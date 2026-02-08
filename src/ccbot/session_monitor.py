@@ -211,14 +211,29 @@ class SessionMonitor:
                 # Seek to last read position for incremental reading
                 await f.seek(session.last_byte_offset)
 
-                # Read only new lines from the offset
+                # Read only new lines from the offset.
+                # Track safe_offset: only advance past lines that parsed
+                # successfully. A non-empty line that fails JSON parsing is
+                # likely a partial write; stop and retry next cycle.
+                safe_offset = session.last_byte_offset
                 async for line in f:
                     data = TranscriptParser.parse_line(line)
                     if data:
                         new_entries.append(data)
+                        safe_offset = await f.tell()
+                    elif line.strip():
+                        # Partial JSONL line — don't advance offset past it
+                        logger.warning(
+                            "Partial JSONL line in session %s, "
+                            "will retry next cycle",
+                            session.session_id,
+                        )
+                        break
+                    else:
+                        # Empty line — safe to skip
+                        safe_offset = await f.tell()
 
-                # Update offset
-                session.last_byte_offset = await f.tell()
+                session.last_byte_offset = safe_offset
 
         except OSError as e:
             logger.error("Error reading session file %s: %s", file_path, e)

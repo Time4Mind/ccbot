@@ -8,6 +8,7 @@ Constants:
   - CB_DIR_*: Directory browser navigation
   - CB_SCREENSHOT_*: Screenshot refresh
   - CB_ASK_*: Interactive UI navigation (arrows, enter, esc)
+  - CB_KEYS_PREFIX: Screenshot control keys (kb:<key_id>:<window>)
 """
 
 # History pagination
@@ -34,4 +35,7 @@ CB_ASK_ENTER = "aq:enter:" # aq:enter:<window>
 CB_ASK_SPACE = "aq:spc:"   # aq:spc:<window>
 CB_ASK_TAB = "aq:tab:"     # aq:tab:<window>
 CB_ASK_REFRESH = "aq:ref:" # aq:ref:<window>
+
+# Screenshot control keys
+CB_KEYS_PREFIX = "kb:"  # kb:<key_id>:<window>
 

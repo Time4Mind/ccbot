@@ -69,6 +69,7 @@ from .handlers.callback_data import (
     CB_DIR_UP,
     CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
+    CB_KEYS_PREFIX,
     CB_SCREENSHOT_REFRESH,
 )
 from .handlers.directory_browser import (
@@ -204,13 +205,11 @@ async def screenshot_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     png_bytes = await text_to_image(text, with_ansi=True)
-    refresh_keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔄 Refresh", callback_data=f"{CB_SCREENSHOT_REFRESH}{wname}"[:64]),
-    ]])
+    keyboard = _build_screenshot_keyboard(wname)
     await update.message.reply_document(
         document=io.BytesIO(png_bytes),
         filename="screenshot.png",
-        reply_markup=refresh_keyboard,
+        reply_markup=keyboard,
     )
 
 
@@ -236,6 +235,44 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # Send Escape control character (no enter)
     await tmux_manager.send_keys(w.window_id, "\x1b", enter=False)
     await safe_reply(update.message, "⎋ Sent Escape")
+
+
+# --- Screenshot keyboard with quick control keys ---
+
+# key_id → (tmux_key, enter, literal)
+_KEYS_SEND_MAP: dict[str, tuple[str, bool, bool]] = {
+    "up": ("Up", False, False),
+    "dn": ("Down", False, False),
+    "lt": ("Left", False, False),
+    "rt": ("Right", False, False),
+    "esc": ("Escape", False, False),
+    "ent": ("Enter", False, False),
+    "spc": ("Space", False, False),
+    "tab": ("Tab", False, False),
+    "cc": ("C-c", False, False),
+}
+
+# key_id → display label (shown in callback answer toast)
+_KEY_LABELS: dict[str, str] = {
+    "up": "↑", "dn": "↓", "lt": "←", "rt": "→",
+    "esc": "⎋ Esc", "ent": "⏎ Enter", "spc": "␣ Space",
+    "tab": "⇥ Tab", "cc": "^C",
+}
+
+
+def _build_screenshot_keyboard(window_name: str) -> InlineKeyboardMarkup:
+    """Build inline keyboard for screenshot: control keys + refresh."""
+    def btn(label: str, key_id: str) -> InlineKeyboardButton:
+        return InlineKeyboardButton(
+            label, callback_data=f"{CB_KEYS_PREFIX}{key_id}:{window_name}"[:64],
+        )
+
+    return InlineKeyboardMarkup([
+        [btn("␣ Space", "spc"), btn("↑", "up"), btn("⇥ Tab", "tab")],
+        [btn("←", "lt"), btn("↓", "dn"), btn("→", "rt")],
+        [btn("⎋ Esc", "esc"), btn("^C", "cc"), btn("⏎ Enter", "ent")],
+        [InlineKeyboardButton("🔄 Refresh", callback_data=f"{CB_SCREENSHOT_REFRESH}{window_name}"[:64])],
+    ])
 
 
 async def topic_closed_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -604,13 +641,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
 
         png_bytes = await text_to_image(text, with_ansi=True)
-        refresh_keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔄 Refresh", callback_data=f"{CB_SCREENSHOT_REFRESH}{window_name}"[:64]),
-        ]])
+        keyboard = _build_screenshot_keyboard(window_name)
         try:
             await query.edit_message_media(
                 media=InputMediaDocument(media=io.BytesIO(png_bytes), filename="screenshot.png"),
-                reply_markup=refresh_keyboard,
+                reply_markup=keyboard,
             )
             await query.answer("Refreshed")
         except Exception as e:
@@ -627,7 +662,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         w = await tmux_manager.find_window_by_name(window_name)
         if w:
             await tmux_manager.send_keys(w.window_id, "Up", enter=False, literal=False)
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.5)
             await handle_interactive_ui(context.bot, user.id, window_name, thread_id)
         await query.answer()
 
@@ -638,7 +673,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         w = await tmux_manager.find_window_by_name(window_name)
         if w:
             await tmux_manager.send_keys(w.window_id, "Down", enter=False, literal=False)
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.5)
             await handle_interactive_ui(context.bot, user.id, window_name, thread_id)
         await query.answer()
 
@@ -649,7 +684,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         w = await tmux_manager.find_window_by_name(window_name)
         if w:
             await tmux_manager.send_keys(w.window_id, "Left", enter=False, literal=False)
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.5)
             await handle_interactive_ui(context.bot, user.id, window_name, thread_id)
         await query.answer()
 
@@ -660,7 +695,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         w = await tmux_manager.find_window_by_name(window_name)
         if w:
             await tmux_manager.send_keys(w.window_id, "Right", enter=False, literal=False)
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.5)
             await handle_interactive_ui(context.bot, user.id, window_name, thread_id)
         await query.answer()
 
@@ -681,7 +716,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         w = await tmux_manager.find_window_by_name(window_name)
         if w:
             await tmux_manager.send_keys(w.window_id, "Enter", enter=False, literal=False)
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.5)
             await handle_interactive_ui(context.bot, user.id, window_name, thread_id)
         await query.answer("⏎ Enter")
 
@@ -692,7 +727,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         w = await tmux_manager.find_window_by_name(window_name)
         if w:
             await tmux_manager.send_keys(w.window_id, "Space", enter=False, literal=False)
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.5)
             await handle_interactive_ui(context.bot, user.id, window_name, thread_id)
         await query.answer("␣ Space")
 
@@ -703,7 +738,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         w = await tmux_manager.find_window_by_name(window_name)
         if w:
             await tmux_manager.send_keys(w.window_id, "Tab", enter=False, literal=False)
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.5)
             await handle_interactive_ui(context.bot, user.id, window_name, thread_id)
         await query.answer("⇥ Tab")
 
@@ -713,6 +748,46 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         thread_id = _get_thread_id(update)
         await handle_interactive_ui(context.bot, user.id, window_name, thread_id)
         await query.answer("🔄")
+
+    # Screenshot quick keys: send key to tmux window
+    elif data.startswith(CB_KEYS_PREFIX):
+        rest = data[len(CB_KEYS_PREFIX):]
+        colon_idx = rest.find(":")
+        if colon_idx < 0:
+            await query.answer("Invalid data")
+            return
+        key_id = rest[:colon_idx]
+        window_name = rest[colon_idx + 1:]
+
+        key_info = _KEYS_SEND_MAP.get(key_id)
+        if not key_info:
+            await query.answer("Unknown key")
+            return
+
+        tmux_key, enter, literal = key_info
+        w = await tmux_manager.find_window_by_name(window_name)
+        if not w:
+            await query.answer("Window not found", show_alert=True)
+            return
+
+        await tmux_manager.send_keys(w.window_id, tmux_key, enter=enter, literal=literal)
+        await query.answer(_KEY_LABELS.get(key_id, key_id))
+
+        # Refresh screenshot after key press
+        await asyncio.sleep(0.5)
+        text = await tmux_manager.capture_pane(w.window_id, with_ansi=True)
+        if text:
+            png_bytes = await text_to_image(text, with_ansi=True)
+            keyboard = _build_screenshot_keyboard(window_name)
+            try:
+                await query.edit_message_media(
+                    media=InputMediaDocument(
+                        media=io.BytesIO(png_bytes), filename="screenshot.png",
+                    ),
+                    reply_markup=keyboard,
+                )
+            except Exception:
+                pass  # Screenshot unchanged or message too old
 
 
 # --- Streaming response / notifications ---
@@ -808,7 +883,7 @@ async def post_init(application: Application) -> None:
     bot_commands = [
         BotCommand("start", "Show welcome message"),
         BotCommand("history", "Message history for this topic"),
-        BotCommand("screenshot", "Capture terminal screenshot"),
+        BotCommand("screenshot", "Terminal screenshot with control keys"),
         BotCommand("esc", "Send Escape to interrupt Claude"),
         BotCommand("kill", "Kill session and delete topic"),
     ]

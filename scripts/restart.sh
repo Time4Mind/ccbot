@@ -4,7 +4,7 @@ set -euo pipefail
 TMUX_SESSION="ccbot"
 TMUX_WINDOW="__main__"
 TARGET="${TMUX_SESSION}:${TMUX_WINDOW}"
-PROJECT_DIR="/data/code/ccbot"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 MAX_WAIT=10  # seconds to wait for process to exit
 
 # Check if tmux session and window exist

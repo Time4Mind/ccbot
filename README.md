@@ -79,6 +79,8 @@ ALLOWED_USERS=your_telegram_user_id
 EOF
 ```
 
+> A local `.env` file in the current working directory takes priority over `~/.ccbot/.env`, so source-code users can simply `cp .env.example .env` and edit in place.
+
 **Required:**
 
 | Variable             | Description                       |

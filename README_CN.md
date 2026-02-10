@@ -77,6 +77,8 @@ ALLOWED_USERS=your_telegram_user_id
 EOF
 ```
 
+> 当前目录下的 `.env` 优先级高于 `~/.ccbot/.env`，因此源码用户可以直接 `cp .env.example .env` 在项目目录中编辑。
+
 **必填项：**
 
 | 变量 | 说明 |

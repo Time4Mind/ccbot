@@ -2,8 +2,7 @@
 
 Loads TELEGRAM_BOT_TOKEN, ALLOWED_USERS, tmux/Claude paths, and
 monitoring intervals from environment variables (with .env support).
-Config directory defaults to ~/.ccbot, overridable via CCBOT_DIR.
-The .env file is loaded from the config directory.
+.env loading priority: local .env (cwd) > $CCBOT_DIR/.env (default ~/.ccbot).
 The module-level `config` instance is imported by nearly every other module.
 
 Key class: Config (singleton instantiated as `config`).
@@ -27,13 +26,16 @@ class Config:
         self.config_dir = ccbot_dir()
         self.config_dir.mkdir(parents=True, exist_ok=True)
 
-        # Load .env from config directory
-        env_file = self.config_dir / ".env"
-        if env_file.is_file():
-            load_dotenv(env_file)
-            logger.debug("Loaded env from %s", env_file)
-        else:
-            logger.debug("No .env found at %s", env_file)
+        # Load .env: local (cwd) takes priority over config_dir
+        # load_dotenv default override=False means first-loaded wins
+        local_env = Path(".env")
+        global_env = self.config_dir / ".env"
+        if local_env.is_file():
+            load_dotenv(local_env)
+            logger.debug("Loaded env from %s", local_env.resolve())
+        if global_env.is_file():
+            load_dotenv(global_env)
+            logger.debug("Loaded env from %s", global_env)
 
         self.telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN") or ""
         if not self.telegram_bot_token:

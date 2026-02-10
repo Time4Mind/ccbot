@@ -69,17 +69,12 @@ uv sync
 
 **2. Configure environment variables:**
 
-Create `~/.ccbot/.env` (or `$CCBOT_DIR/.env` if customized):
+Create `~/.ccbot/.env`:
 
-```bash
-mkdir -p ~/.ccbot
-cat > ~/.ccbot/.env << 'EOF'
+```ini
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 ALLOWED_USERS=your_telegram_user_id
-EOF
 ```
-
-> A local `.env` file in the current working directory takes priority over `~/.ccbot/.env`, so source-code users can simply `cp .env.example .env` and edit in place.
 
 **Required:**
 

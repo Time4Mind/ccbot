@@ -67,17 +67,12 @@ uv sync
 
 **2. 配置环境变量：**
 
-创建 `~/.ccbot/.env`（如果自定义了 `CCBOT_DIR`，则在对应目录下）：
+创建 `~/.ccbot/.env`：
 
-```bash
-mkdir -p ~/.ccbot
-cat > ~/.ccbot/.env << 'EOF'
+```ini
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 ALLOWED_USERS=your_telegram_user_id
-EOF
 ```
-
-> 当前目录下的 `.env` 优先级高于 `~/.ccbot/.env`，因此源码用户可以直接 `cp .env.example .env` 在项目目录中编辑。
 
 **必填项：**
 

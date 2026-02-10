@@ -515,10 +515,6 @@ async def enqueue_status_update(
     thread_id: int | None = None,
 ) -> None:
     """Enqueue status update."""
-    logger.debug(
-        "Enqueue status: user=%d, window=%s, has_text=%s",
-        user_id, window_name, status_text is not None,
-    )
     queue = get_or_create_queue(bot, user_id)
 
     if status_text:

@@ -293,36 +293,6 @@ class TmuxManager:
 
         return await asyncio.to_thread(_sync_kill)
 
-    async def restart_claude_in_window(
-        self, window_name: str, command: str | None = None,
-    ) -> bool:
-        """Restart Claude Code in an existing window.
-
-        Finds the window by name and sends the given command (or default
-        claude_command from config) to its pane.
-        Returns True if the command was sent successfully.
-        """
-        cmd = command or config.claude_command
-
-        def _sync_restart() -> bool:
-            session = self.get_session()
-            if not session:
-                return False
-            try:
-                window = session.windows.get(window_name=window_name)
-                if not window:
-                    return False
-                pane = window.active_pane
-                if not pane:
-                    return False
-                pane.send_keys(cmd, enter=True)
-                logger.info("Restarted Claude Code in window '%s' (cmd=%s)", window_name, cmd)
-                return True
-            except Exception as e:
-                logger.error("Failed to restart Claude in window '%s': %s", window_name, e)
-                return False
-
-        return await asyncio.to_thread(_sync_restart)
 
     async def create_window(
         self,

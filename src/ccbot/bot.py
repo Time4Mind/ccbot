@@ -105,7 +105,14 @@ from .handlers.message_queue import (
     get_message_queue,
     shutdown_workers,
 )
-from .handlers.message_sender import safe_edit, safe_reply, safe_send
+from .handlers.message_sender import (
+    NO_LINK_PREVIEW,
+    rate_limit_send_message,
+    safe_edit,
+    safe_reply,
+    safe_send,
+)
+from .markdown_v2 import convert_markdown
 from .handlers.response_builder import build_response_parts
 from .handlers.status_polling import status_poll_loop
 from .screenshot import text_to_image
@@ -403,6 +410,157 @@ async def unsupported_content_handler(
     )
 
 
+def _strip_pane_chrome(lines: list[str]) -> list[str]:
+    """Strip Claude Code's bottom chrome (prompt area + status bar).
+
+    The bottom of the pane looks like::
+
+        ────────────────────────  (separator)
+        ❯                        (prompt)
+        ────────────────────────  (separator)
+          [Opus 4.6] Context: 34%
+          ⏵⏵ bypass permissions…
+
+    This function finds the topmost ``────`` separator in the last 10 lines
+    and strips everything from there down.
+    """
+    search_start = max(0, len(lines) - 10)
+    for i in range(search_start, len(lines)):
+        stripped = lines[i].strip()
+        if len(stripped) >= 20 and all(c == "─" for c in stripped):
+            return lines[:i]
+    return lines
+
+
+# Active bash capture tasks: (user_id, thread_id) → asyncio.Task
+_bash_capture_tasks: dict[tuple[int, int], asyncio.Task[None]] = {}
+
+
+def _cancel_bash_capture(user_id: int, thread_id: int) -> None:
+    """Cancel any running bash capture for this topic."""
+    key = (user_id, thread_id)
+    task = _bash_capture_tasks.pop(key, None)
+    if task and not task.done():
+        task.cancel()
+
+
+def _extract_bash_output(pane_text: str, command: str) -> str | None:
+    """Extract ``!`` command output from a captured tmux pane.
+
+    Searches from the bottom for the ``! <command>`` echo line, then
+    returns that line and everything below it (including the ``⎿`` output).
+    Returns *None* if the command echo wasn't found.
+    """
+    lines = _strip_pane_chrome(pane_text.splitlines())
+
+    # Find the last "! <command>" echo line (search from bottom).
+    # Match on the first 10 chars of the command in case the line is truncated.
+    cmd_idx: int | None = None
+    match_prefix = command[:10]
+    for i in range(len(lines) - 1, -1, -1):
+        stripped = lines[i].strip()
+        if stripped.startswith(f"! {match_prefix}") or stripped.startswith(
+            f"!{match_prefix}"
+        ):
+            cmd_idx = i
+            break
+
+    if cmd_idx is None:
+        return None
+
+    # Include the command echo line and everything after it
+    raw_output = lines[cmd_idx:]
+
+    # Strip trailing empty lines
+    while raw_output and not raw_output[-1].strip():
+        raw_output.pop()
+
+    if not raw_output:
+        return None
+
+    return "\n".join(raw_output).strip()
+
+
+async def _capture_bash_output(
+    bot: Bot,
+    user_id: int,
+    thread_id: int,
+    window_id: str,
+    command: str,
+) -> None:
+    """Background task: capture ``!`` bash command output from tmux pane.
+
+    Sends the first captured output as a new message, then edits it
+    in-place as more output appears.  Stops after 30 s or when cancelled
+    (e.g. user sends a new message, which pushes content down).
+    """
+    try:
+        # Wait for the command to start producing output
+        await asyncio.sleep(2.0)
+
+        chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+        msg_id: int | None = None
+        last_output: str = ""
+
+        for _ in range(30):
+            raw = await tmux_manager.capture_pane(window_id)
+            if raw is None:
+                return
+
+            output = _extract_bash_output(raw, command)
+            if not output:
+                await asyncio.sleep(1.0)
+                continue
+
+            # Skip edit if nothing changed
+            if output == last_output:
+                await asyncio.sleep(1.0)
+                continue
+
+            last_output = output
+
+            # Truncate to fit Telegram's 4096-char limit
+            if len(output) > 3800:
+                output = "… " + output[-3800:]
+
+            if msg_id is None:
+                # First capture — send a new message
+                sent = await rate_limit_send_message(
+                    bot,
+                    chat_id,
+                    output,
+                    message_thread_id=thread_id,
+                )
+                if sent:
+                    msg_id = sent.message_id
+            else:
+                # Subsequent captures — edit in place
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=msg_id,
+                        text=convert_markdown(output),
+                        parse_mode="MarkdownV2",
+                        link_preview_options=NO_LINK_PREVIEW,
+                    )
+                except Exception:
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=msg_id,
+                            text=output,
+                            link_preview_options=NO_LINK_PREVIEW,
+                        )
+                    except Exception:
+                        pass
+
+            await asyncio.sleep(1.0)
+    except asyncio.CancelledError:
+        return
+    finally:
+        _bash_capture_tasks.pop((user_id, thread_id), None)
+
+
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -533,10 +691,21 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.chat.send_action(ChatAction.TYPING)
     clear_status_msg_info(user.id, thread_id)
 
+    # Cancel any running bash capture — new message pushes pane content down
+    _cancel_bash_capture(user.id, thread_id)
+
     success, message = await session_manager.send_to_window(wid, text)
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
+
+    # Start background capture for ! bash command output
+    if text.startswith("!") and len(text) > 1:
+        bash_cmd = text[1:]  # strip leading "!"
+        task = asyncio.create_task(
+            _capture_bash_output(context.bot, user.id, thread_id, wid, bash_cmd)
+        )
+        _bash_capture_tasks[(user.id, thread_id)] = task
 
     # If in interactive mode, refresh the UI after sending text
     interactive_window = get_interactive_window(user.id, thread_id)

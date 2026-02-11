@@ -9,7 +9,8 @@ Parses captured tmux pane content to detect:
 All Claude Code text patterns live here. To support a new UI type or
 a changed Claude Code version, edit UI_PATTERNS / STATUS_SPINNERS.
 
-Key functions: is_interactive_ui(), extract_interactive_content(), parse_status_line().
+Key functions: is_interactive_ui(), extract_interactive_content(),
+parse_status_line(), strip_pane_chrome(), extract_bash_output().
 """
 
 import re
@@ -191,3 +192,65 @@ def parse_status_line(pane_text: str) -> str | None:
         if line[0] in STATUS_SPINNERS:
             return line[1:].strip()
     return None
+
+
+# ── Pane chrome stripping & bash output extraction ─────────────────────
+
+
+def strip_pane_chrome(lines: list[str]) -> list[str]:
+    """Strip Claude Code's bottom chrome (prompt area + status bar).
+
+    The bottom of the pane looks like::
+
+        ────────────────────────  (separator)
+        ❯                        (prompt)
+        ────────────────────────  (separator)
+          [Opus 4.6] Context: 34%
+          ⏵⏵ bypass permissions…
+
+    This function finds the topmost ``────`` separator in the last 10 lines
+    and strips everything from there down.
+    """
+    search_start = max(0, len(lines) - 10)
+    for i in range(search_start, len(lines)):
+        stripped = lines[i].strip()
+        if len(stripped) >= 20 and all(c == "─" for c in stripped):
+            return lines[:i]
+    return lines
+
+
+def extract_bash_output(pane_text: str, command: str) -> str | None:
+    """Extract ``!`` command output from a captured tmux pane.
+
+    Searches from the bottom for the ``! <command>`` echo line, then
+    returns that line and everything below it (including the ``⎿`` output).
+    Returns *None* if the command echo wasn't found.
+    """
+    lines = strip_pane_chrome(pane_text.splitlines())
+
+    # Find the last "! <command>" echo line (search from bottom).
+    # Match on the first 10 chars of the command in case the line is truncated.
+    cmd_idx: int | None = None
+    match_prefix = command[:10]
+    for i in range(len(lines) - 1, -1, -1):
+        stripped = lines[i].strip()
+        if stripped.startswith(f"! {match_prefix}") or stripped.startswith(
+            f"!{match_prefix}"
+        ):
+            cmd_idx = i
+            break
+
+    if cmd_idx is None:
+        return None
+
+    # Include the command echo line and everything after it
+    raw_output = lines[cmd_idx:]
+
+    # Strip trailing empty lines
+    while raw_output and not raw_output[-1].strip():
+        raw_output.pop()
+
+    if not raw_output:
+        return None
+
+    return "\n".join(raw_output).strip()

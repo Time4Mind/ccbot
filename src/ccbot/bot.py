@@ -118,6 +118,7 @@ from .handlers.status_polling import status_poll_loop
 from .screenshot import text_to_image
 from .session import session_manager
 from .session_monitor import NewMessage, SessionMonitor
+from .terminal_parser import extract_bash_output
 from .tmux_manager import tmux_manager
 
 logger = logging.getLogger(__name__)
@@ -410,28 +411,6 @@ async def unsupported_content_handler(
     )
 
 
-def _strip_pane_chrome(lines: list[str]) -> list[str]:
-    """Strip Claude Code's bottom chrome (prompt area + status bar).
-
-    The bottom of the pane looks like::
-
-        ────────────────────────  (separator)
-        ❯                        (prompt)
-        ────────────────────────  (separator)
-          [Opus 4.6] Context: 34%
-          ⏵⏵ bypass permissions…
-
-    This function finds the topmost ``────`` separator in the last 10 lines
-    and strips everything from there down.
-    """
-    search_start = max(0, len(lines) - 10)
-    for i in range(search_start, len(lines)):
-        stripped = lines[i].strip()
-        if len(stripped) >= 20 and all(c == "─" for c in stripped):
-            return lines[:i]
-    return lines
-
-
 # Active bash capture tasks: (user_id, thread_id) → asyncio.Task
 _bash_capture_tasks: dict[tuple[int, int], asyncio.Task[None]] = {}
 
@@ -442,43 +421,6 @@ def _cancel_bash_capture(user_id: int, thread_id: int) -> None:
     task = _bash_capture_tasks.pop(key, None)
     if task and not task.done():
         task.cancel()
-
-
-def _extract_bash_output(pane_text: str, command: str) -> str | None:
-    """Extract ``!`` command output from a captured tmux pane.
-
-    Searches from the bottom for the ``! <command>`` echo line, then
-    returns that line and everything below it (including the ``⎿`` output).
-    Returns *None* if the command echo wasn't found.
-    """
-    lines = _strip_pane_chrome(pane_text.splitlines())
-
-    # Find the last "! <command>" echo line (search from bottom).
-    # Match on the first 10 chars of the command in case the line is truncated.
-    cmd_idx: int | None = None
-    match_prefix = command[:10]
-    for i in range(len(lines) - 1, -1, -1):
-        stripped = lines[i].strip()
-        if stripped.startswith(f"! {match_prefix}") or stripped.startswith(
-            f"!{match_prefix}"
-        ):
-            cmd_idx = i
-            break
-
-    if cmd_idx is None:
-        return None
-
-    # Include the command echo line and everything after it
-    raw_output = lines[cmd_idx:]
-
-    # Strip trailing empty lines
-    while raw_output and not raw_output[-1].strip():
-        raw_output.pop()
-
-    if not raw_output:
-        return None
-
-    return "\n".join(raw_output).strip()
 
 
 async def _capture_bash_output(
@@ -507,7 +449,7 @@ async def _capture_bash_output(
             if raw is None:
                 return
 
-            output = _extract_bash_output(raw, command)
+            output = extract_bash_output(raw, command)
             if not output:
                 await asyncio.sleep(1.0)
                 continue

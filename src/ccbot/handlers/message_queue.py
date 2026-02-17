@@ -490,6 +490,14 @@ async def _do_send_status_message(
     """Send a new status message and track it (internal, called from worker)."""
     skey = (user_id, thread_id_or_0)
     thread_id: int | None = thread_id_or_0 if thread_id_or_0 != 0 else None
+    # Safety net: delete any orphaned status message before sending a new one.
+    # This catches edge cases where tracking was cleared without deleting the message.
+    old = _status_msg_info.pop(skey, None)
+    if old:
+        try:
+            await bot.delete_message(chat_id=user_id, message_id=old[0])
+        except Exception:
+            pass
     # Send typing indicator when Claude is working
     if "esc to interrupt" in text.lower():
         try:

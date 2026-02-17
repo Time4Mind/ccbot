@@ -101,8 +101,8 @@ from .handlers.interactive_ui import (
     set_interactive_mode,
 )
 from .handlers.message_queue import (
-    clear_status_msg_info,
     enqueue_content_message,
+    enqueue_status_update,
     get_message_queue,
     shutdown_workers,
 )
@@ -624,7 +624,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     await update.message.chat.send_action(ChatAction.TYPING)
-    clear_status_msg_info(user.id, thread_id)
+    await enqueue_status_update(context.bot, user.id, wid, None, thread_id=thread_id)
 
     # Cancel any running bash capture — new message pushes pane content down
     _cancel_bash_capture(user.id, thread_id)

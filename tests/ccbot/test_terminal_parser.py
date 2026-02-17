@@ -25,8 +25,8 @@ class TestParseStatusLine:
             ("✢", "Building project", "Building project"),
         ],
     )
-    def test_spinner_chars(self, spinner: str, rest: str, expected: str):
-        pane = f"some output\n{spinner}{rest}\n"
+    def test_spinner_chars(self, spinner: str, rest: str, expected: str, chrome: str):
+        pane = f"some output\n{spinner}{rest}\n{chrome}"
         assert parse_status_line(pane) == expected
 
     @pytest.mark.parametrize(
@@ -39,9 +39,25 @@ class TestParseStatusLine:
     def test_returns_none(self, pane: str):
         assert parse_status_line(pane) is None
 
-    def test_bottom_up_scan_skips_trailing_blanks(self):
-        pane = "output\n✻ Doing work\n\n\n\n"
+    def test_no_chrome_returns_none(self):
+        """Without chrome separator, status can't be determined."""
+        pane = "output\n✻ Doing work\nno chrome here\n"
+        assert parse_status_line(pane) is None
+
+    def test_blank_line_between_status_and_chrome(self, chrome: str):
+        """Status line with blank lines before separator."""
+        pane = f"output\n✻ Doing work\n\n{chrome}"
         assert parse_status_line(pane) == "Doing work"
+
+    def test_idle_no_status(self, chrome: str):
+        """Idle pane (no status line above chrome) returns None."""
+        pane = f"some output\n● Tool result\n{chrome}"
+        assert parse_status_line(pane) is None
+
+    def test_false_positive_bullet(self, chrome: str):
+        """· in regular output must NOT be detected as status."""
+        pane = f"· bullet point one\n· bullet point two\nsome result\n{chrome}"
+        assert parse_status_line(pane) is None
 
     def test_uses_fixture(self, sample_pane_status_line: str):
         assert parse_status_line(sample_pane_status_line) == "Reading file src/main.py"

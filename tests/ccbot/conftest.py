@@ -128,9 +128,22 @@ def sample_pane_permission():
     return "  Do you want to proceed?\n  Some permission details\n  Esc to cancel\n"
 
 
+_CHROME = (
+    "──────────────────────────────────────\n"
+    "❯ \n"
+    "──────────────────────────────────────\n"
+    "  [Opus 4.6] Context: 50%\n"
+)
+
+
+@pytest.fixture
+def chrome():
+    return _CHROME
+
+
 @pytest.fixture
 def sample_pane_status_line():
-    return "Some output text here\nMore output\n✻ Reading file src/main.py\n"
+    return "Some output text here\nMore output\n✻ Reading file src/main.py\n" + _CHROME
 
 
 @pytest.fixture

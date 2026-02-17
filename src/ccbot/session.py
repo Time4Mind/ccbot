@@ -81,7 +81,6 @@ class ClaudeSession:
     file_path: str
 
 
-
 @dataclass
 class SessionManager:
     """Manages session state for Claude Code.
@@ -98,8 +97,6 @@ class SessionManager:
     window_states: dict[str, WindowState] = field(default_factory=dict)
     user_window_offsets: dict[int, dict[str, int]] = field(default_factory=dict)
     thread_bindings: dict[int, dict[int, str]] = field(default_factory=dict)
-    # group_chat_ids: "user_id:thread_id" -> chat_id (supports multiple groups per user)
-    group_chat_ids: dict[str, int] = field(default_factory=dict)
     # window_id -> display name (window_name)
     window_display_names: dict[str, str] = field(default_factory=dict)
 
@@ -116,7 +113,6 @@ class SessionManager:
                 str(uid): {str(tid): wid for tid, wid in bindings.items()}
                 for uid, bindings in self.thread_bindings.items()
             },
-            "group_chat_ids": self.group_chat_ids,
             "window_display_names": self.window_display_names,
         }
         atomic_write_json(config.state_file, state)
@@ -147,7 +143,6 @@ class SessionManager:
                     int(uid): {int(tid): wid for tid, wid in bindings.items()}
                     for uid, bindings in state.get("thread_bindings", {}).items()
                 }
-                self.group_chat_ids = state.get("group_chat_ids", {})
                 self.window_display_names = state.get("window_display_names", {})
 
                 # Detect old format: keys that don't look like window IDs
@@ -177,7 +172,6 @@ class SessionManager:
                 self.window_states = {}
                 self.user_window_offsets = {}
                 self.thread_bindings = {}
-                self.group_chat_ids = {}
                 self.window_display_names = {}
                 pass
 
@@ -661,38 +655,6 @@ class SessionManager:
             if resolved and resolved.session_id == session_id:
                 result.append((user_id, window_id, thread_id))
         return result
-
-    # --- Group chat ID management ---
-
-    def set_group_chat_id(self, user_id: int, thread_id: int, chat_id: int) -> None:
-        """Store the group chat ID for a user's thread (for forum topic message routing).
-
-        Uses composite key "user_id:thread_id" to support multiple groups per user.
-        """
-        key = f"{user_id}:{thread_id}"
-        if self.group_chat_ids.get(key) != chat_id:
-            self.group_chat_ids[key] = chat_id
-            self._save_state()
-            logger.info(
-                "Stored group chat_id %d for user %d, thread %d",
-                chat_id,
-                user_id,
-                thread_id,
-            )
-
-    def resolve_chat_id(self, user_id: int, thread_id: int | None = None) -> int:
-        """Resolve the chat_id for sending messages.
-
-        In forum topics (thread_id is set), returns the stored group chat_id
-        for that specific thread (user_id:thread_id).
-        Falls back to user_id for direct messages or if no group_id stored.
-        """
-        if thread_id is not None:
-            key = f"{user_id}:{thread_id}"
-            group_id = self.group_chat_ids.get(key)
-            if group_id is not None:
-                return group_id
-        return user_id
 
     # --- Tmux helpers ---
 

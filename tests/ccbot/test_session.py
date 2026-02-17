@@ -25,29 +25,12 @@ class TestThreadBindings:
     def test_unbind_nonexistent_returns_none(self, mgr: SessionManager) -> None:
         assert mgr.unbind_thread(100, 999) is None
 
-    def test_get_thread_for_window(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 42, "@5")
-        assert mgr.get_thread_for_window(100, "@5") == 42
-
     def test_iter_thread_bindings(self, mgr: SessionManager) -> None:
         mgr.bind_thread(100, 1, "@1")
         mgr.bind_thread(100, 2, "@2")
         mgr.bind_thread(200, 3, "@3")
         result = set(mgr.iter_thread_bindings())
         assert result == {(100, 1, "@1"), (100, 2, "@2"), (200, 3, "@3")}
-
-
-class TestResolveChatId:
-    def test_with_stored_group_id(self, mgr: SessionManager) -> None:
-        mgr.set_group_chat_id(100, 1, -999)
-        assert mgr.resolve_chat_id(100, 1) == -999
-
-    def test_without_group_id_falls_back(self, mgr: SessionManager) -> None:
-        assert mgr.resolve_chat_id(100, 1) == 100
-
-    def test_none_thread_id_falls_back(self, mgr: SessionManager) -> None:
-        mgr.set_group_chat_id(100, 1, -999)
-        assert mgr.resolve_chat_id(100) == 100
 
 
 class TestWindowState:
@@ -86,12 +69,12 @@ class TestDisplayNames:
         assert mgr.get_display_name("@99") == "@99"
 
     def test_set_and_get_display_name(self, mgr: SessionManager) -> None:
-        mgr.set_display_name("@1", "myproject")
+        mgr.bind_thread(100, 1, "@1", window_name="myproject")
         assert mgr.get_display_name("@1") == "myproject"
 
     def test_set_display_name_update(self, mgr: SessionManager) -> None:
-        mgr.set_display_name("@1", "old-name")
-        mgr.set_display_name("@1", "new-name")
+        mgr.bind_thread(100, 1, "@1", window_name="old-name")
+        mgr.window_display_names["@1"] = "new-name"
         assert mgr.get_display_name("@1") == "new-name"
 
     def test_bind_thread_sets_display_name(self, mgr: SessionManager) -> None:

@@ -286,7 +286,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                 await bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=edit_msg_id,
-                    text=full_text,
+                    text=convert_markdown(full_text),
                     parse_mode="MarkdownV2",
                     link_preview_options=NO_LINK_PREVIEW,
                 )
@@ -383,7 +383,7 @@ async def _convert_status_to_content(
         await bot.edit_message_text(
             chat_id=chat_id,
             message_id=msg_id,
-            text=content_text,
+            text=convert_markdown(content_text),
             parse_mode="MarkdownV2",
             link_preview_options=NO_LINK_PREVIEW,
         )

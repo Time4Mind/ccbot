@@ -287,14 +287,19 @@ class SessionMonitor:
                     logger.info(f"Started tracking session: {session_info.session_id}")
                     continue
 
-                # Check mtime to see if file has changed
+                # Check mtime + file size to see if file has changed
                 try:
-                    current_mtime = session_info.file_path.stat().st_mtime
+                    st = session_info.file_path.stat()
+                    current_mtime = st.st_mtime
+                    current_size = st.st_size
                 except OSError:
                     continue
 
                 last_mtime = self._file_mtimes.get(session_info.session_id, 0.0)
-                if current_mtime <= last_mtime:
+                if (
+                    current_mtime <= last_mtime
+                    and current_size <= tracked.last_byte_offset
+                ):
                     # File hasn't changed, skip reading
                     continue
 

@@ -27,7 +27,7 @@ def _split_table_row(line: str) -> list[str]:
     return [cell.strip().replace("\\|", "|") for cell in cells]
 
 
-def _convert_markdown_tables(text: str) -> str:
+def convert_markdown_tables(text: str) -> str:
     """Convert markdown tables to card-style key-value format.
 
     Telegram has no table rendering. This converts each row into a card
@@ -180,7 +180,7 @@ def convert_markdown(text: str) -> str:
     so that telegramify_markdown doesn't mangle the >...|| syntax.
     """
     # Convert markdown tables to card-style format before telegramify
-    text = _convert_markdown_tables(text)
+    text = convert_markdown_tables(text)
 
     # Extract expandable quote blocks before telegramify
     segments: list[tuple[bool, str]] = []  # (is_quote, content)

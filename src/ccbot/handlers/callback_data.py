@@ -54,3 +54,11 @@ CB_KEYS_PREFIX = "kb:"  # kb:<key_id>:<window>
 CB_SW_USE = "sw:"  # sw:<session.id>     — switch active session
 CB_SW_NEW = "swn"  # open directory browser to create a new session
 CB_SW_NOOP = "sw0"  # tap on already-active button (no-op)
+
+# Archive
+CB_ARC_PAGE = "ar:p:"  # ar:p:<page>
+CB_ARC_RESTORE = "ar:r:"  # ar:r:<session.id>
+CB_ARC_INSPECT = "ar:i:"  # ar:i:<session.id>
+CB_ARC_DELETE = "ar:d:"  # ar:d:<session.id>
+CB_ARC_BACK = "ar:back"  # back from inspect to list
+CB_ARC_ALL = "ar:all"  # toggle 0-72h vs 0-14d

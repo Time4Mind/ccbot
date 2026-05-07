@@ -56,7 +56,18 @@ from telegram.ext import (
 )
 
 from .config import config
+from .handlers.archive import (
+    DEFAULT_LOOKBACK_SECONDS,
+    build_archive_page,
+    restore_session,
+)
 from .handlers.callback_data import (
+    CB_ARC_ALL,
+    CB_ARC_BACK,
+    CB_ARC_DELETE,
+    CB_ARC_INSPECT,
+    CB_ARC_PAGE,
+    CB_ARC_RESTORE,
     CB_ASK_DOWN,
     CB_ASK_ENTER,
     CB_ASK_ESC,
@@ -615,6 +626,29 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     await tmux_manager.send_keys(w.window_id, "\x1b", enter=False)
     await safe_reply(update.message, "⎋ Sent Escape")
+
+
+async def archive_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/archive` — paginated list of archived sessions.
+
+    `--all` flag extends lookback to ARCHIVE_PURGE_AFTER (default 14d).
+    """
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    args = (update.message.text or "").split()
+    show_all = "--all" in args
+    lookback = config.archive_purge_after if show_all else DEFAULT_LOOKBACK_SECONDS
+    if context.user_data is not None:
+        context.user_data["_arc_show_all"] = show_all
+
+    text, keyboard = build_archive_page(
+        page=0, lookback_seconds=lookback, show_all=show_all
+    )
+    await safe_reply(update.message, text, reply_markup=keyboard)
 
 
 # --- Screenshot keyboard with quick control keys ---
@@ -1530,6 +1564,142 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     )
         await query.answer(f"→ {sess.name or sess.id}")
 
+    # Archive: pagination
+    elif data.startswith(CB_ARC_PAGE):
+        try:
+            page = int(data[len(CB_ARC_PAGE) :])
+        except ValueError:
+            await query.answer("Invalid page")
+            return
+        show_all = bool(
+            context.user_data and context.user_data.get("_arc_show_all", False)
+        )
+        lookback = (
+            config.archive_purge_after if show_all else DEFAULT_LOOKBACK_SECONDS
+        )
+        text, keyboard = build_archive_page(
+            page=page, lookback_seconds=lookback, show_all=show_all
+        )
+        try:
+            await query.edit_message_text(text=text, reply_markup=keyboard)
+        except Exception as e:
+            logger.debug("archive page edit failed: %s", e)
+        await query.answer()
+
+    # Archive: toggle 0-72h vs 0-14d
+    elif data == CB_ARC_ALL:
+        cur = bool(
+            context.user_data and context.user_data.get("_arc_show_all", False)
+        )
+        new = not cur
+        if context.user_data is not None:
+            context.user_data["_arc_show_all"] = new
+        lookback = config.archive_purge_after if new else DEFAULT_LOOKBACK_SECONDS
+        text, keyboard = build_archive_page(
+            page=0, lookback_seconds=lookback, show_all=new
+        )
+        try:
+            await query.edit_message_text(text=text, reply_markup=keyboard)
+        except Exception as e:
+            logger.debug("archive toggle edit failed: %s", e)
+        await query.answer("→ 14d" if new else "→ 72h")
+
+    # Archive: restore <session.id>
+    elif data.startswith(CB_ARC_RESTORE):
+        sid = data[len(CB_ARC_RESTORE) :]
+        sess = session_manager.get_session(sid)
+        if sess is None:
+            await query.answer("Session not found", show_alert=True)
+            return
+        ok, msg = await restore_session(context.bot, user.id, sess)
+        if ok:
+            preview = await _render_session_preview(sess)
+            keyboard = build_switcher_keyboard(user.id)
+            try:
+                await query.edit_message_text(text=preview, reply_markup=keyboard)
+            except Exception as e:
+                logger.debug("archive restore edit failed: %s", e)
+            else:
+                if query.message and keyboard is not None:
+                    session_manager.set_last_switcher_msg(
+                        user.id, query.message.message_id
+                    )
+            await query.answer("Restored")
+        else:
+            await query.answer(f"Restore failed: {msg}", show_alert=True)
+
+    # Archive: inspect <session.id>
+    elif data.startswith(CB_ARC_INSPECT):
+        sid = data[len(CB_ARC_INSPECT) :]
+        sess = session_manager.get_session(sid)
+        if sess is None:
+            await query.answer("Session not found", show_alert=True)
+            return
+        preview = await _render_session_preview(sess)
+        from telegram import (
+            InlineKeyboardButton as _IKB,
+            InlineKeyboardMarkup as _IKM,
+        )
+
+        kb = _IKM(
+            [
+                [
+                    _IKB(
+                        "⤴ Restore",
+                        callback_data=f"{CB_ARC_RESTORE}{sess.id}"[:64],
+                    ),
+                    _IKB(
+                        "🗑 Delete",
+                        callback_data=f"{CB_ARC_DELETE}{sess.id}"[:64],
+                    ),
+                    _IKB("◀ Back", callback_data=CB_ARC_BACK),
+                ]
+            ]
+        )
+        try:
+            await query.edit_message_text(text=preview, reply_markup=kb)
+        except Exception as e:
+            logger.debug("archive inspect edit failed: %s", e)
+        await query.answer()
+
+    # Archive: back from inspect to listing
+    elif data == CB_ARC_BACK:
+        show_all = bool(
+            context.user_data and context.user_data.get("_arc_show_all", False)
+        )
+        lookback = (
+            config.archive_purge_after if show_all else DEFAULT_LOOKBACK_SECONDS
+        )
+        text, keyboard = build_archive_page(
+            page=0, lookback_seconds=lookback, show_all=show_all
+        )
+        try:
+            await query.edit_message_text(text=text, reply_markup=keyboard)
+        except Exception as e:
+            logger.debug("archive back edit failed: %s", e)
+        await query.answer()
+
+    # Archive: delete <session.id>
+    elif data.startswith(CB_ARC_DELETE):
+        sid = data[len(CB_ARC_DELETE) :]
+        if session_manager.delete_session(sid):
+            show_all = bool(
+                context.user_data and context.user_data.get("_arc_show_all", False)
+            )
+            lookback = (
+                config.archive_purge_after if show_all else DEFAULT_LOOKBACK_SECONDS
+            )
+            text, keyboard = build_archive_page(
+                page=0, lookback_seconds=lookback, show_all=show_all
+            )
+            try:
+                await query.edit_message_text(text=text, reply_markup=keyboard)
+            except Exception as e:
+                logger.debug("archive delete edit failed: %s", e)
+            await query.answer("Deleted")
+        else:
+            await query.answer("Already gone", show_alert=True)
+
     # A8 switcher: + new — open directory browser
     elif data == CB_SW_NEW:
         clear_browse_state(context.user_data)
@@ -1803,6 +1973,7 @@ async def post_init(application: Application) -> None:
         BotCommand("kill", "Stop and archive a session: /kill <name-or-id>"),
         BotCommand("stop", "Send Escape to interrupt the active session"),
         BotCommand("done", "Mark a session as done"),
+        BotCommand("archive", "Browse archived sessions"),
         BotCommand("history", "Message history for the active session"),
         BotCommand("screenshot", "Terminal screenshot with control keys"),
         BotCommand("usage", "Show Claude Code usage remaining"),
@@ -1890,6 +2061,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("kill", kill_command))
     application.add_handler(CommandHandler("done", done_command))
     application.add_handler(CommandHandler("stop", stop_command))
+    application.add_handler(CommandHandler("archive", archive_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Forward any other /command to Claude Code
     application.add_handler(MessageHandler(filters.COMMAND, forward_command_handler))

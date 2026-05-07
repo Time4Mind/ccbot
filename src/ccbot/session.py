@@ -967,6 +967,71 @@ class SessionManager:
         self._save_state()
         logger.warning("Session %s marked lost", session_id)
 
+    def list_archived(
+        self,
+        *,
+        max_age_seconds: float | None = None,
+        states: tuple[SessionState, ...] = ("archived", "completed", "lost"),
+    ) -> list["Session"]:
+        """Return archived/completed/lost sessions, newest first.
+
+        If `max_age_seconds` is given, only sessions whose archived_at is
+        within that window are returned.
+        """
+        now = time.time()
+        out: list[Session] = []
+        for s in self.sessions.values():
+            if s.state not in states:
+                continue
+            if max_age_seconds is not None:
+                # Use archived_at if set, else last_event_at as fallback.
+                anchor = s.archived_at or s.last_event_at or s.created_at
+                if anchor and (now - anchor) > max_age_seconds:
+                    continue
+            out.append(s)
+        out.sort(key=lambda s: s.archived_at or s.last_event_at or 0, reverse=True)
+        return out
+
+    def find_idle_to_archive(self, idle_seconds: float) -> list["Session"]:
+        """Return active/idle sessions that have crossed the idle TTL threshold."""
+        if idle_seconds <= 0:
+            return []
+        now = time.time()
+        out: list[Session] = []
+        for s in self.sessions.values():
+            if s.state not in ("active", "idle"):
+                continue
+            anchor = s.last_event_at or s.created_at
+            if anchor and (now - anchor) >= idle_seconds:
+                out.append(s)
+        return out
+
+    def find_archive_to_purge(self, purge_after_seconds: float) -> list["Session"]:
+        """Return archived/completed/lost sessions older than the purge threshold."""
+        if purge_after_seconds <= 0:
+            return []
+        now = time.time()
+        out: list[Session] = []
+        for s in self.sessions.values():
+            if s.state not in ("archived", "completed", "lost"):
+                continue
+            anchor = s.archived_at or s.last_event_at or s.created_at
+            if anchor and (now - anchor) >= purge_after_seconds:
+                out.append(s)
+        return out
+
+    def delete_session(self, session_id: str) -> bool:
+        """Permanently remove a Session record. Transcripts on disk are kept."""
+        if session_id not in self.sessions:
+            return False
+        del self.sessions[session_id]
+        for uid, sid in list(self.active_sessions.items()):
+            if sid == session_id:
+                del self.active_sessions[uid]
+        self._save_state()
+        logger.info("Deleted session record %s", session_id)
+        return True
+
     def rename_session(self, session_id: str, new_name: str) -> None:
         sess = self.sessions.get(session_id)
         if not sess:

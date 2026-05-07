@@ -16,6 +16,7 @@ Key components:
 
 import asyncio
 import logging
+import time
 
 from telegram import Bot
 
@@ -23,6 +24,7 @@ from ..config import config
 from ..session import session_manager
 from ..terminal_parser import is_interactive_ui, parse_status_line
 from ..tmux_manager import tmux_manager
+from .archive import idle_archive_sweep, purge_sweep
 from .cleanup import clear_session_state
 from .interactive_ui import (
     clear_interactive_msg,
@@ -35,6 +37,11 @@ logger = logging.getLogger(__name__)
 
 # Status polling interval
 STATUS_POLL_INTERVAL = 1.0  # seconds — fast feedback; rate limiting is at send layer.
+
+# Idle-archive sweep cadence (seconds).
+ARCHIVE_SWEEP_INTERVAL = 60.0
+# Archive-purge sweep cadence (seconds).
+PURGE_SWEEP_INTERVAL = 3600.0
 
 
 async def update_status_message(
@@ -107,8 +114,29 @@ async def update_status_message(
 async def status_poll_loop(bot: Bot) -> None:
     """Background task to poll terminal status for every live session."""
     logger.info("Status polling started (interval: %ss)", STATUS_POLL_INTERVAL)
+    last_archive_sweep = 0.0
+    last_purge_sweep = 0.0
     while True:
         try:
+            now = time.monotonic()
+
+            # Idle-TTL sweep — archive sessions whose last_event_at exceeded TTL.
+            if now - last_archive_sweep >= ARCHIVE_SWEEP_INTERVAL:
+                last_archive_sweep = now
+                for user_id in sorted(config.allowed_users):
+                    try:
+                        await idle_archive_sweep(bot, user_id)
+                    except Exception as e:
+                        logger.debug("idle_archive_sweep error: %s", e)
+
+            # Long-archive purge sweep.
+            if now - last_purge_sweep >= PURGE_SWEEP_INTERVAL:
+                last_purge_sweep = now
+                try:
+                    purge_sweep()
+                except Exception as e:
+                    logger.debug("purge_sweep error: %s", e)
+
             # Iterate every (user, window) pair derived from active+idle sessions.
             pairs: list[tuple[int, str]] = []
             for user_id in sorted(config.allowed_users):

@@ -1,0 +1,36 @@
+[Unit]
+Description=ccbot DM multi-session bridge to Claude Code
+Documentation=https://github.com/Time4Mind/ccbot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Replace with your install user; the bot must own ~/.claude and ~/.ccbot.
+User=%i
+# Working directory holds the cloned repo.
+WorkingDirectory=/opt/ccbot
+# Pull env from a single file. .env in WorkingDirectory is also honored.
+EnvironmentFile=-/etc/ccbot/ccbot.env
+EnvironmentFile=-/opt/ccbot/.env
+# Keep tmux server alive across daemon restarts by socket-binding it
+# under the bot's runtime directory.
+Environment=TMUX_TMPDIR=%t/ccbot
+RuntimeDirectory=ccbot
+RuntimeDirectoryMode=0700
+# uv resolves the project from pyproject.toml in WorkingDirectory.
+ExecStart=/usr/bin/env uv run python -m ccbot
+Restart=always
+RestartSec=5
+# Sessions are recovered via reconcile_sessions_with_tmux + resolve_stale_ids.
+TimeoutStartSec=60
+KillMode=mixed
+
+# Hardening (loose; loosen further only if claude needs more).
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/ccbot %h/.ccbot %h/.claude
+
+[Install]
+WantedBy=multi-user.target

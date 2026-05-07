@@ -2134,6 +2134,10 @@ async def post_init(application: Application) -> None:
 
     # Re-resolve stale window IDs from persisted state against live tmux windows
     await session_manager.resolve_stale_ids()
+    # DM mode: cross-check Session records against live tmux. Sessions whose
+    # window vanished get state=lost and surface in /list with a Restore button
+    # via /archive (or are restorable from /archive --all).
+    await session_manager.reconcile_sessions_with_tmux()
 
     # Pre-fill global rate limiter bucket on restart.
     # AsyncLimiter starts at _level=0 (full burst capacity), but Telegram's

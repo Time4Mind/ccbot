@@ -307,6 +307,36 @@ class SessionManager:
                 self.group_chat_ids = {}
                 pass
 
+    async def reconcile_sessions_with_tmux(self) -> int:
+        """Cross-check Session records against live tmux windows.
+
+        - active/idle Session whose window_id is missing in tmux → marked `lost`.
+        - lost Session whose window_id was re-resolved to a live window → bumped
+          back to active by callers (we only flip lost→? if the user explicitly
+          restores via /archive).
+
+        Returns count of sessions marked lost.
+        """
+        windows = await tmux_manager.list_windows()
+        live_ids = {w.window_id for w in windows}
+        lost = 0
+        for sess in self.sessions.values():
+            if sess.state in ("active", "idle") and sess.window_id:
+                if sess.window_id not in live_ids:
+                    sess.state = "lost"
+                    lost += 1
+        if lost:
+            self._save_state()
+            logger.info("Reconcile: marked %d sessions as lost on startup", lost)
+        # If the user's active_sessions points to a Session that's now lost,
+        # drop the pointer so the user doesn't hit an inactive bind.
+        for uid, sid in list(self.active_sessions.items()):
+            sess = self.sessions.get(sid)
+            if sess is None or sess.state == "lost":
+                del self.active_sessions[uid]
+        self._save_state()
+        return lost
+
     async def resolve_stale_ids(self) -> None:
         """Re-resolve persisted window IDs against live tmux windows.
 

@@ -137,6 +137,13 @@ from .handlers.message_sender import (
     safe_send,
     send_with_fallback,
 )
+from .handlers.notifications import (
+    bg_mode,
+    is_active_for_user,
+    push_event,
+    reset_card,
+    update_session_card,
+)
 from .markdown_v2 import convert_markdown
 from .naming import maybe_auto_name
 from .handlers.response_builder import build_response_parts
@@ -1920,7 +1927,10 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         # Touch session activity for idle TTL.
         session_manager.touch_session(sess.id)
 
+        is_active = is_active_for_user(user_id, sess)
+
         # Handle interactive tools specially — capture terminal and send UI.
+        # Interactive UIs always go to the user (only one shown at a time).
         if msg.tool_name in INTERACTIVE_TOOL_NAMES and msg.content_type == "tool_use":
             set_interactive_mode(user_id, wid)
             queue = get_message_queue(user_id)
@@ -1929,6 +1939,10 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             await asyncio.sleep(0.3)
             handled = await handle_interactive_ui(bot, user_id, wid)
             if handled:
+                # C5 push: AskUserQuestion / ExitPlanMode.
+                await push_event(
+                    bot, user_id, sess, text=f"interactive prompt: {msg.tool_name}"
+                )
                 claude_sess = await session_manager.resolve_session_for_window(wid)
                 if claude_sess and claude_sess.file_path:
                     try:
@@ -1946,6 +1960,21 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         if get_interactive_msg_id(user_id, wid):
             await clear_interactive_msg(user_id, bot, wid)
 
+        # Background sessions: edit a single per-session live card and skip
+        # the multi-message stream.
+        if not is_active and bg_mode() != "footer":
+            await update_session_card(bot, user_id, sess, msg)
+            if msg.is_complete and msg.content_type == "text" and msg.role == "assistant":
+                summary = (msg.text or "").strip().splitlines()[0:1]
+                summary_line = summary[0] if summary else "task complete"
+                if len(summary_line) > 200:
+                    summary_line = summary_line[:197] + "…"
+                await push_event(bot, user_id, sess, text=f"✓ {summary_line}")
+                # Reset card so next assistant turn opens a fresh card.
+                reset_card(user_id, sess.id)
+            continue
+
+        # Active session (or footer mode): existing multi-message stream.
         # Skip tool call notifications when CCBOT_SHOW_TOOL_CALLS=false.
         if not config.show_tool_calls and msg.content_type in (
             "tool_use",

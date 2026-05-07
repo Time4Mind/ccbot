@@ -1,34 +1,41 @@
 """Claude Code session management — the core state hub.
 
-Manages the key mappings:
-  Window→Session (window_states): which Claude session_id a window holds (keyed by window_id).
-  User→Thread→Window (thread_bindings): topic-to-window bindings (1 topic = 1 window_id).
+Manages the key mappings (DM mode):
+  user_id -> active_session: which Session is currently active for a user.
+  short id -> Session: full per-session metadata (goal, window, state, timestamps, usage).
+  window_id -> WindowState: which Claude session_id a tmux window holds.
+
+Legacy mappings (kept for migration, dropped in Phase 1):
+  user_id -> thread_id -> window_id (thread_bindings) — topic routing.
+  group_chat_ids — supergroup forum routing.
 
 Responsibilities:
   - Persist/load state to ~/.ccbot/state.json.
-  - Sync window↔session bindings from session_map.json (written by hook).
+  - Sync window<->session bindings from session_map.json (written by hook).
   - Resolve window IDs to ClaudeSession objects (JSONL file reading).
   - Track per-user read offsets for unread-message detection.
-  - Manage thread↔window bindings for Telegram topic routing.
+  - Manage active_sessions: lookup, switch, create, archive, restore.
   - Send keystrokes to tmux windows and retrieve message history.
-  - Maintain window_id→display name mapping for UI display.
+  - Maintain window_id<->display name mapping for UI display.
   - Re-resolve stale window IDs on startup (tmux server restart recovery).
 
-Key class: SessionManager (singleton instantiated as `session_manager`).
-Key methods for thread binding access:
-  - resolve_window_for_thread: Get window_id for a user's thread
-  - iter_thread_bindings: Generator for iterating all (user_id, thread_id, window_id)
-  - find_users_for_session: Find all users bound to a session_id
+Key classes:
+  SessionManager (singleton `session_manager`).
+  Session — per-task record with goal, lifecycle state, timestamps.
+  WindowState — per-tmux-window claude_session_id + cwd.
+  ClaudeSession — read-only Claude transcript metadata.
 """
 
 import asyncio
 import json
 import logging
 import re
+import secrets
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, Literal
 
 import aiofiles
 
@@ -82,6 +89,87 @@ class ClaudeSession:
     file_path: str
 
 
+SessionState = Literal["active", "idle", "archived", "completed", "lost"]
+
+
+@dataclass
+class Session:
+    """A task-driven Claude Code session.
+
+    The unit of UX in DM mode. One Session corresponds to one tmux window while
+    in `active`/`idle` state; on archival the window is killed and the
+    `claude_session_id` is kept so `claude --resume` can rehydrate on restore.
+
+    Attributes:
+        id: Short stable id (8 hex chars). Never changes for the lifetime of the record.
+        name: Human-readable name (kebab-case). Auto-generated via Haiku, renameable.
+        window_id: Current tmux window id (e.g. '@5'). Empty if archived.
+        workdir: Working directory at session creation. Used as cwd for `claude --resume`.
+        goal: Free-form goal description. Closed only by user via `/done`.
+        state: 'active' | 'idle' | 'archived' | 'completed' | 'lost'.
+        claude_session_id: Last known Claude session id (uuid). Set by SessionStart hook.
+        created_at: Unix timestamp.
+        last_event_at: Unix timestamp of most recent inbound or outbound activity.
+        archived_at: Unix timestamp of archival, 0 while active.
+        token_usage_total: Cumulative input+output tokens (parsed from JSONL).
+        message_count: Cumulative claude turn count.
+    """
+
+    id: str
+    name: str
+    window_id: str = ""
+    workdir: str = ""
+    goal: str = ""
+    state: SessionState = "active"
+    claude_session_id: str = ""
+    created_at: float = 0.0
+    last_event_at: float = 0.0
+    archived_at: float = 0.0
+    token_usage_total: int = 0
+    message_count: int = 0
+
+    @staticmethod
+    def new_id() -> str:
+        """Generate a fresh short id (8 lowercase hex chars)."""
+        return secrets.token_hex(4)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "window_id": self.window_id,
+            "workdir": self.workdir,
+            "goal": self.goal,
+            "state": self.state,
+            "claude_session_id": self.claude_session_id,
+            "created_at": self.created_at,
+            "last_event_at": self.last_event_at,
+            "archived_at": self.archived_at,
+            "token_usage_total": self.token_usage_total,
+            "message_count": self.message_count,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Session":
+        state_val = data.get("state", "active")
+        if state_val not in ("active", "idle", "archived", "completed", "lost"):
+            state_val = "active"
+        return cls(
+            id=data["id"],
+            name=data.get("name", ""),
+            window_id=data.get("window_id", ""),
+            workdir=data.get("workdir", ""),
+            goal=data.get("goal", ""),
+            state=state_val,
+            claude_session_id=data.get("claude_session_id", ""),
+            created_at=float(data.get("created_at", 0.0)),
+            last_event_at=float(data.get("last_event_at", 0.0)),
+            archived_at=float(data.get("archived_at", 0.0)),
+            token_usage_total=int(data.get("token_usage_total", 0)),
+            message_count=int(data.get("message_count", 0)),
+        )
+
+
 @dataclass
 class SessionManager:
     """Manages session state for Claude Code.
@@ -98,17 +186,22 @@ class SessionManager:
 
     window_states: dict[str, WindowState] = field(default_factory=dict)
     user_window_offsets: dict[int, dict[str, int]] = field(default_factory=dict)
-    thread_bindings: dict[int, dict[int, str]] = field(default_factory=dict)
+    # DM mode: routing key for inbound user text.
+    # user_id -> Session.id (short hex). Single active session per user.
+    active_sessions: dict[int, str] = field(default_factory=dict)
+    # All sessions known to the bot (active, idle, archived, completed, lost).
+    # Keyed by Session.id.
+    sessions: dict[str, "Session"] = field(default_factory=dict)
+    # Telegram message_id of the bot message that currently carries the inline
+    # session switcher for each user. Used to strip stale switchers when a new
+    # bot message goes out.
+    last_switcher_msg_id: dict[int, int] = field(default_factory=dict)
     # window_id -> display name (window_name)
     window_display_names: dict[str, str] = field(default_factory=dict)
-    # "user_id:thread_id" -> group chat_id (for supergroup forum topic routing)
-    # IMPORTANT: This mapping is essential for supergroup/forum topic support.
-    # Telegram Bot API requires group chat_id (negative number like -100xxx)
-    # as the chat_id parameter when sending messages to forum topics.
-    # Using user_id as chat_id will fail with "Message thread not found".
-    # See: https://core.telegram.org/bots/api#sendmessage
-    # History: originally added in 5afc111, erroneously removed in 26cb81f,
-    # restored in PR #23.
+    # Legacy: kept for migration from supergroup mode. Empty in DM mode.
+    # user_id -> {thread_id -> window_id}
+    thread_bindings: dict[int, dict[int, str]] = field(default_factory=dict)
+    # Legacy: "user_id:thread_id" -> group chat_id. Empty in DM mode.
     group_chat_ids: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -120,11 +213,19 @@ class SessionManager:
             "user_window_offsets": {
                 str(uid): offsets for uid, offsets in self.user_window_offsets.items()
             },
+            "active_sessions": {
+                str(uid): sid for uid, sid in self.active_sessions.items()
+            },
+            "sessions": {sid: s.to_dict() for sid, s in self.sessions.items()},
+            "last_switcher_msg_id": {
+                str(uid): mid for uid, mid in self.last_switcher_msg_id.items()
+            },
+            "window_display_names": self.window_display_names,
+            # Legacy fields retained for migration; empty in DM mode.
             "thread_bindings": {
                 str(uid): {str(tid): wid for tid, wid in bindings.items()}
                 for uid, bindings in self.thread_bindings.items()
             },
-            "window_display_names": self.window_display_names,
             "group_chat_ids": self.group_chat_ids,
         }
         atomic_write_json(config.state_file, state)
@@ -150,6 +251,18 @@ class SessionManager:
                 self.user_window_offsets = {
                     int(uid): offsets
                     for uid, offsets in state.get("user_window_offsets", {}).items()
+                }
+                self.active_sessions = {
+                    int(uid): sid
+                    for uid, sid in state.get("active_sessions", {}).items()
+                }
+                self.sessions = {
+                    sid: Session.from_dict(data)
+                    for sid, data in state.get("sessions", {}).items()
+                }
+                self.last_switcher_msg_id = {
+                    int(uid): int(mid)
+                    for uid, mid in state.get("last_switcher_msg_id", {}).items()
                 }
                 self.thread_bindings = {
                     int(uid): {int(tid): wid for tid, wid in bindings.items()}
@@ -186,6 +299,9 @@ class SessionManager:
                 logger.warning("Failed to load state: %s", e)
                 self.window_states = {}
                 self.user_window_offsets = {}
+                self.active_sessions = {}
+                self.sessions = {}
+                self.last_switcher_msg_id = {}
                 self.thread_bindings = {}
                 self.window_display_names = {}
                 self.group_chat_ids = {}
@@ -719,7 +835,170 @@ class SessionManager:
         self.user_window_offsets[user_id][window_id] = offset
         self._save_state()
 
-    # --- Thread binding management ---
+    # --- DM mode: active session management ---
+
+    def get_active_session(self, user_id: int) -> "Session | None":
+        """Return the currently active Session for a user, or None."""
+        sid = self.active_sessions.get(user_id)
+        if not sid:
+            return None
+        return self.sessions.get(sid)
+
+    def set_active_session(self, user_id: int, session_id: str) -> None:
+        """Make `session_id` the active session for `user_id`."""
+        if session_id not in self.sessions:
+            raise KeyError(f"Unknown session id: {session_id}")
+        self.active_sessions[user_id] = session_id
+        self._save_state()
+        logger.info("Active session for user %d: %s", user_id, session_id)
+
+    def clear_active_session(self, user_id: int) -> None:
+        """Drop the active-session pointer for a user (e.g. all sessions archived)."""
+        if user_id in self.active_sessions:
+            del self.active_sessions[user_id]
+            self._save_state()
+
+    def list_user_sessions(
+        self,
+        user_id: int,
+        *,
+        states: tuple[SessionState, ...] = ("active", "idle"),
+    ) -> list["Session"]:
+        """List sessions for a user filtered by state. Active first, by name."""
+        # In v0.1 every session is implicitly the bot's single user's; we still
+        # accept user_id so the public surface is uniform with other helpers.
+        del user_id  # no per-user partitioning yet
+        out = [s for s in self.sessions.values() if s.state in states]
+        out.sort(key=lambda s: (s.state != "active", s.name or s.id))
+        return out
+
+    def get_session(self, session_id: str) -> "Session | None":
+        return self.sessions.get(session_id)
+
+    def find_session_by_window(self, window_id: str) -> "Session | None":
+        for s in self.sessions.values():
+            if s.window_id == window_id and s.state in ("active", "idle"):
+                return s
+        return None
+
+    def find_session_by_claude_id(self, claude_session_id: str) -> "Session | None":
+        for s in self.sessions.values():
+            if s.claude_session_id == claude_session_id:
+                return s
+        return None
+
+    def create_session(
+        self,
+        *,
+        name: str = "",
+        window_id: str = "",
+        workdir: str = "",
+        goal: str = "",
+    ) -> "Session":
+        """Register a new Session record. Caller is responsible for the tmux window."""
+        now = time.time()
+        sid = Session.new_id()
+        # Avoid id collision in pathological case
+        while sid in self.sessions:
+            sid = Session.new_id()
+        if not name:
+            name = f"session-{len(self.sessions) + 1}"
+        sess = Session(
+            id=sid,
+            name=name,
+            window_id=window_id,
+            workdir=workdir,
+            goal=goal,
+            state="active",
+            created_at=now,
+            last_event_at=now,
+        )
+        self.sessions[sid] = sess
+        self._save_state()
+        logger.info("Created session %s (%s) on window %s", sid, name, window_id or "-")
+        return sess
+
+    def touch_session(self, session_id: str) -> None:
+        """Bump last_event_at to now and persist."""
+        sess = self.sessions.get(session_id)
+        if not sess:
+            return
+        sess.last_event_at = time.time()
+        # Don't save on every touch; callers batch via _save_state when appropriate.
+
+    def mark_session_archived(
+        self, session_id: str, *, completed: bool = False
+    ) -> None:
+        """Move a session to archived/completed state, drop window_id binding."""
+        sess = self.sessions.get(session_id)
+        if not sess:
+            return
+        sess.state = "completed" if completed else "archived"
+        sess.archived_at = time.time()
+        sess.window_id = ""
+        # If this was anyone's active session, clear that
+        for uid, sid in list(self.active_sessions.items()):
+            if sid == session_id:
+                del self.active_sessions[uid]
+        self._save_state()
+        logger.info("Archived session %s (completed=%s)", session_id, completed)
+
+    def mark_session_lost(self, session_id: str) -> None:
+        """Mark a session as lost (its tmux window vanished externally)."""
+        sess = self.sessions.get(session_id)
+        if not sess:
+            return
+        sess.state = "lost"
+        sess.window_id = ""
+        self._save_state()
+        logger.warning("Session %s marked lost", session_id)
+
+    def rename_session(self, session_id: str, new_name: str) -> None:
+        sess = self.sessions.get(session_id)
+        if not sess:
+            return
+        sess.name = new_name
+        self._save_state()
+
+    def set_session_window(self, session_id: str, window_id: str) -> None:
+        """Re-attach a session to a (possibly new) tmux window after restore."""
+        sess = self.sessions.get(session_id)
+        if not sess:
+            return
+        sess.window_id = window_id
+        sess.state = "active"
+        sess.last_event_at = time.time()
+        self._save_state()
+
+    def set_session_goal(self, session_id: str, goal: str) -> None:
+        sess = self.sessions.get(session_id)
+        if not sess:
+            return
+        sess.goal = goal
+        self._save_state()
+
+    def set_session_claude_id(self, session_id: str, claude_session_id: str) -> None:
+        sess = self.sessions.get(session_id)
+        if not sess:
+            return
+        if sess.claude_session_id != claude_session_id:
+            sess.claude_session_id = claude_session_id
+            self._save_state()
+
+    def get_last_switcher_msg(self, user_id: int) -> int | None:
+        return self.last_switcher_msg_id.get(user_id)
+
+    def set_last_switcher_msg(self, user_id: int, message_id: int) -> None:
+        self.last_switcher_msg_id[user_id] = message_id
+        # Persist eagerly: cheap, helps survive bot restart for switcher cleanup.
+        self._save_state()
+
+    def clear_last_switcher_msg(self, user_id: int) -> None:
+        if user_id in self.last_switcher_msg_id:
+            del self.last_switcher_msg_id[user_id]
+            self._save_state()
+
+    # --- Legacy thread binding management (used during migration; removed in Phase 1) ---
 
     def bind_thread(
         self, user_id: int, thread_id: int, window_id: str, window_name: str = ""
@@ -798,9 +1077,10 @@ class SessionManager:
         self,
         session_id: str,
     ) -> list[tuple[int, str, int]]:
-        """Find all users whose thread-bound window maps to the given session_id.
+        """Legacy: find users via thread bindings. Returns (user, window, thread).
 
-        Returns list of (user_id, window_id, thread_id) tuples.
+        Used only during Phase 0 transition. Phase 1 replaces it with
+        `find_users_for_claude_session`. Empty list in DM mode.
         """
         result: list[tuple[int, str, int]] = []
         for user_id, thread_id, window_id in self.iter_thread_bindings():
@@ -808,6 +1088,42 @@ class SessionManager:
             if resolved and resolved.session_id == session_id:
                 result.append((user_id, window_id, thread_id))
         return result
+
+    async def find_users_for_claude_session(
+        self,
+        claude_session_id: str,
+    ) -> list[tuple[int, "Session"]]:
+        """Return [(user_id, Session)] for every user whose active session matches.
+
+        Reverse-map of (user_id -> active Session) by claude_session_id.
+        Background sessions of a user are NOT returned here — outbound for those
+        flows through their own per-session live cards (see C7).
+        """
+        out: list[tuple[int, "Session"]] = []
+        for user_id, sid in self.active_sessions.items():
+            sess = self.sessions.get(sid)
+            if sess and sess.claude_session_id == claude_session_id:
+                out.append((user_id, sess))
+        return out
+
+    def all_user_sessions_with_claude_id(
+        self, claude_session_id: str
+    ) -> list[tuple[int, "Session"]]:
+        """Return [(user_id, Session)] including non-active sessions for that claude id.
+
+        Used to drive background-session live-card edits even when the session
+        is not active for any user. The user_id is best-effort and currently
+        always equals the bot's single allowed user (DM mode).
+        """
+        if not config.allowed_users:
+            return []
+        # In v0.1 we model a single user; pick the deterministic minimum.
+        user_id = min(config.allowed_users)
+        out: list[tuple[int, "Session"]] = []
+        for sess in self.sessions.values():
+            if sess.claude_session_id == claude_session_id:
+                out.append((user_id, sess))
+        return out
 
     # --- Tmux helpers ---
 

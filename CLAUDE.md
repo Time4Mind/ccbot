@@ -1,6 +1,8 @@
 # CLAUDE.md
 
-ccmux — Telegram bot that bridges Telegram Forum topics to Claude Code sessions via tmux windows. Each topic is bound to one tmux window running one Claude Code instance.
+ccbot (this fork) — Telegram bot that bridges a private 1-1 DM to multiple parallel Claude Code sessions via tmux windows. One user, N sessions, one inline switcher in the most recent bot message.
+
+Authoritative product spec: `doc/dm-multisession-spec.md`. Implementation plan: `doc/dm-multisession-plan.md`.
 
 Tech stack: Python, python-telegram-bot, tmux, uv.
 
@@ -16,10 +18,12 @@ ccbot hook --install                  # Auto-install Claude Code SessionStart ho
 
 ## Core Design Constraints
 
-- **1 Topic = 1 Window = 1 Session** — all internal routing keyed by tmux window ID (`@0`, `@12`), not window name. Window names kept as display names. Same directory can have multiple windows.
-- **Topic-only** — no backward-compat for non-topic mode. No `active_sessions`, no `/list`, no General topic routing.
-- **No message truncation** at parse layer — splitting only at send layer (`split_message`, 4096 char limit).
-- **MarkdownV2 only** — use `safe_reply`/`safe_edit`/`safe_send` helpers (auto fallback to plain text). Internal queue/UI code calls bot API directly with its own fallback.
+- **DM-only (private 1-1 chat)** — no supergroup, no topics. Routing keyed by `active_sessions: dict[user_id -> session_id]` plus `Session.window_id`.
+- **Parallel sessions** — switching the active session never pauses or stops work in other sessions. Each session has its own tmux window and claude process.
+- **Inline switcher in last bot message only** — strip reply markup from previous switcher when a new bot message is sent. Never accumulate stale switchers.
+- **bypass-only** — claude is launched with `--dangerously-skip-permissions`. No permission relay UI.
+- **No message truncation** at parse layer — splitting only at send layer (`split_message`, 4096 char limit). Tables/code that overflow → file attachment.
+- **MarkdownV2 via telegramify-markdown** — use `safe_reply`/`safe_edit`/`safe_send` helpers (auto fallback to plain text).
 - **Hook-based session tracking** — `SessionStart` hook writes `session_map.json`; monitor polls it to detect session changes.
 - **Message queue per user** — FIFO ordering, message merging (3800 char limit), tool_use/tool_result pairing.
 - **Rate limiting** — `AIORateLimiter(max_retries=5)` on the Application (30/s global). On restart, the global bucket is pre-filled to avoid burst against Telegram's server-side counter.
@@ -55,5 +59,9 @@ Or manually in `~/.claude/settings.json`:
 ## Architecture Details
 
 See @.claude/rules/architecture.md for full system diagram and module inventory.
-See @.claude/rules/topic-architecture.md for topic→window→session mapping details.
+See @.claude/rules/dm-architecture.md for DM routing model, active_sessions, switcher, and session lifecycle.
 See @.claude/rules/message-handling.md for message queue, merging, and rate limiting.
+See @doc/dm-multisession-spec.md for the product spec (UX, env vars, acceptance criteria).
+See @doc/dm-multisession-plan.md for the implementation plan and hotspot map.
+
+The legacy topic-based routing rule is archived at `doc/legacy/topic-architecture.md` for historical reference only — do not follow it.

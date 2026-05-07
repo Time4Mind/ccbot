@@ -5,11 +5,16 @@ monitoring intervals from environment variables (with .env support).
 .env loading priority: local .env (cwd) > $CCBOT_DIR/.env (default ~/.ccbot).
 The module-level `config` instance is imported by nearly every other module.
 
+DM mode adds: SESSION_IDLE_TTL, ARCHIVE_PURGE_AFTER, MAX_SESSIONS,
+SESSION_TOKEN_BUDGET_5H, MAX_5H_TOKENS, MAX_WEEKLY_TOKENS, PREVIEW_*,
+BG_NOTIFY_MODE, VOICE_BACKEND, WHISPER_MODEL_PATH, INBOX_TTL_HOURS.
+
 Key class: Config (singleton instantiated as `config`).
 """
 
 import logging
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -20,6 +25,22 @@ logger = logging.getLogger(__name__)
 
 # Env vars that must not leak to child processes (e.g. Claude Code via tmux)
 SENSITIVE_ENV_VARS = {"TELEGRAM_BOT_TOKEN", "ALLOWED_USERS", "OPENAI_API_KEY"}
+
+
+def _parse_duration(value: str, default_seconds: float) -> float:
+    """Parse a duration string like '4h', '72h', '14d', '60s', '15m' into seconds.
+
+    Bare numbers are treated as seconds. Empty/invalid input returns the default.
+    """
+    if not value:
+        return default_seconds
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([smhd]?)\s*", value.lower())
+    if not m:
+        return default_seconds
+    n = float(m.group(1))
+    unit = m.group(2)
+    multiplier = {"": 1.0, "s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}[unit]
+    return n * multiplier
 
 
 class Config:
@@ -106,6 +127,58 @@ class Config:
         self.openai_base_url: str = os.getenv(
             "OPENAI_BASE_URL", "https://api.openai.com/v1"
         )
+
+        # --- DM multi-session mode ---
+        # Sessions
+        self.max_sessions: int = int(os.getenv("MAX_SESSIONS", "10"))
+        self.session_idle_ttl: float = _parse_duration(
+            os.getenv("SESSION_IDLE_TTL", "4h"), 4 * 3600
+        )
+        self.archive_purge_after: float = _parse_duration(
+            os.getenv("ARCHIVE_PURGE_AFTER", "14d"), 14 * 86400
+        )
+        self.session_token_budget_5h: int = int(
+            os.getenv("SESSION_TOKEN_BUDGET_5H", "15000")
+        )
+
+        # Budgets — Max x20 starting estimates, calibrated empirically.
+        self.max_5h_tokens: int = int(os.getenv("MAX_5H_TOKENS", "50000"))
+        self.max_weekly_tokens: int = int(os.getenv("MAX_WEEKLY_TOKENS", "640000"))
+
+        # Preview
+        self.preview_user_lines: int = int(os.getenv("PREVIEW_USER_LINES", "4"))
+        self.preview_assistant_lines: int = int(
+            os.getenv("PREVIEW_ASSISTANT_LINES", "8")
+        )
+        self.preview_tools: int = int(os.getenv("PREVIEW_TOOLS", "2"))
+        self.preview_live_lag: float = float(os.getenv("PREVIEW_LIVE_LAG", "4"))
+
+        # Notifications
+        bg_mode = os.getenv("BG_NOTIFY_MODE", "separate").strip().lower()
+        if bg_mode not in ("separate", "footer"):
+            bg_mode = "separate"
+        self.bg_notify_mode: str = bg_mode
+
+        # Voice
+        voice_backend = os.getenv("VOICE_BACKEND", "auto").strip().lower()
+        if voice_backend not in ("auto", "whisper", "apple", "off"):
+            voice_backend = "auto"
+        self.voice_backend: str = voice_backend
+        self.whisper_model_path: str = os.getenv(
+            "WHISPER_MODEL_PATH",
+            str(self.config_dir / "models" / "ggml-medium.bin"),
+        )
+        self.whisper_bin: str = os.getenv("WHISPER_BIN", "whisper-cli")
+
+        # Media inbox
+        self.inbox_ttl_hours: float = float(os.getenv("INBOX_TTL_HOURS", "24"))
+        self.inbox_dirname: str = os.getenv("CCBOT_INBOX_DIRNAME", ".ccbot-inbox")
+
+        # Claude flags
+        self.claude_flags: str = os.getenv(
+            "CLAUDE_FLAGS", "--dangerously-skip-permissions"
+        )
+        self.is_sandbox: bool = os.getenv("IS_SANDBOX", "1") not in ("", "0", "false")
 
         # Scrub sensitive vars from os.environ so child processes never inherit them.
         # Values are already captured in Config attributes above.

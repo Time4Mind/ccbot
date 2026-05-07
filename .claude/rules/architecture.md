@@ -3,13 +3,14 @@
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         Telegram Bot (bot.py)                       │
-│  - Topic-based routing: 1 topic = 1 window = 1 session             │
+│  - DM-based routing: 1 user = active_session -> tmux window        │
+│  - /list /use /new /done /archive /status /kill /stop slash cmds   │
+│  - Inline switcher under last bot message (A8)                     │
 │  - /history: Paginated message history (default: latest page)      │
 │  - /screenshot: Capture tmux pane as PNG                           │
 │  - /esc: Send Escape to interrupt Claude                           │
 │  - Send text → Claude Code via tmux keystrokes                     │
 │  - Forward /commands to Claude Code                                │
-│  - Create sessions via directory browser in unbound topics         │
 │  - Tool use → tool result: edit message in-place                   │
 │  - Interactive UI: AskUserQuestion / ExitPlanMode / Permission     │
 │  - Per-user message queue + worker (merge, rate limit)             │
@@ -53,8 +54,8 @@
 │  (session.py)          │  reads  │  - Write session_map   │
 │  - Window ↔ Session    │  map    │    .json               │
 │    resolution          │         └────────────────────────┘
-│  - Thread bindings     │
-│    (topic → window)    │         ┌────────────────────────┐
+│  - active_sessions     │
+│    (user_id -> sid)    │         ┌────────────────────────┐
 │  - Message history     │────────►│  Claude Sessions       │
 │    retrieval           │  reads  │  ~/.claude/projects/   │
 └────────────────────────┘  JSONL  │  - sessions-index      │
@@ -91,12 +92,12 @@ State files (~/.ccbot/ or $CCBOT_DIR/):
 
 ## Key Design Decisions
 
-- **Topic-centric** — Each Telegram topic binds to one tmux window. No centralized session list; topics *are* the session list.
+- **DM-centric, not topic-centric** — single 1-1 chat per user; routing key is `active_sessions[user_id] -> session_id -> window_id`. Multiple parallel sessions per user, switcher in the most recent bot message.
 - **Window ID-centric** — All internal state keyed by tmux window ID (e.g. `@0`, `@12`), not window names. Window IDs are guaranteed unique within a tmux server session. Window names are kept as display names via `window_display_names` map. Same directory can have multiple windows.
 - **Hook-based session tracking** — Claude Code `SessionStart` hook writes `session_map.json`; monitor reads it each poll cycle to auto-detect session changes.
 - **Tool use ↔ tool result pairing** — `tool_use_id` tracked across poll cycles; tool result edits the original tool_use Telegram message in-place.
 - **MarkdownV2 with fallback** — All messages go through `safe_reply`/`safe_edit`/`safe_send` which convert via `telegramify-markdown` and fall back to plain text on parse failure.
 - **No truncation at parse layer** — Full content preserved; splitting at send layer respects Telegram's 4096 char limit with expandable quote atomicity.
 - Only sessions registered in `session_map.json` (via hook) are monitored.
-- Notifications delivered to users via thread bindings (topic → window_id → session).
+- Notifications delivered to users via active_sessions reverse-map (claude session_id -> user with matching active session). Background sessions render their own per-session live cards.
 - **Startup re-resolution** — Window IDs reset on tmux server restart. On startup, `resolve_stale_ids()` matches persisted display names against live windows to re-map IDs. Old state.json files keyed by window name are auto-migrated.

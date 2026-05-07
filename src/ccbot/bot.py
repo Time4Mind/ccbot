@@ -78,6 +78,9 @@ from .handlers.callback_data import (
     CB_SESSION_SELECT,
     CB_KEYS_PREFIX,
     CB_SCREENSHOT_REFRESH,
+    CB_SW_NEW,
+    CB_SW_NOOP,
+    CB_SW_USE,
     CB_WIN_BIND,
     CB_WIN_CANCEL,
     CB_WIN_NEW,
@@ -126,6 +129,10 @@ from .handlers.message_sender import (
 from .markdown_v2 import convert_markdown
 from .handlers.response_builder import build_response_parts
 from .handlers.status_polling import status_poll_loop
+from .handlers.switcher import (
+    build_session_preview,
+    build_switcher_keyboard,
+)
 from .screenshot import text_to_image
 from .session import session_manager
 from .session_monitor import NewMessage, SessionMonitor
@@ -161,6 +168,50 @@ def is_user_allowed(user_id: int | None) -> bool:
 def _active_window(user_id: int) -> str | None:
     """Return the user's active tmux window_id, or None if none active."""
     return session_manager.get_active_window(user_id)
+
+
+async def _render_session_preview(sess) -> str:
+    """Build a context-preview text for a Session — header + last user/assistant
+    + last tool calls. Read from the session's JSONL transcript.
+    """
+    last_user = ""
+    last_assistant = ""
+    last_tools: list[str] = []
+    if sess.window_id:
+        try:
+            messages, _total = await session_manager.get_recent_messages(sess.window_id)
+        except Exception as e:
+            logger.debug("preview: get_recent_messages failed: %s", e)
+            messages = []
+        # Walk from newest to oldest collecting one of each kind.
+        for m in reversed(messages):
+            role = m.get("role")
+            ctype = m.get("content_type", "text")
+            text = m.get("text", "")
+            if not text:
+                continue
+            if role == "user" and not last_user:
+                last_user = text
+            elif role == "assistant" and ctype == "text" and not last_assistant:
+                last_assistant = text
+            elif (
+                ctype == "tool_use"
+                and len(last_tools) < config.preview_tools
+            ):
+                first_line = text.splitlines()[0] if text else ""
+                last_tools.append(f"[tool] {first_line}")
+            if (
+                last_user
+                and last_assistant
+                and len(last_tools) >= config.preview_tools
+            ):
+                break
+    return build_session_preview(
+        sess,
+        last_user=last_user,
+        last_assistant=last_assistant,
+        last_tools=list(reversed(last_tools)),
+    )
 
 
 # --- Command handlers ---
@@ -1179,6 +1230,57 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer("Failed to refresh", show_alert=True)
 
     elif data == "noop":
+        await query.answer()
+
+    # A8 switcher: tap on already-active button — no-op feedback.
+    elif data == CB_SW_NOOP:
+        await query.answer("already active")
+
+    # A8 switcher: switch active session to <session.id>
+    elif data.startswith(CB_SW_USE):
+        target_id = data[len(CB_SW_USE) :]
+        sess = session_manager.get_session(target_id)
+        if sess is None or sess.state not in ("active", "idle"):
+            await query.answer("Session not available", show_alert=True)
+            return
+        session_manager.set_active_session(user.id, target_id)
+
+        # Render the context preview into the same message and re-attach
+        # the switcher so the active marker moves to the new session.
+        try:
+            preview = await _render_session_preview(sess)
+            await query.edit_message_text(text=preview)
+        except Exception as e:
+            logger.debug("preview edit_message_text failed: %s", e)
+        keyboard = build_switcher_keyboard(user.id)
+        if keyboard is not None:
+            try:
+                await query.edit_message_reply_markup(reply_markup=keyboard)
+            except Exception as e:
+                logger.debug("preview reply markup failed: %s", e)
+            else:
+                if query.message:
+                    session_manager.set_last_switcher_msg(
+                        user.id, query.message.message_id
+                    )
+        await query.answer(f"→ {sess.name or sess.id}")
+
+    # A8 switcher: + new — open directory browser
+    elif data == CB_SW_NEW:
+        clear_browse_state(context.user_data)
+        clear_window_picker_state(context.user_data)
+        clear_session_picker_state(context.user_data)
+        start_path = str(Path.cwd())
+        msg_text, keyboard, subdirs = build_directory_browser(start_path)
+        if context.user_data is not None:
+            context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
+            context.user_data[BROWSE_PATH_KEY] = start_path
+            context.user_data[BROWSE_PAGE_KEY] = 0
+            context.user_data[BROWSE_DIRS_KEY] = subdirs
+        try:
+            await query.edit_message_text(text=msg_text, reply_markup=keyboard)
+        except Exception:
+            await safe_send(context.bot, user.id, msg_text, reply_markup=keyboard)
         await query.answer()
 
     # Interactive UI: Up arrow

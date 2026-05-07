@@ -49,3 +49,8 @@ CB_SESSION_CANCEL = "rs:cancel"  # cancel
 
 # Screenshot control keys
 CB_KEYS_PREFIX = "kb:"  # kb:<key_id>:<window>
+
+# A8 switcher
+CB_SW_USE = "sw:"  # sw:<session.id>     — switch active session
+CB_SW_NEW = "swn"  # open directory browser to create a new session
+CB_SW_NOOP = "sw0"  # tap on already-active button (no-op)

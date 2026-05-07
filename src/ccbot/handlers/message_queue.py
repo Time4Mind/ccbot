@@ -36,6 +36,7 @@ from .message_sender import (
     send_with_fallback,
     strip_sentinels,
 )
+from .switcher import attach_switcher
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +289,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     """Process a content message task."""
     wid = task.window_id or ""
     chat_id = user_id  # DM mode
+    last_visible_msg_id: int | None = None
 
     # 1. Handle tool_result editing (merged parts are edited together)
     if task.content_type == "tool_result" and task.tool_use_id and wid:
@@ -307,7 +309,10 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                     link_preview_options=NO_LINK_PREVIEW,
                 )
                 await _send_task_images(bot, chat_id, task)
-                await _check_and_send_status(bot, user_id, wid)
+                last_visible_msg_id = edit_msg_id
+                await _attach_switcher_and_status(
+                    bot, user_id, wid, last_visible_msg_id
+                )
                 return
             except RetryAfter:
                 raise
@@ -322,7 +327,10 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                         link_preview_options=NO_LINK_PREVIEW,
                     )
                     await _send_task_images(bot, chat_id, task)
-                    await _check_and_send_status(bot, user_id, wid)
+                    last_visible_msg_id = edit_msg_id
+                    await _attach_switcher_and_status(
+                        bot, user_id, wid, last_visible_msg_id
+                    )
                     return
                 except RetryAfter:
                     raise
@@ -361,8 +369,20 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     # 4. Send images if present (from tool_result with base64 image blocks)
     await _send_task_images(bot, chat_id, task)
 
-    # 5. After content, check and send status
-    await _check_and_send_status(bot, user_id, wid)
+    # 5. Attach switcher to last content message; then status check.
+    last_visible_msg_id = last_msg_id
+    await _attach_switcher_and_status(bot, user_id, wid, last_visible_msg_id)
+
+
+async def _attach_switcher_and_status(
+    bot: Bot, user_id: int, window_id: str, last_msg_id: int | None
+) -> None:
+    """Attach the inline session switcher to the last content message
+    (if any) and then run the post-content status check.
+    """
+    if last_msg_id is not None:
+        await attach_switcher(bot, user_id, last_msg_id)
+    await _check_and_send_status(bot, user_id, window_id)
 
 
 async def _convert_status_to_content(

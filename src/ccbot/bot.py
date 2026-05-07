@@ -138,6 +138,7 @@ from .handlers.message_sender import (
     send_with_fallback,
 )
 from .markdown_v2 import convert_markdown
+from .naming import maybe_auto_name
 from .handlers.response_builder import build_response_parts
 from .handlers.status_polling import status_poll_loop
 from .handlers.switcher import (
@@ -147,6 +148,12 @@ from .handlers.switcher import (
 from .screenshot import text_to_image
 from .session import Session, session_manager
 from .session_monitor import NewMessage, SessionMonitor
+from .usage import (
+    aggregate_session,
+    compute_user_usage,
+    format_usage_status,
+    should_warn_quota,
+)
 from .terminal_parser import extract_bash_output, is_interactive_ui
 from .tmux_manager import tmux_manager
 from .transcribe import close_client as close_transcribe_client
@@ -628,6 +635,19 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await safe_reply(update.message, "⎋ Sent Escape")
 
 
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/status` — usage breakdown (5h window, weekly, per-session)."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    usage = await compute_user_usage(user.id)
+    text = format_usage_status(user.id, usage)
+    await safe_reply(update.message, text)
+
+
 async def archive_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """`/archive` — paginated list of archived sessions.
 
@@ -1062,10 +1082,15 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await safe_reply(update.message, f"❌ {message}")
         return
 
-    # Touch session activity for idle TTL.
+    # Touch session activity for idle TTL and trigger H6 auto-naming on
+    # the first/second meaningful user message.
     sess = session_manager.find_session_by_window(wid)
     if sess is not None:
         session_manager.touch_session(sess.id)
+        # Trigger auto-name on a sufficiently-long first message.
+        looks_default = (not sess.name) or sess.name.startswith("session-")
+        if looks_default and len(text) >= 50:
+            asyncio.create_task(maybe_auto_name(sess.id, text))
 
     # Start background capture for ! bash command output
     if text.startswith("!") and len(text) > 1:
@@ -1956,6 +1981,27 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 except OSError:
                     pass
 
+            # G6 soft quota — warn once per crossing per session.
+            if msg.content_type == "text" and msg.role == "assistant":
+                try:
+                    su = await aggregate_session(sess)
+                    sess.token_usage_total = su.tokens_total
+                    if should_warn_quota(su):
+                        warn = (
+                            f"⚠ session burned {su.tokens_5h * 100 // max(1, config.session_token_budget_5h)}% "
+                            f"of its 5h quota ({config.session_token_budget_5h // 1000}k)"
+                        )
+                        await enqueue_content_message(
+                            bot=bot,
+                            user_id=user_id,
+                            window_id=wid,
+                            parts=[warn],
+                            content_type="text",
+                            text=warn,
+                        )
+                except Exception as e:
+                    logger.debug("quota check failed: %s", e)
+
 
 # --- App lifecycle ---
 
@@ -1974,6 +2020,7 @@ async def post_init(application: Application) -> None:
         BotCommand("stop", "Send Escape to interrupt the active session"),
         BotCommand("done", "Mark a session as done"),
         BotCommand("archive", "Browse archived sessions"),
+        BotCommand("status", "Usage breakdown: 5h, weekly, per-session"),
         BotCommand("history", "Message history for the active session"),
         BotCommand("screenshot", "Terminal screenshot with control keys"),
         BotCommand("usage", "Show Claude Code usage remaining"),
@@ -2062,6 +2109,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("done", done_command))
     application.add_handler(CommandHandler("stop", stop_command))
     application.add_handler(CommandHandler("archive", archive_command))
+    application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Forward any other /command to Claude Code
     application.add_handler(MessageHandler(filters.COMMAND, forward_command_handler))

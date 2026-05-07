@@ -9,9 +9,10 @@ Handles interactive terminal UIs displayed by Claude Code:
 Provides:
   - Keyboard navigation (up/down/left/right/enter/esc)
   - Terminal capture and display
-  - Interactive mode tracking per user and thread
+  - Interactive mode tracking per user and window
 
-State dicts are keyed by (user_id, thread_id_or_0) for Telegram topic support.
+State dicts are keyed by (user_id, window_id) — DM mode, one user can have
+multiple parallel sessions, but at most one interactive UI per window.
 """
 
 import logging
@@ -19,7 +20,6 @@ import logging
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 
-from ..session import session_manager
 from ..terminal_parser import extract_interactive_content, is_interactive_ui
 from ..tmux_manager import tmux_manager
 from .callback_data import (
@@ -40,42 +40,34 @@ logger = logging.getLogger(__name__)
 # Tool names that trigger interactive UI via JSONL (terminal capture + inline keyboard)
 INTERACTIVE_TOOL_NAMES = frozenset({"AskUserQuestion", "ExitPlanMode"})
 
-# Track interactive UI message IDs: (user_id, thread_id_or_0) -> message_id
-_interactive_msgs: dict[tuple[int, int], int] = {}
+# Track interactive UI message IDs: (user_id, window_id) -> message_id
+_interactive_msgs: dict[tuple[int, str], int] = {}
 
-# Track interactive mode: (user_id, thread_id_or_0) -> window_id
-_interactive_mode: dict[tuple[int, int], str] = {}
-
-
-def get_interactive_window(user_id: int, thread_id: int | None = None) -> str | None:
-    """Get the window_id for user's interactive mode."""
-    return _interactive_mode.get((user_id, thread_id or 0))
+# Track active interactive UI per user — at most one across all windows.
+# user_id -> window_id of the window whose UI is currently shown.
+_active_interactive_window: dict[int, str] = {}
 
 
-def set_interactive_mode(
-    user_id: int,
-    window_id: str,
-    thread_id: int | None = None,
-) -> None:
-    """Set interactive mode for a user."""
-    logger.debug(
-        "Set interactive mode: user=%d, window_id=%s, thread=%s",
-        user_id,
-        window_id,
-        thread_id,
-    )
-    _interactive_mode[(user_id, thread_id or 0)] = window_id
+def get_interactive_window(user_id: int) -> str | None:
+    """Get the window_id whose interactive UI is currently shown to the user."""
+    return _active_interactive_window.get(user_id)
 
 
-def clear_interactive_mode(user_id: int, thread_id: int | None = None) -> None:
-    """Clear interactive mode for a user (without deleting message)."""
-    logger.debug("Clear interactive mode: user=%d, thread=%s", user_id, thread_id)
-    _interactive_mode.pop((user_id, thread_id or 0), None)
+def set_interactive_mode(user_id: int, window_id: str) -> None:
+    """Mark a window as the user's currently-shown interactive UI."""
+    logger.debug("Set interactive mode: user=%d, window_id=%s", user_id, window_id)
+    _active_interactive_window[user_id] = window_id
 
 
-def get_interactive_msg_id(user_id: int, thread_id: int | None = None) -> int | None:
-    """Get the interactive message ID for a user."""
-    return _interactive_msgs.get((user_id, thread_id or 0))
+def clear_interactive_mode(user_id: int) -> None:
+    """Clear active interactive UI marker for a user (without deleting message)."""
+    logger.debug("Clear interactive mode: user=%d", user_id)
+    _active_interactive_window.pop(user_id, None)
+
+
+def get_interactive_msg_id(user_id: int, window_id: str) -> int | None:
+    """Get the interactive message ID for a (user, window) pair."""
+    return _interactive_msgs.get((user_id, window_id))
 
 
 def _build_interactive_keyboard(
@@ -145,16 +137,17 @@ async def handle_interactive_ui(
     bot: Bot,
     user_id: int,
     window_id: str,
-    thread_id: int | None = None,
 ) -> bool:
     """Capture terminal and send interactive UI content to user.
 
     Handles AskUserQuestion, ExitPlanMode, Permission Prompt, and
     RestoreCheckpoint UIs. Returns True if UI was detected and sent,
     False otherwise.
+
+    In DM mode chat_id == user_id always.
     """
-    ikey = (user_id, thread_id or 0)
-    chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+    chat_id = user_id
+    ikey = (user_id, window_id)
     w = await tmux_manager.find_window_by_id(window_id)
     if not w:
         return False
@@ -185,11 +178,6 @@ async def handle_interactive_ui(
     # Send as plain text (no markdown conversion)
     text = content.content
 
-    # Build thread kwargs for send_message
-    thread_kwargs: dict[str, int] = {}
-    if thread_id is not None:
-        thread_kwargs["message_thread_id"] = thread_id
-
     # Check if we have an existing interactive message to edit
     existing_msg_id = _interactive_msgs.get(ikey)
     if existing_msg_id:
@@ -201,12 +189,12 @@ async def handle_interactive_ui(
                 reply_markup=keyboard,
                 link_preview_options=NO_LINK_PREVIEW,
             )
-            _interactive_mode[ikey] = window_id
+            _active_interactive_window[user_id] = window_id
             return True
         except BadRequest as e:
             if "Message is not modified" in str(e):
                 # Content unchanged — keep existing message as-is
-                _interactive_mode[ikey] = window_id
+                _active_interactive_window[user_id] = window_id
                 return True
             # Other edit failure — fall through to send new message,
             # but keep old message until replacement succeeds
@@ -232,14 +220,13 @@ async def handle_interactive_ui(
             text=text,
             reply_markup=keyboard,
             link_preview_options=NO_LINK_PREVIEW,
-            **thread_kwargs,  # type: ignore[arg-type]
         )
     except Exception as e:
         logger.error("Failed to send interactive UI: %s", e)
         return False
     if sent:
         _interactive_msgs[ikey] = sent.message_id
-        _interactive_mode[ikey] = window_id
+        _active_interactive_window[user_id] = window_id
         # New message sent successfully — now safe to delete the old one
         if existing_msg_id:
             try:
@@ -253,21 +240,41 @@ async def handle_interactive_ui(
 async def clear_interactive_msg(
     user_id: int,
     bot: Bot | None = None,
-    thread_id: int | None = None,
+    window_id: str | None = None,
 ) -> None:
-    """Clear tracked interactive message, delete from chat, and exit interactive mode."""
-    ikey = (user_id, thread_id or 0)
+    """Clear tracked interactive message and exit interactive mode.
+
+    If `window_id` is given, only that window's interactive message is cleared.
+    If None, clears whichever window currently shows the user's interactive UI.
+    """
+    if window_id is None:
+        window_id = _active_interactive_window.get(user_id)
+    if window_id is None:
+        # Nothing to clear
+        return
+    ikey = (user_id, window_id)
     msg_id = _interactive_msgs.pop(ikey, None)
-    _interactive_mode.pop(ikey, None)
+    # Only clear active marker if we cleared its window
+    if _active_interactive_window.get(user_id) == window_id:
+        _active_interactive_window.pop(user_id, None)
     logger.debug(
-        "Clear interactive msg: user=%d, thread=%s, msg_id=%s",
+        "Clear interactive msg: user=%d, window=%s, msg_id=%s",
         user_id,
-        thread_id,
+        window_id,
         msg_id,
     )
     if bot and msg_id:
-        chat_id = session_manager.resolve_chat_id(user_id, thread_id)
         try:
-            await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            await bot.delete_message(chat_id=user_id, message_id=msg_id)
         except Exception:
             pass  # Message may already be deleted or too old
+
+
+def clear_interactive_for_window(user_id: int, window_id: str) -> None:
+    """Drop in-memory state for a (user, window) pair without touching Telegram.
+
+    Used during session archive/kill so we don't leak state when a window goes away.
+    """
+    _interactive_msgs.pop((user_id, window_id), None)
+    if _active_interactive_window.get(user_id) == window_id:
+        _active_interactive_window.pop(user_id, None)

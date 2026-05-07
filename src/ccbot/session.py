@@ -657,6 +657,13 @@ class SessionManager:
                 state.session_id = new_sid
                 state.cwd = new_cwd
                 changed = True
+            # Mirror the claude session id onto any Session record bound to this window.
+            sess = self.find_session_by_window(window_id)
+            if sess is not None and sess.claude_session_id != new_sid:
+                sess.claude_session_id = new_sid
+                if not sess.workdir and new_cwd:
+                    sess.workdir = new_cwd
+                changed = True
             # Update display name
             if new_wname:
                 state.window_name = new_wname
@@ -843,6 +850,13 @@ class SessionManager:
         if not sid:
             return None
         return self.sessions.get(sid)
+
+    def get_active_window(self, user_id: int) -> str | None:
+        """Return the tmux window_id of the user's active session, or None."""
+        sess = self.get_active_session(user_id)
+        if sess is None or not sess.window_id or sess.state not in ("active", "idle"):
+            return None
+        return sess.window_id
 
     def set_active_session(self, user_id: int, session_id: str) -> None:
         """Make `session_id` the active session for `user_id`."""

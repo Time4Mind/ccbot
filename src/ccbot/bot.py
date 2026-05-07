@@ -134,7 +134,7 @@ from .handlers.switcher import (
     build_switcher_keyboard,
 )
 from .screenshot import text_to_image
-from .session import session_manager
+from .session import Session, session_manager
 from .session_monitor import NewMessage, SessionMonitor
 from .terminal_parser import extract_bash_output, is_interactive_ui
 from .tmux_manager import tmux_manager
@@ -285,6 +285,24 @@ async def screenshot_command(
     )
 
 
+def _resolve_ident(ident: str) -> Session | None:
+    """Resolve a /command argument that may be a session id (short hex) or a name.
+
+    Falls back to a case-insensitive name match on active+idle sessions. Returns
+    None when nothing matches.
+    """
+    if not ident:
+        return None
+    sess = session_manager.get_session(ident)
+    if sess is not None and sess.state in ("active", "idle", "archived", "completed"):
+        return sess
+    needle = ident.casefold()
+    for s in session_manager.sessions.values():
+        if s.name.casefold() == needle:
+            return s
+    return None
+
+
 async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send Escape key to interrupt Claude in the active session."""
     user = update.effective_user
@@ -353,6 +371,250 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if len(trimmed) > 3000:
             trimmed = trimmed[:3000] + "\n... (truncated)"
         await safe_reply(update.message, f"```\n{trimmed}\n```")
+
+
+# --- Phase 3 / B7 slash commands ---
+
+
+async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/new [name] [path]` — create a new session.
+
+    With no args, opens the directory browser.
+    With one arg, treats it as the session name and browses for path.
+    With two args, creates the session immediately at the given path.
+    """
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    args = (update.message.text or "").split(maxsplit=2)
+    name_arg = args[1] if len(args) > 1 else ""
+    path_arg = args[2] if len(args) > 2 else ""
+
+    if path_arg:
+        # Direct create. We mimic _create_and_activate_session without a
+        # CallbackQuery — send a status message and create.
+        target_path = str(Path(path_arg).expanduser().resolve())
+        await safe_reply(update.message, f"⏳ Creating session at {target_path}…")
+        success, message, created_wname, created_wid = await tmux_manager.create_window(
+            target_path
+        )
+        if not success:
+            await safe_reply(update.message, f"❌ {message}")
+            return
+        hook_ok = await session_manager.wait_for_session_map_entry(
+            created_wid, timeout=5.0
+        )
+        del hook_ok  # advisory only
+        sess = session_manager.create_session(
+            name=name_arg or created_wname or "",
+            window_id=created_wid,
+            workdir=target_path,
+        )
+        ws = session_manager.get_window_state(created_wid)
+        if ws.session_id:
+            session_manager.set_session_claude_id(sess.id, ws.session_id)
+        session_manager.set_active_session(user.id, sess.id)
+        await safe_reply(
+            update.message,
+            f"✅ Session `{sess.name}` ({sess.id}) created at {target_path}",
+        )
+        return
+
+    # No path → directory browser.
+    if name_arg and context.user_data is not None:
+        context.user_data["_pending_session_name"] = name_arg
+    clear_browse_state(context.user_data)
+    start_path = str(Path.cwd())
+    msg_text, keyboard, subdirs = build_directory_browser(start_path)
+    if context.user_data is not None:
+        context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
+        context.user_data[BROWSE_PATH_KEY] = start_path
+        context.user_data[BROWSE_PAGE_KEY] = 0
+        context.user_data[BROWSE_DIRS_KEY] = subdirs
+    await safe_reply(update.message, msg_text, reply_markup=keyboard)
+
+
+async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/list` — show all live sessions with state and short usage."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    sessions = session_manager.list_user_sessions(
+        user.id, states=("active", "idle", "lost")
+    )
+    if not sessions:
+        await safe_reply(update.message, "No live sessions. Use /new to create one.")
+        return
+
+    active_sess = session_manager.get_active_session(user.id)
+    active_id = active_sess.id if active_sess else ""
+
+    lines = ["*Live sessions*", ""]
+    for s in sessions:
+        marker = "✓" if s.id == active_id else " "
+        usage = (
+            f"{s.token_usage_total // 1000}k tok"
+            if s.token_usage_total
+            else "0 tok"
+        )
+        wd = s.workdir or "?"
+        lines.append(
+            f"{marker} `{s.id}` *{s.name}* ({s.state}) — {usage}\n  {wd}"
+        )
+    keyboard = build_switcher_keyboard(user.id)
+    sent = await safe_reply(update.message, "\n".join(lines), reply_markup=keyboard)
+    if sent and keyboard is not None:
+        session_manager.set_last_switcher_msg(user.id, sent.message_id)
+
+
+async def use_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/use <name-or-id>` — make the named session active."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    args = (update.message.text or "").split(maxsplit=1)
+    if len(args) < 2:
+        await safe_reply(update.message, "Usage: `/use <name-or-id>`")
+        return
+    sess = _resolve_ident(args[1].strip())
+    if sess is None:
+        await safe_reply(update.message, "❌ Session not found.")
+        return
+    if sess.state == "archived" or sess.state == "completed":
+        await safe_reply(
+            update.message,
+            f"❌ `{sess.name}` is archived. Use /archive to restore it.",
+        )
+        return
+    if sess.state == "lost":
+        await safe_reply(
+            update.message,
+            f"❌ `{sess.name}` is lost (tmux window vanished). Use /archive to restore.",
+        )
+        return
+    session_manager.set_active_session(user.id, sess.id)
+    preview = await _render_session_preview(sess)
+    keyboard = build_switcher_keyboard(user.id)
+    sent = await safe_reply(update.message, preview, reply_markup=keyboard)
+    if sent and keyboard is not None:
+        session_manager.set_last_switcher_msg(user.id, sent.message_id)
+
+
+async def rename_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/rename <old-name-or-id> <new-name>`."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    args = (update.message.text or "").split(maxsplit=2)
+    if len(args) < 3:
+        await safe_reply(update.message, "Usage: `/rename <old> <new-name>`")
+        return
+    sess = _resolve_ident(args[1].strip())
+    if sess is None:
+        await safe_reply(update.message, "❌ Session not found.")
+        return
+    new_name = args[2].strip()
+    session_manager.rename_session(sess.id, new_name)
+    if sess.window_id:
+        await tmux_manager.rename_window(sess.window_id, new_name)
+        session_manager.update_display_name(sess.window_id, new_name)
+    await safe_reply(update.message, f"✅ Renamed to `{new_name}`")
+
+
+async def _archive_session(
+    user_id: int,
+    bot: Bot,
+    sess: Session,
+    *,
+    completed: bool,
+) -> None:
+    """Kill tmux window if alive and mark the Session archived/completed.
+
+    Used by both /kill and /done. Cleans up any per-window in-memory state.
+    """
+    wid = sess.window_id
+    if wid:
+        w = await tmux_manager.find_window_by_id(wid)
+        if w:
+            await tmux_manager.kill_window(w.window_id)
+        await clear_session_state(user_id, wid, bot)
+    session_manager.mark_session_archived(sess.id, completed=completed)
+
+
+async def kill_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/kill <name-or-id>` — stop and archive immediately."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    args = (update.message.text or "").split(maxsplit=1)
+    if len(args) < 2:
+        await safe_reply(update.message, "Usage: `/kill <name-or-id>`")
+        return
+    sess = _resolve_ident(args[1].strip())
+    if sess is None or sess.state not in ("active", "idle", "lost"):
+        await safe_reply(update.message, "❌ Session not found or already archived.")
+        return
+    await _archive_session(user.id, context.bot, sess, completed=False)
+    await safe_reply(update.message, f"✅ Killed `{sess.name}`")
+
+
+async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/done [<name-or-id>]` — mark goal achieved and archive.
+
+    Without an argument, applies to the user's active session.
+    """
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    args = (update.message.text or "").split(maxsplit=1)
+    if len(args) >= 2:
+        sess = _resolve_ident(args[1].strip())
+    else:
+        sess = session_manager.get_active_session(user.id)
+    if sess is None or sess.state not in ("active", "idle"):
+        await safe_reply(update.message, "❌ Session not found or not live.")
+        return
+    await _archive_session(user.id, context.bot, sess, completed=True)
+    await safe_reply(update.message, f"🎉 Marked `{sess.name}` as done.")
+
+
+async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/stop` — send Escape to the active session's tmux window."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    wid = _active_window(user.id)
+    if not wid:
+        await safe_reply(update.message, "❌ No active session.")
+        return
+    w = await tmux_manager.find_window_by_id(wid)
+    if not w:
+        display = session_manager.get_display_name(wid)
+        await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
+        return
+    await tmux_manager.send_keys(w.window_id, "\x1b", enter=False)
+    await safe_reply(update.message, "⎋ Sent Escape")
 
 
 # --- Screenshot keyboard with quick control keys ---
@@ -856,9 +1118,12 @@ async def _create_and_activate_session(
             ws.session_id = resume_session_id
             session_manager._save_state()
 
-    # Register Session record and make it active.
+    # Register Session record and make it active. Honor /new <name> if any.
+    pending_name = (
+        context.user_data.pop("_pending_session_name", "") if context.user_data else ""
+    )
     sess = session_manager.create_session(
-        name=created_wname or "",
+        name=pending_name or created_wname or "",
         window_id=created_wid,
         workdir=selected_path,
     )
@@ -1531,11 +1796,18 @@ async def post_init(application: Application) -> None:
     await application.bot.delete_my_commands()
 
     bot_commands = [
-        BotCommand("start", "Show welcome message"),
+        BotCommand("new", "Create a new session"),
+        BotCommand("list", "List active sessions"),
+        BotCommand("use", "Switch active session: /use <name-or-id>"),
+        BotCommand("rename", "Rename a session: /rename <old> <new>"),
+        BotCommand("kill", "Stop and archive a session: /kill <name-or-id>"),
+        BotCommand("stop", "Send Escape to interrupt the active session"),
+        BotCommand("done", "Mark a session as done"),
         BotCommand("history", "Message history for the active session"),
         BotCommand("screenshot", "Terminal screenshot with control keys"),
-        BotCommand("esc", "Send Escape to interrupt Claude"),
         BotCommand("usage", "Show Claude Code usage remaining"),
+        BotCommand("esc", "Send Escape (alias for /stop)"),
+        BotCommand("start", "Show welcome message"),
     ]
     # Add Claude Code slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -1610,6 +1882,14 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
     application.add_handler(CommandHandler("usage", usage_command))
+    # Phase 3 — DM session management
+    application.add_handler(CommandHandler("new", new_command))
+    application.add_handler(CommandHandler("list", list_command))
+    application.add_handler(CommandHandler("use", use_command))
+    application.add_handler(CommandHandler("rename", rename_command))
+    application.add_handler(CommandHandler("kill", kill_command))
+    application.add_handler(CommandHandler("done", done_command))
+    application.add_handler(CommandHandler("stop", stop_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Forward any other /command to Claude Code
     application.add_handler(MessageHandler(filters.COMMAND, forward_command_handler))

@@ -1,28 +1,30 @@
-"""Tests for forward_command_handler — command forwarding to Claude Code."""
+"""Tests for forward_command_handler — slash-command forwarding to Claude.
+
+DM mode: routing is via _active_window(user.id) which reads
+session_manager.get_active_window. No thread_id is involved.
+"""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 
-def _make_update(text: str, user_id: int = 1, thread_id: int = 42) -> MagicMock:
-    """Build a minimal mock Update with message text in a forum topic."""
+def _make_update(text: str, user_id: int = 1) -> MagicMock:
+    """Build a minimal mock Update for a private DM."""
     update = MagicMock()
     update.effective_user = MagicMock()
     update.effective_user.id = user_id
     update.message = MagicMock()
     update.message.text = text
-    update.message.message_thread_id = thread_id
     update.message.chat = MagicMock()
     update.message.chat.send_action = AsyncMock()
     update.effective_chat = MagicMock()
-    update.effective_chat.type = "supergroup"
-    update.effective_chat.id = 100
+    update.effective_chat.type = "private"
+    update.effective_chat.id = user_id
     return update
 
 
 def _make_context() -> MagicMock:
-    """Build a minimal mock context."""
     context = MagicMock()
     context.bot = AsyncMock()
     context.user_data = {}
@@ -38,12 +40,11 @@ class TestForwardCommand:
 
         with (
             patch("ccbot.bot.is_user_allowed", return_value=True),
-            patch("ccbot.bot._get_thread_id", return_value=42),
             patch("ccbot.bot.session_manager") as mock_sm,
             patch("ccbot.bot.tmux_manager") as mock_tmux,
             patch("ccbot.bot.safe_reply", new_callable=AsyncMock),
         ):
-            mock_sm.resolve_window_for_thread.return_value = "@5"
+            mock_sm.get_active_window.return_value = "@5"
             mock_sm.get_display_name.return_value = "project"
             mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock())
             mock_sm.send_to_window = AsyncMock(return_value=(True, "ok"))
@@ -62,12 +63,11 @@ class TestForwardCommand:
 
         with (
             patch("ccbot.bot.is_user_allowed", return_value=True),
-            patch("ccbot.bot._get_thread_id", return_value=42),
             patch("ccbot.bot.session_manager") as mock_sm,
             patch("ccbot.bot.tmux_manager") as mock_tmux,
             patch("ccbot.bot.safe_reply", new_callable=AsyncMock),
         ):
-            mock_sm.resolve_window_for_thread.return_value = "@5"
+            mock_sm.get_active_window.return_value = "@5"
             mock_sm.get_display_name.return_value = "project"
             mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock())
             mock_sm.send_to_window = AsyncMock(return_value=(True, "ok"))
@@ -86,12 +86,11 @@ class TestForwardCommand:
 
         with (
             patch("ccbot.bot.is_user_allowed", return_value=True),
-            patch("ccbot.bot._get_thread_id", return_value=42),
             patch("ccbot.bot.session_manager") as mock_sm,
             patch("ccbot.bot.tmux_manager") as mock_tmux,
             patch("ccbot.bot.safe_reply", new_callable=AsyncMock),
         ):
-            mock_sm.resolve_window_for_thread.return_value = "@5"
+            mock_sm.get_active_window.return_value = "@5"
             mock_sm.get_display_name.return_value = "project"
             mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock())
             mock_sm.send_to_window = AsyncMock(return_value=(True, "ok"))

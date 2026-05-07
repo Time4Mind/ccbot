@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ccbot.session import Session, SessionManager
+from ccbot.session import SessionManager
 from ccbot.usage import (
     SessionUsage,
     parse_session_usage,

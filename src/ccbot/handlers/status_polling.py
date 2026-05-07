@@ -26,6 +26,7 @@ from ..terminal_parser import is_interactive_ui, parse_status_line
 from ..tmux_manager import tmux_manager
 from .archive import idle_archive_sweep, purge_sweep
 from .cleanup import clear_session_state
+from .inbox import inbox_sweep
 from .interactive_ui import (
     clear_interactive_msg,
     get_interactive_window,
@@ -136,6 +137,10 @@ async def status_poll_loop(bot: Bot) -> None:
                     purge_sweep()
                 except Exception as e:
                     logger.debug("purge_sweep error: %s", e)
+                try:
+                    inbox_sweep()
+                except Exception as e:
+                    logger.debug("inbox_sweep error: %s", e)
 
             # Iterate every (user, window) pair derived from active+idle sessions.
             pairs: list[tuple[int, str]] = []

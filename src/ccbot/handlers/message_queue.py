@@ -37,6 +37,7 @@ from .message_sender import (
     strip_sentinels,
 )
 from .switcher import attach_switcher
+from .tg_format import split_overflow
 
 logger = logging.getLogger(__name__)
 
@@ -341,7 +342,14 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     # 2. Send content messages, converting status message to first content part
     first_part = True
     last_msg_id: int | None = None
+    pending_attachments: list[bytes] = []  # placeholder for type narrowing
+    pending_attachments_named: list[tuple[str, bytes]] = []
     for part in task.parts:
+        # Pull oversized code/tables out into downloadable attachments.
+        formatted = split_overflow(part)
+        part = formatted.text
+        for att in formatted.attachments:
+            pending_attachments_named.append((att.filename, att.content))
         sent = None
 
         # For first part, try to convert status message to content (edit instead of delete)
@@ -361,6 +369,22 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
 
         if sent:
             last_msg_id = sent.message_id
+
+    # 2.5. Send any extracted file attachments after the textual messages.
+    for filename, content in pending_attachments_named:
+        try:
+            import io as _io
+
+            await bot.send_document(
+                chat_id=chat_id,
+                document=_io.BytesIO(content),
+                filename=filename,
+            )
+        except RetryAfter:
+            raise
+        except Exception as e:
+            logger.debug("attachment send failed: %s", e)
+    del pending_attachments  # silence "unused" if branch above changes
 
     # 3. Record tool_use message ID for later editing
     if last_msg_id and task.tool_use_id and task.content_type == "tool_use" and wid:

@@ -71,6 +71,7 @@ class CardState:
     last_rendered: str = ""  # last text we sent to TG; lets touch_card_status skip no-op edits
     last_edit_ts: float = 0.0  # monotonic seconds; gate for CARD_EDIT_LAG coalescing
     pending_edit: asyncio.Task | None = None  # one deferred edit task at most
+    is_continuation: bool = False  # True after a stale-pause or overflow split
 
 
 # Per-(user, session.id) card state.
@@ -243,7 +244,8 @@ def _render_card(sess: Session, state: CardState, *, footer: str = "") -> str:
         # Promote the running tmux status into the header so we don't need a
         # separate ephemeral "Esc to interrupt" message.
         state_label = f"{state_label} · {_trim(state.status_text, 60)}"
-    header = f"{emoji} *{sess.name or sess.id}* · {state_label}"
+    cont_marker = " · …continued" if state.is_continuation else ""
+    header = f"{emoji} *{sess.name or sess.id}* · {state_label}{cont_marker}"
     if sess.goal:
         header += f"\ngoal: {sess.goal}"
     body = "\n".join(line.text for line in state.lines)
@@ -391,6 +393,8 @@ async def update_session_card(
     if _is_stale(state):
         state.msg_id = None
         state.lines = []
+        state.is_continuation = True
+        state.last_rendered = ""
 
     new_line = _line_for_event(msg)
 
@@ -416,6 +420,8 @@ async def update_session_card(
         # Couldn't fit even one line — start a fresh card holding only the new line.
         state.msg_id = None
         state.lines = [new_line]
+        state.is_continuation = True
+        state.last_rendered = ""
 
     text = _render_card(sess, state)
 

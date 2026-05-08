@@ -170,8 +170,7 @@ def format_usage_status(user_id: int, usage: UserUsage) -> str:
     pct_w = int(100 * usage.tokens_weekly / cap_w)
     lines.append("*Usage (Max x20)*")
     lines.append(
-        f"5h window: {pct_5h:>3}% ({usage.tokens_5h // 1000}k / "
-        f"{cap_5h // 1000}k est)"
+        f"5h window: {pct_5h:>3}% ({usage.tokens_5h // 1000}k / {cap_5h // 1000}k est)"
     )
     lines.append(
         f"Weekly:    {pct_w:>3}% ({usage.tokens_weekly // 1000}k / "

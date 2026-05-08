@@ -98,6 +98,9 @@ def inbox_sweep() -> int:
             except OSError as e:
                 logger.debug("inbox_sweep skip %s: %s", entry, e)
     if removed:
-        logger.info("inbox_sweep removed %d files older than %.0fh",
-                    removed, config.inbox_ttl_hours)
+        logger.info(
+            "inbox_sweep removed %d files older than %.0fh",
+            removed,
+            config.inbox_ttl_hours,
+        )
     return removed

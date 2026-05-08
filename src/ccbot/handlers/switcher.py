@@ -30,8 +30,18 @@ logger = logging.getLogger(__name__)
 
 # Twelve color emoji used as visual session markers; assigned by name hash.
 _SESSION_EMOJI: tuple[str, ...] = (
-    "🟦", "🟩", "🟨", "🟧", "🟥", "🟪",
-    "🟫", "⬛", "🔵", "🟢", "🟣", "🟠",
+    "🟦",
+    "🟩",
+    "🟨",
+    "🟧",
+    "🟥",
+    "🟪",
+    "🟫",
+    "⬛",
+    "🔵",
+    "🟢",
+    "🟣",
+    "🟠",
 )
 
 
@@ -62,9 +72,7 @@ def build_switcher_keyboard(user_id: int) -> InlineKeyboardMarkup | None:
     sessions we return None (the caller decides whether to surface a "+ new"
     elsewhere, e.g. via /new).
     """
-    active = session_manager.list_user_sessions(
-        user_id, states=("active", "idle")
-    )
+    active = session_manager.list_user_sessions(user_id, states=("active", "idle"))
     if not active:
         return None
 
@@ -146,7 +154,13 @@ async def attach_switcher(bot: Bot, user_id: int, message_id: int) -> None:
         logger.debug("attach_switcher: unexpected: %s", e)
 
 
-def build_session_preview(sess: Session, *, last_user: str = "", last_assistant: str = "", last_tools: list[str] | None = None) -> str:
+def build_session_preview(
+    sess: Session,
+    *,
+    last_user: str = "",
+    last_assistant: str = "",
+    last_tools: list[str] | None = None,
+) -> str:
     """Render a short context preview for a session, used on switch.
 
     The bot edits the message in place to show this preview. Length-bounded by
@@ -155,7 +169,9 @@ def build_session_preview(sess: Session, *, last_user: str = "", last_assistant:
     parts: list[str] = []
     emoji = session_emoji(sess)
     state_label = sess.state if sess.state else "?"
-    usage = f"{sess.token_usage_total // 1000}k tok" if sess.token_usage_total else "0 tok"
+    usage = (
+        f"{sess.token_usage_total // 1000}k tok" if sess.token_usage_total else "0 tok"
+    )
     header = f"{emoji} {sess.name or sess.id} · {state_label} · {usage}"
     if sess.goal:
         header += f"\ngoal: {sess.goal}"
@@ -165,7 +181,9 @@ def build_session_preview(sess: Session, *, last_user: str = "", last_assistant:
     if last_user:
         parts.append("You: " + _trim_lines(last_user, config.preview_user_lines))
     if last_assistant:
-        parts.append("Claude: " + _trim_lines(last_assistant, config.preview_assistant_lines))
+        parts.append(
+            "Claude: " + _trim_lines(last_assistant, config.preview_assistant_lines)
+        )
     if last_tools:
         for tool in last_tools[: config.preview_tools]:
             parts.append(tool)

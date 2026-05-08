@@ -241,9 +241,7 @@ def build_session_picker(
             tok = f"{s.token_total // 1000}k"
         else:
             tok = f"{s.token_total}"
-        lines.append(
-            f"{i + 1}. {summary} — {s.message_count} msgs / {tok}{time_str}"
-        )
+        lines.append(f"{i + 1}. {summary} — {s.message_count} msgs / {tok}{time_str}")
 
     buttons: list[list[InlineKeyboardButton]] = []
     for i in range(0, len(sessions), 2):

@@ -35,7 +35,9 @@ class FormatResult:
     attachments: list[Attachment] = field(default_factory=list)
 
 
-_FENCE_RE = re.compile(r"^(```+)([^\n`]*)\n(.*?)(?<=\n)\1[ \t]*$", re.DOTALL | re.MULTILINE)
+_FENCE_RE = re.compile(
+    r"^(```+)([^\n`]*)\n(.*?)(?<=\n)\1[ \t]*$", re.DOTALL | re.MULTILINE
+)
 
 
 def _ext_for_lang(lang: str) -> str:
@@ -146,9 +148,7 @@ def split_overflow(text: str) -> FormatResult:
                     content=(slab + "\n").encode("utf-8"),
                 )
             )
-            replacement = (
-                f"_(table {cols}×{end - start} attached as table-{idx}.md)_"
-            )
+            replacement = f"_(table {cols}×{end - start} attached as table-{idx}.md)_"
             lines = lines[:start] + [replacement] + lines[end:]
         out_text = "\n".join(lines)
 

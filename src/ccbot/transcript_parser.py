@@ -48,6 +48,9 @@ class ParsedEntry:
     image_data: list[tuple[str, bytes]] | None = (
         None  # For tool_result entries with images: (media_type, raw_bytes)
     )
+    stop_reason: str | None = (
+        None  # Assistant message stop_reason: "end_turn" | "tool_use" | etc.
+    )
 
 
 @dataclass
@@ -501,6 +504,8 @@ class TranscriptParser:
             if msg_type == "assistant":
                 # Process content blocks
                 has_text = False
+                stop_reason = message.get("stop_reason")
+                pre_count = len(result)
                 for block in content:
                     if not isinstance(block, dict):
                         continue
@@ -594,6 +599,12 @@ class TranscriptParser:
                                     timestamp=entry_timestamp,
                                 )
                             )
+
+                # Stamp stop_reason on every entry produced from this assistant
+                # message — bot.py uses it to distinguish intermediate text
+                # (stop_reason="tool_use") from a real end-of-turn ("end_turn").
+                for entry in result[pre_count:]:
+                    entry.stop_reason = stop_reason
 
             elif msg_type == "user":
                 # Check for tool_result blocks and merge with pending tools

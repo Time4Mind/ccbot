@@ -200,5 +200,9 @@ def purge_sweep() -> int:
         if session_manager.delete_session(sess.id):
             purged += 1
     if purged:
-        logger.info("Purged %d archive records older than %.0fs", purged, config.archive_purge_after)
+        logger.info(
+            "Purged %d archive records older than %.0fs",
+            purged,
+            config.archive_purge_after,
+        )
     return purged

@@ -165,9 +165,9 @@ class Config:
         # session card. Older tool calls collapse to a single "… N earlier
         # tool calls collapsed" placeholder. Recommended range 3..7.
         try:
-            visible = int(os.getenv("CARD_VISIBLE_TOOLS", "5"))
+            visible = int(os.getenv("CARD_VISIBLE_TOOLS", "3"))
         except ValueError:
-            visible = 5
+            visible = 3
         self.card_visible_tools: int = max(1, visible)
 
         # Notifications

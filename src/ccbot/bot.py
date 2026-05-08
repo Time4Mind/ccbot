@@ -216,17 +216,10 @@ async def _render_session_preview(sess) -> str:
                 last_user = text
             elif role == "assistant" and ctype == "text" and not last_assistant:
                 last_assistant = text
-            elif (
-                ctype == "tool_use"
-                and len(last_tools) < config.preview_tools
-            ):
+            elif ctype == "tool_use" and len(last_tools) < config.preview_tools:
                 first_line = text.splitlines()[0] if text else ""
                 last_tools.append(f"[tool] {first_line}")
-            if (
-                last_user
-                and last_assistant
-                and len(last_tools) >= config.preview_tools
-            ):
+            if last_user and last_assistant and len(last_tools) >= config.preview_tools:
                 break
     return build_session_preview(
         sess,
@@ -253,7 +246,9 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     wid = _active_window(user.id)
     if not wid:
-        await safe_reply(update.message, "❌ No active session. Use /new to create one.")
+        await safe_reply(
+            update.message, "❌ No active session. Use /new to create one."
+        )
         return
 
     await send_history(update.message, wid)
@@ -271,7 +266,9 @@ async def screenshot_command(
 
     wid = _active_window(user.id)
     if not wid:
-        await safe_reply(update.message, "❌ No active session. Use /new to create one.")
+        await safe_reply(
+            update.message, "❌ No active session. Use /new to create one."
+        )
         return
 
     w = await tmux_manager.find_window_by_id(wid)
@@ -447,14 +444,10 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     for s in sessions:
         marker = "✓" if s.id == active_id else " "
         usage = (
-            f"{s.token_usage_total // 1000}k tok"
-            if s.token_usage_total
-            else "0 tok"
+            f"{s.token_usage_total // 1000}k tok" if s.token_usage_total else "0 tok"
         )
         wd = s.workdir or "?"
-        lines.append(
-            f"{marker} `{s.id}` *{s.name}* ({s.state}) — {usage}\n  {wd}"
-        )
+        lines.append(f"{marker} `{s.id}` *{s.name}* ({s.state}) — {usage}\n  {wd}")
     keyboard = build_switcher_keyboard(user.id)
     sent = await safe_reply(update.message, "\n".join(lines), reply_markup=keyboard)
     if sent and keyboard is not None:
@@ -708,7 +701,9 @@ async def forward_command_handler(
     cc_slash = cmd_text.split("@")[0]  # strip bot mention
     wid = _active_window(user.id)
     if not wid:
-        await safe_reply(update.message, "❌ No active session. Use /new to create one.")
+        await safe_reply(
+            update.message, "❌ No active session. Use /new to create one."
+        )
         return
 
     w = await tmux_manager.find_window_by_id(wid)
@@ -767,9 +762,7 @@ async def _forward_inbox_file(
     rel = file_path.name
     sess = session_manager.find_session_by_window(wid)
     workdir = sess.workdir if sess else ""
-    location = (
-        f"{workdir}/.ccbot-inbox/{rel}" if workdir else str(file_path)
-    )
+    location = f"{workdir}/.ccbot-inbox/{rel}" if workdir else str(file_path)
     if caption:
         text_to_send = f"{caption}\n\n({label} attached: {location})"
     else:
@@ -1269,9 +1262,7 @@ async def _create_and_activate_session(
     )
 
     # Forward any pending text held while the picker was up.
-    pending_text = (
-        context.user_data.get("_pending_text") if context.user_data else None
-    )
+    pending_text = context.user_data.get("_pending_text") if context.user_data else None
     if pending_text:
         logger.debug(
             "Forwarding pending text to window %s (len=%d)",
@@ -1455,9 +1446,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
 
         # No existing sessions — create new window directly
-        await _create_and_activate_session(
-            query, context, user, selected_path
-        )
+        await _create_and_activate_session(query, context, user, selected_path)
 
     elif data == CB_DIR_CANCEL:
         clear_browse_state(context.user_data)
@@ -1490,7 +1479,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data.pop("_selected_path", None)
 
         await _create_and_activate_session(
-            query, context, user, selected_path,
+            query,
+            context,
+            user,
+            selected_path,
             resume_session_id=session.session_id,
         )
 
@@ -1669,9 +1661,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         show_all = bool(
             context.user_data and context.user_data.get("_arc_show_all", False)
         )
-        lookback = (
-            config.archive_purge_after if show_all else DEFAULT_LOOKBACK_SECONDS
-        )
+        lookback = config.archive_purge_after if show_all else DEFAULT_LOOKBACK_SECONDS
         text, keyboard = build_archive_page(
             page=page, lookback_seconds=lookback, show_all=show_all
         )
@@ -1683,9 +1673,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Archive: toggle 0-72h vs 0-14d
     elif data == CB_ARC_ALL:
-        cur = bool(
-            context.user_data and context.user_data.get("_arc_show_all", False)
-        )
+        cur = bool(context.user_data and context.user_data.get("_arc_show_all", False))
         new = not cur
         if context.user_data is not None:
             context.user_data["_arc_show_all"] = new
@@ -1762,9 +1750,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         show_all = bool(
             context.user_data and context.user_data.get("_arc_show_all", False)
         )
-        lookback = (
-            config.archive_purge_after if show_all else DEFAULT_LOOKBACK_SECONDS
-        )
+        lookback = config.archive_purge_after if show_all else DEFAULT_LOOKBACK_SECONDS
         text, keyboard = build_archive_page(
             page=0, lookback_seconds=lookback, show_all=show_all
         )
@@ -2031,11 +2017,19 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         # Streaming chunks update the card in place; only msg.is_complete
         # events with role=assistant content_type=text trigger finalization.
         if msg.is_complete:
-            if msg.role == "assistant" and msg.content_type == "text":
-                # Task complete: append final text, finalize, push.
+            # Only a real end-of-turn assistant text (stop_reason=end_turn /
+            # stop_sequence / max_tokens) is a "task complete" event. Text
+            # blocks emitted before tool calls (stop_reason=tool_use) are
+            # intermediate narration — they belong on the live card, not in
+            # finalize_task (which would push a summary every time).
+            is_terminal_text = (
+                msg.role == "assistant"
+                and msg.content_type == "text"
+                and msg.stop_reason in ("end_turn", "stop_sequence", "max_tokens")
+            )
+            if is_terminal_text:
                 await finalize_task(bot, user_id, sess, msg.text or "")
             else:
-                # Tool result (or other complete non-text events) — append to card.
                 await update_session_card(bot, user_id, sess, msg)
 
             claude_sess = await session_manager.resolve_session_for_window(wid)
@@ -2053,9 +2047,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                     sess.token_usage_total = su.tokens_total
                     if should_warn_quota(su):
                         pct = (
-                            su.tokens_5h
-                            * 100
-                            // max(1, config.session_token_budget_5h)
+                            su.tokens_5h * 100 // max(1, config.session_token_budget_5h)
                         )
                         await push_event(
                             bot,
@@ -2071,7 +2063,6 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         else:
             # Streaming partial chunks — best-effort card update.
             await update_session_card(bot, user_id, sess, msg)
-
 
 
 # --- App lifecycle ---
@@ -2185,9 +2176,7 @@ def create_bot() -> Application:
 
         builder = builder.request(
             HTTPXRequest(proxy=config.tg_proxy_url)
-        ).get_updates_request(
-            HTTPXRequest(proxy=config.tg_proxy_url)
-        )
+        ).get_updates_request(HTTPXRequest(proxy=config.tg_proxy_url))
         logger.info("TG proxy enabled: %s", config.tg_proxy_url)
     application = builder.build()
 

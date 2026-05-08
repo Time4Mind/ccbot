@@ -486,9 +486,7 @@ async def _process_status_update_task(
         # Send typing indicator when Claude is working
         if "esc to interrupt" in status_text.lower():
             try:
-                await bot.send_chat_action(
-                    chat_id=chat_id, action=ChatAction.TYPING
-                )
+                await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
             except RetryAfter:
                 raise
             except Exception:

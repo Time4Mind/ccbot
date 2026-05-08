@@ -36,6 +36,7 @@ from telegram.error import BadRequest, RetryAfter
 from ..config import config
 from ..session import Session, session_manager
 from ..session_monitor import NewMessage
+from ..telegram_sender import split_message
 from .message_sender import safe_send
 from .switcher import build_switcher_keyboard, session_emoji
 
@@ -67,8 +68,12 @@ class CardState:
     msg_id: int | None = None
     lines: list[CardLine] = field(default_factory=list)
     last_event_ts: float = 0.0
-    status_text: str = ""  # latest tmux status line ("…Esc to interrupt"), shown in header
-    last_rendered: str = ""  # last text we sent to TG; lets touch_card_status skip no-op edits
+    status_text: str = (
+        ""  # latest tmux status line ("…Esc to interrupt"), shown in header
+    )
+    last_rendered: str = (
+        ""  # last text we sent to TG; lets touch_card_status skip no-op edits
+    )
     last_edit_ts: float = 0.0  # monotonic seconds; gate for CARD_EDIT_LAG coalescing
     pending_edit: asyncio.Task | None = None  # one deferred edit task at most
     is_continuation: bool = False  # True after a stale-pause or overflow split
@@ -338,9 +343,7 @@ async def _edit_card(
     if state.msg_id is None:
         return False
     try:
-        await bot.edit_message_text(
-            chat_id=user_id, message_id=state.msg_id, text=text
-        )
+        await bot.edit_message_text(chat_id=user_id, message_id=state.msg_id, text=text)
         return True
     except BadRequest as e:
         if "Message is not modified" in str(e):
@@ -452,11 +455,11 @@ async def update_session_card(
         )
 
 
-async def finalize_task(
-    bot: Bot, user_id: int, sess: Session, final_text: str
-) -> None:
-    """Mark the current task as complete: flush card, send completion push,
-    drop the live-card pointer so the next event opens a fresh card.
+async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) -> None:
+    """Mark the current task as complete: replace the live card's body with
+    the full final assistant answer, then drop the live-card pointer so the
+    next event opens a fresh card. Long answers spill into continuation
+    cards via `split_message` to respect Telegram's 4096-char limit.
     """
     state = get_card_state(user_id, sess)
     # Cancel any pending coalesced edit — we want this completion to land
@@ -465,10 +468,22 @@ async def finalize_task(
         state.pending_edit.cancel()
     state.pending_edit = None
 
-    final_line = CardLine(text=f"✓ {_trim(final_text, 600)}")
-    state.lines.append(final_line)
+    cleaned = (final_text or "").strip()
+    # Empty final turn — drop the card and emit only the push summary.
+    if not cleaned:
+        reset_card(user_id, sess.id)
+        await push_event(bot, user_id, sess, text="✓ task complete")
+        return
+
+    # Compute body budget so each chunk + header + footer fits CARD_HARD_LIMIT.
+    state.lines = []
+    overhead = len(_render_card(sess, state, footer="(task complete)"))
+    body_budget = max(200, CARD_HARD_LIMIT - overhead - 1)
+    chunks = split_message(cleaned, max_length=body_budget)
+
+    # First chunk → live card (edit in place, or send fresh if no card yet).
+    state.lines = [CardLine(text=chunks[0])]
     state.last_event_ts = time.time()
-    _ensure_room(sess, state)
     text = _render_card(sess, state, footer="(task complete)")
     if state.msg_id is None:
         await _send_card(bot, user_id, sess, state, text=text)
@@ -476,10 +491,21 @@ async def finalize_task(
         if await _edit_card(bot, user_id, state, text=text):
             state.last_rendered = text
     state.last_edit_ts = time.monotonic()
+
+    # Remaining chunks → fresh continuation cards.
+    for chunk in chunks[1:]:
+        state.msg_id = None
+        state.lines = [CardLine(text=chunk)]
+        state.is_continuation = True
+        state.last_rendered = ""
+        text = _render_card(sess, state, footer="(task complete)")
+        await _send_card(bot, user_id, sess, state, text=text)
+        state.last_edit_ts = time.monotonic()
+
     # Reset for next task — a new card will spawn on the next event.
     reset_card(user_id, sess.id)
     # Push completion summary as a separate message.
-    summary = _summary_for_push(final_text)
+    summary = _summary_for_push(cleaned)
     await push_event(bot, user_id, sess, text=f"✓ {summary}")
 
 

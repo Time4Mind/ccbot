@@ -25,6 +25,7 @@ line is replaced in place rather than appended, keeping the card compact.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -100,6 +101,58 @@ def _trim(s: str, limit: int = 200) -> str:
     if len(s) > limit:
         return s[: limit - 1] + "…"
     return s
+
+
+_BULLET_RE = re.compile(r"^[\s>#*\-•]+")
+
+
+def _summary_for_push(text: str, *, limit: int = 200) -> str:
+    """Pick a useful one-liner summary from a final assistant text turn.
+
+    Strategy:
+      1. Take the first non-empty paragraph (split on a blank line).
+      2. If it ends with a heading-only line, drop into the next paragraph.
+      3. Walk to the first sentence terminator (".!?") inside the limit
+         range so we don't truncate mid-sentence.
+      4. Strip leading markdown bullet/heading markers.
+      5. Cap at `limit` chars.
+    """
+    if not text:
+        return "task complete"
+
+    paragraphs = [p.strip() for p in text.strip().split("\n\n") if p.strip()]
+    if not paragraphs:
+        return "task complete"
+
+    para = paragraphs[0]
+    # If the first paragraph is just a heading (one short line ending without
+    # a period), prefer the next paragraph as the meaningful summary.
+    if (
+        len(paragraphs) > 1
+        and "\n" not in para
+        and len(para) < 80
+        and not para.rstrip().endswith((".", "!", "?", ":"))
+    ):
+        para = paragraphs[1]
+
+    # Take the first sentence inside the budget when possible.
+    # Floor of 8 chars avoids absurdly short cuts ("ok." etc).
+    earliest = -1
+    for sep in (". ", "! ", "? "):
+        idx = para.find(sep)
+        if 8 <= idx <= limit and (earliest == -1 or idx < earliest):
+            earliest = idx
+    if earliest > 0:
+        # Keep the punctuation, drop the trailing space.
+        para = para[: earliest + 1]
+
+    para = para.replace("\n", " ").strip()
+    # Strip leading markdown bullet/heading markers from each line.
+    para = _BULLET_RE.sub("", para).strip()
+
+    if len(para) > limit:
+        para = para[: limit - 1] + "…"
+    return para or "task complete"
 
 
 def _line_for_event(msg: NewMessage) -> CardLine:
@@ -367,7 +420,7 @@ async def finalize_task(
     # Reset for next task — a new card will spawn on the next event.
     reset_card(user_id, sess.id)
     # Push completion summary as a separate message.
-    summary = _trim(final_text, 200) or "task complete"
+    summary = _summary_for_push(final_text)
     await push_event(bot, user_id, sess, text=f"✓ {summary}")
 
 

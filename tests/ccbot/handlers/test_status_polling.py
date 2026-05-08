@@ -92,7 +92,7 @@ class TestStatusPollerSettingsDetection:
                 new_callable=AsyncMock,
             ) as mock_handle_ui,
             patch(
-                "ccbot.handlers.status_polling.enqueue_status_update",
+                "ccbot.handlers.status_polling.touch_card_status",
                 new_callable=AsyncMock,
             ),
         ):

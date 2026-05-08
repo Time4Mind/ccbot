@@ -65,6 +65,36 @@ On `systemctl restart ccbot@…`:
 3. Idle and archive sweeps resume from `last_event_at`/`archived_at`
    timestamps in `state.json`.
 
+## Tunnelling api.telegram.org from blocked networks
+
+`api.telegram.org` is unreachable from many residential and hosting
+networks (notably RU IP ranges). The bot supports an outbound HTTP or
+SOCKS proxy via `TG_PROXY_URL` — long-poll and Bot API requests both
+use it.
+
+Set `TG_PROXY_URL` to any reachable HTTP/SOCKS5 proxy. Examples:
+
+```
+TG_PROXY_URL=http://127.0.0.1:1081      # local HTTP proxy / SSH tunnel
+TG_PROXY_URL=socks5://127.0.0.1:1080    # local SOCKS proxy
+TG_PROXY_URL=http://user:pass@host:port # remote authenticated HTTP proxy
+```
+
+Common patterns:
+
+- **Run a SOCKS5 proxy on a VPS in an unblocked region** (sing-box,
+  3proxy, dante) and SSH-forward its port to the host running ccbot.
+- **Use any commercial HTTP proxy** that supports CONNECT.
+- **Tunnel through your own VPN** if you already have one.
+
+Verify before starting the bot:
+
+```bash
+curl -s --max-time 8 -x "$TG_PROXY_URL" \
+  "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getMe"
+# -> {"ok":true,...} means TG is reachable through the proxy
+```
+
 ## Voice backend
 
 - `VOICE_BACKEND=auto` (default) → Apple Speech on Darwin, whisper.cpp

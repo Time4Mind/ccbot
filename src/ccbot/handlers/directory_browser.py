@@ -128,17 +128,24 @@ def build_directory_browser(
     """
     path = Path(current_path).expanduser().resolve()
     if not path.exists() or not path.is_dir():
-        path = Path.cwd()
+        path = Path.home()
 
     try:
-        subdirs = sorted(
-            [
-                d.name
-                for d in path.iterdir()
-                if d.is_dir()
-                and (config.show_hidden_dirs or not d.name.startswith("."))
-            ]
-        )
+        # Sort by mtime descending — most recently changed directories first.
+        # Fall back to alphabetical for any directory whose stat fails.
+        candidates: list[tuple[float, str]] = []
+        for d in path.iterdir():
+            if not d.is_dir():
+                continue
+            if not config.show_hidden_dirs and d.name.startswith("."):
+                continue
+            try:
+                m = d.stat().st_mtime
+            except OSError:
+                m = 0.0
+            candidates.append((m, d.name))
+        candidates.sort(key=lambda t: (-t[0], t[1].lower()))
+        subdirs = [name for _, name in candidates]
     except (PermissionError, OSError):
         subdirs = []
 
@@ -230,7 +237,13 @@ def build_session_picker(
         summary = s.summary[:40] + "…" if len(s.summary) > 40 else s.summary
         rel = _relative_time(s.file_path)
         time_str = f" ({rel})" if rel else ""
-        lines.append(f"{i + 1}. {summary} — {s.message_count} msgs{time_str}")
+        if s.token_total >= 1000:
+            tok = f"{s.token_total // 1000}k"
+        else:
+            tok = f"{s.token_total}"
+        lines.append(
+            f"{i + 1}. {summary} — {s.message_count} msgs / {tok}{time_str}"
+        )
 
     buttons: list[list[InlineKeyboardButton]] = []
     for i in range(0, len(sessions), 2):

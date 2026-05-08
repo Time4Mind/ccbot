@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from telegram import Bot, InlineKeyboardMarkup
 from telegram.error import BadRequest, RetryAfter
 
+from ..config import config
 from ..session import Session, session_manager
 from ..session_monitor import NewMessage
 from .message_sender import safe_send
@@ -47,10 +48,16 @@ CARD_MAX_LINES = 40
 STALE_CARD_SECONDS = 5 * 60
 
 
+_COLLAPSED_PREFIX = "… "
+_COLLAPSED_SUFFIX = " earlier tool calls collapsed"
+
+
 @dataclass
 class CardLine:
     text: str
     tool_use_id: str | None = None  # so tool_result can edit-replace its tool_use line
+    is_tool: bool = False  # true for both tool_use and tool_result lines
+    collapsed_count: int = 0  # for the synthetic "… N earlier ..." placeholder
 
 
 @dataclass
@@ -81,6 +88,7 @@ def _line_for_event(msg: NewMessage) -> CardLine:
         return CardLine(
             text=f"[{tname}] {_trim(text, 160)}",
             tool_use_id=msg.tool_use_id,
+            is_tool=True,
         )
     if msg.content_type == "tool_result":
         tname = msg.tool_name or "result"
@@ -89,11 +97,63 @@ def _line_for_event(msg: NewMessage) -> CardLine:
         return CardLine(
             text=f"[{tname} ✓] {_trim(text, 160)}",
             tool_use_id=msg.tool_use_id,
+            is_tool=True,
         )
     # text content (assistant or user echo)
     if msg.role == "user":
         return CardLine(text=f"👤 {_trim(text, 200)}")
     return CardLine(text=_trim(text, 200))
+
+
+def _collapse_old_tools(state: CardState) -> None:
+    """Keep only the last `config.card_visible_tools` tool lines visible.
+
+    Older tool lines are removed and replaced by a single placeholder line
+    "… N earlier tool calls collapsed" inserted at the position of the
+    earliest dropped tool. Non-tool lines (thinking, text, user echoes)
+    are preserved in order.
+    """
+    cap = max(1, config.card_visible_tools)
+    tool_idxs = [i for i, ln in enumerate(state.lines) if ln.is_tool]
+    if len(tool_idxs) <= cap:
+        # Make sure no stale collapse-placeholder lingers from a previous prune.
+        state.lines = [ln for ln in state.lines if ln.collapsed_count == 0]
+        return
+
+    keep_set = set(tool_idxs[-cap:])
+    new_lines: list[CardLine] = []
+    placeholder_inserted = False
+    dropped = 0
+    earliest_drop_pos: int | None = None
+    for i, ln in enumerate(state.lines):
+        # Drop existing placeholders — we'll add a fresh one if needed.
+        if ln.collapsed_count > 0:
+            continue
+        if ln.is_tool and i not in keep_set:
+            dropped += 1
+            if earliest_drop_pos is None:
+                earliest_drop_pos = len(new_lines)
+            continue
+        new_lines.append(ln)
+
+    if dropped > 0 and earliest_drop_pos is not None:
+        new_lines.insert(
+            earliest_drop_pos,
+            CardLine(
+                text=f"{_COLLAPSED_PREFIX}{dropped}{_COLLAPSED_SUFFIX}",
+                collapsed_count=dropped,
+            ),
+        )
+        placeholder_inserted = True
+    elif dropped > 0 and not placeholder_inserted:
+        new_lines.append(
+            CardLine(
+                text=f"{_COLLAPSED_PREFIX}{dropped}{_COLLAPSED_SUFFIX}",
+                collapsed_count=dropped,
+            )
+        )
+
+    state.lines = new_lines
 
 
 def _render_card(sess: Session, state: CardState, *, footer: str = "") -> str:
@@ -232,6 +292,9 @@ async def update_session_card(
         state.lines.append(new_line)
 
     state.last_event_ts = time.time()
+
+    # Cap visible tool history per CARD_VISIBLE_TOOLS.
+    _collapse_old_tools(state)
 
     # Trigger: card overflow → continuation card.
     overflow = _ensure_room(sess, state)

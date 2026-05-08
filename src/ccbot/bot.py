@@ -448,7 +448,7 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if name_arg and context.user_data is not None:
         context.user_data["_pending_session_name"] = name_arg
     clear_browse_state(context.user_data)
-    start_path = str(Path.cwd())
+    start_path = str(Path.home())
     msg_text, keyboard, subdirs = build_directory_browser(start_path)
     if context.user_data is not None:
         context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
@@ -1101,7 +1101,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "No active session: showing directory browser (user=%d)",
             user.id,
         )
-        start_path = str(Path.cwd())
+        start_path = str(Path.home())
         msg_text, keyboard, subdirs = build_directory_browser(start_path)
         if context.user_data is not None:
             context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
@@ -1369,7 +1369,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         subdir_name = cached_dirs[idx]
 
-        default_path = str(Path.cwd())
+        default_path = str(Path.home())
         current_path = (
             context.user_data.get(BROWSE_PATH_KEY, default_path)
             if context.user_data
@@ -1393,7 +1393,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.answer()
 
     elif data == CB_DIR_UP:
-        default_path = str(Path.cwd())
+        default_path = str(Path.home())
         current_path = (
             context.user_data.get(BROWSE_PATH_KEY, default_path)
             if context.user_data
@@ -1420,7 +1420,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         except ValueError:
             await query.answer("Invalid data")
             return
-        default_path = str(Path.cwd())
+        default_path = str(Path.home())
         current_path = (
             context.user_data.get(BROWSE_PATH_KEY, default_path)
             if context.user_data
@@ -1436,7 +1436,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.answer()
 
     elif data == CB_DIR_CONFIRM:
-        default_path = str(Path.cwd())
+        default_path = str(Path.home())
         selected_path = (
             context.user_data.get(BROWSE_PATH_KEY, default_path)
             if context.user_data
@@ -1484,9 +1484,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         session = cached_sessions[idx]
         selected_path = (
-            context.user_data.get("_selected_path", str(Path.cwd()))
+            context.user_data.get("_selected_path", str(Path.home()))
             if context.user_data
-            else str(Path.cwd())
+            else str(Path.home())
         )
         clear_session_picker_state(context.user_data)
         if context.user_data is not None:
@@ -1499,9 +1499,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     elif data == CB_SESSION_NEW:
         selected_path = (
-            context.user_data.get("_selected_path", str(Path.cwd()))
+            context.user_data.get("_selected_path", str(Path.home()))
             if context.user_data
-            else str(Path.cwd())
+            else str(Path.home())
         )
         clear_session_picker_state(context.user_data)
         if context.user_data is not None:
@@ -1581,7 +1581,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Window picker: new session → transition to directory browser
     elif data == CB_WIN_NEW:
         clear_window_picker_state(context.user_data)
-        start_path = str(Path.cwd())
+        start_path = str(Path.home())
         msg_text, keyboard, subdirs = build_directory_browser(start_path)
         if context.user_data is not None:
             context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
@@ -1803,7 +1803,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         clear_browse_state(context.user_data)
         clear_window_picker_state(context.user_data)
         clear_session_picker_state(context.user_data)
-        start_path = str(Path.cwd())
+        start_path = str(Path.home())
         msg_text, keyboard, subdirs = build_directory_browser(start_path)
         if context.user_data is not None:
             context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY

@@ -87,6 +87,7 @@ class ClaudeSession:
     summary: str
     message_count: int
     file_path: str
+    token_total: int = 0  # input+output across all assistant turns
 
 
 SessionState = Literal["active", "idle", "archived", "completed", "lost"]
@@ -758,10 +759,11 @@ class SessionManager:
             else:
                 return None
 
-        # Single pass: read file once, extract summary + count messages
+        # Single pass: read file once, extract summary, count messages, sum tokens.
         summary = ""
         last_user_msg = ""
         message_count = 0
+        token_total = 0
         try:
             async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
                 async for line in f:
@@ -771,12 +773,14 @@ class SessionManager:
                     message_count += 1
                     try:
                         data = json.loads(line)
-                        # Check for summary
                         if data.get("type") == "summary":
                             s = data.get("summary", "")
                             if s:
                                 summary = s
-                        # Track last user message as fallback
+                        elif data.get("type") == "assistant":
+                            usage = (data.get("message") or {}).get("usage") or {}
+                            token_total += int(usage.get("input_tokens", 0) or 0)
+                            token_total += int(usage.get("output_tokens", 0) or 0)
                         elif TranscriptParser.is_user_message(data):
                             parsed = TranscriptParser.parse_message(data)
                             if parsed and parsed.text.strip():
@@ -794,6 +798,7 @@ class SessionManager:
             summary=summary,
             message_count=message_count,
             file_path=str(file_path),
+            token_total=token_total,
         )
 
     # --- Directory session listing ---

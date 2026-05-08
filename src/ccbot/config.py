@@ -153,6 +153,15 @@ class Config:
         self.preview_tools: int = int(os.getenv("PREVIEW_TOOLS", "2"))
         self.preview_live_lag: float = float(os.getenv("PREVIEW_LIVE_LAG", "4"))
 
+        # How many of the most-recent tool-call lines to keep visible in the
+        # session card. Older tool calls collapse to a single "… N earlier
+        # tool calls collapsed" placeholder. Recommended range 3..7.
+        try:
+            visible = int(os.getenv("CARD_VISIBLE_TOOLS", "5"))
+        except ValueError:
+            visible = 5
+        self.card_visible_tools: int = max(1, visible)
+
         # Notifications
         bg_mode = os.getenv("BG_NOTIFY_MODE", "separate").strip().lower()
         if bg_mode not in ("separate", "footer"):

@@ -153,6 +153,14 @@ class Config:
         self.preview_tools: int = int(os.getenv("PREVIEW_TOOLS", "2"))
         self.preview_live_lag: float = float(os.getenv("PREVIEW_LIVE_LAG", "4"))
 
+        # Coalescing window for live card edits — at most one editMessageText
+        # per session per CARD_EDIT_LAG seconds. Burst events accumulate into
+        # a single edit; the deferred edit always picks up the latest state.
+        try:
+            self.card_edit_lag: float = float(os.getenv("CARD_EDIT_LAG", "2.0"))
+        except ValueError:
+            self.card_edit_lag = 2.0
+
         # How many of the most-recent tool-call lines to keep visible in the
         # session card. Older tool calls collapse to a single "… N earlier
         # tool calls collapsed" placeholder. Recommended range 3..7.

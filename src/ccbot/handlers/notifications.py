@@ -24,6 +24,7 @@ line is replaced in place rather than appended, keeping the card compact.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -68,6 +69,8 @@ class CardState:
     last_event_ts: float = 0.0
     status_text: str = ""  # latest tmux status line ("…Esc to interrupt"), shown in header
     last_rendered: str = ""  # last text we sent to TG; lets touch_card_status skip no-op edits
+    last_edit_ts: float = 0.0  # monotonic seconds; gate for CARD_EDIT_LAG coalescing
+    pending_edit: asyncio.Task | None = None  # one deferred edit task at most
 
 
 # Per-(user, session.id) card state.
@@ -348,6 +351,33 @@ async def _edit_card(
     return False
 
 
+async def _deferred_edit(
+    bot: Bot, user_id: int, sess: Session, state: CardState, delay: float
+) -> None:
+    """Sleep `delay` then render the latest card state and edit once.
+
+    The deferred task always picks up the latest `state.lines` / `status_text`,
+    so multiple events arriving during the sleep collapse into a single edit.
+    """
+    try:
+        await asyncio.sleep(delay)
+        # Stale guard: card may have been reset (finalize_task) while we slept.
+        if state.msg_id is None:
+            return
+        text = _render_card(sess, state)
+        if text == state.last_rendered:
+            return
+        if await _edit_card(bot, user_id, state, text=text):
+            state.last_rendered = text
+            state.last_edit_ts = time.monotonic()
+    except asyncio.CancelledError:
+        return
+    except Exception as e:
+        logger.debug("deferred card edit failed: %s", e)
+    finally:
+        state.pending_edit = None
+
+
 async def update_session_card(
     bot: Bot, user_id: int, sess: Session, msg: NewMessage
 ) -> None:
@@ -391,14 +421,29 @@ async def update_session_card(
 
     if state.msg_id is None:
         await _send_card(bot, user_id, sess, state, text=text)
+        state.last_edit_ts = time.monotonic()
         return
-    edited = await _edit_card(bot, user_id, state, text=text)
-    if edited:
-        state.last_rendered = text
-    else:
-        # Lost the message — start a new card.
-        state.msg_id = None
-        await _send_card(bot, user_id, sess, state, text=text)
+
+    # Coalesce edits — at most one editMessageText per CARD_EDIT_LAG seconds.
+    lag = max(0.0, config.card_edit_lag)
+    elapsed = time.monotonic() - state.last_edit_ts if state.last_edit_ts else lag
+    if lag <= 0 or elapsed >= lag:
+        edited = await _edit_card(bot, user_id, state, text=text)
+        if edited:
+            state.last_rendered = text
+            state.last_edit_ts = time.monotonic()
+        else:
+            state.msg_id = None
+            await _send_card(bot, user_id, sess, state, text=text)
+            state.last_edit_ts = time.monotonic()
+        return
+
+    # Inside the coalescing window: ensure exactly one deferred edit is queued.
+    if state.pending_edit is None or state.pending_edit.done():
+        delay = max(0.05, lag - elapsed)
+        state.pending_edit = asyncio.create_task(
+            _deferred_edit(bot, user_id, sess, state, delay)
+        )
 
 
 async def finalize_task(
@@ -408,6 +453,12 @@ async def finalize_task(
     drop the live-card pointer so the next event opens a fresh card.
     """
     state = get_card_state(user_id, sess)
+    # Cancel any pending coalesced edit — we want this completion to land
+    # immediately, not via the deferred path.
+    if state.pending_edit is not None and not state.pending_edit.done():
+        state.pending_edit.cancel()
+    state.pending_edit = None
+
     final_line = CardLine(text=f"✓ {_trim(final_text, 600)}")
     state.lines.append(final_line)
     state.last_event_ts = time.time()
@@ -416,7 +467,9 @@ async def finalize_task(
     if state.msg_id is None:
         await _send_card(bot, user_id, sess, state, text=text)
     else:
-        await _edit_card(bot, user_id, state, text=text)
+        if await _edit_card(bot, user_id, state, text=text):
+            state.last_rendered = text
+    state.last_edit_ts = time.monotonic()
     # Reset for next task — a new card will spawn on the next event.
     reset_card(user_id, sess.id)
     # Push completion summary as a separate message.

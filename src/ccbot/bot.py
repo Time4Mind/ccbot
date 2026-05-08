@@ -2170,14 +2170,26 @@ async def post_shutdown(application: Application) -> None:
 
 
 def create_bot() -> Application:
-    application = (
+    builder = (
         Application.builder()
         .token(config.telegram_bot_token)
         .rate_limiter(AIORateLimiter(max_retries=5))
         .post_init(post_init)
         .post_shutdown(post_shutdown)
-        .build()
     )
+    if config.tg_proxy_url:
+        # Route both the long-poll request and the regular bot API through the
+        # configured proxy. Required when api.telegram.org is unreachable from
+        # the host (e.g. RU-blocked IPs); see scripts/com.ccbot.plist comments.
+        from telegram.request import HTTPXRequest
+
+        builder = builder.request(
+            HTTPXRequest(proxy=config.tg_proxy_url)
+        ).get_updates_request(
+            HTTPXRequest(proxy=config.tg_proxy_url)
+        )
+        logger.info("TG proxy enabled: %s", config.tg_proxy_url)
+    application = builder.build()
 
     # Visible menu commands.
     application.add_handler(CommandHandler("history", history_command))

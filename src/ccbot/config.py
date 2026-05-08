@@ -197,6 +197,11 @@ class Config:
         )
         self.is_sandbox: bool = os.getenv("IS_SANDBOX", "1") not in ("", "0", "false")
 
+        # Optional outbound proxy for the Telegram Bot API. Useful when the
+        # host is on a network that cannot reach api.telegram.org directly
+        # (e.g. RU-blocked IPs). Accepts http://host:port or socks5://host:port.
+        self.tg_proxy_url: str = os.getenv("TG_PROXY_URL", "").strip()
+
         # Scrub sensitive vars from os.environ so child processes never inherit them.
         # Values are already captured in Config attributes above.
         for var in SENSITIVE_ENV_VARS:

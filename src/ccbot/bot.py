@@ -171,14 +171,15 @@ session_monitor: SessionMonitor | None = None
 # Status polling task
 _status_poll_task: asyncio.Task | None = None
 
-# Claude Code commands shown in bot menu (forwarded via tmux)
+# Claude Code commands shown in bot menu (forwarded via tmux).
+# Order preserved in setMyCommands. Dropped: /cost (duplicate of /status,
+# which actually renders output), /help (meta, produces no useful TG output).
 CC_COMMANDS: dict[str, str] = {
+    "model": "↗ Switch AI model",
+    "effort": "↗ Set thinking effort",
     "clear": "↗ Clear conversation history",
     "compact": "↗ Compact conversation context",
-    "cost": "↗ Show token/cost usage",
-    "help": "↗ Show Claude Code help",
     "memory": "↗ Edit CLAUDE.md",
-    "model": "↗ Switch AI model",
 }
 
 
@@ -238,21 +239,8 @@ async def _render_session_preview(sess) -> str:
 # --- Command handlers ---
 
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not user or not is_user_allowed(user.id):
-        if update.message:
-            await safe_reply(update.message, "You are not authorized to use this bot.")
-        return
-
-    clear_browse_state(context.user_data)
-
-    if update.message:
-        await safe_reply(
-            update.message,
-            "🤖 *Claude Code Monitor*\n\n"
-            "Send a message to start a session, or use /new to create one.",
-        )
+# /start removed — first text message in an empty DM already opens the
+# directory browser, so there's no useful welcome screen to maintain.
 
 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -324,28 +312,7 @@ def _resolve_ident(ident: str) -> Session | None:
     return None
 
 
-async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send Escape key to interrupt Claude in the active session."""
-    user = update.effective_user
-    if not user or not is_user_allowed(user.id):
-        return
-    if not update.message:
-        return
-
-    wid = _active_window(user.id)
-    if not wid:
-        await safe_reply(update.message, "❌ No active session. Use /new to create one.")
-        return
-
-    w = await tmux_manager.find_window_by_id(wid)
-    if not w:
-        display = session_manager.get_display_name(wid)
-        await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
-        return
-
-    # Send Escape control character (no enter)
-    await tmux_manager.send_keys(w.window_id, "\x1b", enter=False)
-    await safe_reply(update.message, "⎋ Sent Escape")
+# /esc removed — duplicate of /stop (both send Escape to active session).
 
 
 async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2085,24 +2052,33 @@ async def post_init(application: Application) -> None:
 
     await application.bot.delete_my_commands()
 
+    # Order: session ops first, then prominent Claude switches (model/effort),
+    # then everything else. /use and /rename are intentionally NOT in the menu —
+    # the inline switcher covers their job (TODO: remove handlers in v1.5).
     bot_commands = [
         BotCommand("new", "Create a new session"),
         BotCommand("list", "List active sessions"),
-        BotCommand("use", "Switch active session: /use <name-or-id>"),
-        BotCommand("rename", "Rename a session: /rename <old> <new>"),
-        BotCommand("kill", "Stop and archive a session: /kill <name-or-id>"),
-        BotCommand("stop", "Send Escape to interrupt the active session"),
-        BotCommand("done", "Mark a session as done"),
-        BotCommand("archive", "Browse archived sessions"),
-        BotCommand("status", "Usage breakdown: 5h, weekly, per-session"),
-        BotCommand("history", "Message history for the active session"),
-        BotCommand("screenshot", "Terminal screenshot with control keys"),
-        BotCommand("usage", "Show Claude Code usage remaining"),
-        BotCommand("esc", "Send Escape (alias for /stop)"),
-        BotCommand("start", "Show welcome message"),
     ]
-    # Add Claude Code slash commands
+    # Promote model + effort right after /new and /list per user preference.
+    for cmd_name in ("model", "effort"):
+        if cmd_name in CC_COMMANDS:
+            bot_commands.append(BotCommand(cmd_name, CC_COMMANDS[cmd_name]))
+    bot_commands.extend(
+        [
+            BotCommand("done", "Mark a session as done"),
+            BotCommand("kill", "Stop and archive a session: /kill <name-or-id>"),
+            BotCommand("stop", "Send Escape to interrupt the active session"),
+            BotCommand("archive", "Browse archived sessions"),
+            BotCommand("status", "Usage breakdown: 5h, weekly, per-session"),
+            BotCommand("history", "Message history for the active session"),
+            BotCommand("screenshot", "Terminal screenshot with control keys"),
+            BotCommand("usage", "Show Claude Code usage remaining"),
+        ]
+    )
+    # Append remaining Claude Code slash commands (excluding the promoted ones).
     for cmd_name, desc in CC_COMMANDS.items():
+        if cmd_name in ("model", "effort"):
+            continue
         bot_commands.append(BotCommand(cmd_name, desc))
 
     await application.bot.set_my_commands(bot_commands)
@@ -2173,21 +2149,21 @@ def create_bot() -> Application:
         .build()
     )
 
-    application.add_handler(CommandHandler("start", start_command))
+    # Visible menu commands.
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("screenshot", screenshot_command))
-    application.add_handler(CommandHandler("esc", esc_command))
     application.add_handler(CommandHandler("usage", usage_command))
-    # Phase 3 — DM session management
     application.add_handler(CommandHandler("new", new_command))
     application.add_handler(CommandHandler("list", list_command))
-    application.add_handler(CommandHandler("use", use_command))
-    application.add_handler(CommandHandler("rename", rename_command))
     application.add_handler(CommandHandler("kill", kill_command))
     application.add_handler(CommandHandler("done", done_command))
     application.add_handler(CommandHandler("stop", stop_command))
     application.add_handler(CommandHandler("archive", archive_command))
     application.add_handler(CommandHandler("status", status_command))
+    # Hidden but functional — the inline switcher covers their use case.
+    # TODO(v1.5): drop these handlers and the corresponding command bodies.
+    application.add_handler(CommandHandler("use", use_command))
+    application.add_handler(CommandHandler("rename", rename_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Forward any other /command to Claude Code
     application.add_handler(MessageHandler(filters.COMMAND, forward_command_handler))

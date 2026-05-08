@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ccbot</string>
+
+    <!--
+        Replace ${HOME}/pet_projects/ccbot with the absolute path to your
+        clone before installing. launchd does not expand $VAR strings.
+        Recommended install location: ~/Library/LaunchAgents/com.ccbot.plist
+        then `launchctl load ~/Library/LaunchAgents/com.ccbot.plist`.
+    -->
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/uv</string>
+        <string>run</string>
+        <string>ccbot</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>${HOME}/pet_projects/ccbot</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>NetworkState</key>
+        <true/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>${HOME}/.ccbot/logs/bot.log</string>
+    <key>StandardErrorPath</key>
+    <string>${HOME}/.ccbot/logs/bot.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- launchd ships a minimal PATH; whisper-cli, ffmpeg, claude, tmux
+             all live under /opt/homebrew on Apple Silicon. -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <!-- Pin TMUX_TMPDIR so the tmux server outlives bot restarts and
+             reconcile_sessions_with_tmux can re-attach windows on boot. -->
+        <key>TMUX_TMPDIR</key>
+        <string>${HOME}/.ccbot/tmux</string>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

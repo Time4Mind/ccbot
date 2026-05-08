@@ -88,6 +88,37 @@ On `systemctl restart ccbot@…`:
 - Archived Session records expire after `ARCHIVE_PURGE_AFTER` (default
   14d). Transcripts on disk are kept for audit.
 
+## macOS as the bot host (LaunchAgent)
+
+If you'd rather run the bot on your Mac (e.g. for personal use) instead
+of a Linux VPS, use the included LaunchAgent template:
+
+```bash
+# 1. Edit the template — launchd doesn't expand ${HOME}.
+cp scripts/com.ccbot.plist ~/Library/LaunchAgents/com.ccbot.plist
+sed -i '' "s|\${HOME}|$HOME|g" ~/Library/LaunchAgents/com.ccbot.plist
+
+# 2. Load + start. KeepAlive will restart the bot on crash.
+launchctl load -w ~/Library/LaunchAgents/com.ccbot.plist
+
+# 3. Tail the log.
+tail -f ~/.ccbot/logs/bot.log
+
+# Stop / unload:
+launchctl unload ~/Library/LaunchAgents/com.ccbot.plist
+```
+
+Whisper.cpp model installer:
+
+```bash
+# Default downloads ggml-medium.bin (~1.5GB) into ~/.ccbot/models/.
+./scripts/install_whisper_model.sh
+# Or pick a smaller model:
+MODEL=small ./scripts/install_whisper_model.sh
+```
+
+After the model is in place, set `VOICE_BACKEND=whisper` in `.env`.
+
 ## Mac as a client
 
 The bot does not run a second instance on the Mac. Instead:

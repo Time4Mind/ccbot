@@ -448,7 +448,7 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         wd = s.workdir or "?"
         lines.append(f"{marker} `{s.id}` *{s.name}* ({s.state}) — {usage}\n  {wd}")
-    keyboard = build_switcher_keyboard(user.id)
+    keyboard = build_switcher_keyboard(user.id, include_lost=True)
     sent = await safe_reply(update.message, "\n".join(lines), reply_markup=keyboard)
     if sent and keyboard is not None:
         session_manager.set_last_switcher_msg(user.id, sent.message_id)

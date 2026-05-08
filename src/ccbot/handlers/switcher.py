@@ -23,7 +23,7 @@ from telegram.error import BadRequest
 
 from ..config import config
 from ..session import Session, session_manager
-from .callback_data import CB_SW_NEW, CB_SW_NOOP, CB_SW_USE
+from .callback_data import CB_ARC_RESTORE, CB_SW_NEW, CB_SW_NOOP, CB_SW_USE
 
 logger = logging.getLogger(__name__)
 
@@ -63,17 +63,22 @@ def _label(sess: Session, *, is_active: bool) -> str:
     return f"{emoji} {name}"
 
 
-def build_switcher_keyboard(user_id: int) -> InlineKeyboardMarkup | None:
+def build_switcher_keyboard(
+    user_id: int, *, include_lost: bool = False
+) -> InlineKeyboardMarkup | None:
     """Build the inline switcher keyboard for a user.
 
-    Returns None if the user has no active or idle sessions and we are not in
-    a state where a "+ new" button alone is appropriate. We always include the
-    "+ new" button when at least one session exists; when there are zero
-    sessions we return None (the caller decides whether to surface a "+ new"
-    elsewhere, e.g. via /new).
+    With `include_lost=True`, lost sessions also appear as buttons whose
+    callback restores the session (CB_ARC_RESTORE) — used by /list per
+    spec §9 (F2). Default behavior (active+idle only) is unchanged for
+    content-message attachments.
+
+    Returns None if the user has no live (or lost, when included) sessions.
+    Otherwise always appends a "+ new" button as the final row.
     """
-    active = session_manager.list_user_sessions(user_id, states=("active", "idle"))
-    if not active:
+    states = ("active", "idle", "lost") if include_lost else ("active", "idle")
+    sessions = session_manager.list_user_sessions(user_id, states=states)
+    if not sessions:
         return None
 
     active_sess = session_manager.get_active_session(user_id)
@@ -82,12 +87,21 @@ def build_switcher_keyboard(user_id: int) -> InlineKeyboardMarkup | None:
     # 3 buttons per row; sessions then a final "+ new"
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
-    for sess in active:
+    for sess in sessions:
         is_active = sess.id == active_id
-        cb = CB_SW_NOOP if is_active else f"{CB_SW_USE}{sess.id}"
+        if sess.state == "lost":
+            # Lost sessions can't be switched to — tap = restore.
+            name = sess.name or sess.id
+            if len(name) > 12:
+                name = name[:11] + "…"
+            label = f"⤴ {name}"
+            cb = f"{CB_ARC_RESTORE}{sess.id}"
+        else:
+            cb = CB_SW_NOOP if is_active else f"{CB_SW_USE}{sess.id}"
+            label = _label(sess, is_active=is_active)
         row.append(
             InlineKeyboardButton(
-                _label(sess, is_active=is_active),
+                label,
                 callback_data=cb[:64],
             )
         )

@@ -32,7 +32,8 @@ from .interactive_ui import (
     get_interactive_window,
     handle_interactive_ui,
 )
-from .message_queue import enqueue_status_update, get_message_queue
+from .message_queue import get_message_queue
+from .notifications import touch_card_status
 
 logger = logging.getLogger(__name__)
 
@@ -51,25 +52,19 @@ async def update_status_message(
     window_id: str,
     skip_status: bool = False,
 ) -> None:
-    """Poll terminal and check for interactive UIs and status updates.
+    """Poll terminal: detect interactive UIs and refresh the card's status badge.
 
-    UI detection always happens regardless of skip_status. When skip_status=True,
-    only UI detection runs (used when message queue is non-empty to avoid
-    flooding the queue with status updates).
-
-    Also detects permission prompt UIs (not triggered via JSONL) and enters
-    interactive mode when found.
+    There is no separate "status message" anymore — the live session card
+    already shows the session's state. The pane status line ("…Esc to
+    interrupt", "Working…") is folded into the card header via
+    notifications.touch_card_status when present.
     """
     w = await tmux_manager.find_window_by_id(window_id)
     if not w:
-        # Window gone, enqueue clear (unless skipping status)
-        if not skip_status:
-            await enqueue_status_update(bot, user_id, window_id, None)
         return
 
     pane_text = await tmux_manager.capture_pane(w.window_id)
     if not pane_text:
-        # Transient capture failure — keep existing status message
         return
 
     interactive_window = get_interactive_window(user_id)
@@ -80,14 +75,11 @@ async def update_status_message(
         if is_interactive_ui(pane_text):
             # Interactive UI still showing — skip status update (user is interacting)
             return
-        # Interactive UI gone — clear interactive mode, fall through to status check.
-        # Don't re-check for new UI this cycle (the old one just disappeared).
+        # Interactive UI gone — clear interactive mode, fall through.
         await clear_interactive_msg(user_id, bot, window_id)
         should_check_new_ui = False
 
     # Check for permission prompt (interactive UI not triggered via JSONL).
-    # Only check for new UI if no interactive UI is shown for any other window
-    # (we don't want to overwrite a different window's UI).
     if (
         should_check_new_ui
         and interactive_window is None
@@ -101,15 +93,12 @@ async def update_status_message(
         await handle_interactive_ui(bot, user_id, window_id)
         return
 
-    # Normal status line check — skip if queue is non-empty
+    # Lift status into the card header. Skip when skip_status to avoid
+    # piling on top of an active enqueued event.
     if skip_status:
         return
-
-    status_line = parse_status_line(pane_text)
-
-    if status_line:
-        await enqueue_status_update(bot, user_id, window_id, status_line)
-    # If no status line, keep existing status message (don't clear on transient state)
+    status_line = parse_status_line(pane_text) or ""
+    await touch_card_status(bot, user_id, window_id, status_line)
 
 
 async def status_poll_loop(bot: Bot) -> None:

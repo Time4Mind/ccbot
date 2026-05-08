@@ -65,6 +65,8 @@ class CardState:
     msg_id: int | None = None
     lines: list[CardLine] = field(default_factory=list)
     last_event_ts: float = 0.0
+    status_text: str = ""  # latest tmux status line ("…Esc to interrupt"), shown in header
+    last_rendered: str = ""  # last text we sent to TG; lets touch_card_status skip no-op edits
 
 
 # Per-(user, session.id) card state.
@@ -158,7 +160,12 @@ def _collapse_old_tools(state: CardState) -> None:
 
 def _render_card(sess: Session, state: CardState, *, footer: str = "") -> str:
     emoji = session_emoji(sess)
-    header = f"{emoji} *{sess.name or sess.id}* · {sess.state}"
+    state_label = sess.state
+    if state.status_text:
+        # Promote the running tmux status into the header so we don't need a
+        # separate ephemeral "Esc to interrupt" message.
+        state_label = f"{state_label} · {_trim(state.status_text, 60)}"
+    header = f"{emoji} *{sess.name or sess.id}* · {state_label}"
     if sess.goal:
         header += f"\ngoal: {sess.goal}"
     body = "\n".join(line.text for line in state.lines)
@@ -236,6 +243,7 @@ async def _send_card(
     if keyboard is not None:
         session_manager.set_last_switcher_msg(user_id, sent.message_id)
     state.msg_id = sent.message_id
+    state.last_rendered = text
 
 
 async def _edit_card(
@@ -309,7 +317,9 @@ async def update_session_card(
         await _send_card(bot, user_id, sess, state, text=text)
         return
     edited = await _edit_card(bot, user_id, state, text=text)
-    if not edited:
+    if edited:
+        state.last_rendered = text
+    else:
         # Lost the message — start a new card.
         state.msg_id = None
         await _send_card(bot, user_id, sess, state, text=text)
@@ -383,3 +393,27 @@ async def push_event(
 def is_active_for_user(user_id: int, sess: Session) -> bool:
     active = session_manager.get_active_session(user_id)
     return active is not None and active.id == sess.id
+
+
+async def touch_card_status(
+    bot: Bot, user_id: int, window_id: str, status_text: str
+) -> None:
+    """Update the card header's status badge for the session that owns
+    `window_id`. No-op when there is no live card or the badge text is
+    unchanged. Does not create a card if none exists.
+    """
+    sess = session_manager.find_session_by_window(window_id)
+    if sess is None:
+        return
+    state = _cards.get((user_id, sess.id))
+    if state is None or state.msg_id is None:
+        # No live card to update — don't create one for a status tick.
+        return
+    if state.status_text == status_text:
+        return
+    state.status_text = status_text
+    rendered = _render_card(sess, state)
+    if rendered == state.last_rendered:
+        return
+    if await _edit_card(bot, user_id, state, text=rendered):
+        state.last_rendered = rendered

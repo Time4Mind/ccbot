@@ -419,8 +419,12 @@ class TmuxManager:
                     pane = window.active_pane
                     if pane:
                         cmd = config.claude_command
+                        if config.claude_flags:
+                            cmd = f"{cmd} {config.claude_flags}"
                         if resume_session_id:
                             cmd = f"{cmd} --resume {resume_session_id}"
+                        if config.is_sandbox:
+                            cmd = f"IS_SANDBOX=1 {cmd}"
                         pane.send_keys(cmd, enter=True)
 
                 logger.info(

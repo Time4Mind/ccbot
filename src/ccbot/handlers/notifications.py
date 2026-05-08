@@ -1,141 +1,278 @@
-"""C5 + C7 notifications — per-session live card and push messages.
+"""Live-card notifications for every session (active or background).
 
-C5 (push). Sent as a fresh send_message on key events only:
-  - assistant completion (final text turn)
-  - error / failure
-  - AskUserQuestion / ExitPlanMode
-Format: `<emoji> [<session-name>] <text>`.
+A "card" is a single Telegram message that the bot keeps editMessageText-
+updating as Claude emits tool calls, thinking blocks, and text chunks. New
+TG messages are sent **only** on the user-approved triggers:
 
-C7 (live card). One message per (user, session) that the bot keeps
-editMessageText-updating with the latest tool/event. Cheap because TG edits
-do not raise a notification on the user's device.
+  - task completion (final assistant text turn)
+  - blocking error (subset of error events)
+  - AskUserQuestion / ExitPlanMode (interactive UI is handled elsewhere
+    and naturally creates a separate message)
+  - session lifecycle (created/restored/archived/done/killed)
+  - inbox file received
+  - quota warning (G6)
+  - long pause: card not updated for >= STALE_CARD_SECONDS — next event
+    starts a fresh card
+  - card overflow: rendered text would exceed CARD_HARD_LIMIT chars
 
-For the **active** session we keep the existing multi-message stream
-(handle_new_message goes through enqueue_content_message + switcher).
-For **background** sessions we use the live-card mechanism here, gated by
-config.bg_notify_mode:
-  - "separate" (default): each background session has its own live card.
-  - "footer":  append a one-line per-session footer to the active session's
-    most recent bot message instead of a card. Implemented as a fall-through
-    to "separate" in v0.1; will be enabled once we have a stable hook to
-    edit the active session's card without races (Phase 6 follow-up).
+Implementation. State per (user_id, session.id):
+  msg_id, lines (list of CardLine), last_event_ts, finalized
+
+When a tool_result arrives matching a previous tool_use_id, the existing
+line is replaced in place rather than appended, keeping the card compact.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
-from telegram import Bot
+from telegram import Bot, InlineKeyboardMarkup
 from telegram.error import BadRequest, RetryAfter
 
-from ..config import config
 from ..session import Session, session_manager
 from ..session_monitor import NewMessage
 from .message_sender import safe_send
-from .switcher import session_emoji
+from .switcher import build_switcher_keyboard, session_emoji
 
 logger = logging.getLogger(__name__)
 
 
-# Per-(user, session) live card state.
-# Key: (user_id, session.id). Value: (message_id, last_rendered_text).
-_session_cards: dict[tuple[int, str], tuple[int, str]] = {}
+# Hard cap for rendered card text — Telegram limit is 4096; leave headroom.
+CARD_HARD_LIMIT = 3800
+# Number of accumulated lines kept; older lines get summarised away.
+CARD_MAX_LINES = 40
+# After this much idleness, the next event opens a fresh card.
+STALE_CARD_SECONDS = 5 * 60
 
 
 @dataclass
-class _CardEvent:
-    """Compact single-line summary of the latest event for a session."""
-
-    line: str
-    final: str = ""
+class CardLine:
+    text: str
+    tool_use_id: str | None = None  # so tool_result can edit-replace its tool_use line
 
 
-def _summarize(msg: NewMessage) -> _CardEvent:
-    """Reduce a NewMessage into a one-line summary for the live card."""
-    head = msg.text or ""
-    head = head.replace("\n", " ").strip()
-    if len(head) > 200:
-        head = head[:197] + "…"
+@dataclass
+class CardState:
+    msg_id: int | None = None
+    lines: list[CardLine] = field(default_factory=list)
+    last_event_ts: float = 0.0
+
+
+# Per-(user, session.id) card state.
+_cards: dict[tuple[int, str], CardState] = {}
+
+
+def _trim(s: str, limit: int = 200) -> str:
+    s = s.replace("\n", " ").strip()
+    if len(s) > limit:
+        return s[: limit - 1] + "…"
+    return s
+
+
+def _line_for_event(msg: NewMessage) -> CardLine:
+    """Build a single one-line summary of one Claude event."""
+    text = msg.text or ""
+    if msg.content_type == "thinking":
+        return CardLine(text=f"∴ {_trim(text, 160)}")
     if msg.content_type == "tool_use":
         tname = msg.tool_name or "tool"
-        return _CardEvent(line=f"[{tname}] {head}")
+        return CardLine(
+            text=f"[{tname}] {_trim(text, 160)}",
+            tool_use_id=msg.tool_use_id,
+        )
     if msg.content_type == "tool_result":
         tname = msg.tool_name or "result"
-        return _CardEvent(line=f"[{tname} ✓] {head}")
-    if msg.content_type == "thinking":
-        return _CardEvent(line=f"∴ {head}")
-    final = (msg.text or "").strip() if msg.is_complete and msg.role == "assistant" else ""
-    return _CardEvent(line=head, final=final)
+        # Show a tiny success marker; the matching tool_use line will be
+        # replaced in update_session_card so we don't render two lines per tool.
+        return CardLine(
+            text=f"[{tname} ✓] {_trim(text, 160)}",
+            tool_use_id=msg.tool_use_id,
+        )
+    # text content (assistant or user echo)
+    if msg.role == "user":
+        return CardLine(text=f"👤 {_trim(text, 200)}")
+    return CardLine(text=_trim(text, 200))
 
 
-def render_card(sess: Session, event: _CardEvent | None) -> str:
-    """Render a session's live card text."""
+def _render_card(sess: Session, state: CardState, *, footer: str = "") -> str:
     emoji = session_emoji(sess)
-    state = sess.state
-    parts = [f"{emoji} *{sess.name or sess.id}* · {state}"]
+    header = f"{emoji} *{sess.name or sess.id}* · {sess.state}"
     if sess.goal:
-        parts.append(f"goal: {sess.goal}")
-    if event is not None:
-        parts.append("───")
-        if event.line:
-            parts.append(f"last: {event.line}")
-        if event.final:
-            f = event.final
-            if len(f) > 1500:
-                f = f[:1497] + "…"
-            parts.append("─ result ─")
-            parts.append(f)
+        header += f"\ngoal: {sess.goal}"
+    body = "\n".join(line.text for line in state.lines)
+    parts = [header, "─────"]
+    if body:
+        parts.append(body)
+    if footer:
+        parts.append("─────")
+        parts.append(footer)
     return "\n".join(parts)
 
 
-async def update_session_card(
-    bot: Bot, user_id: int, sess: Session, msg: NewMessage
-) -> None:
-    """Edit-or-send the per-session live card with the latest event.
+def _ensure_room(sess: Session, state: CardState) -> bool:
+    """Trim oldest lines while the rendered card exceeds CARD_HARD_LIMIT.
 
-    Cheap on rate limits: editMessageText does not push a notification.
+    Returns True if a fresh card should be opened (we trimmed everything
+    and still don't fit, or we've crossed CARD_MAX_LINES).
     """
-    event = _summarize(msg)
-    text = render_card(sess, event)
-    key = (user_id, sess.id)
+    while len(state.lines) > CARD_MAX_LINES:
+        state.lines.pop(0)
+    while state.lines and len(_render_card(sess, state)) > CARD_HARD_LIMIT:
+        state.lines.pop(0)
+    return len(state.lines) <= 1 and len(_render_card(sess, state)) > CARD_HARD_LIMIT
 
-    existing = _session_cards.get(key)
-    if existing is not None:
-        msg_id, last_text = existing
-        if last_text == text:
-            return
-        try:
-            await bot.edit_message_text(chat_id=user_id, message_id=msg_id, text=text)
-            _session_cards[key] = (msg_id, text)
-            return
-        except BadRequest as e:
-            if "Message is not modified" in str(e):
-                _session_cards[key] = (msg_id, text)
-                return
-            logger.debug("card edit failed: %s — sending new", e)
-        except RetryAfter:
-            raise
-        except Exception as e:
-            logger.debug("card edit unexpected: %s — sending new", e)
 
-    # Send a fresh card.
+def _is_stale(state: CardState) -> bool:
+    if state.msg_id is None or state.last_event_ts <= 0:
+        return False
+    return (time.time() - state.last_event_ts) >= STALE_CARD_SECONDS
+
+
+def get_card_state(user_id: int, sess: Session) -> CardState:
+    return _cards.setdefault((user_id, sess.id), CardState())
+
+
+def reset_card(user_id: int, session_id: str) -> None:
+    """Drop the cached card so the next event creates a fresh message."""
+    _cards.pop((user_id, session_id), None)
+
+
+async def _send_card(
+    bot: Bot,
+    user_id: int,
+    sess: Session,
+    state: CardState,
+    *,
+    text: str,
+) -> None:
+    """Send a brand-new card message and remember it as the live card."""
+    keyboard = build_switcher_keyboard(user_id)
     try:
         sent = await bot.send_message(
-            chat_id=user_id, text=text, disable_notification=True
+            chat_id=user_id,
+            text=text,
+            reply_markup=keyboard,
+            disable_notification=True,
         )
     except RetryAfter:
         raise
     except Exception as e:
         logger.debug("card send failed: %s", e)
         return
-    if sent:
-        _session_cards[key] = (sent.message_id, text)
+    if not sent:
+        return
+    # Strip the previous switcher (if any), then remember this one as the
+    # carrier of the live switcher.
+    prev = session_manager.get_last_switcher_msg(user_id)
+    if prev and prev != sent.message_id:
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=user_id, message_id=prev, reply_markup=None
+            )
+        except Exception:
+            pass
+    if keyboard is not None:
+        session_manager.set_last_switcher_msg(user_id, sent.message_id)
+    state.msg_id = sent.message_id
 
 
-def reset_card(user_id: int, session_id: str) -> None:
-    """Drop the cached card so the next event creates a fresh message."""
-    _session_cards.pop((user_id, session_id), None)
+async def _edit_card(
+    bot: Bot,
+    user_id: int,
+    state: CardState,
+    *,
+    text: str,
+) -> bool:
+    """Edit the live card. Returns False if the edit failed permanently."""
+    if state.msg_id is None:
+        return False
+    try:
+        await bot.edit_message_text(
+            chat_id=user_id, message_id=state.msg_id, text=text
+        )
+        return True
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return True
+        logger.debug("card edit failed (BadRequest): %s", e)
+    except RetryAfter:
+        raise
+    except Exception as e:
+        logger.debug("card edit failed (other): %s", e)
+    return False
+
+
+async def update_session_card(
+    bot: Bot, user_id: int, sess: Session, msg: NewMessage
+) -> None:
+    """Append `msg` to the session's live card, or open a new one if needed.
+
+    Triggers a fresh card on long pause and on hard-limit overflow.
+    """
+    state = get_card_state(user_id, sess)
+
+    # Trigger: long pause → fresh card.
+    if _is_stale(state):
+        state.msg_id = None
+        state.lines = []
+
+    new_line = _line_for_event(msg)
+
+    # tool_result: replace the matching tool_use line in place.
+    replaced = False
+    if msg.content_type == "tool_result" and msg.tool_use_id:
+        for i, ln in enumerate(state.lines):
+            if ln.tool_use_id == msg.tool_use_id:
+                state.lines[i] = new_line
+                replaced = True
+                break
+    if not replaced:
+        state.lines.append(new_line)
+
+    state.last_event_ts = time.time()
+
+    # Trigger: card overflow → continuation card.
+    overflow = _ensure_room(sess, state)
+    if overflow:
+        # Couldn't fit even one line — start a fresh card holding only the new line.
+        state.msg_id = None
+        state.lines = [new_line]
+
+    text = _render_card(sess, state)
+
+    if state.msg_id is None:
+        await _send_card(bot, user_id, sess, state, text=text)
+        return
+    edited = await _edit_card(bot, user_id, state, text=text)
+    if not edited:
+        # Lost the message — start a new card.
+        state.msg_id = None
+        await _send_card(bot, user_id, sess, state, text=text)
+
+
+async def finalize_task(
+    bot: Bot, user_id: int, sess: Session, final_text: str
+) -> None:
+    """Mark the current task as complete: flush card, send completion push,
+    drop the live-card pointer so the next event opens a fresh card.
+    """
+    state = get_card_state(user_id, sess)
+    final_line = CardLine(text=f"✓ {_trim(final_text, 600)}")
+    state.lines.append(final_line)
+    state.last_event_ts = time.time()
+    _ensure_room(sess, state)
+    text = _render_card(sess, state, footer="(task complete)")
+    if state.msg_id is None:
+        await _send_card(bot, user_id, sess, state, text=text)
+    else:
+        await _edit_card(bot, user_id, state, text=text)
+    # Reset for next task — a new card will spawn on the next event.
+    reset_card(user_id, sess.id)
+    # Push completion summary as a separate message.
+    summary = _trim(final_text, 200) or "task complete"
+    await push_event(bot, user_id, sess, text=f"✓ {summary}")
 
 
 async def push_event(
@@ -146,32 +283,40 @@ async def push_event(
     text: str,
     is_error: bool = False,
 ) -> None:
-    """C5 push — `<emoji> [<name>] <text>` as a separate send_message.
-
-    Reserved for completion / error / AskUserQuestion only. Cards do not
-    trigger pushes.
+    """C5 push notification — separate `send_message` for one of the
+    user-approved triggers (completion / blocker error / interactive UI /
+    lifecycle / inbox / quota).
     """
-    emoji = session_emoji(sess)
-    if is_error:
-        emoji = "🟥"
+    emoji = "🟥" if is_error else session_emoji(sess)
     body = f"{emoji} \\[{sess.name or sess.id}\\] {text}"
     if len(body) > 3500:
         body = body[:3497] + "…"
     try:
-        await safe_send(bot, user_id, body)
+        sent = await safe_send(bot, user_id, body)
     except Exception as e:
         logger.debug("push_event failed: %s", e)
+        return
+    # Migrate the switcher onto the latest pushed message.
+    if sent is not None:
+        keyboard: InlineKeyboardMarkup | None = build_switcher_keyboard(user_id)
+        if keyboard is not None:
+            try:
+                await bot.edit_message_reply_markup(
+                    chat_id=user_id, message_id=sent.message_id, reply_markup=keyboard
+                )
+                prev = session_manager.get_last_switcher_msg(user_id)
+                if prev and prev != sent.message_id:
+                    try:
+                        await bot.edit_message_reply_markup(
+                            chat_id=user_id, message_id=prev, reply_markup=None
+                        )
+                    except Exception:
+                        pass
+                session_manager.set_last_switcher_msg(user_id, sent.message_id)
+            except Exception as e:
+                logger.debug("push_event switcher migrate failed: %s", e)
 
 
 def is_active_for_user(user_id: int, sess: Session) -> bool:
-    """True iff `sess` is the user's currently-active session."""
     active = session_manager.get_active_session(user_id)
     return active is not None and active.id == sess.id
-
-
-def bg_mode() -> str:
-    """Return the configured BG_NOTIFY_MODE; falls back to 'separate'."""
-    mode = (config.bg_notify_mode or "separate").lower()
-    if mode not in ("separate", "footer"):
-        return "separate"
-    return mode

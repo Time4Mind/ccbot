@@ -125,7 +125,6 @@ from .handlers.interactive_ui import (
 )
 from .handlers.message_queue import (
     clear_status_msg_info,
-    enqueue_content_message,
     enqueue_status_update,
     get_message_queue,
     shutdown_workers,
@@ -138,15 +137,12 @@ from .handlers.message_sender import (
     send_with_fallback,
 )
 from .handlers.notifications import (
-    bg_mode,
-    is_active_for_user,
+    finalize_task,
     push_event,
-    reset_card,
     update_session_card,
 )
 from .markdown_v2 import convert_markdown
 from .naming import maybe_auto_name
-from .handlers.response_builder import build_response_parts
 from .handlers.status_polling import status_poll_loop
 from .handlers.switcher import (
     build_session_preview,
@@ -1997,10 +1993,15 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         # Touch session activity for idle TTL.
         session_manager.touch_session(sess.id)
 
-        is_active = is_active_for_user(user_id, sess)
+        # Skip tool-call notifications when display config disables them.
+        if not config.show_tool_calls and msg.content_type in (
+            "tool_use",
+            "tool_result",
+        ):
+            continue
 
-        # Handle interactive tools specially — capture terminal and send UI.
-        # Interactive UIs always go to the user (only one shown at a time).
+        # Handle interactive tools specially — capture terminal and send a
+        # separate UI message with inline keyboard. (User-approved trigger.)
         if msg.tool_name in INTERACTIVE_TOOL_NAMES and msg.content_type == "tool_use":
             set_interactive_mode(user_id, wid)
             queue = get_message_queue(user_id)
@@ -2009,7 +2010,6 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             await asyncio.sleep(0.3)
             handled = await handle_interactive_ui(bot, user_id, wid)
             if handled:
-                # C5 push: AskUserQuestion / ExitPlanMode.
                 await push_event(
                     bot, user_id, sess, text=f"interactive prompt: {msg.tool_name}"
                 )
@@ -2025,53 +2025,22 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 continue
             clear_interactive_mode(user_id)
 
-        # Any non-interactive event for this window means the prior interactive UI
-        # is no longer relevant — drop it from chat.
+        # Any non-interactive event for this window means the prior interactive
+        # UI is no longer relevant — drop it from chat.
         if get_interactive_msg_id(user_id, wid):
             await clear_interactive_msg(user_id, bot, wid)
 
-        # Background sessions: edit a single per-session live card and skip
-        # the multi-message stream.
-        if not is_active and bg_mode() != "footer":
-            await update_session_card(bot, user_id, sess, msg)
-            if msg.is_complete and msg.content_type == "text" and msg.role == "assistant":
-                summary = (msg.text or "").strip().splitlines()[0:1]
-                summary_line = summary[0] if summary else "task complete"
-                if len(summary_line) > 200:
-                    summary_line = summary_line[:197] + "…"
-                await push_event(bot, user_id, sess, text=f"✓ {summary_line}")
-                # Reset card so next assistant turn opens a fresh card.
-                reset_card(user_id, sess.id)
-            continue
-
-        # Active session (or footer mode): existing multi-message stream.
-        # Skip tool call notifications when CCBOT_SHOW_TOOL_CALLS=false.
-        if not config.show_tool_calls and msg.content_type in (
-            "tool_use",
-            "tool_result",
-        ):
-            continue
-
-        parts = build_response_parts(
-            msg.text,
-            msg.is_complete,
-            msg.content_type,
-            msg.role,
-        )
-
+        # Single live card per session (active and background alike).
+        # Streaming chunks update the card in place; only msg.is_complete
+        # events with role=assistant content_type=text trigger finalization.
         if msg.is_complete:
-            await enqueue_content_message(
-                bot=bot,
-                user_id=user_id,
-                window_id=wid,
-                parts=parts,
-                tool_use_id=msg.tool_use_id,
-                content_type=msg.content_type,
-                text=msg.text,
-                image_data=msg.image_data,
-            )
+            if msg.role == "assistant" and msg.content_type == "text":
+                # Task complete: append final text, finalize, push.
+                await finalize_task(bot, user_id, sess, msg.text or "")
+            else:
+                # Tool result (or other complete non-text events) — append to card.
+                await update_session_card(bot, user_id, sess, msg)
 
-            # Update user's read offset to current file position.
             claude_sess = await session_manager.resolve_session_for_window(wid)
             if claude_sess and claude_sess.file_path:
                 try:
@@ -2080,26 +2049,32 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 except OSError:
                     pass
 
-            # G6 soft quota — warn once per crossing per session.
-            if msg.content_type == "text" and msg.role == "assistant":
+            # G6 soft quota crossing — separate push, not card-merged.
+            if msg.role == "assistant" and msg.content_type == "text":
                 try:
                     su = await aggregate_session(sess)
                     sess.token_usage_total = su.tokens_total
                     if should_warn_quota(su):
-                        warn = (
-                            f"⚠ session burned {su.tokens_5h * 100 // max(1, config.session_token_budget_5h)}% "
-                            f"of its 5h quota ({config.session_token_budget_5h // 1000}k)"
+                        pct = (
+                            su.tokens_5h
+                            * 100
+                            // max(1, config.session_token_budget_5h)
                         )
-                        await enqueue_content_message(
-                            bot=bot,
-                            user_id=user_id,
-                            window_id=wid,
-                            parts=[warn],
-                            content_type="text",
-                            text=warn,
+                        await push_event(
+                            bot,
+                            user_id,
+                            sess,
+                            text=(
+                                f"⚠ burned {pct}% of 5h quota "
+                                f"({config.session_token_budget_5h // 1000}k)"
+                            ),
                         )
                 except Exception as e:
                     logger.debug("quota check failed: %s", e)
+        else:
+            # Streaming partial chunks — best-effort card update.
+            await update_session_card(bot, user_id, sess, msg)
+
 
 
 # --- App lifecycle ---

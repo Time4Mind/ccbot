@@ -137,6 +137,7 @@ from .handlers.message_sender import (
 )
 from .handlers.notifications import (
     finalize_task,
+    lookup_session_for_message,
     push_event,
     update_session_card,
 )
@@ -1058,6 +1059,37 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "Please use the picker above, or tap Cancel.",
         )
         return
+
+    # Reply-quote routing (A4): if the user replied to a bot message that
+    # belongs to a non-active session, send this single message there
+    # without changing the active session pointer.
+    reply = update.message.reply_to_message
+    if reply is not None:
+        target_sid = lookup_session_for_message(user.id, reply.message_id)
+        if target_sid:
+            target = session_manager.get_session(target_sid)
+            active_sess = session_manager.get_active_session(user.id)
+            same_as_active = active_sess is not None and active_sess.id == target_sid
+            if (
+                target is not None
+                and target.window_id
+                and target.state in ("active", "idle")
+                and not same_as_active
+            ):
+                tw = await tmux_manager.find_window_by_id(target.window_id)
+                if tw:
+                    ok, sm = await session_manager.send_to_window(
+                        target.window_id, text
+                    )
+                    if ok:
+                        session_manager.touch_session(target.id)
+                        await safe_reply(
+                            update.message,
+                            f"→ \\[{target.name or target.id}\\]",
+                        )
+                        return
+                    await safe_reply(update.message, f"❌ {sm}")
+                    return
 
     wid = _active_window(user.id)
     if wid is None:

@@ -72,6 +72,28 @@ class CardState:
 # Per-(user, session.id) card state.
 _cards: dict[tuple[int, str], CardState] = {}
 
+# Reverse lookup so reply-quote can route a one-shot user message to the
+# session that owns the message being replied to. Capped via FIFO eviction.
+_MSG_REGISTRY_LIMIT = 2000
+_msg_to_session: dict[tuple[int, int], str] = {}
+
+
+def _register_msg(user_id: int, message_id: int, session_id: str) -> None:
+    """Remember which session a bot message belongs to for reply-quote routing."""
+    key = (user_id, message_id)
+    # Best-effort eviction: drop ~10% of the oldest entries when the cap
+    # is hit. dict preserves insertion order in CPython 3.7+.
+    if len(_msg_to_session) >= _MSG_REGISTRY_LIMIT and key not in _msg_to_session:
+        drop = max(1, _MSG_REGISTRY_LIMIT // 10)
+        for k in list(_msg_to_session.keys())[:drop]:
+            _msg_to_session.pop(k, None)
+    _msg_to_session[key] = session_id
+
+
+def lookup_session_for_message(user_id: int, message_id: int) -> str | None:
+    """Resolve a Telegram message id back to the Session.id it represents."""
+    return _msg_to_session.get((user_id, message_id))
+
 
 def _trim(s: str, limit: int = 200) -> str:
     s = s.replace("\n", " ").strip()
@@ -244,6 +266,7 @@ async def _send_card(
         session_manager.set_last_switcher_msg(user_id, sent.message_id)
     state.msg_id = sent.message_id
     state.last_rendered = text
+    _register_msg(user_id, sent.message_id, sess.id)
 
 
 async def _edit_card(
@@ -371,6 +394,7 @@ async def push_event(
         return
     # Migrate the switcher onto the latest pushed message.
     if sent is not None:
+        _register_msg(user_id, sent.message_id, sess.id)
         keyboard: InlineKeyboardMarkup | None = build_switcher_keyboard(user_id)
         if keyboard is not None:
             try:

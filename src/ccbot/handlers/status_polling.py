@@ -16,6 +16,7 @@ Key components:
 
 import asyncio
 import logging
+import re
 import time
 
 from telegram import Bot
@@ -34,6 +35,49 @@ from .interactive_ui import (
 )
 from .message_queue import get_message_queue
 from .notifications import touch_card_status
+
+# Match option lines like "  1. Yes" / " ❯ 2. Yes, and don't ask again".
+_OPTION_LINE_RE = re.compile(r"^[\s❯>]*?(\d+)\.\s+(.+?)\s*$")
+
+
+def _parse_first_yes_option(pane_text: str) -> str | None:
+    """First option line whose label starts with "Yes". Returns its number."""
+    for raw in pane_text.splitlines():
+        m = _OPTION_LINE_RE.match(raw)
+        if not m:
+            continue
+        if m.group(2).lower().startswith("yes"):
+            return m.group(1)
+    return None
+
+
+async def _maybe_auto_approve(
+    user_id: int, window_id: str, pane_text: str
+) -> bool:
+    """Auto-Yes on the in-pane Yes/No prompt when the user opted in.
+
+    Returns True iff a key was sent — caller should then skip surfacing the
+    UI to TG.
+    """
+    mode = session_manager.get_user_settings(user_id).get("auto_approve", "off")
+    if mode != "on":
+        return False
+    digit = _parse_first_yes_option(pane_text)
+    if digit is None:
+        return False
+    # Number-key shortcut: typing the digit picks the option, Enter submits.
+    try:
+        await tmux_manager.send_keys(window_id, digit, enter=True)
+    except Exception as e:
+        logger.debug("auto_approve send_keys failed: %s", e)
+        return False
+    logger.info(
+        "Auto-approved interactive prompt (opt=%s) for user=%d window=%s",
+        digit,
+        user_id,
+        window_id,
+    )
+    return True
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +129,10 @@ async def update_status_message(
         and interactive_window is None
         and is_interactive_ui(pane_text)
     ):
+        # User-configurable auto-approve takes precedence — bypass the TG
+        # surface entirely when the setting matches.
+        if await _maybe_auto_approve(user_id, window_id, pane_text):
+            return
         logger.debug(
             "Interactive UI detected in polling (user=%d, window=%s)",
             user_id,

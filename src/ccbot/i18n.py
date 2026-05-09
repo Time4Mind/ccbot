@@ -47,6 +47,7 @@ _EN: dict[str, str] = {
     "mm.history": "📜 History",
     "mm.shot": "📸 Shot",
     "mm.new": "🆕 New",
+    "mm.archive": "🗄 Archive",
     "mm.settings": "⚙ Settings",
     # Menu screen body
     "menu.title": "*Menu*",
@@ -59,7 +60,6 @@ _EN: dict[str, str] = {
         "Language: `{language}`\n"
         "Previews: `{previews}`\n"
         "Live lag: `{live_lag}s`\n"
-        "BG notify: `{bg_notify}`\n"
         "Voice: `{voice}`\n\n"
         "_Tap a group to change._"
     ),
@@ -67,7 +67,6 @@ _EN: dict[str, str] = {
     "settings.group.language": "Language",
     "settings.group.previews": "Previews",
     "settings.group.live_lag": "Live lag",
-    "settings.group.bg_notify": "BG notify",
     "settings.group.voice": "Voice",
     # Settings — group sub-screen descriptions
     "settings.previews.body": (
@@ -80,12 +79,6 @@ _EN: dict[str, str] = {
         "*Live preview lag*\n\n"
         "Coalescing window for live-card edits.\n"
         "`0s` = update on every event, higher = quieter chat."
-    ),
-    "settings.bg.body": (
-        "*Background notifications*\n\n"
-        "How non-active session events are surfaced.\n"
-        "• `separate` — own card + push messages\n"
-        "• `footer` — append to the active session's last message"
     ),
     "settings.voice.body": (
         "*Voice transcription*\n\n"
@@ -160,6 +153,18 @@ _EN: dict[str, str] = {
     "day.fri": "Fri",
     "day.sat": "Sat",
     "day.sun": "Sun",
+    # Settings group: auto-approve interactive prompts
+    "settings.group.auto_approve": "Auto-approve",
+    "settings.approve.body": (
+        "*Auto-approve*\n\n"
+        "Bot's response to Claude Code's interactive Yes/No prompts\n"
+        "that --dangerously-skip-permissions doesn't already bypass\n"
+        "(e.g. WebFetch per-domain trust):\n"
+        "• `off` — surface in chat, you tap manually\n"
+        "• `on` — auto-Yes on every prompt"
+    ),
+    "approve.off": "off",
+    "approve.on": "on",
 }
 
 _RU: dict[str, str] = {
@@ -181,6 +186,7 @@ _RU: dict[str, str] = {
     "mm.history": "📜 История",
     "mm.shot": "📸 Скрин",
     "mm.new": "🆕 Новая",
+    "mm.archive": "🗄 Архив",
     "mm.settings": "⚙ Настройки",
     "menu.title": "*Меню*",
     "menu.empty": "*Меню*\n\nАктивной сессии нет — выбери в свитчере или тапни 🆕 Новая.",
@@ -191,14 +197,12 @@ _RU: dict[str, str] = {
         "Язык: `{language}`\n"
         "Превью: `{previews}`\n"
         "Лаг карточки: `{live_lag}с`\n"
-        "Фон-уведомления: `{bg_notify}`\n"
         "Голос: `{voice}`\n\n"
         "_Тапни группу, чтобы изменить._"
     ),
     "settings.group.language": "Язык",
     "settings.group.previews": "Превью",
     "settings.group.live_lag": "Лаг карточки",
-    "settings.group.bg_notify": "Фон-уведомления",
     "settings.group.voice": "Голос",
     "settings.previews.body": (
         "*Превью*\n\n"
@@ -210,12 +214,6 @@ _RU: dict[str, str] = {
         "*Лаг карточки*\n\n"
         "Окно сглаживания правок live-карточки.\n"
         "`0с` = править на каждом событии, больше = тише в чате."
-    ),
-    "settings.bg.body": (
-        "*Фоновые уведомления*\n\n"
-        "Как показывать события неактивных сессий.\n"
-        "• `separate` — своя карточка + push\n"
-        "• `footer` — дописывать в последнее сообщение активной"
     ),
     "settings.voice.body": (
         "*Распознавание голоса*\n\n"
@@ -285,6 +283,17 @@ _RU: dict[str, str] = {
     "day.fri": "пт",
     "day.sat": "сб",
     "day.sun": "вс",
+    "settings.group.auto_approve": "Авто-подтверждение",
+    "settings.approve.body": (
+        "*Авто-подтверждение*\n\n"
+        "Как боту обращаться с интерактивными Yes/No-промптами,\n"
+        "которые --dangerously-skip-permissions сам не закрывает\n"
+        "(например, доверие домену для WebFetch):\n"
+        "• `off` — присылать в чат, ты тапаешь сам\n"
+        "• `on` — Yes на любой промпт"
+    ),
+    "approve.off": "выкл",
+    "approve.on": "вкл",
 }
 
 _ZH: dict[str, str] = {
@@ -306,6 +315,7 @@ _ZH: dict[str, str] = {
     "mm.history": "📜 历史",
     "mm.shot": "📸 截图",
     "mm.new": "🆕 新建",
+    "mm.archive": "🗄 归档",
     "mm.settings": "⚙ 设置",
     "menu.title": "*菜单*",
     "menu.empty": "*菜单*\n\n无活动会话——从切换器选一个或点 🆕 新建。",
@@ -316,14 +326,12 @@ _ZH: dict[str, str] = {
         "语言: `{language}`\n"
         "预览: `{previews}`\n"
         "卡片延迟: `{live_lag}秒`\n"
-        "后台通知: `{bg_notify}`\n"
         "语音: `{voice}`\n\n"
         "_点击分组进行更改。_"
     ),
     "settings.group.language": "语言",
     "settings.group.previews": "预览",
     "settings.group.live_lag": "卡片延迟",
-    "settings.group.bg_notify": "后台通知",
     "settings.group.voice": "语音",
     "settings.previews.body": (
         "*预览*\n\n"
@@ -335,12 +343,6 @@ _ZH: dict[str, str] = {
         "*实时预览延迟*\n\n"
         "实时卡片编辑的合并窗口。\n"
         "`0秒` = 每个事件都更新,数值越高越安静。"
-    ),
-    "settings.bg.body": (
-        "*后台通知*\n\n"
-        "非活动会话事件如何呈现。\n"
-        "• `separate` — 独立卡片 + 推送\n"
-        "• `footer` — 追加到活动会话最后一条消息"
     ),
     "settings.voice.body": (
         "*语音识别*\n\n"
@@ -405,6 +407,17 @@ _ZH: dict[str, str] = {
     "day.fri": "五",
     "day.sat": "六",
     "day.sun": "日",
+    "settings.group.auto_approve": "自动同意",
+    "settings.approve.body": (
+        "*自动同意*\n\n"
+        "对 --dangerously-skip-permissions 未覆盖的\n"
+        "Claude Code 交互式 Yes/No 提示的处理方式\n"
+        "(例如 WebFetch 域名信任):\n"
+        "• `off` — 推送到聊天,手动点击\n"
+        "• `on` — 所有提示自动 Yes"
+    ),
+    "approve.off": "关",
+    "approve.on": "开",
 }
 
 TRANSLATIONS: dict[str, dict[str, str]] = {

@@ -29,6 +29,7 @@ from .callback_data import (
     CB_FT_KILL,
     CB_FT_MORE,
     CB_FT_STOP,
+    CB_MM_ARCHIVE,
     CB_MM_BACK,
     CB_MM_HISTORY,
     CB_MM_LIST,
@@ -37,11 +38,11 @@ from .callback_data import (
     CB_MM_SHOT,
     CB_MM_STATUS,
     CB_ST_BACK,
-    CB_ST_BG,
     CB_ST_GRP,
     CB_ST_LAG,
     CB_ST_LANG,
     CB_ST_PREV,
+    CB_ST_APPROVE,
     CB_ST_VOICE,
     CB_ST_WDAY,
     CB_SW_NEW,
@@ -55,10 +56,10 @@ Screen = Literal[
     "settings",
     "settings_previews",
     "settings_lag",
-    "settings_bg",
     "settings_voice",
     "settings_language",
     "settings_weeklyday",
+    "settings_approve",
 ]
 
 # Group key -> (label translation key, sub-screen name, settings-dict key)
@@ -66,13 +67,18 @@ _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
     ("language", "settings.group.language", "settings_language", "language"),
     ("previews", "settings.group.previews", "settings_previews", "previews"),
     ("live_lag", "settings.group.live_lag", "settings_lag", "live_lag"),
-    ("bg_notify", "settings.group.bg_notify", "settings_bg", "bg_notify"),
     ("voice", "settings.group.voice", "settings_voice", "voice"),
     (
         "weekly_reset_day",
         "settings.group.weekly_reset_day",
         "settings_weeklyday",
         "weekly_reset_day",
+    ),
+    (
+        "auto_approve",
+        "settings.group.auto_approve",
+        "settings_approve",
+        "auto_approve",
     ),
 )
 
@@ -106,6 +112,7 @@ def _footer_top_row(
 
 _MM_BUTTONS: tuple[tuple[str, str, str], ...] = (
     ("list", "mm.list", CB_MM_LIST),
+    ("archive", "mm.archive", CB_MM_ARCHIVE),
     ("status", "mm.status", CB_MM_STATUS),
     ("history", "mm.history", CB_MM_HISTORY),
     ("shot", "mm.shot", CB_MM_SHOT),
@@ -154,6 +161,8 @@ def _settings_main_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             value_str = f"{int(cur)}s"
         elif value_key == "weekly_reset_day":
             value_str = t(user_id, f"day.{cur}") if cur else "?"
+        elif value_key == "auto_approve":
+            value_str = t(user_id, f"approve.{cur}") if cur else "?"
         else:
             value_str = str(cur)
         rows.append(
@@ -201,23 +210,6 @@ def _settings_lag_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     ]
 
 
-def _settings_bg_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
-    cur = session_manager.get_user_settings(user_id).get("bg_notify", "separate")
-    return [
-        [
-            InlineKeyboardButton(
-                _highlight("separate", cur == "separate"),
-                callback_data=f"{CB_ST_BG}separate",
-            ),
-            InlineKeyboardButton(
-                _highlight("footer", cur == "footer"),
-                callback_data=f"{CB_ST_BG}footer",
-            ),
-        ],
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
-    ]
-
-
 def _settings_voice_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     cur = session_manager.get_user_settings(user_id).get("voice", "auto")
     return [
@@ -241,6 +233,20 @@ def _settings_language_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
                 callback_data=f"{CB_ST_LANG}{code}",
             )
             for code, label in LANGUAGES
+        ],
+        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+    ]
+
+
+def _settings_approve_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
+    cur = session_manager.get_user_settings(user_id).get("auto_approve", "off")
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(t(user_id, f"approve.{v}"), cur == v),
+                callback_data=f"{CB_ST_APPROVE}{v}",
+            )
+            for v in ("off", "on")
         ],
         [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
     ]
@@ -303,14 +309,14 @@ def build_footer_keyboard(
         rows.extend(_settings_previews_grid(user_id))
     elif screen == "settings_lag":
         rows.extend(_settings_lag_grid(user_id))
-    elif screen == "settings_bg":
-        rows.extend(_settings_bg_grid(user_id))
     elif screen == "settings_voice":
         rows.extend(_settings_voice_grid(user_id))
     elif screen == "settings_language":
         rows.extend(_settings_language_grid(user_id))
     elif screen == "settings_weeklyday":
         rows.extend(_settings_weeklyday_grid(user_id))
+    elif screen == "settings_approve":
+        rows.extend(_settings_approve_grid(user_id))
     else:
         top = _footer_top_row(user_id, is_busy=is_busy)
         if top:
@@ -346,7 +352,6 @@ def render_settings_text(user_id: int) -> str:
         language=s.get("language", "en"),
         previews=s.get("previews", "economical"),
         live_lag=int(s.get("live_lag", 4)),
-        bg_notify=s.get("bg_notify", "separate"),
         voice=s.get("voice", "auto"),
     )
 
@@ -354,10 +359,10 @@ def render_settings_text(user_id: int) -> str:
 _GROUP_TEXT_KEYS: dict[str, str] = {
     "settings_previews": "settings.previews.body",
     "settings_lag": "settings.lag.body",
-    "settings_bg": "settings.bg.body",
     "settings_voice": "settings.voice.body",
     "settings_language": "settings.lang.body",
     "settings_weeklyday": "settings.weeklyday.body",
+    "settings_approve": "settings.approve.body",
 }
 
 

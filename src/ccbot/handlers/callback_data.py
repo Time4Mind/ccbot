@@ -69,6 +69,7 @@ CB_MM_STATUS = "mm:status"
 CB_MM_HISTORY = "mm:hist"
 CB_MM_SHOT = "mm:shot"
 CB_MM_NEW = "mm:new"
+CB_MM_ARCHIVE = "mm:arch"
 CB_MM_SETTINGS = "mm:set"
 CB_MM_BACK = "mm:back"  # back to default footer
 
@@ -77,9 +78,9 @@ CB_ST_GRP = "st:grp:"  # st:grp:<name>  open a per-group settings screen
 CB_ST_LANG = "st:lng:"  # st:lng:<code>
 CB_ST_PREV = "st:prev:"  # st:prev:<value>
 CB_ST_LAG = "st:lag:"  # st:lag:<value>
-CB_ST_BG = "st:bg:"  # st:bg:<value>
 CB_ST_VOICE = "st:voice:"  # st:voice:<value>
 CB_ST_WDAY = "st:wday:"  # st:wday:<mon|tue|...|sun>
+CB_ST_APPROVE = "st:apr:"  # st:apr:<off|webfetch|all>
 CB_ST_BACK = "st:back"  # back to Menu
 
 # Confirmation dialogs (id-bearing variants take session.id)

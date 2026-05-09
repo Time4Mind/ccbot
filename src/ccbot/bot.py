@@ -94,6 +94,7 @@ from .handlers.callback_data import (
     CB_FT_STOP,
     CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
+    CB_MM_ARCHIVE,
     CB_MM_BACK,
     CB_MM_HISTORY,
     CB_MM_LIST,
@@ -108,8 +109,8 @@ from .handlers.callback_data import (
     CB_SESSION_SELECT,
     CB_KEYS_PREFIX,
     CB_SCREENSHOT_REFRESH,
+    CB_ST_APPROVE,
     CB_ST_BACK,
-    CB_ST_BG,
     CB_ST_GRP,
     CB_ST_LAG,
     CB_ST_LANG,
@@ -2514,6 +2515,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         elif data == CB_MM_NEW:
             await _emit_new_flow(query, context, user)
 
+    elif data == CB_MM_ARCHIVE:
+        await query.answer()
+        if context.user_data is not None:
+            context.user_data["_arc_show_all"] = False
+        text, kb = build_archive_page(
+            page=0, lookback_seconds=DEFAULT_LOOKBACK_SECONDS, show_all=False
+        )
+        # Append a Back-to-Menu row so the user can leave the archive.
+        rows: list[list[InlineKeyboardButton]] = [
+            list(r) for r in kb.inline_keyboard
+        ]
+        rows.append(
+            [InlineKeyboardButton(t(user.id, "btn.back"), callback_data=CB_MM_BACK)]
+        )
+        await _set_view(
+            query, context.bot, user.id, text, InlineKeyboardMarkup(rows)
+        )
+
     # More menu: open Settings (in place).
     elif data == CB_MM_SETTINGS:
         text = render_settings_text(user.id)
@@ -2545,9 +2564,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "language": "settings_language",
             "previews": "settings_previews",
             "live_lag": "settings_lag",
-            "bg_notify": "settings_bg",
             "voice": "settings_voice",
             "weekly_reset_day": "settings_weeklyday",
+            "auto_approve": "settings_approve",
         }.get(group)
         if not screen_name:
             await query.answer("Unknown group")
@@ -2566,10 +2585,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     elif (
         data.startswith(CB_ST_PREV)
         or data.startswith(CB_ST_LAG)
-        or data.startswith(CB_ST_BG)
         or data.startswith(CB_ST_VOICE)
         or data.startswith(CB_ST_LANG)
         or data.startswith(CB_ST_WDAY)
+        or data.startswith(CB_ST_APPROVE)
     ):
         screen_name = "settings"
         if data.startswith(CB_ST_PREV):
@@ -2585,11 +2604,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if lag in (0, 2, 4, 8):
                 session_manager.update_user_setting(user.id, "live_lag", lag)
             screen_name = "settings_lag"
-        elif data.startswith(CB_ST_BG):
-            value = data[len(CB_ST_BG) :]
-            if value in ("separate", "footer"):
-                session_manager.update_user_setting(user.id, "bg_notify", value)
-            screen_name = "settings_bg"
         elif data.startswith(CB_ST_VOICE):
             value = data[len(CB_ST_VOICE) :]
             if value in ("auto", "whisper", "apple", "off"):
@@ -2605,6 +2619,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if value in ("mon", "tue", "wed", "thu", "fri", "sat", "sun"):
                 session_manager.update_user_setting(user.id, "weekly_reset_day", value)
             screen_name = "settings_weeklyday"
+        elif data.startswith(CB_ST_APPROVE):
+            value = data[len(CB_ST_APPROVE) :]
+            if value in ("off", "on"):
+                session_manager.update_user_setting(user.id, "auto_approve", value)
+            screen_name = "settings_approve"
         text = render_settings_group_text(user.id, screen_name)  # type: ignore[arg-type]
         keyboard = build_footer_keyboard(user.id, screen=screen_name)  # type: ignore[arg-type]
         try:
@@ -2951,12 +2970,11 @@ async def post_init(application: Application) -> None:
     # Order: session ops first, then prominent Claude switches (model/effort),
     # then everything else. /use and /rename are intentionally NOT in the menu —
     # the inline switcher covers their job (TODO: remove handlers in v1.5).
-    # Trimmed /-menu surface. Stop/Kill/Clear/Menu live in the inline footer
-    # under the live card; History/Status/Shot/Archive live in the inline ≡ Menu.
-    # Hidden commands still work when typed (handlers below are unchanged).
+    # Trimmed /-menu surface. New/List/Status/History/Shot/Settings/Archive
+    # all live behind the inline ≡ Menu; Stop/Kill/Clear in the live-card
+    # footer. Hidden commands still work when typed.
     bot_commands = [
-        BotCommand("new", "Create a new session"),
-        BotCommand("list", "List sessions (active + lost)"),
+        BotCommand("menu", "Open menu"),
         BotCommand("done", "Mark a session as done"),
     ]
     for cmd_name in ("model", "effort", "compact", "memory"):

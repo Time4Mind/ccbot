@@ -350,23 +350,24 @@ async def _edit_card(
 ) -> bool:
     """Edit the live card. Returns False if the edit failed permanently.
 
-    When `reply_markup` is provided, the keyboard is updated atomically with
-    the text — used to flip the Stop/Kill button as busy state changes.
+    Always sends a keyboard along with the text — relying on Telegram's
+    "preserve keyboard when reply_markup is omitted" semantics turned out
+    flaky (the buttons flickered between edits). Caller may pass an
+    explicit `reply_markup`; otherwise we rebuild from current busy state.
     """
     if state.msg_id is None:
         return False
+    if reply_markup is None:
+        reply_markup = build_footer_keyboard(
+            user_id, screen="main", is_busy=_card_is_busy(state)
+        )
     try:
-        if reply_markup is not None:
-            await bot.edit_message_text(
-                chat_id=user_id,
-                message_id=state.msg_id,
-                text=text,
-                reply_markup=reply_markup,
-            )
-        else:
-            await bot.edit_message_text(
-                chat_id=user_id, message_id=state.msg_id, text=text
-            )
+        await bot.edit_message_text(
+            chat_id=user_id,
+            message_id=state.msg_id,
+            text=text,
+            reply_markup=reply_markup,
+        )
         return True
     except BadRequest as e:
         if "Message is not modified" in str(e):

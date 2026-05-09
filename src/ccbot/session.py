@@ -1090,11 +1090,14 @@ class SessionManager:
         "language": "en",  # "en" | "ru" | "zh" — UI strings
         "previews": "economical",  # "economical" | "readable" (Haiku-cached)
         "live_lag": 4,  # seconds, see PREVIEW_LIVE_LAG
-        "bg_notify": "separate",  # "separate" | "footer"
         "voice": "auto",  # "auto" | "whisper" | "apple" | "off"
         # Day-of-week the Anthropic weekly window resets on. Drives the %/d
         # burn-rate computation in /status. Values: "mon".."sun".
         "weekly_reset_day": "mon",
+        # Auto-approve interactive Yes/No prompts that --dangerously-skip-
+        # permissions doesn't already bypass (e.g. WebFetch per-domain
+        # trust). "off" = surface in TG, "on" = auto-Yes on every prompt.
+        "auto_approve": "off",
     }
 
     def get_user_settings(self, user_id: int) -> dict[str, Any]:

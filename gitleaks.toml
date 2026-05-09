@@ -1,0 +1,14 @@
+# Custom gitleaks rules for ccbot.
+#
+# Used by both the local pre-commit hook and the secrets-scan CI workflow.
+# Telegram Bot API tokens are the most common accidental leak — match those
+# precisely so we don't have to rely on gitleaks' generic regexes.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "telegram-bot-token"
+description = "Telegram Bot API token"
+regex = '''[0-9]{8,10}:AA[A-Za-z0-9_-]{32,35}'''
+keywords = ["bot", "telegram", "TELEGRAM_BOT_TOKEN"]

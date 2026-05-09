@@ -52,6 +52,9 @@ coverage.xml
 
 # Environments
 .env
+.env.local
+.env.*.local
+.env.bak.*
 .venv
 env/
 venv/
@@ -65,6 +68,19 @@ venv.bak/
 *.swp
 *.swo
 *~
+
+# OS / editor
+.DS_Store
+
+# Local Claude Code state
+.claude/settings.local.json
+.claude/local/
+
+# Operator-private docs — anything in this folder is git-ignored except
+# the README that explains the folder's purpose.
+doc/operator-private/*
+!doc/operator-private/README.md
+doc/local/
 
 # Project specific
 .uv/

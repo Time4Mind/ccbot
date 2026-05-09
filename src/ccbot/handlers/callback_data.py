@@ -45,7 +45,9 @@ CB_ASK_REFRESH = "aq:ref:"  # aq:ref:<window>
 # Session picker (resume existing session)
 CB_SESSION_SELECT = "rs:sel:"  # rs:sel:<index>
 CB_SESSION_NEW = "rs:new"  # start a new session
-CB_SESSION_CANCEL = "rs:cancel"  # cancel
+CB_SESSION_CANCEL = "rs:cancel"  # cancel — drop the new flow entirely
+CB_SESSION_BACK = "rs:back"  # back to directory browser at last selected path
+CB_SESSION_PAGE = "rs:p:"  # rs:p:<page>  pagination
 
 # Screenshot control keys
 CB_KEYS_PREFIX = "kb:"  # kb:<key_id>:<window>
@@ -54,6 +56,39 @@ CB_KEYS_PREFIX = "kb:"  # kb:<key_id>:<window>
 CB_SW_USE = "sw:"  # sw:<session.id>     — switch active session
 CB_SW_NEW = "swn"  # open directory browser to create a new session
 CB_SW_NOOP = "sw0"  # tap on already-active button (no-op)
+
+# Footer (always under last bot message)
+CB_FT_STOP = "ft:stop"  # send Escape to active session (busy state)
+CB_FT_KILL = "ft:kill"  # confirm-archive active session (idle state)
+CB_FT_CLEAR = "ft:clear"  # forward /clear to active session
+CB_FT_MORE = "ft:more"  # open the Menu screen
+
+# More menu
+CB_MM_LIST = "mm:list"
+CB_MM_STATUS = "mm:status"
+CB_MM_HISTORY = "mm:hist"
+CB_MM_SHOT = "mm:shot"
+CB_MM_NEW = "mm:new"
+CB_MM_SETTINGS = "mm:set"
+CB_MM_BACK = "mm:back"  # back to default footer
+
+# Settings (toggle screens)
+CB_ST_GRP = "st:grp:"  # st:grp:<name>  open a per-group settings screen
+CB_ST_LANG = "st:lng:"  # st:lng:<code>
+CB_ST_PREV = "st:prev:"  # st:prev:<value>
+CB_ST_LAG = "st:lag:"  # st:lag:<value>
+CB_ST_BG = "st:bg:"  # st:bg:<value>
+CB_ST_VOICE = "st:voice:"  # st:voice:<value>
+CB_ST_WDAY = "st:wday:"  # st:wday:<mon|tue|...|sun>
+CB_ST_BACK = "st:back"  # back to Menu
+
+# Confirmation dialogs (id-bearing variants take session.id)
+CB_CONF_KILL_YES = "cn:kill:y:"  # cn:kill:y:<sid>
+CB_CONF_KILL_NO = "cn:kill:n"
+CB_CONF_DEL_YES = "cn:del:y:"  # cn:del:y:<sid>
+CB_CONF_DEL_NO = "cn:del:n"
+CB_CONF_DONE_YES = "cn:done:y:"  # cn:done:y:<sid>
+CB_CONF_DONE_NO = "cn:done:n"
 
 # Archive
 CB_ARC_PAGE = "ar:p:"  # ar:p:<page>

@@ -135,11 +135,13 @@ async def strip_active_switcher(bot: Bot, user_id: int) -> None:
 
 
 async def attach_switcher(bot: Bot, user_id: int, message_id: int) -> None:
-    """Attach the current switcher to `message_id` and strip the previous one.
-
-    No-op if the user has no sessions (returns silently).
+    """Attach the default footer (Stop + ⋯ More + switcher) to `message_id`
+    and strip the previous one. No-op only when there's truly nothing to show.
     """
-    keyboard = build_switcher_keyboard(user_id)
+    # Local import to avoid an import cycle (menu.py imports from switcher.py).
+    from .menu import build_footer_keyboard
+
+    keyboard = build_footer_keyboard(user_id, screen="main")
     if keyboard is None:
         return
 

@@ -15,6 +15,7 @@ Key components:
 
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -28,8 +29,10 @@ from .callback_data import (
     CB_DIR_PAGE,
     CB_DIR_SELECT,
     CB_DIR_UP,
+    CB_SESSION_BACK,
     CB_SESSION_CANCEL,
     CB_SESSION_NEW,
+    CB_SESSION_PAGE,
     CB_SESSION_SELECT,
     CB_WIN_BIND,
     CB_WIN_CANCEL,
@@ -38,6 +41,9 @@ from .callback_data import (
 
 # Directories per page in directory browser
 DIRS_PER_PAGE = 6
+
+# Sessions per page in the session picker (after the dir is chosen).
+SESSIONS_PER_PAGE = 8
 
 # User state keys
 STATE_KEY = "state"
@@ -49,6 +55,7 @@ BROWSE_DIRS_KEY = "browse_dirs"  # Cache of subdirs for current path
 UNBOUND_WINDOWS_KEY = "unbound_windows"  # Cache of (name, cwd) tuples
 STATE_SELECTING_SESSION = "selecting_session"
 SESSIONS_KEY = "cached_sessions"  # Cache of ClaudeSession list
+SESSIONS_PAGE_KEY = "sessions_page"  # current page index in session picker
 
 
 def clear_browse_state(user_data: dict | None) -> None:
@@ -111,7 +118,7 @@ def build_window_picker(
     buttons.append(
         [
             InlineKeyboardButton("➕ New Session", callback_data=CB_WIN_NEW),
-            InlineKeyboardButton("Cancel", callback_data=CB_WIN_CANCEL),
+            InlineKeyboardButton("≡ Menu", callback_data=CB_WIN_CANCEL),
         ]
     )
 
@@ -188,7 +195,7 @@ def build_directory_browser(
     if path != path.parent:
         action_row.append(InlineKeyboardButton("..", callback_data=CB_DIR_UP))
     action_row.append(InlineKeyboardButton("Select", callback_data=CB_DIR_CONFIRM))
-    action_row.append(InlineKeyboardButton("Cancel", callback_data=CB_DIR_CANCEL))
+    action_row.append(InlineKeyboardButton("≡ Menu", callback_data=CB_DIR_CANCEL))
     buttons.append(action_row)
 
     display_path = str(path).replace(str(Path.home()), "~")
@@ -221,45 +228,85 @@ def _relative_time(file_path: str) -> str:
 
 def build_session_picker(
     sessions: list[ClaudeSession],
+    *,
+    page: int = 0,
+    summary_resolver: Callable[[ClaudeSession], str] | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build session picker UI for resuming an existing Claude session.
 
     Args:
-        sessions: List of ClaudeSession objects (sorted by recency).
+        sessions: All ClaudeSession objects in the chosen dir (sorted by recency).
+        page: Page index in the paginated picker (0-based).
+        summary_resolver: Optional callable that returns a human-readable label
+            for a session. When None, falls back to the JSONL `summary` field.
 
     Returns: (text, keyboard).
     """
+    total = len(sessions)
+    pages = max(1, (total + SESSIONS_PER_PAGE - 1) // SESSIONS_PER_PAGE)
+    page = max(0, min(page, pages - 1))
+    start = page * SESSIONS_PER_PAGE
+    chunk = sessions[start : start + SESSIONS_PER_PAGE]
+
+    def _label_for(s: ClaudeSession) -> str:
+        text = summary_resolver(s) if summary_resolver else s.summary
+        return text or "untitled"
+
     lines = [
-        "*Resume Session?*\n",
-        "Existing sessions found in this directory.\n",
+        "*Resume Session?*",
+        "",
+        f"page {page + 1}/{pages} — {total} session(s) in this directory.",
+        "",
     ]
-    for i, s in enumerate(sessions):
-        summary = s.summary[:40] + "…" if len(s.summary) > 40 else s.summary
+    for n, s in enumerate(chunk, start=1):
+        summary = _label_for(s)
+        if len(summary) > 60:
+            summary = summary[:59] + "…"
         rel = _relative_time(s.file_path)
         time_str = f" ({rel})" if rel else ""
         if s.token_total >= 1000:
             tok = f"{s.token_total // 1000}k"
         else:
             tok = f"{s.token_total}"
-        lines.append(f"{i + 1}. {summary} — {s.message_count} msgs / {tok}{time_str}")
+        lines.append(f"{n}. {summary}\n   {s.message_count} msgs / {tok}{time_str}")
 
     buttons: list[list[InlineKeyboardButton]] = []
-    for i in range(0, len(sessions), 2):
-        row = []
-        for j in range(min(2, len(sessions) - i)):
-            s = sessions[i + j]
-            label = s.summary[:14] + "…" if len(s.summary) > 14 else s.summary
-            row.append(
-                InlineKeyboardButton(
-                    f"▶ {label}", callback_data=f"{CB_SESSION_SELECT}{i + j}"
-                )
+    # One row of numeric pickers per page (max 8 per page → up to 4+4).
+    num_row: list[InlineKeyboardButton] = []
+    for n, _s in enumerate(chunk, start=1):
+        num_row.append(
+            InlineKeyboardButton(
+                str(n),
+                # Callback data carries the absolute index, not the local one.
+                callback_data=f"{CB_SESSION_SELECT}{start + (n - 1)}",
             )
-        buttons.append(row)
+        )
+        if len(num_row) == 4:
+            buttons.append(num_row)
+            num_row = []
+    if num_row:
+        buttons.append(num_row)
+
+    if pages > 1:
+        nav: list[InlineKeyboardButton] = []
+        if page > 0:
+            nav.append(
+                InlineKeyboardButton("◀", callback_data=f"{CB_SESSION_PAGE}{page - 1}")
+            )
+        nav.append(InlineKeyboardButton(f"{page + 1}/{pages}", callback_data="noop"))
+        if page < pages - 1:
+            nav.append(
+                InlineKeyboardButton("▶", callback_data=f"{CB_SESSION_PAGE}{page + 1}")
+            )
+        buttons.append(nav)
 
     buttons.append(
+        [InlineKeyboardButton("🆕 Start fresh", callback_data=CB_SESSION_NEW)]
+    )
+    buttons.append(
         [
-            InlineKeyboardButton("➕ New Session", callback_data=CB_SESSION_NEW),
-            InlineKeyboardButton("Cancel", callback_data=CB_SESSION_CANCEL),
+            InlineKeyboardButton("← Back to dirs", callback_data=CB_SESSION_BACK),
+            InlineKeyboardButton("≡ Menu", callback_data=CB_SESSION_CANCEL),
         ]
     )
 

@@ -38,12 +38,7 @@ class TestSplitOverflow:
         assert r.attachments[0].filename.endswith(".txt")
 
     def test_small_table_inline(self) -> None:
-        table = (
-            "| a | b |\n"
-            "|---|---|\n"
-            "| 1 | 2 |\n"
-            "| 3 | 4 |\n"
-        )
+        table = "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n"
         r = split_overflow(table)
         assert r.attachments == []
         assert "| a | b |" in r.text

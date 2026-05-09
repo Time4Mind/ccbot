@@ -160,15 +160,153 @@ async def compute_user_usage(user_id: int) -> UserUsage:
     return usage
 
 
+_WEEKDAY_INDEX: dict[str, int] = {
+    "mon": 0,
+    "tue": 1,
+    "wed": 2,
+    "thu": 3,
+    "fri": 4,
+    "sat": 5,
+    "sun": 6,
+}
+
+
+def _parse_hhmm(hh_mm: str) -> tuple[int, int] | None:
+    try:
+        h_str, m_str = hh_mm.split(":", 1)
+        hour = int(h_str)
+        minute = int(m_str)
+    except (ValueError, AttributeError):
+        return None
+    if not (0 <= hour < 24 and 0 <= minute < 60):
+        return None
+    return hour, minute
+
+
+def _hours_until_clock(hh_mm: str) -> float | None:
+    """Hours from now until the next occurrence of a 24h HH:MM wall-clock."""
+    parsed = _parse_hhmm(hh_mm)
+    if parsed is None:
+        return None
+    hour, minute = parsed
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds() / 3600.0
+
+
+def _days_until_weekday_clock(weekday_key: str, hh_mm: str) -> float | None:
+    """Days from now until the next occurrence of the given weekday + HH:MM."""
+    target_weekday = _WEEKDAY_INDEX.get(weekday_key)
+    if target_weekday is None:
+        return None
+    parsed = _parse_hhmm(hh_mm)
+    if parsed is None:
+        return None
+    hour, minute = parsed
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    days_ahead = (target_weekday - now.weekday()) % 7
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0) + timedelta(
+        days=days_ahead
+    )
+    if target <= now:
+        target += timedelta(days=7)
+    return (target - now).total_seconds() / 86400.0
+
+
+def _quota_emoji(pct: int) -> str:
+    """Stoplight glyph for an at-a-glance quota signal."""
+    if pct < 50:
+        return "🟢"
+    if pct < 75:
+        return "🟡"
+    if pct < 90:
+        return "🟠"
+    return "🔴"
+
+
+def format_usage_breakdown_compact(user_id: int, info: object) -> str | None:
+    """Render the live /usage payload as a compact, multilingual block.
+
+    Each row: ``label: pct% · rate · resetTime`` (rate is %/h for the 5h
+    window; the weekly rows omit it because the modal doesn't expose the
+    elapsed time within the week). Returns None when info has nothing.
+    """
+    from .i18n import t
+    from .terminal_parser import UsageInfo, extract_usage_breakdown
+
+    if not isinstance(info, UsageInfo):
+        return None
+    b = extract_usage_breakdown(info)
+    rows: list[str] = []
+
+    # 5h: pct + hourly burn rate + reset time.
+    if b.session_pct is not None and b.session_reset_hhmm:
+        hours_left = _hours_until_clock(b.session_reset_hhmm)
+        rate_str = ""
+        if hours_left is not None:
+            elapsed = max(0.1, 5.0 - min(5.0, hours_left))
+            rate = b.session_pct / elapsed
+            rate_str = f" · {rate:.1f}%/h"
+        rows.append(
+            f"{_quota_emoji(b.session_pct)} {t(user_id, 'usage.5h')}: "
+            f"{b.session_pct}%{rate_str} · {b.session_reset_hhmm}"
+        )
+
+    # Weekly window: %/d burn rate using user-configured reset day.
+    weekly_day = session_manager.get_user_settings(user_id).get(
+        "weekly_reset_day", "mon"
+    )
+
+    def _weekly_rate(pct: int, reset_hhmm: str) -> str:
+        days_left = _days_until_weekday_clock(weekly_day, reset_hhmm)
+        if days_left is None:
+            return ""
+        elapsed = max(0.1, 7.0 - min(7.0, days_left))
+        return f" · {pct / elapsed:.1f}%/d"
+
+    if b.week_pct is not None and b.week_reset_hhmm:
+        rate = _weekly_rate(b.week_pct, b.week_reset_hhmm)
+        rows.append(
+            f"{_quota_emoji(b.week_pct)} {t(user_id, 'usage.week')}: "
+            f"{b.week_pct}%{rate} · {b.week_reset_hhmm}"
+        )
+
+    if b.week_sonnet_pct is not None and b.week_sonnet_reset_hhmm:
+        rate = _weekly_rate(b.week_sonnet_pct, b.week_sonnet_reset_hhmm)
+        rows.append(
+            f"{_quota_emoji(b.week_sonnet_pct)} "
+            f"{t(user_id, 'usage.week_sonnet')}: "
+            f"{b.week_sonnet_pct}%{rate} · {b.week_sonnet_reset_hhmm}"
+        )
+
+    extra_label = t(user_id, "usage.on" if b.extra_enabled else "usage.off")
+    rows.append(f"{t(user_id, 'usage.extra')}: {extra_label}")
+
+    if not rows:
+        return None
+    return t(user_id, "usage.title") + "\n" + "\n".join(rows)
+
+
 def format_usage_status(user_id: int, usage: UserUsage) -> str:
-    """Render the /status text. Per-session lines marked with active emoji."""
+    """Render the /status text.
+
+    Header carries 5h / weekly aggregates against the configured caps.
+    Sessions are split into Active / Archived / Lost groups; each line is
+    name + 5h tokens + lifetime tokens, marked with ✓ for the active one.
+    """
     del user_id
     lines: list[str] = []
     cap_5h = max(1, config.max_5h_tokens)
     cap_w = max(1, config.max_weekly_tokens)
     pct_5h = int(100 * usage.tokens_5h / cap_5h)
     pct_w = int(100 * usage.tokens_weekly / cap_w)
-    lines.append("*Usage (Max x20)*")
+    lines.append("*Local estimate*")
     lines.append(
         f"5h window: {pct_5h:>3}% ({usage.tokens_5h // 1000}k / {cap_5h // 1000}k est)"
     )
@@ -176,20 +314,48 @@ def format_usage_status(user_id: int, usage: UserUsage) -> str:
         f"Weekly:    {pct_w:>3}% ({usage.tokens_weekly // 1000}k / "
         f"{cap_w // 1000}k est)"
     )
-    lines.append("")
-    if usage.sessions:
-        lines.append("*Sessions*")
-        # Show active first
-        active = session_manager.get_active_session(
-            min(config.allowed_users) if config.allowed_users else 0
-        )
-        active_id = active.id if active else ""
-        for s in usage.sessions:
-            sess_obj = session_manager.get_session(s.session_id)
-            state = sess_obj.state if sess_obj else "?"
+    if not usage.sessions:
+        return "\n".join(lines)
+
+    active = session_manager.get_active_session(
+        min(config.allowed_users) if config.allowed_users else 0
+    )
+    active_id = active.id if active else ""
+
+    # Partition sessions by state so each group renders under its own header.
+    by_state: dict[str, list[SessionUsage]] = {
+        "active": [],
+        "archived": [],
+        "lost": [],
+    }
+    for s in usage.sessions:
+        sess_obj = session_manager.get_session(s.session_id)
+        state = sess_obj.state if sess_obj else "?"
+        if state in ("active", "idle"):
+            bucket = "active"
+        elif state in ("archived", "completed"):
+            bucket = "archived"
+        elif state == "lost":
+            bucket = "lost"
+        else:
+            continue
+        by_state[bucket].append(s)
+
+    section_headers = {
+        "active": "*Active*",
+        "archived": "*Archived*",
+        "lost": "*Lost*",
+    }
+    for bucket in ("active", "archived", "lost"):
+        rows = by_state[bucket]
+        if not rows:
+            continue
+        lines.append("")
+        lines.append(section_headers[bucket])
+        for s in rows:
             marker = "✓" if s.session_id == active_id else " "
             lines.append(
-                f"{marker} `{s.session_id}` *{s.name}* ({state}) — "
+                f"{marker} *{s.name}* — "
                 f"{s.tokens_5h // 1000}k 5h / {s.tokens_total // 1000}k total"
             )
     return "\n".join(lines)

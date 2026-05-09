@@ -75,7 +75,7 @@ class TestParseSessionUsage:
     async def test_handles_malformed_json_lines(self, tmp_path: Path) -> None:
         f = tmp_path / "s.jsonl"
         f.write_text(
-            'not valid json\n'
+            "not valid json\n"
             + json.dumps(
                 {
                     "type": "assistant",

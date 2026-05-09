@@ -78,6 +78,7 @@ async def send_history(
     user_id: int | None = None,
     bot: Bot | None = None,
     message_thread_id: int | None = None,
+    extra_rows: list[list[InlineKeyboardButton]] | None = None,
 ) -> None:
     """Send or edit message history for a window's session.
 
@@ -212,6 +213,12 @@ async def send_history(
             len(pages),
             page_index,
         )
+
+    # Append caller-supplied extra keyboard rows (used by the inline Menu's
+    # "History" sub-screen to add a Menu-grid below pagination).
+    if extra_rows:
+        existing_rows = list(keyboard.inline_keyboard) if keyboard is not None else []
+        keyboard = InlineKeyboardMarkup(existing_rows + [list(r) for r in extra_rows])
 
     if edit:
         await safe_edit(target, text, reply_markup=keyboard)

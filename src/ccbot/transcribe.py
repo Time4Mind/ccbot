@@ -146,11 +146,26 @@ async def _openai_transcribe(ogg_data: bytes) -> str:
     return text
 
 
-async def transcribe_voice(ogg_data: bytes) -> str:
-    """Dispatch to the configured backend; raise ValueError on failure."""
+async def transcribe_voice(ogg_data: bytes, user_id: int | None = None) -> str:
+    """Dispatch to the configured backend; raise ValueError on failure.
+
+    Backend resolution order:
+      1. Per-user setting (`voice` key in user_settings) when `user_id` given
+         and the value isn't `auto` (auto means "follow the env default").
+      2. Env-var `VOICE_BACKEND` (config.voice_backend).
+      3. Platform fallback when the resolved value is `auto`.
+    """
     backend = (config.voice_backend or "auto").lower()
+    if user_id is not None:
+        from .session import session_manager
+
+        per_user = (
+            session_manager.get_user_settings(user_id).get("voice") or ""
+        ).lower()
+        if per_user and per_user != "auto":
+            backend = per_user
     if backend == "off":
-        raise ValueError("Voice backend is disabled (VOICE_BACKEND=off)")
+        raise ValueError("Voice backend is disabled")
     if backend == "auto":
         backend = "apple" if platform.system() == "Darwin" else "whisper"
 

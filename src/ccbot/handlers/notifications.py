@@ -38,7 +38,8 @@ from ..session import Session, session_manager
 from ..session_monitor import NewMessage
 from ..telegram_sender import split_message
 from .message_sender import safe_send
-from .switcher import build_switcher_keyboard, session_emoji
+from .menu import build_footer_keyboard
+from .switcher import session_emoji
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +292,11 @@ def reset_card(user_id: int, session_id: str) -> None:
     _cards.pop((user_id, session_id), None)
 
 
+def _card_is_busy(state: CardState) -> bool:
+    """Heuristic: card is busy iff its header carries a tmux status line."""
+    return bool(state.status_text)
+
+
 async def _send_card(
     bot: Bot,
     user_id: int,
@@ -300,7 +306,9 @@ async def _send_card(
     text: str,
 ) -> None:
     """Send a brand-new card message and remember it as the live card."""
-    keyboard = build_switcher_keyboard(user_id)
+    keyboard = build_footer_keyboard(
+        user_id, screen="main", is_busy=_card_is_busy(state)
+    )
     try:
         sent = await bot.send_message(
             chat_id=user_id,
@@ -338,12 +346,27 @@ async def _edit_card(
     state: CardState,
     *,
     text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
 ) -> bool:
-    """Edit the live card. Returns False if the edit failed permanently."""
+    """Edit the live card. Returns False if the edit failed permanently.
+
+    When `reply_markup` is provided, the keyboard is updated atomically with
+    the text — used to flip the Stop/Kill button as busy state changes.
+    """
     if state.msg_id is None:
         return False
     try:
-        await bot.edit_message_text(chat_id=user_id, message_id=state.msg_id, text=text)
+        if reply_markup is not None:
+            await bot.edit_message_text(
+                chat_id=user_id,
+                message_id=state.msg_id,
+                text=text,
+                reply_markup=reply_markup,
+            )
+        else:
+            await bot.edit_message_text(
+                chat_id=user_id, message_id=state.msg_id, text=text
+            )
         return True
     except BadRequest as e:
         if "Message is not modified" in str(e):
@@ -433,8 +456,12 @@ async def update_session_card(
         state.last_edit_ts = time.monotonic()
         return
 
-    # Coalesce edits — at most one editMessageText per CARD_EDIT_LAG seconds.
-    lag = max(0.0, config.card_edit_lag)
+    # Coalesce edits — at most one editMessageText per live_lag seconds.
+    # User setting takes precedence over the env-var default.
+    user_lag = session_manager.get_user_settings(user_id).get("live_lag")
+    if user_lag is None:
+        user_lag = config.card_edit_lag
+    lag = max(0.0, float(user_lag))
     elapsed = time.monotonic() - state.last_edit_ts if state.last_edit_ts else lag
     if lag <= 0 or elapsed >= lag:
         edited = await _edit_card(bot, user_id, state, text=text)
@@ -533,7 +560,9 @@ async def push_event(
     # Migrate the switcher onto the latest pushed message.
     if sent is not None:
         _register_msg(user_id, sent.message_id, sess.id)
-        keyboard: InlineKeyboardMarkup | None = build_switcher_keyboard(user_id)
+        keyboard: InlineKeyboardMarkup | None = build_footer_keyboard(
+            user_id, screen="main"
+        )
         if keyboard is not None:
             try:
                 await bot.edit_message_reply_markup(
@@ -573,9 +602,18 @@ async def touch_card_status(
         return
     if state.status_text == status_text:
         return
+    was_busy = bool(state.status_text)
     state.status_text = status_text
+    is_busy = bool(state.status_text)
     rendered = _render_card(sess, state)
-    if rendered == state.last_rendered:
+    if rendered == state.last_rendered and was_busy == is_busy:
         return
-    if await _edit_card(bot, user_id, state, text=rendered):
+
+    # When busy state flips, refresh the keyboard so Stop ↔ Kill swaps.
+    keyboard = (
+        build_footer_keyboard(user_id, screen="main", is_busy=is_busy)
+        if was_busy != is_busy
+        else None
+    )
+    if await _edit_card(bot, user_id, state, text=rendered, reply_markup=keyboard):
         state.last_rendered = rendered

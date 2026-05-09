@@ -34,6 +34,7 @@ import asyncio
 import io
 import logging
 from pathlib import Path
+from typing import Any
 
 from telegram import (
     Bot,
@@ -81,13 +82,40 @@ from .handlers.callback_data import (
     CB_DIR_PAGE,
     CB_DIR_SELECT,
     CB_DIR_UP,
+    CB_CONF_DEL_NO,
+    CB_CONF_DEL_YES,
+    CB_CONF_DONE_NO,
+    CB_CONF_DONE_YES,
+    CB_CONF_KILL_NO,
+    CB_CONF_KILL_YES,
+    CB_FT_CLEAR,
+    CB_FT_KILL,
+    CB_FT_MORE,
+    CB_FT_STOP,
     CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
+    CB_MM_BACK,
+    CB_MM_HISTORY,
+    CB_MM_LIST,
+    CB_MM_NEW,
+    CB_MM_SETTINGS,
+    CB_MM_SHOT,
+    CB_MM_STATUS,
+    CB_SESSION_BACK,
     CB_SESSION_CANCEL,
     CB_SESSION_NEW,
+    CB_SESSION_PAGE,
     CB_SESSION_SELECT,
     CB_KEYS_PREFIX,
     CB_SCREENSHOT_REFRESH,
+    CB_ST_BACK,
+    CB_ST_BG,
+    CB_ST_GRP,
+    CB_ST_LAG,
+    CB_ST_LANG,
+    CB_ST_PREV,
+    CB_ST_VOICE,
+    CB_ST_WDAY,
     CB_SW_NEW,
     CB_SW_NOOP,
     CB_SW_USE,
@@ -100,6 +128,7 @@ from .handlers.directory_browser import (
     BROWSE_PAGE_KEY,
     BROWSE_PATH_KEY,
     SESSIONS_KEY,
+    SESSIONS_PAGE_KEY,
     STATE_BROWSING_DIRECTORY,
     STATE_KEY,
     STATE_SELECTING_SESSION,
@@ -141,9 +170,16 @@ from .handlers.notifications import (
     push_event,
     update_session_card,
 )
+from .i18n import t
 from .markdown_v2 import convert_markdown
-from .naming import maybe_auto_name
+from .naming import generate_name, maybe_auto_name
 from .handlers.status_polling import status_poll_loop
+from .handlers.menu import (
+    build_footer_keyboard,
+    render_more_text,
+    render_settings_group_text,
+    render_settings_text,
+)
 from .handlers.switcher import (
     build_session_preview,
     build_switcher_keyboard,
@@ -419,7 +455,21 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data[BROWSE_PATH_KEY] = start_path
         context.user_data[BROWSE_PAGE_KEY] = 0
         context.user_data[BROWSE_DIRS_KEY] = subdirs
+        # Cancel via Menu lands on the default footer (active session preview).
+        context.user_data["menu_origin"] = "main"
     await safe_reply(update.message, msg_text, reply_markup=keyboard)
+
+
+def _shorten_workdir(path: str) -> str:
+    """Replace user's home prefix with ~ so paths fit on one row."""
+    if not path:
+        return "?"
+    home = str(Path.home())
+    if path == home:
+        return "~"
+    if path.startswith(home + "/"):
+        return "~" + path[len(home) :]
+    return path
 
 
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -434,20 +484,35 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         user.id, states=("active", "idle", "lost")
     )
     if not sessions:
-        await safe_reply(update.message, "No live sessions. Use /new to create one.")
+        await safe_reply(update.message, t(user.id, "list.empty"))
         return
 
     active_sess = session_manager.get_active_session(user.id)
     active_id = active_sess.id if active_sess else ""
 
-    lines = ["*Live sessions*", ""]
+    active_block: list[str] = []
+    lost_block: list[str] = []
     for s in sessions:
-        marker = "✓" if s.id == active_id else " "
         usage = (
             f"{s.token_usage_total // 1000}k tok" if s.token_usage_total else "0 tok"
         )
-        wd = s.workdir or "?"
-        lines.append(f"{marker} `{s.id}` *{s.name}* ({s.state}) — {usage}\n  {wd}")
+        wd = _shorten_workdir(s.workdir)
+        if s.state == "lost":
+            lost_block.append(f"  • *{s.name}* — {usage} · `{wd}`")
+        else:
+            marker = "✓ " if s.id == active_id else "  "
+            active_block.append(f"{marker}*{s.name}* — {usage} · `{wd}`")
+
+    lines: list[str] = []
+    if active_block:
+        lines.append(t(user.id, "list.active"))
+        lines.extend(active_block)
+    if lost_block:
+        if active_block:
+            lines.append("")
+        lines.append(t(user.id, "list.lost"))
+        lines.extend(lost_block)
+
     keyboard = build_switcher_keyboard(user.id, include_lost=True)
     sent = await safe_reply(update.message, "\n".join(lines), reply_markup=keyboard)
     if sent and keyboard is not None:
@@ -484,7 +549,7 @@ async def use_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     session_manager.set_active_session(user.id, sess.id)
     preview = await _render_session_preview(sess)
-    keyboard = build_switcher_keyboard(user.id)
+    keyboard = build_footer_keyboard(user.id, screen="main")
     sent = await safe_reply(update.message, preview, reply_markup=keyboard)
     if sent and keyboard is not None:
         session_manager.set_last_switcher_msg(user.id, sent.message_id)
@@ -535,7 +600,10 @@ async def _archive_session(
 
 
 async def kill_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """`/kill <name-or-id>` — stop and archive immediately."""
+    """`/kill [<name-or-id>]` — stop and archive after confirmation.
+
+    Without an argument, applies to the user's active session.
+    """
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         return
@@ -543,19 +611,35 @@ async def kill_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     args = (update.message.text or "").split(maxsplit=1)
-    if len(args) < 2:
-        await safe_reply(update.message, "Usage: `/kill <name-or-id>`")
-        return
-    sess = _resolve_ident(args[1].strip())
+    if len(args) >= 2:
+        sess = _resolve_ident(args[1].strip())
+    else:
+        sess = session_manager.get_active_session(user.id)
     if sess is None or sess.state not in ("active", "idle", "lost"):
         await safe_reply(update.message, "❌ Session not found or already archived.")
         return
-    await _archive_session(user.id, context.bot, sess, completed=False)
-    await safe_reply(update.message, f"✅ Killed `{sess.name}`")
+    kb = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    t(user.id, "btn.yes_kill"),
+                    callback_data=f"{CB_CONF_KILL_YES}{sess.id}"[:64],
+                ),
+                InlineKeyboardButton(
+                    t(user.id, "btn.no"), callback_data=CB_CONF_KILL_NO
+                ),
+            ]
+        ]
+    )
+    await safe_reply(
+        update.message,
+        t(user.id, "conf.kill", name=sess.name),
+        reply_markup=kb,
+    )
 
 
 async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """`/done [<name-or-id>]` — mark goal achieved and archive.
+    """`/done [<name-or-id>]` — mark goal achieved and archive after confirm.
 
     Without an argument, applies to the user's active session.
     """
@@ -573,8 +657,24 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if sess is None or sess.state not in ("active", "idle"):
         await safe_reply(update.message, "❌ Session not found or not live.")
         return
-    await _archive_session(user.id, context.bot, sess, completed=True)
-    await safe_reply(update.message, f"🎉 Marked `{sess.name}` as done.")
+    kb = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    t(user.id, "btn.confirm"),
+                    callback_data=f"{CB_CONF_DONE_YES}{sess.id}"[:64],
+                ),
+                InlineKeyboardButton(
+                    t(user.id, "btn.no"), callback_data=CB_CONF_DONE_NO
+                ),
+            ]
+        ]
+    )
+    await safe_reply(
+        update.message,
+        t(user.id, "conf.done", name=sess.name),
+        reply_markup=kb,
+    )
 
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -596,6 +696,24 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     await tmux_manager.send_keys(w.window_id, "\x1b", enter=False)
     await safe_reply(update.message, "⎋ Sent Escape")
+
+
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/menu` — global entry point: opens the More menu in a fresh message.
+
+    Useful when there's no live bot message carrying the inline footer yet
+    (e.g. cold start, no sessions, or the chat scrolled past the carrier).
+    """
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+    text = render_more_text(user.id)
+    keyboard = build_footer_keyboard(user.id, screen="more")
+    sent = await safe_reply(update.message, text, reply_markup=keyboard)
+    if sent and keyboard is not None:
+        session_manager.set_last_switcher_msg(user.id, sent.message_id)
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -719,15 +837,17 @@ async def forward_command_handler(
     await update.message.chat.send_action(ChatAction.TYPING)
     success, message = await session_manager.send_to_window(wid, cc_slash)
     if success:
-        await safe_reply(update.message, f"⚡ [{display}] Sent: {cc_slash}")
-        # If /clear command was sent, clear the session association
-        # so we can detect the new session after first message.
+        # /clear: drop the session association so we re-detect once a new
+        # session id is written by the next user message.
         if cc_slash.strip().lower() == "/clear":
             logger.info("Clearing session for window %s after /clear", display)
             session_manager.clear_window_session(wid)
-
-        # Interactive commands (e.g. /model) render a terminal-based UI
-        # with no JSONL tool_use entry. The status poller detects them.
+            await safe_reply(
+                update.message,
+                "🧹 Context cleared. Next message starts a fresh Claude session.",
+            )
+        # No "Sent: /cmd" toast — the slash result is visible in the live card
+        # and any picker UI rendered by Claude itself.
     else:
         await safe_reply(update.message, f"❌ {message}")
 
@@ -922,7 +1042,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # Transcribe
     try:
-        text = await transcribe_voice(ogg_data)
+        text = await transcribe_voice(ogg_data, user_id=user.id)
     except ValueError as e:
         await safe_reply(update.message, f"⚠ {e}")
         return
@@ -1287,6 +1407,369 @@ async def _create_and_activate_session(
 # --- Callback query handler ---
 
 
+def _build_live_sessions_text(user_id: int) -> str | None:
+    """Render the same body /list shows. None when there are no live sessions."""
+    sessions = session_manager.list_user_sessions(
+        user_id, states=("active", "idle", "lost")
+    )
+    if not sessions:
+        return None
+    active_sess = session_manager.get_active_session(user_id)
+    active_id = active_sess.id if active_sess else ""
+    active_block: list[str] = []
+    lost_block: list[str] = []
+    for s in sessions:
+        usage = (
+            f"{s.token_usage_total // 1000}k tok" if s.token_usage_total else "0 tok"
+        )
+        wd = _shorten_workdir(s.workdir)
+        if s.state == "lost":
+            lost_block.append(f"  • *{s.name}* — {usage} · `{wd}`")
+        else:
+            marker = "✓ " if s.id == active_id else "  "
+            active_block.append(f"{marker}*{s.name}* — {usage} · `{wd}`")
+    lines: list[str] = []
+    if active_block:
+        lines.append("*Active*")
+        lines.extend(active_block)
+    if lost_block:
+        if active_block:
+            lines.append("")
+        lines.append("*Lost*")
+        lines.extend(lost_block)
+    return "\n".join(lines)
+
+
+async def _emit_list(bot: Bot, user_id: int) -> None:
+    """Render /list as a fresh bot message (used by the More menu)."""
+    body = _build_live_sessions_text(user_id)
+    if body is None:
+        await safe_send(bot, user_id, "No live sessions. Use 🆕 New to create one.")
+        return
+    keyboard = build_switcher_keyboard(user_id, include_lost=True)
+    sent = await safe_send(bot, user_id, body, reply_markup=keyboard)
+    if sent and keyboard is not None:
+        session_manager.set_last_switcher_msg(user_id, sent.message_id)
+
+
+async def _emit_status(bot: Bot, user_id: int) -> None:
+    usage = await compute_user_usage(user_id)
+    text = format_usage_status(user_id, usage)
+    await safe_send(bot, user_id, text)
+
+
+async def _emit_history(bot: Bot, user_id: int) -> None:
+    wid = _active_window(user_id)
+    if not wid:
+        await safe_send(bot, user_id, "❌ No active session.")
+        return
+    await send_history(target=None, window_id=wid, bot=bot, user_id=user_id)
+
+
+async def _emit_screenshot(query: Any, bot: Bot, user_id: int) -> None:
+    """Delete the carrier message and reply with a compressed photo preview.
+
+    Visually replaces the source menu in the chat. The photo carries a
+    single ≡ Menu button; tapping it removes the photo and re-opens Menu.
+    """
+    wid = _active_window(user_id)
+    if not wid:
+        await safe_send(bot, user_id, t(user_id, "toast.no_session"))
+        return
+    w = await tmux_manager.find_window_by_id(wid)
+    if not w:
+        await safe_send(bot, user_id, t(user_id, "toast.window_gone"))
+        return
+    text = await tmux_manager.capture_pane(w.window_id, with_ansi=True)
+    if not text:
+        await safe_send(bot, user_id, "❌ Failed to capture pane content.")
+        return
+    png_bytes = await text_to_image(text, with_ansi=True)
+
+    # Delete the menu message so the photo "replaces" it in the chat.
+    if query and query.message:
+        try:
+            await query.message.delete()
+        except Exception as e:
+            logger.debug("emit_screenshot: delete carrier failed: %s", e)
+
+    # Single Menu button — edit-in-place doesn't work across text↔photo,
+    # so the Menu callback handles photo source by deleting + resending.
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_FT_MORE)]]
+    )
+    try:
+        await bot.send_photo(
+            chat_id=user_id,
+            photo=io.BytesIO(png_bytes),
+            reply_markup=keyboard,
+        )
+    except Exception as e:
+        logger.debug("emit_screenshot send failed: %s", e)
+
+
+async def _resolve_session_summaries(
+    sessions: list,
+    *,
+    user_id: int,
+) -> dict[str, str]:
+    """Return claude_session_id → human-readable summary for `sessions`.
+
+    economical mode: just returns the JSONL `summary` field as-is.
+    readable mode: returns cached Haiku summaries when available; for any
+    session that lacks a (still-fresh) cache entry, kicks off a Haiku call
+    in the background and falls back to JSONL summary for now.
+    """
+    settings = session_manager.get_user_settings(user_id)
+    mode = settings.get("previews", "economical")
+    out: dict[str, str] = {}
+    if mode != "readable":
+        for s in sessions:
+            out[s.session_id] = s.summary or "untitled"
+        return out
+
+    pending: list[tuple[str, str, float]] = []  # (sid, seed, mtime)
+    for s in sessions:
+        try:
+            mtime = Path(s.file_path).stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        cached = session_manager.get_cached_summary(s.session_id, mtime)
+        if cached:
+            out[s.session_id] = cached
+        else:
+            out[s.session_id] = s.summary or "untitled"
+            seed = (s.summary or "")[:200]
+            if seed:
+                pending.append((s.session_id, seed, mtime))
+
+    if pending:
+
+        async def _bg() -> None:
+            for sid, seed, mtime in pending:
+                try:
+                    name = await generate_name(seed)
+                    if name:
+                        # Replace kebab dashes with spaces for readability.
+                        readable = name.replace("-", " ")
+                        session_manager.set_cached_summary(sid, readable, mtime)
+                except Exception as e:
+                    logger.debug("haiku resolve failed for %s: %s", sid, e)
+
+        asyncio.create_task(_bg())
+    return out
+
+
+async def _emit_session_picker(
+    query: Any,
+    context: ContextTypes.DEFAULT_TYPE,
+    sessions: list,
+    *,
+    page: int,
+    user_id: int,
+) -> None:
+    """Render (or re-render) the session picker for the cached `sessions`."""
+    summaries = await _resolve_session_summaries(sessions, user_id=user_id)
+
+    def _resolver(s: Any) -> str:
+        return summaries.get(s.session_id, s.summary or "untitled")
+
+    text, keyboard = build_session_picker(
+        sessions, page=page, summary_resolver=_resolver
+    )
+    if context.user_data is not None:
+        context.user_data[SESSIONS_PAGE_KEY] = page
+    await safe_edit(query, text, reply_markup=keyboard)
+
+
+USAGE_WINDOW_NAME = "ccbot-usage"
+_usage_window_lock = asyncio.Lock()
+
+
+async def _ensure_usage_window() -> str | None:
+    """Find or lazily create a long-lived tmux window dedicated to /usage queries.
+
+    The window runs a Claude Code instance that we never feed real prompts;
+    /usage opens a UI-only Settings modal so this stays at ~zero token cost.
+    Created once, reused thereafter (survives bot restarts via tmux state).
+    """
+    w = await tmux_manager.find_window_by_name(USAGE_WINDOW_NAME)
+    if w:
+        return w.window_id
+    home = str(Path.home())
+    success, message, _wname, wid = await tmux_manager.create_window(
+        home, window_name=USAGE_WINDOW_NAME, start_claude=True
+    )
+    if not success:
+        logger.debug("ensure_usage_window: create failed: %s", message)
+        return None
+    # Give Claude a few seconds to reach the prompt before we send /usage.
+    await asyncio.sleep(4.0)
+    return wid
+
+
+async def _fetch_claude_usage() -> object | None:
+    """Open /usage in the dedicated window, return the parsed UsageInfo.
+
+    Active-polls for the modal so the typical case finishes in <1 s. Independent
+    of whatever the user's active session is currently doing — never interrupts
+    real work. Returns None on failure.
+    """
+    from .terminal_parser import extract_usage_breakdown, parse_usage_output
+
+    async with _usage_window_lock:
+        wid = await _ensure_usage_window()
+        if not wid:
+            return None
+        info = None
+        try:
+            await tmux_manager.send_keys(wid, "/usage")
+            # The modal frame paints instantly but the Current-session /
+            # Current-week rows arrive asynchronously (Claude shows a
+            # "Loading usage data…" placeholder first). Keep polling until
+            # at least one quota row resolves, or the 5 s budget runs out.
+            for _ in range(25):  # 25 × 200 ms = 5 s
+                await asyncio.sleep(0.2)
+                pane_text = await tmux_manager.capture_pane(wid)
+                if not pane_text:
+                    continue
+                candidate = parse_usage_output(pane_text)
+                if not candidate or not candidate.parsed_lines:
+                    continue
+                # Always keep the latest parse as fallback; break only when
+                # real data has loaded.
+                info = candidate
+                breakdown = extract_usage_breakdown(candidate)
+                if (
+                    breakdown.session_pct is not None
+                    or breakdown.week_pct is not None
+                    or breakdown.week_sonnet_pct is not None
+                ):
+                    break
+            try:
+                await tmux_manager.send_keys(wid, "Escape", enter=False, literal=False)
+            except Exception as e:
+                logger.debug("fetch_claude_usage: dismiss failed: %s", e)
+        except Exception as e:
+            logger.debug("fetch_claude_usage: tmux failed: %s", e)
+            return None
+    return info
+
+
+async def _is_window_busy(window_id: str) -> bool:
+    """Best-effort check: does the tmux pane currently show a Claude Code
+    status line (i.e. is the agent working)? Used to choose between Stop
+    and Kill in the dynamic footer.
+    """
+    if not window_id:
+        return False
+    w = await tmux_manager.find_window_by_id(window_id)
+    if not w:
+        return False
+    pane_text = await tmux_manager.capture_pane(w.window_id)
+    if not pane_text:
+        return False
+    from .terminal_parser import parse_status_line
+
+    return bool(parse_status_line(pane_text))
+
+
+def _is_media_message(msg: Any) -> bool:
+    """True if `msg` is a Telegram message that carries non-text media.
+
+    Photo / document / video / animation messages can't be edited via
+    edit_message_text — we have to delete+resend to switch back to a text
+    view. This is the common path when the user came from the screenshot.
+    """
+    if msg is None:
+        return False
+    return bool(
+        getattr(msg, "photo", None)
+        or getattr(msg, "document", None)
+        or getattr(msg, "video", None)
+        or getattr(msg, "animation", None)
+    )
+
+
+async def _set_view(
+    query: Any,
+    bot: Bot,
+    user_id: int,
+    text: str,
+    reply_markup: Any | None,
+) -> None:
+    """Edit the carrier message to (text, reply_markup) — or, if the carrier
+    is a photo/document, delete it and send a fresh text message instead.
+
+    Keeps `last_switcher_msg_id` pointing at whatever message ends up
+    carrying the inline keyboard.
+    """
+    if _is_media_message(query.message):
+        try:
+            await query.message.delete()
+        except Exception as e:
+            logger.debug("set_view: delete media carrier failed: %s", e)
+        sent = await safe_send(bot, user_id, text, reply_markup=reply_markup)
+        if sent and reply_markup is not None:
+            session_manager.set_last_switcher_msg(user_id, sent.message_id)
+        return
+    try:
+        await query.edit_message_text(text=text, reply_markup=reply_markup)
+    except Exception as e:
+        logger.debug("set_view: edit failed: %s", e)
+    if query.message and reply_markup is not None:
+        session_manager.set_last_switcher_msg(user_id, query.message.message_id)
+
+
+async def _open_more_in_place(query: Any, user_id: int) -> None:
+    """Edit the current message into the Menu screen."""
+    text = render_more_text(user_id)
+    keyboard = build_footer_keyboard(user_id, screen="more")
+    try:
+        await query.edit_message_text(text=text, reply_markup=keyboard)
+    except Exception as e:
+        logger.debug("open more in place edit failed: %s", e)
+    if query.message and keyboard is not None:
+        session_manager.set_last_switcher_msg(user_id, query.message.message_id)
+
+
+async def _close_modal(
+    query: Any, user_id: int, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Bail out of a modal flow → always Menu.
+
+    Earlier this routed back to "wherever the user came from" via a stored
+    `menu_origin` marker, but that produced surprising "back to session
+    preview" jumps when the user clearly tapped `Menu`. The Menu screen is
+    a better universal destination — it has every entry point, including
+    Back-to-active.
+    """
+    if context.user_data is not None:
+        context.user_data.pop("menu_origin", None)
+    await _open_more_in_place(query, user_id)
+
+
+async def _emit_new_flow(
+    query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any
+) -> None:
+    """Open the directory browser from the Menu screen — Menu button returns there."""
+    clear_browse_state(context.user_data)
+    clear_window_picker_state(context.user_data)
+    clear_session_picker_state(context.user_data)
+    start_path = str(Path.home())
+    msg_text, keyboard, subdirs = build_directory_browser(start_path)
+    if context.user_data is not None:
+        context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
+        context.user_data[BROWSE_PATH_KEY] = start_path
+        context.user_data[BROWSE_PAGE_KEY] = 0
+        context.user_data[BROWSE_DIRS_KEY] = subdirs
+        context.user_data["menu_origin"] = "menu"
+    try:
+        await query.edit_message_text(text=msg_text, reply_markup=keyboard)
+    except Exception:
+        await safe_send(context.bot, user.id, msg_text, reply_markup=keyboard)
+
+
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not query.data:
@@ -1430,28 +1913,31 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if context.user_data
             else default_path
         )
-        clear_browse_state(context.user_data)
 
         # Check for existing sessions in this directory
         sessions = await session_manager.list_sessions_for_directory(selected_path)
         if sessions:
-            # Show session picker — store state for later
+            # Show session picker — store state for later. Keep BROWSE_PATH_KEY
+            # so [← Back to dirs] can re-render the same directory.
             if context.user_data is not None:
                 context.user_data[STATE_KEY] = STATE_SELECTING_SESSION
                 context.user_data[SESSIONS_KEY] = sessions
                 context.user_data["_selected_path"] = selected_path
-            text, keyboard = build_session_picker(sessions)
-            await safe_edit(query, text, reply_markup=keyboard)
+                context.user_data[SESSIONS_PAGE_KEY] = 0
+            await _emit_session_picker(
+                query, context, sessions, page=0, user_id=user.id
+            )
             await query.answer()
             return
 
+        clear_browse_state(context.user_data)
         # No existing sessions — create new window directly
         await _create_and_activate_session(query, context, user, selected_path)
 
     elif data == CB_DIR_CANCEL:
         clear_browse_state(context.user_data)
-        await safe_edit(query, "Cancelled")
-        await query.answer("Cancelled")
+        await _close_modal(query, user.id, context)
+        await query.answer()
 
     # Session picker: resume existing session
     elif data.startswith(CB_SESSION_SELECT):
@@ -1502,8 +1988,49 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         clear_session_picker_state(context.user_data)
         if context.user_data is not None:
             context.user_data.pop("_selected_path", None)
-        await safe_edit(query, "Cancelled")
-        await query.answer("Cancelled")
+            context.user_data.pop(SESSIONS_PAGE_KEY, None)
+        clear_browse_state(context.user_data)
+        await _close_modal(query, user.id, context)
+        await query.answer()
+
+    # Session picker: ← Back to dir browser at the same selected path.
+    elif data == CB_SESSION_BACK:
+        selected_path = (
+            context.user_data.get("_selected_path", str(Path.home()))
+            if context.user_data
+            else str(Path.home())
+        )
+        clear_session_picker_state(context.user_data)
+        if context.user_data is not None:
+            context.user_data.pop("_selected_path", None)
+            context.user_data.pop(SESSIONS_PAGE_KEY, None)
+
+        msg_text, keyboard, subdirs = build_directory_browser(selected_path)
+        if context.user_data is not None:
+            context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
+            context.user_data[BROWSE_PATH_KEY] = selected_path
+            context.user_data[BROWSE_PAGE_KEY] = 0
+            context.user_data[BROWSE_DIRS_KEY] = subdirs
+        await safe_edit(query, msg_text, reply_markup=keyboard)
+        await query.answer()
+
+    # Session picker: pagination
+    elif data.startswith(CB_SESSION_PAGE):
+        try:
+            pg = int(data[len(CB_SESSION_PAGE) :])
+        except ValueError:
+            await query.answer("Invalid page")
+            return
+        cached_sessions = (
+            context.user_data.get(SESSIONS_KEY, []) if context.user_data else []
+        )
+        if not cached_sessions:
+            await query.answer("Session list expired, please retry", show_alert=True)
+            return
+        await _emit_session_picker(
+            query, context, cached_sessions, page=pg, user_id=user.id
+        )
+        await query.answer()
 
     # Window picker: bind existing window
     elif data.startswith(CB_WIN_BIND):
@@ -1580,13 +2107,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await safe_edit(query, msg_text, reply_markup=keyboard)
         await query.answer()
 
-    # Window picker: cancel
+    # Window picker: cancel — drop state and bounce to More menu.
     elif data == CB_WIN_CANCEL:
         clear_window_picker_state(context.user_data)
         if context.user_data is not None:
             context.user_data.pop("_pending_text", None)
-        await safe_edit(query, "Cancelled")
-        await query.answer("Cancelled")
+        await _close_modal(query, user.id, context)
+        await query.answer()
 
     # Screenshot: Refresh
     elif data.startswith(CB_SCREENSHOT_REFRESH):
@@ -1631,6 +2158,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         session_manager.set_active_session(user.id, target_id)
 
+        # Decide Stop-vs-Kill based on whether the target window currently
+        # has a status line (Claude is actively working).
+        is_busy = await _is_window_busy(sess.window_id) if sess.window_id else False
+
         # Render the context preview into the same message and re-attach
         # the switcher so the active marker moves to the new session.
         try:
@@ -1638,7 +2169,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.edit_message_text(text=preview)
         except Exception as e:
             logger.debug("preview edit_message_text failed: %s", e)
-        keyboard = build_switcher_keyboard(user.id)
+        keyboard = build_footer_keyboard(user.id, screen="main", is_busy=is_busy)
         if keyboard is not None:
             try:
                 await query.edit_message_reply_markup(reply_markup=keyboard)
@@ -1697,7 +2228,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         ok, msg = await restore_session(context.bot, user.id, sess)
         if ok:
             preview = await _render_session_preview(sess)
-            keyboard = build_switcher_keyboard(user.id)
+            keyboard = build_footer_keyboard(user.id, screen="main")
             try:
                 await query.edit_message_text(text=preview, reply_markup=keyboard)
             except Exception as e:
@@ -1760,26 +2291,34 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             logger.debug("archive back edit failed: %s", e)
         await query.answer()
 
-    # Archive: delete <session.id>
+    # Archive: delete <session.id> — show confirmation in place.
     elif data.startswith(CB_ARC_DELETE):
         sid = data[len(CB_ARC_DELETE) :]
-        if session_manager.delete_session(sid):
-            show_all = bool(
-                context.user_data and context.user_data.get("_arc_show_all", False)
+        sess = session_manager.get_session(sid)
+        if sess is None:
+            await query.answer("Already gone", show_alert=False)
+            return
+        kb = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        t(user.id, "btn.yes_delete"),
+                        callback_data=f"{CB_CONF_DEL_YES}{sess.id}"[:64],
+                    ),
+                    InlineKeyboardButton(
+                        t(user.id, "btn.no"), callback_data=CB_CONF_DEL_NO
+                    ),
+                ]
+            ]
+        )
+        try:
+            await query.edit_message_text(
+                text=t(user.id, "conf.delete", name=sess.name),
+                reply_markup=kb,
             )
-            lookback = (
-                config.archive_purge_after if show_all else DEFAULT_LOOKBACK_SECONDS
-            )
-            text, keyboard = build_archive_page(
-                page=0, lookback_seconds=lookback, show_all=show_all
-            )
-            try:
-                await query.edit_message_text(text=text, reply_markup=keyboard)
-            except Exception as e:
-                logger.debug("archive delete edit failed: %s", e)
-            await query.answer("Deleted")
-        else:
-            await query.answer("Already gone", show_alert=True)
+        except Exception as e:
+            logger.debug("archive delete confirm failed: %s", e)
+        await query.answer()
 
     # A8 switcher: + new — open directory browser
     elif data == CB_SW_NEW:
@@ -1793,11 +2332,332 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data[BROWSE_PATH_KEY] = start_path
             context.user_data[BROWSE_PAGE_KEY] = 0
             context.user_data[BROWSE_DIRS_KEY] = subdirs
+            # Came from a regular content card: Menu returns to default footer.
+            context.user_data["menu_origin"] = "main"
         try:
             await query.edit_message_text(text=msg_text, reply_markup=keyboard)
         except Exception:
             await safe_send(context.bot, user.id, msg_text, reply_markup=keyboard)
         await query.answer()
+
+    # Footer: Stop button — Esc to active window
+    elif data == CB_FT_STOP:
+        wid = _active_window(user.id)
+        if not wid:
+            await query.answer(t(user.id, "toast.no_session"), show_alert=False)
+            return
+        w = await tmux_manager.find_window_by_id(wid)
+        if not w:
+            await query.answer(t(user.id, "toast.window_gone"), show_alert=False)
+            return
+        await tmux_manager.send_keys(w.window_id, "\x1b", enter=False)
+        await query.answer(t(user.id, "toast.esc_sent"))
+
+    # Footer: Kill button — open confirm dialog as a fresh message.
+    elif data == CB_FT_KILL:
+        sess = session_manager.get_active_session(user.id)
+        if sess is None or sess.state not in ("active", "idle", "lost"):
+            await query.answer(t(user.id, "toast.nothing_to_kill"), show_alert=False)
+            return
+        # Edit the carrier message into the confirm dialog instead of
+        # sending a new one — keeps the chat clean.
+        kb = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        t(user.id, "btn.yes_kill"),
+                        callback_data=f"{CB_CONF_KILL_YES}{sess.id}"[:64],
+                    ),
+                    InlineKeyboardButton(
+                        t(user.id, "btn.no"), callback_data=CB_CONF_KILL_NO
+                    ),
+                ]
+            ]
+        )
+        await _set_view(
+            query, context.bot, user.id, t(user.id, "conf.kill", name=sess.name), kb
+        )
+        await query.answer()
+
+    # Footer: Clear button — forward /clear to the active session.
+    elif data == CB_FT_CLEAR:
+        wid = _active_window(user.id)
+        if not wid:
+            await query.answer(t(user.id, "toast.no_session"), show_alert=False)
+            return
+        w = await tmux_manager.find_window_by_id(wid)
+        if not w:
+            await query.answer(t(user.id, "toast.window_gone"), show_alert=False)
+            return
+        success, message = await session_manager.send_to_window(wid, "/clear")
+        if not success:
+            await query.answer(f"Clear failed: {message}", show_alert=True)
+            return
+        session_manager.clear_window_session(wid)
+        await query.answer(t(user.id, "toast.cleared"))
+
+    # Footer: ≡ Menu — open the Menu screen. Robust to photo source: when
+    # the user taps Menu on a screenshot message, the photo is deleted and
+    # a fresh text message renders.
+    elif data == CB_FT_MORE:
+        text = render_more_text(user.id)
+        keyboard = build_footer_keyboard(user.id, screen="more")
+        await _set_view(query, context.bot, user.id, text, keyboard)
+        await query.answer()
+
+    # Sub-screen Back row (used by List / Status / History) → return to Menu.
+    elif data == CB_MM_BACK:
+        text = render_more_text(user.id)
+        keyboard = build_footer_keyboard(user.id, screen="more")
+        await _set_view(query, context.bot, user.id, text, keyboard)
+        await query.answer()
+
+    # More menu actions: List/Status/History edit in place; Shot stays a fresh
+    # photo message; New transitions to dir browser.
+    elif data == CB_MM_LIST:
+        await query.answer()
+        body = _build_live_sessions_text(user.id) or t(user.id, "list.empty")
+        # Custom keyboard for List:
+        #   1. Active-session controls (Stop/Kill + Clear) when active exists
+        #   2. Switcher rows (active no-op, non-active, lost, "+ new")
+        #   3. Back to Menu
+        rows: list[list[InlineKeyboardButton]] = []
+        active_sess = session_manager.get_active_session(user.id)
+        if active_sess is not None and active_sess.window_id:
+            is_busy = await _is_window_busy(active_sess.window_id)
+            ctl_row: list[InlineKeyboardButton] = []
+            if is_busy:
+                ctl_row.append(
+                    InlineKeyboardButton(
+                        t(user.id, "btn.stop"), callback_data=CB_FT_STOP
+                    )
+                )
+            else:
+                ctl_row.append(
+                    InlineKeyboardButton(
+                        t(user.id, "btn.kill"), callback_data=CB_FT_KILL
+                    )
+                )
+            ctl_row.append(
+                InlineKeyboardButton(t(user.id, "btn.clear"), callback_data=CB_FT_CLEAR)
+            )
+            rows.append(ctl_row)
+        sw = build_switcher_keyboard(user.id, include_lost=True)
+        if sw is not None:
+            for sw_row in sw.inline_keyboard:
+                rows.append(list(sw_row))
+        rows.append(
+            [InlineKeyboardButton(t(user.id, "btn.back"), callback_data=CB_MM_BACK)]
+        )
+        kb = InlineKeyboardMarkup(rows)
+        try:
+            await query.edit_message_text(text=body, reply_markup=kb)
+        except Exception as e:
+            logger.debug("mm list edit failed: %s", e)
+
+    elif data == CB_MM_STATUS:
+        await query.answer()
+        # Keyboard: Refresh row + Menu-grid-minus-Status + Back. The
+        # Refresh button reuses CB_MM_STATUS so tapping it re-runs this
+        # handler.
+        base = build_footer_keyboard(user.id, screen="more", exclude_more="status")
+        base_rows = list(base.inline_keyboard) if base is not None else []
+        refresh_row = [
+            InlineKeyboardButton(t(user.id, "btn.refresh"), callback_data=CB_MM_STATUS)
+        ]
+        kb = InlineKeyboardMarkup([refresh_row] + [list(r) for r in base_rows])
+        # Placeholder while the dedicated usage window queries /usage.
+        try:
+            await query.edit_message_text(
+                text=t(user.id, "usage.fetching"), reply_markup=kb
+            )
+        except Exception as e:
+            logger.debug("mm status placeholder failed: %s", e)
+        usage_info = await _fetch_claude_usage()
+        from .usage import format_usage_breakdown_compact
+
+        live_block = format_usage_breakdown_compact(user.id, usage_info)
+        text = live_block or t(user.id, "usage.unavailable")
+        try:
+            await query.edit_message_text(text=text, reply_markup=kb)
+        except Exception as e:
+            logger.debug("mm status edit failed: %s", e)
+
+    elif data == CB_MM_HISTORY:
+        await query.answer()
+        wid = _active_window(user.id)
+        if not wid:
+            kb = build_footer_keyboard(user.id, screen="more", exclude_more="history")
+            try:
+                await query.edit_message_text(
+                    text=t(user.id, "toast.no_session"), reply_markup=kb
+                )
+            except Exception as e:
+                logger.debug("mm history empty edit failed: %s", e)
+        else:
+            extra_kb = build_footer_keyboard(
+                user.id, screen="more", exclude_more="history"
+            )
+            extra_rows = list(extra_kb.inline_keyboard) if extra_kb is not None else []
+            await send_history(
+                target=query,
+                window_id=wid,
+                edit=True,
+                user_id=user.id,
+                extra_rows=[list(r) for r in extra_rows],
+            )
+
+    elif data in (CB_MM_SHOT, CB_MM_NEW):
+        await query.answer()
+        if data == CB_MM_SHOT:
+            await _emit_screenshot(query, context.bot, user.id)
+        elif data == CB_MM_NEW:
+            await _emit_new_flow(query, context, user)
+
+    # More menu: open Settings (in place).
+    elif data == CB_MM_SETTINGS:
+        text = render_settings_text(user.id)
+        keyboard = build_footer_keyboard(user.id, screen="settings")
+        try:
+            await query.edit_message_text(text=text, reply_markup=keyboard)
+        except Exception as e:
+            logger.debug("settings open edit failed: %s", e)
+        if query.message and keyboard is not None:
+            session_manager.set_last_switcher_msg(user.id, query.message.message_id)
+        await query.answer()
+
+    # Settings: Back -> More menu.
+    elif data == CB_ST_BACK:
+        text = render_more_text(user.id)
+        keyboard = build_footer_keyboard(user.id, screen="more")
+        try:
+            await query.edit_message_text(text=text, reply_markup=keyboard)
+        except Exception as e:
+            logger.debug("settings back edit failed: %s", e)
+        if query.message and keyboard is not None:
+            session_manager.set_last_switcher_msg(user.id, query.message.message_id)
+        await query.answer()
+
+    # Settings: open per-group sub-screen.
+    elif data.startswith(CB_ST_GRP):
+        group = data[len(CB_ST_GRP) :]
+        screen_name = {
+            "language": "settings_language",
+            "previews": "settings_previews",
+            "live_lag": "settings_lag",
+            "bg_notify": "settings_bg",
+            "voice": "settings_voice",
+            "weekly_reset_day": "settings_weeklyday",
+        }.get(group)
+        if not screen_name:
+            await query.answer("Unknown group")
+            return
+        text = render_settings_group_text(user.id, screen_name)  # type: ignore[arg-type]
+        keyboard = build_footer_keyboard(user.id, screen=screen_name)  # type: ignore[arg-type]
+        try:
+            await query.edit_message_text(text=text, reply_markup=keyboard)
+        except Exception as e:
+            logger.debug("settings group open failed: %s", e)
+        if query.message and keyboard is not None:
+            session_manager.set_last_switcher_msg(user.id, query.message.message_id)
+        await query.answer()
+
+    # Settings: per-group setters — persist, re-render the same group screen.
+    elif (
+        data.startswith(CB_ST_PREV)
+        or data.startswith(CB_ST_LAG)
+        or data.startswith(CB_ST_BG)
+        or data.startswith(CB_ST_VOICE)
+        or data.startswith(CB_ST_LANG)
+        or data.startswith(CB_ST_WDAY)
+    ):
+        screen_name = "settings"
+        if data.startswith(CB_ST_PREV):
+            value = data[len(CB_ST_PREV) :]
+            if value in ("economical", "readable"):
+                session_manager.update_user_setting(user.id, "previews", value)
+            screen_name = "settings_previews"
+        elif data.startswith(CB_ST_LAG):
+            try:
+                lag = int(data[len(CB_ST_LAG) :])
+            except ValueError:
+                lag = 4
+            if lag in (0, 2, 4, 8):
+                session_manager.update_user_setting(user.id, "live_lag", lag)
+            screen_name = "settings_lag"
+        elif data.startswith(CB_ST_BG):
+            value = data[len(CB_ST_BG) :]
+            if value in ("separate", "footer"):
+                session_manager.update_user_setting(user.id, "bg_notify", value)
+            screen_name = "settings_bg"
+        elif data.startswith(CB_ST_VOICE):
+            value = data[len(CB_ST_VOICE) :]
+            if value in ("auto", "whisper", "apple", "off"):
+                session_manager.update_user_setting(user.id, "voice", value)
+            screen_name = "settings_voice"
+        elif data.startswith(CB_ST_LANG):
+            value = data[len(CB_ST_LANG) :]
+            if value in ("en", "ru", "zh"):
+                session_manager.update_user_setting(user.id, "language", value)
+            screen_name = "settings_language"
+        elif data.startswith(CB_ST_WDAY):
+            value = data[len(CB_ST_WDAY) :]
+            if value in ("mon", "tue", "wed", "thu", "fri", "sat", "sun"):
+                session_manager.update_user_setting(user.id, "weekly_reset_day", value)
+            screen_name = "settings_weeklyday"
+        text = render_settings_group_text(user.id, screen_name)  # type: ignore[arg-type]
+        keyboard = build_footer_keyboard(user.id, screen=screen_name)  # type: ignore[arg-type]
+        try:
+            await query.edit_message_text(text=text, reply_markup=keyboard)
+        except Exception as e:
+            logger.debug("settings toggle edit failed: %s", e)
+        await query.answer(t(user.id, "toast.saved"))
+
+    # Confirmation dialogs — kill / done / delete. Outcome: a toast +
+    # the carrier message edits back into Menu so we never leave a stray
+    # "Cancelled" / "Killed X" line behind.
+    elif data.startswith(CB_CONF_KILL_YES):
+        sid = data[len(CB_CONF_KILL_YES) :]
+        sess = session_manager.get_session(sid)
+        if sess is None or sess.state not in ("active", "idle", "lost"):
+            await _open_more_in_place(query, user.id)
+            await query.answer(t(user.id, "toast.already_gone"), show_alert=False)
+            return
+        await _archive_session(user.id, context.bot, sess, completed=False)
+        await _open_more_in_place(query, user.id)
+        await query.answer(t(user.id, "toast.killed"))
+
+    elif data == CB_CONF_KILL_NO:
+        await _open_more_in_place(query, user.id)
+        await query.answer(t(user.id, "btn.cancelled"))
+
+    elif data.startswith(CB_CONF_DONE_YES):
+        sid = data[len(CB_CONF_DONE_YES) :]
+        sess = session_manager.get_session(sid)
+        if sess is None or sess.state not in ("active", "idle"):
+            await _open_more_in_place(query, user.id)
+            await query.answer("Not live", show_alert=False)
+            return
+        await _archive_session(user.id, context.bot, sess, completed=True)
+        await _open_more_in_place(query, user.id)
+        await query.answer(t(user.id, "toast.done"))
+
+    elif data == CB_CONF_DONE_NO:
+        await _open_more_in_place(query, user.id)
+        await query.answer(t(user.id, "btn.cancelled"))
+
+    elif data.startswith(CB_CONF_DEL_YES):
+        sid = data[len(CB_CONF_DEL_YES) :]
+        if session_manager.delete_session(sid):
+            await _open_more_in_place(query, user.id)
+            await query.answer(t(user.id, "toast.deleted"))
+        else:
+            await _open_more_in_place(query, user.id)
+            await query.answer(t(user.id, "toast.already_gone"), show_alert=False)
+
+    elif data == CB_CONF_DEL_NO:
+        await _open_more_in_place(query, user.id)
+        await query.answer(t(user.id, "btn.cancelled"))
 
     # Interactive UI: Up arrow
     elif data.startswith(CB_ASK_UP):
@@ -1969,6 +2829,21 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         logger.info("No session record for claude session %s", msg.session_id)
         return
 
+    # Filter empty assistant chunks. Claude occasionally emits a placeholder
+    # text/thinking block with no content (e.g. right after /model or /clear).
+    # These show up in TG as ghost-edits; drop them at dispatch time.
+    if (
+        msg.role == "assistant"
+        and msg.content_type in ("text", "thinking")
+        and not (msg.text or "").strip()
+    ):
+        logger.debug(
+            "Dropping empty assistant %s for session=%s",
+            msg.content_type,
+            msg.session_id,
+        )
+        return
+
     for user_id, sess in targets:
         wid = sess.window_id
         if not wid:
@@ -2076,31 +2951,17 @@ async def post_init(application: Application) -> None:
     # Order: session ops first, then prominent Claude switches (model/effort),
     # then everything else. /use and /rename are intentionally NOT in the menu —
     # the inline switcher covers their job (TODO: remove handlers in v1.5).
+    # Trimmed /-menu surface. Stop/Kill/Clear/Menu live in the inline footer
+    # under the live card; History/Status/Shot/Archive live in the inline ≡ Menu.
+    # Hidden commands still work when typed (handlers below are unchanged).
     bot_commands = [
         BotCommand("new", "Create a new session"),
-        BotCommand("list", "List active sessions"),
+        BotCommand("list", "List sessions (active + lost)"),
+        BotCommand("done", "Mark a session as done"),
     ]
-    # Promote model + effort right after /new and /list per user preference.
-    for cmd_name in ("model", "effort"):
+    for cmd_name in ("model", "effort", "compact", "memory"):
         if cmd_name in CC_COMMANDS:
             bot_commands.append(BotCommand(cmd_name, CC_COMMANDS[cmd_name]))
-    bot_commands.extend(
-        [
-            BotCommand("done", "Mark a session as done"),
-            BotCommand("kill", "Stop and archive a session: /kill <name-or-id>"),
-            BotCommand("stop", "Send Escape to interrupt the active session"),
-            BotCommand("archive", "Browse archived sessions"),
-            BotCommand("status", "Usage breakdown: 5h, weekly, per-session"),
-            BotCommand("history", "Message history for the active session"),
-            BotCommand("screenshot", "Terminal screenshot with control keys"),
-            BotCommand("usage", "Show Claude Code usage remaining"),
-        ]
-    )
-    # Append remaining Claude Code slash commands (excluding the promoted ones).
-    for cmd_name, desc in CC_COMMANDS.items():
-        if cmd_name in ("model", "effort"):
-            continue
-        bot_commands.append(BotCommand(cmd_name, desc))
 
     await application.bot.set_my_commands(bot_commands)
 
@@ -2184,6 +3045,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("usage", usage_command))
+    application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler("new", new_command))
     application.add_handler(CommandHandler("list", list_command))
     application.add_handler(CommandHandler("kill", kill_command))

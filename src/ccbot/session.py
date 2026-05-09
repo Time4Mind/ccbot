@@ -35,7 +35,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Iterator
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import aiofiles
 
@@ -204,6 +204,12 @@ class SessionManager:
     thread_bindings: dict[int, dict[int, str]] = field(default_factory=dict)
     # Legacy: "user_id:thread_id" -> group chat_id. Empty in DM mode.
     group_chat_ids: dict[str, int] = field(default_factory=dict)
+    # User-scoped UI/runtime preferences (set via the inline ⚙ menu).
+    # user_id -> {key: value}. Defaults are filled by get_user_settings.
+    user_settings: dict[int, dict[str, Any]] = field(default_factory=dict)
+    # Cached short summaries for ClaudeSession picker. Key = claude session id.
+    # Value = {"summary": str, "mtime": float, "ts": float}.
+    summary_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self._load_state()
@@ -228,6 +234,10 @@ class SessionManager:
                 for uid, bindings in self.thread_bindings.items()
             },
             "group_chat_ids": self.group_chat_ids,
+            "user_settings": {
+                str(uid): vals for uid, vals in self.user_settings.items()
+            },
+            "summary_cache": self.summary_cache,
         }
         atomic_write_json(config.state_file, state)
         logger.debug("State saved to %s", config.state_file)
@@ -273,6 +283,11 @@ class SessionManager:
                 self.group_chat_ids = {
                     k: int(v) for k, v in state.get("group_chat_ids", {}).items()
                 }
+                self.user_settings = {
+                    int(uid): dict(vals)
+                    for uid, vals in state.get("user_settings", {}).items()
+                }
+                self.summary_cache = dict(state.get("summary_cache", {}))
 
                 # Detect old format: keys that don't look like window IDs
                 needs_migration = False
@@ -306,6 +321,8 @@ class SessionManager:
                 self.thread_bindings = {}
                 self.window_display_names = {}
                 self.group_chat_ids = {}
+                self.user_settings = {}
+                self.summary_cache = {}
                 pass
 
     async def reconcile_sessions_with_tmux(self) -> int:
@@ -1066,6 +1083,60 @@ class SessionManager:
         self._save_state()
         logger.info("Deleted session record %s", session_id)
         return True
+
+    # --- User settings (set via the inline ⚙ menu) ---
+
+    DEFAULT_USER_SETTINGS: ClassVar[dict[str, Any]] = {
+        "language": "en",  # "en" | "ru" | "zh" — UI strings
+        "previews": "economical",  # "economical" | "readable" (Haiku-cached)
+        "live_lag": 4,  # seconds, see PREVIEW_LIVE_LAG
+        "bg_notify": "separate",  # "separate" | "footer"
+        "voice": "auto",  # "auto" | "whisper" | "apple" | "off"
+        # Day-of-week the Anthropic weekly window resets on. Drives the %/d
+        # burn-rate computation in /status. Values: "mon".."sun".
+        "weekly_reset_day": "mon",
+    }
+
+    def get_user_settings(self, user_id: int) -> dict[str, Any]:
+        """Return the user's settings, filling in defaults for missing keys."""
+        stored = self.user_settings.get(user_id, {})
+        merged: dict[str, Any] = dict(self.DEFAULT_USER_SETTINGS)
+        merged.update(stored)
+        return merged
+
+    def update_user_setting(self, user_id: int, key: str, value: Any) -> None:
+        """Persist a single user setting."""
+        if key not in self.DEFAULT_USER_SETTINGS:
+            raise ValueError(f"Unknown setting key: {key}")
+        bucket = self.user_settings.setdefault(user_id, {})
+        bucket[key] = value
+        self._save_state()
+
+    # --- Summary cache (Claude session id -> short readable summary) ---
+
+    def get_cached_summary(
+        self, claude_session_id: str, file_mtime: float
+    ) -> str | None:
+        """Return cached summary if mtime matches; otherwise None."""
+        entry = self.summary_cache.get(claude_session_id)
+        if not entry:
+            return None
+        if abs(float(entry.get("mtime", 0.0)) - file_mtime) > 1e-3:
+            return None
+        return entry.get("summary") or None
+
+    def set_cached_summary(
+        self, claude_session_id: str, summary: str, file_mtime: float
+    ) -> None:
+        """Persist a generated summary for a Claude session id."""
+        if not claude_session_id or not summary:
+            return
+        self.summary_cache[claude_session_id] = {
+            "summary": summary,
+            "mtime": file_mtime,
+            "ts": time.time(),
+        }
+        self._save_state()
 
     def rename_session(self, session_id: str, new_name: str) -> None:
         sess = self.sessions.get(session_id)

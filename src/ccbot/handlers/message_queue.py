@@ -27,7 +27,7 @@ from telegram.constants import ChatAction
 from telegram.error import RetryAfter
 
 from ..markdown_v2 import convert_markdown
-from ..terminal_parser import parse_status_line
+from ..terminal_parser import is_interactive_ui, parse_status_line
 from ..tmux_manager import tmux_manager
 from .message_sender import (
     NO_LINK_PREVIEW,
@@ -401,12 +401,16 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
 async def _attach_switcher_and_status(
     bot: Bot, user_id: int, window_id: str, last_msg_id: int | None
 ) -> None:
-    """Attach the inline session switcher to the last content message
-    (if any) and then run the post-content status check.
+    """Attach the inline session switcher to the last content message.
+
+    The "and status" half is intentionally a no-op now: the live card carries
+    pane status in its header (notifications.touch_card_status), so emitting
+    a separate "Esc to interrupt" message after every content chunk only
+    duplicates state and shows up without the footer keyboard.
     """
+    del window_id  # legacy parameter; kept for caller compatibility
     if last_msg_id is not None:
         await attach_switcher(bot, user_id, last_msg_id)
-    await _check_and_send_status(bot, user_id, window_id)
 
 
 async def _convert_status_to_content(
@@ -586,6 +590,12 @@ async def _check_and_send_status(
 
     pane_text = await tmux_manager.capture_pane(w.window_id)
     if not pane_text:
+        return
+
+    # Suppress status updates while Claude is rendering an interactive picker
+    # (e.g. /model, /effort) — otherwise we ghost-edit the card with stale
+    # "running" status while the user is choosing.
+    if is_interactive_ui(pane_text):
         return
 
     status_line = parse_status_line(pane_text)

@@ -64,9 +64,7 @@ class TestStatusPollerSettingsDetection:
             mock_tmux.capture_pane = AsyncMock(return_value=sample_pane_settings)
             mock_handle_ui.return_value = True
 
-            await update_status_message(
-                mock_bot, user_id=1, window_id=window_id
-            )
+            await update_status_message(mock_bot, user_id=1, window_id=window_id)
 
             mock_handle_ui.assert_called_once_with(mock_bot, 1, window_id)
 
@@ -99,9 +97,7 @@ class TestStatusPollerSettingsDetection:
             mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
             mock_tmux.capture_pane = AsyncMock(return_value=normal_pane)
 
-            await update_status_message(
-                mock_bot, user_id=1, window_id=window_id
-            )
+            await update_status_message(mock_bot, user_id=1, window_id=window_id)
 
             mock_handle_ui.assert_not_called()
 
@@ -127,9 +123,7 @@ class TestStatusPollerSettingsDetection:
             mock_tmux_ui.find_window_by_id = AsyncMock(return_value=mock_window)
             mock_tmux_ui.capture_pane = AsyncMock(return_value=sample_pane_settings)
 
-            await update_status_message(
-                mock_bot, user_id=100, window_id=window_id
-            )
+            await update_status_message(mock_bot, user_id=100, window_id=window_id)
 
             # Verify bot.send_message was called with keyboard.
             # In DM mode chat_id == user_id; no message_thread_id is passed.

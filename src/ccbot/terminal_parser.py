@@ -330,8 +330,15 @@ class UsageBreakdown:
 
 
 def _parse_clock_to_24h(text: str) -> str | None:
-    """Parse a strings like '9:59pm', '4pm', '12:00am' to 24h 'HH:MM'."""
-    m = re.match(r"\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", text, re.IGNORECASE)
+    """Parse strings like ``9:59pm``, ``4pm``, ``May 17 at 4pm`` → ``HH:MM``.
+
+    Claude Code's ``/usage`` modal switched, around mid-week, from
+    ``Resets 4pm (Europe/Moscow)`` to ``Resets May 17 at 4pm
+    (Europe/Moscow)`` on the *Current week* rows. Use ``re.search``
+    (not ``re.match``) so the time can appear anywhere in the string,
+    and accept an optional ``at`` separator.
+    """
+    m = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", text, re.IGNORECASE)
     if not m:
         return None
     hour = int(m.group(1))

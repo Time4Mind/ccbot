@@ -27,8 +27,16 @@ class TestBuildTmuxCommand:
         cmd = _build_tmux_command("@5")
         assert "@5" in cmd
         assert "tmux attach -t" in cmd
-        assert "select-window -t @5" in cmd
+        # switch-client (per-client) — not select-window (session-level),
+        # otherwise multi-window popups stomp on each other.
+        assert "switch-client -t" in cmd
         assert "\\;" in cmd  # tmux command separator preserved
+
+    def test_uses_session_qualified_target(self) -> None:
+        """switch-client target carries the tmux session name so the
+        command is unambiguous regardless of attached client state."""
+        cmd = _build_tmux_command("@7")
+        assert "ccbot:@7" in cmd
 
     def test_keeps_window_open_after_detach(self) -> None:
         """`|| true; exec ${SHELL:-bash} -l` prevents the terminal from

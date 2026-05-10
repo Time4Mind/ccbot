@@ -38,6 +38,29 @@ EXPANDABLE_QUOTE_END = "\x02EXPQUOTE_END\x02"
 # after `Read(...)`). Longer summaries get truncated with an ellipsis.
 _MAX_SUMMARY_LENGTH = 200
 
+# Take this many trailing path components when shortening absolute paths
+# in the tool-summary line. ``/Users/x/y/proj/foo/bar.py`` → ``foo/bar.py``.
+_PATH_TRAIL_PARTS = 2
+
+
+def _shorten_path(value: str) -> str:
+    """Compact rendering of a path argument for the tool summary.
+
+    Absolute paths get clipped to the trailing ``_PATH_TRAIL_PARTS``
+    components so the card line stays readable on a phone. Relative
+    paths and non-path strings pass through. Glob patterns containing
+    ``*`` or ``?`` are left untouched — they're already short and
+    the wildcards tell the user it's not a literal path.
+    """
+    if not value or "*" in value or "?" in value:
+        return value
+    if not value.startswith("/"):
+        return value
+    parts = value.rstrip("/").split("/")
+    if len(parts) <= _PATH_TRAIL_PARTS:
+        return value
+    return "/".join(parts[-_PATH_TRAIL_PARTS:])
+
 
 def format_edit_diff(old_string: str, new_string: str) -> str:
     """Compact unified diff (no --- / +++ header) between two strings."""
@@ -64,11 +87,15 @@ def format_tool_use_summary(name: str, input_data: dict[str, Any] | Any) -> str:
 
     summary = ""
     if name in ("Read", "Glob"):
-        summary = input_data.get("file_path") or input_data.get("pattern", "")
+        summary = _shorten_path(
+            input_data.get("file_path") or input_data.get("pattern", "")
+        )
     elif name == "Write":
-        summary = input_data.get("file_path", "")
+        summary = _shorten_path(input_data.get("file_path", ""))
     elif name in ("Edit", "NotebookEdit"):
-        summary = input_data.get("file_path") or input_data.get("notebook_path", "")
+        summary = _shorten_path(
+            input_data.get("file_path") or input_data.get("notebook_path", "")
+        )
     elif name == "Bash":
         summary = input_data.get("command", "")
     elif name == "Grep":

@@ -1,4 +1,5 @@
-"""Tests for handlers/tg_format.split_overflow + pretty_pad_table."""
+"""Tests for handlers/tg_format.split_overflow + pretty_pad_table +
+related transcript_format helpers used by the live card."""
 
 import pytest
 
@@ -8,6 +9,47 @@ from ccbot.handlers.tg_format import (
     pretty_pad_table,
     split_overflow,
 )
+from ccbot.transcript_format import _shorten_path, format_tool_use_summary
+
+
+class TestShortenPath:
+    def test_keeps_short_paths(self) -> None:
+        assert _shorten_path("foo/bar.py") == "foo/bar.py"
+        assert _shorten_path("file.txt") == "file.txt"
+
+    def test_clips_absolute_paths_to_trailing_two(self) -> None:
+        assert (
+            _shorten_path("/Users/a/.claude/projects/-x/memory/notes.md")
+            == "memory/notes.md"
+        )
+        assert _shorten_path("/usr/local/bin/python") == "bin/python"
+
+    def test_passes_globs_through(self) -> None:
+        assert _shorten_path("**/*.py") == "**/*.py"
+        assert _shorten_path("/abs/**/*.ts") == "/abs/**/*.ts"
+
+    def test_empty(self) -> None:
+        assert _shorten_path("") == ""
+
+    def test_two_part_absolute_drops_leading_slash(self) -> None:
+        # Cleaner output: leading "/" is redundant when only 2 parts remain.
+        assert _shorten_path("/etc/hosts") == "etc/hosts"
+
+
+class TestFormatToolUseSummaryShortensPaths:
+    def test_read_strips_long_prefix(self) -> None:
+        result = format_tool_use_summary(
+            "Read", {"file_path": "/Users/x/proj/src/foo.py"}
+        )
+        assert result == "**Read**(src/foo.py)"
+
+    def test_glob_pattern_kept_intact(self) -> None:
+        result = format_tool_use_summary("Glob", {"pattern": "/abs/**/*.py"})
+        assert "**" in result and "*.py" in result
+
+    def test_write_short_relative_unchanged(self) -> None:
+        result = format_tool_use_summary("Write", {"file_path": "out/notes.md"})
+        assert result == "**Write**(out/notes.md)"
 
 
 class TestPrettyPadTable:

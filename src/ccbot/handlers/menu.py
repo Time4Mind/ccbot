@@ -42,7 +42,9 @@ from .callback_data import (
     CB_ST_GRP,
     CB_ST_LAG,
     CB_ST_LANG,
+    CB_ST_LCLAUDE,
     CB_ST_LOCAL,
+    CB_ST_LTERM,
     CB_ST_PREV,
     CB_ST_TOK,
     CB_ST_VOICE,
@@ -274,17 +276,53 @@ def _settings_approve_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
 
 
 def _settings_local_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
-    cur = session_manager.get_user_settings(user_id).get("local_terminal", "off")
-    return [
+    import platform
+
+    from ..local_terminal import LINUX_TEMPLATES, detect_linux_emulators
+
+    settings = session_manager.get_user_settings(user_id)
+    cur = settings.get("local_terminal", "off")
+    cur_cmd = settings.get("local_terminal_cmd", "")
+
+    rows: list[list[InlineKeyboardButton]] = []
+    rows.append(
         [
             InlineKeyboardButton(
                 _highlight(t(user_id, f"approve.{v}"), cur == v),
                 callback_data=f"{CB_ST_LOCAL}{v}",
             )
             for v in ("off", "on")
-        ],
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
-    ]
+        ]
+    )
+
+    # On Linux + on, surface emulator picker. Empty list → claude-fallback only.
+    if cur == "on" and platform.system() == "Linux":
+        detected = detect_linux_emulators()
+        if detected:
+            for i in range(0, len(detected), 2):
+                row: list[InlineKeyboardButton] = []
+                for name in detected[i : i + 2]:
+                    selected = cur_cmd == LINUX_TEMPLATES[name]
+                    row.append(
+                        InlineKeyboardButton(
+                            _highlight(name, selected),
+                            callback_data=f"{CB_ST_LTERM}{name}",
+                        )
+                    )
+                rows.append(row)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    t(user_id, "settings.local.claude_help"),
+                    callback_data=CB_ST_LCLAUDE,
+                )
+            ]
+        )
+
+    rows.append(
+        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)]
+    )
+    return rows
 
 
 def _settings_tokens_grid(user_id: int) -> list[list[InlineKeyboardButton]]:

@@ -14,7 +14,9 @@ from ...handlers.callback_data import (
     CB_ST_GRP,
     CB_ST_LAG,
     CB_ST_LANG,
+    CB_ST_LCLAUDE,
     CB_ST_LOCAL,
+    CB_ST_LTERM,
     CB_ST_PREV,
     CB_ST_TOK,
     CB_ST_VOICE,
@@ -25,10 +27,51 @@ from ...handlers.menu import (
     render_more_text,
     render_settings_group_text,
 )
+from ...handlers.message_sender import safe_send
 from ...i18n import t
 from ...session import session_manager
 
 logger = logging.getLogger(__name__)
+
+
+_CLAUDE_LINUX_PROMPT = """Help me wire ccbot's *Local terminal* feature on this Linux host.
+
+The bot will run an external command of the form `<emulator> <args>...` \
+where the placeholder `{shell}` is replaced (by ccbot, before exec) with \
+a single shell-quoted argument that runs:
+
+    tmux attach -t <session> \\\\; select-window -t @<wid> || true; exec bash -i
+
+Step 1. Detect what's installed:
+    which gnome-terminal kitty wezterm alacritty konsole tilix foot xterm
+
+Step 2. If exactly one is available, pick it. Otherwise ask me which to use.
+
+Step 3. Pick a template that opens a new tab when possible. Examples that \
+work in practice:
+
+    gnome-terminal -- bash -c {shell}
+    konsole --new-tab -e bash -c {shell}
+    kitty bash -c {shell}
+    wezterm start -- bash -c {shell}
+    alacritty -e bash -c {shell}
+
+Step 4. Append (or update) this line in `~/.ccbot/.env`:
+
+    CCBOT_LOCAL_TERMINAL_CMD=<your template, with {shell} verbatim>
+
+Step 5. Restart ccbot (`./scripts/restart.sh`), then create a new session \
+in the bot to verify a window pops up.
+
+If something needs my input, use AskUserQuestion."""
+
+
+async def _send_linux_claude_prompt(query: Any, user_id: int) -> None:
+    """Push a ready-to-paste prompt for the user to feed into a Claude session."""
+    try:
+        await safe_send(query.get_bot(), user_id, _CLAUDE_LINUX_PROMPT)
+    except Exception as e:
+        logger.debug("send_linux_claude_prompt failed: %s", e)
 
 
 _GROUP_TO_SCREEN = {
@@ -94,6 +137,11 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         await query.answer()
         return True
 
+    if data == CB_ST_LCLAUDE:
+        await _send_linux_claude_prompt(query, user.id)
+        await query.answer()
+        return True
+
     setter_prefixes = (
         CB_ST_PREV,
         CB_ST_LAG,
@@ -103,6 +151,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         CB_ST_APPROVE,
         CB_ST_TOK,
         CB_ST_LOCAL,
+        CB_ST_LTERM,
     )
     if not any(data.startswith(p) for p in setter_prefixes):
         return False
@@ -145,6 +194,15 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         value = data[len(CB_ST_LOCAL) :]
         if value in ("off", "on"):
             session_manager.update_user_setting(user.id, "local_terminal", value)
+        screen_name = "settings_local"
+    elif data.startswith(CB_ST_LTERM):
+        from ...local_terminal import LINUX_TEMPLATES
+
+        emu = data[len(CB_ST_LTERM) :]
+        if emu in LINUX_TEMPLATES:
+            session_manager.update_user_setting(
+                user.id, "local_terminal_cmd", LINUX_TEMPLATES[emu]
+            )
         screen_name = "settings_local"
     elif data.startswith(CB_ST_TOK):
         # Format: st:tok:<slot>:<+|->

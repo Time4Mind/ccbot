@@ -93,7 +93,7 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if session_manager.get_user_settings(user.id).get("local_terminal") == "on":
             from ...local_terminal import open_terminal_for_window
 
-            await open_terminal_for_window(created_wid)
+            await open_terminal_for_window(created_wid, user_id=user.id)
         await safe_reply(
             update.message,
             f"✅ Session `{sess.name}` ({sess.id}) created at {target_path}",

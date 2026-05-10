@@ -177,11 +177,14 @@ _EN: dict[str, str] = {
     "settings.group.local_terminal": "Local terminal",
     "settings.local.body": (
         "*Local terminal*\n\n"
-        "When `on`, every new session also opens a native macOS "
-        "Terminal/iTerm window attached to its tmux window — drive "
-        "the session by hand from the desktop in parallel with the "
-        "Telegram UI. No-op on non-macOS hosts."
+        "When `on`, every new session also opens a native window "
+        "attached to its tmux window — drive the session by hand from "
+        "the desktop in parallel with the Telegram UI.\n\n"
+        "macOS: Terminal.app or iTerm2 (auto-detected).\n"
+        "Linux: pick an emulator below. Tap *Configure via Claude* if "
+        "the auto-detected list is wrong for your setup."
     ),
+    "settings.local.claude_help": "🪄 Configure via Claude",
 }
 
 _RU: dict[str, str] = {
@@ -321,9 +324,13 @@ _RU: dict[str, str] = {
     "settings.local.body": (
         "*Локальный терминал*\n\n"
         "Если `on`, при создании каждой сессии бот открывает\n"
-        "нативное окно Terminal/iTerm с `tmux attach` — управляй\n"
-        "сессией с десктопа параллельно с Telegram. Только macOS."
+        "нативное окно с `tmux attach` — управляй сессией\n"
+        "с десктопа параллельно с Telegram.\n\n"
+        "macOS: Terminal.app или iTerm2 (авто).\n"
+        "Linux: выбери эмулятор ниже. Тапни *Configure via Claude*\n"
+        "если автодетект не угадал."
     ),
+    "settings.local.claude_help": "🪄 Настроить через Claude",
 }
 
 _ZH: dict[str, str] = {
@@ -457,10 +464,14 @@ _ZH: dict[str, str] = {
     "settings.group.local_terminal": "本地终端",
     "settings.local.body": (
         "*本地终端*\n\n"
-        "开启后,每当创建新会话,机器人也会在 macOS\n"
-        "Terminal/iTerm 中打开一个附加到 tmux 窗口的本地\n"
-        "终端窗口,可与 Telegram 并行手动操作。仅限 macOS。"
+        "开启后,每当创建新会话,机器人也会打开一个\n"
+        "附加到 tmux 窗口的本地终端,可与 Telegram\n"
+        "并行手动操作。\n\n"
+        "macOS:Terminal.app 或 iTerm2(自动)。\n"
+        "Linux:在下方选择终端模拟器。如果自动检测\n"
+        "不符合实际环境,请点击 *Configure via Claude*。"
     ),
+    "settings.local.claude_help": "🪄 通过 Claude 配置",
 }
 
 TRANSLATIONS: dict[str, dict[str, str]] = {

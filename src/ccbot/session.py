@@ -592,8 +592,15 @@ class SessionManager:
         # macOS UX: when "on", every newly-created session also pops a
         # native Terminal/iTerm window attached to its tmux window, so the
         # user can drive the session by hand from the desktop in parallel
-        # with the Telegram UI. No-op on non-macOS hosts.
+        # with the Telegram UI. On Linux, also requires
+        # ``local_terminal_cmd`` (or CCBOT_LOCAL_TERMINAL_CMD env).
         "local_terminal": "off",
+        # Linux: command template used by ``local_terminal``. Empty means
+        # "fall back to CCBOT_LOCAL_TERMINAL_CMD or skip". Templates are
+        # picked from a known list in Settings → Local terminal, or set
+        # manually via env. Use ``{shell}`` as the placeholder for the
+        # shell-quoted attach snippet.
+        "local_terminal_cmd": "",
     }
 
     def get_user_settings(self, user_id: int) -> dict[str, Any]:

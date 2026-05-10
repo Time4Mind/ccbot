@@ -26,10 +26,10 @@ from ..i18n import LANGUAGES, t
 from ..session import session_manager
 from .callback_data import (
     CB_FT_CLEAR,
-    CB_FT_CLOSE,
     CB_FT_KILL,
     CB_FT_MORE,
     CB_FT_STOP,
+    CB_FT_TERM,
     CB_MM_ARCHIVE,
     CB_MM_BACK,
     CB_MM_HISTORY,
@@ -179,6 +179,15 @@ def _footer_top_row(
         row.append(
             InlineKeyboardButton(t(user_id, "btn.clear"), callback_data=CB_FT_CLEAR)
         )
+        # Open-terminal sits with the other per-session controls so the
+        # button persists across switcher taps (which re-render the
+        # footer top row for the newly-active session). Visible only
+        # when ``local_terminal`` ∈ {manual, auto} AND no tmux client
+        # is currently attached to this session's window group.
+        if can_offer_terminal(user_id):
+            row.append(
+                InlineKeyboardButton(t(user_id, "btn.term"), callback_data=CB_FT_TERM)
+            )
     row.append(InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_FT_MORE))
     return row
 
@@ -216,15 +225,11 @@ def _more_grid(
         rows.append(
             [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_BACK)]
         )
-    else:
-        # Menu top-level: surface a Close button so the user can return to
-        # the live card. Without it, a busy session's events are buffered
-        # silently and the user has no way to drop back to the card view.
-        # ("Open terminal" lives on the /list screen — it's a session-
-        # level action, not a global one.)
-        rows.append(
-            [InlineKeyboardButton(t(user_id, "btn.close"), callback_data=CB_FT_CLOSE)]
-        )
+    # Menu top-level intentionally has no "Close" — typing in chat auto-
+    # resumes the live card via ``resume_card_view`` in text_handler, and
+    # adding an explicit button confused users in the no-active-card case
+    # where it would silently no-op. Section buttons themselves provide
+    # navigation; a no-op escape isn't worth the extra row.
     return rows
 
 

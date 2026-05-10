@@ -13,7 +13,6 @@ from ...handlers.archive import DEFAULT_LOOKBACK_SECONDS, build_archive_page
 from ...handlers.callback_data import (
     CB_FT_CLEAR,
     CB_FT_KILL,
-    CB_FT_TERM,
     CB_MM_ARCHIVE,
     CB_MM_BACK,
     CB_MM_HISTORY,
@@ -26,7 +25,6 @@ from ...handlers.callback_data import (
 from ...handlers.history import send_history
 from ...handlers.menu import (
     build_footer_keyboard,
-    can_offer_terminal,
     render_more_text,
     render_settings_text,
 )
@@ -45,10 +43,8 @@ logger = logging.getLogger(__name__)
 def build_list_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     """Render the ``/list`` body + keyboard for ``user_id``.
 
-    Factored out so the "Open terminal" callback (in footer.py) can
-    re-render the same screen after a spawn — Telegram's
-    ``editMessageText`` needs both the new text and the new markup, so
-    the duplication has to happen somewhere.
+    Factored out so callers that re-render the same screen (e.g. after
+    a session-level action) don't duplicate the keyboard layout.
     """
     body = build_live_sessions_text(user_id) or t(user_id, "list.empty")
     rows: list[list[InlineKeyboardButton]] = []
@@ -58,10 +54,6 @@ def build_list_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton(t(user_id, "btn.kill"), callback_data=CB_FT_KILL),
             InlineKeyboardButton(t(user_id, "btn.clear"), callback_data=CB_FT_CLEAR),
         ]
-        if can_offer_terminal(user_id):
-            ctl_row.append(
-                InlineKeyboardButton(t(user_id, "btn.term"), callback_data=CB_FT_TERM)
-            )
         rows.append(ctl_row)
     sw = build_switcher_keyboard(user_id, include_lost=True)
     if sw is not None:

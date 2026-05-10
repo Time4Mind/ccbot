@@ -32,8 +32,7 @@ _EN: dict[str, str] = {
     "btn.kill": "💀 Kill",
     "btn.clear": "🧹 Clear",
     "btn.menu": "≡ Menu",
-    "btn.close": "× Close",
-    "btn.term": "🖥 Open terminal",
+    "btn.term": "🖥 Term",
     "btn.back": "← Back",
     "btn.cancel": "× Cancel",
     "btn.confirm": "✓ Confirm",
@@ -188,10 +187,11 @@ _EN: dict[str, str] = {
         "tmux window — useful for driving Claude by hand in parallel "
         "with the Telegram UI.\n\n"
         "*off* — never spawn, never offer.\n"
-        "*manual* — no auto-spawn; *🖥 Open terminal* shows up in "
-        "/list when the active session has no terminal attached.\n"
+        "*manual* — no auto-spawn; *🖥 Term* shows up next to *Stop / "
+        "Kill / Clear / Menu* whenever the active session has no "
+        "terminal attached.\n"
         "*auto* — spawn one on every new session AND show the same "
-        "button on /list whenever no terminal is attached.\n\n"
+        "*🖥 Term* button whenever no terminal is attached.\n\n"
         "macOS: Terminal.app or iTerm2 (auto-detected).\n"
         "Linux: pick an emulator below. Tap *Configure via Claude* if "
         "the auto-detected list is wrong for your setup."
@@ -301,8 +301,7 @@ _RU: dict[str, str] = {
     "btn.kill": "💀 Убить",
     "btn.clear": "🧹 Очистить",
     "btn.menu": "≡ Меню",
-    "btn.close": "× Закрыть",
-    "btn.term": "🖥 Открыть терминал",
+    "btn.term": "🖥 Терминал",
     "btn.back": "← Назад",
     "btn.cancel": "× Отмена",
     "btn.confirm": "✓ Подтвердить",
@@ -442,12 +441,13 @@ _RU: dict[str, str] = {
         "Опциональное нативное окно с `tmux attach` к сессии —\n"
         "удобно вести Claude руками с десктопа параллельно\n"
         "с Telegram.\n\n"
-        "*выкл* — не открывать никогда, кнопку не показывать.\n"
-        "*по кнопке* — авто-спавна нет; в /list появляется\n"
-        "*🖥 Открыть терминал* для активной сессии, у которой\n"
-        "терминал не аттачен.\n"
+        "*выкл* — никогда не открывать, кнопку не показывать.\n"
+        "*по кнопке* — авто-спавна нет; *🖥 Терминал*\n"
+        "появляется рядом со *Стоп / Убить / Очистить / Меню*\n"
+        "когда у активной сессии терминал не аттачен.\n"
         "*всегда* — спавнить при создании каждой сессии И\n"
-        "показывать ту же кнопку в /list, когда терминала нет.\n\n"
+        "показывать ту же *🖥 Терминал*-кнопку, когда\n"
+        "терминала нет.\n\n"
         "macOS: Terminal.app или iTerm2 (авто).\n"
         "Linux: выбери эмулятор ниже. Тапни *Configure via Claude*\n"
         "если автодетект не угадал."
@@ -554,8 +554,7 @@ _ZH: dict[str, str] = {
     "btn.kill": "💀 终止",
     "btn.clear": "🧹 清空",
     "btn.menu": "≡ 菜单",
-    "btn.close": "× 关闭",
-    "btn.term": "🖥 打开终端",
+    "btn.term": "🖥 终端",
     "btn.back": "← 返回",
     "btn.cancel": "× 取消",
     "btn.confirm": "✓ 确认",
@@ -691,9 +690,9 @@ _ZH: dict[str, str] = {
         "便于在桌面手动操作 Claude,与 Telegram 并行。\n\n"
         "*关* — 从不打开,不显示按钮。\n"
         "*按钮* — 不自动打开;当活动会话未附加终端时,\n"
-        "在 /list 中显示 *🖥 打开终端*。\n"
-        "*总是* — 每个新会话都自动打开,同时在 /list 中\n"
-        "显示相同按钮(当未附加终端时)。\n\n"
+        "*🖥 终端* 出现在 *停止 / 终止 / 清空 / 菜单* 旁边。\n"
+        "*总是* — 每个新会话都自动打开,同时在未附加\n"
+        "终端时显示相同的 *🖥 终端* 按钮。\n\n"
         "macOS:Terminal.app 或 iTerm2(自动)。\n"
         "Linux:在下方选择终端模拟器。如果自动检测\n"
         "不符合实际环境,请点击 *Configure via Claude*。"

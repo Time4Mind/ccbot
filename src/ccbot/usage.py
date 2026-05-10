@@ -271,19 +271,30 @@ def format_usage_breakdown_compact(user_id: int, info: object) -> str | None:
         elapsed = max(0.1, 7.0 - min(7.0, days_left))
         return f" · {pct / elapsed:.1f}%/d"
 
-    if b.week_pct is not None and b.week_reset_hhmm:
-        rate = _weekly_rate(b.week_pct, b.week_reset_hhmm)
+    # Weekly rows render even when ``Resets …`` is missing — Claude Code
+    # sometimes drops that line at 0 %, but the percentage still matters.
+    # Reset suffix is shown only when we parsed a clock.
+    if b.week_pct is not None:
+        if b.week_reset_hhmm:
+            rate = _weekly_rate(b.week_pct, b.week_reset_hhmm)
+            tail = f"{rate} · {b.week_reset_hhmm}"
+        else:
+            tail = ""
         rows.append(
             f"{_quota_emoji(b.week_pct)} {t(user_id, 'usage.week')}: "
-            f"{b.week_pct}%{rate} · {b.week_reset_hhmm}"
+            f"{b.week_pct}%{tail}"
         )
 
-    if b.week_sonnet_pct is not None and b.week_sonnet_reset_hhmm:
-        rate = _weekly_rate(b.week_sonnet_pct, b.week_sonnet_reset_hhmm)
+    if b.week_sonnet_pct is not None:
+        if b.week_sonnet_reset_hhmm:
+            rate = _weekly_rate(b.week_sonnet_pct, b.week_sonnet_reset_hhmm)
+            tail = f"{rate} · {b.week_sonnet_reset_hhmm}"
+        else:
+            tail = ""
         rows.append(
             f"{_quota_emoji(b.week_sonnet_pct)} "
             f"{t(user_id, 'usage.week_sonnet')}: "
-            f"{b.week_sonnet_pct}%{rate} · {b.week_sonnet_reset_hhmm}"
+            f"{b.week_sonnet_pct}%{tail}"
         )
 
     extra_label = t(user_id, "usage.on" if b.extra_enabled else "usage.off")

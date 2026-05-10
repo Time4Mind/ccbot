@@ -17,6 +17,7 @@ from ...handlers.callback_data import (
     CB_FT_STOP,
 )
 from ...handlers.menu import build_footer_keyboard, render_more_text
+from ...handlers.notifications import clear_card
 from ...i18n import t
 from ...session import session_manager
 from ...tmux_manager import tmux_manager
@@ -79,6 +80,11 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             await query.answer(f"Clear failed: {message}", show_alert=True)
             return True
         session_manager.clear_window_session(wid)
+        # Wipe the live card body so the previous turn's tool log
+        # doesn't sit there pretending to be the current state.
+        sess = session_manager.get_active_session(user.id)
+        if sess is not None:
+            await clear_card(context.bot, user.id, sess)
         await query.answer(t(user.id, "toast.cleared"))
         return True
 

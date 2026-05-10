@@ -129,9 +129,16 @@ def _resolve_tmux_bin() -> str:
 
 
 def _build_tmux_command(window_id: str) -> str:
-    """tmux attach + select-window + interactive-shell tail, wrapped in
-    ``bash -c '…'`` so the macOS host's terminal app runs it through a
-    real shell.
+    """tmux attach + per-client window switch + interactive-shell tail,
+    wrapped in ``bash -c '…'`` so the macOS host's terminal app runs it
+    through a real shell.
+
+    Why ``switch-client`` and not ``select-window``: ``select-window``
+    mutates the SESSION's active window (server state), so when a
+    second terminal pops up for a different session window it
+    overwrites the first terminal's view — both clients end up looking
+    at the same window. ``switch-client -t <session>:@<wid>`` is
+    per-client and only affects the client running the command.
 
     iTerm2's ``create tab with default profile command "X"`` and (in
     some macOS versions) Terminal.app's ``do script`` exec ``X``
@@ -142,10 +149,12 @@ def _build_tmux_command(window_id: str) -> str:
     preferred login shell. ``tmux`` is invoked by absolute path
     because iTerm's bash inherits a stripped PATH on macOS.
     """
-    session = shlex.quote(config.tmux_session_name)
+    session_name = config.tmux_session_name
+    session_q = shlex.quote(session_name)
     tmux_bin = shlex.quote(_resolve_tmux_bin())
+    target = shlex.quote(f"{session_name}:{window_id}")
     inner = (
-        f"{tmux_bin} attach -t {session} \\; select-window -t {window_id} "
+        f"{tmux_bin} attach -t {session_q} \\; switch-client -t {target} "
         f"|| true; exec ${{SHELL:-bash}} -l"
     )
     return f"bash -c {shlex.quote(inner)}"

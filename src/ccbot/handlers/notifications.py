@@ -275,6 +275,37 @@ def reset_card(user_id: int, session_id: str) -> None:
     _cards.pop((user_id, session_id), None)
 
 
+async def clear_card(bot: Bot, user_id: int, sess: Session) -> None:
+    """Wipe the live card's body in response to a user-driven /clear.
+
+    Edits the existing message to a header-only "(cleared)" snapshot
+    so the user sees the previous tool log disappear, then drops the
+    cached state so the next claude event spawns a fresh card.
+    No-op when there is no live card.
+    """
+    state = _cards.get((user_id, sess.id))
+    if state is None or state.msg_id is None:
+        reset_card(user_id, sess.id)
+        return
+    if state.pending_edit is not None and not state.pending_edit.done():
+        state.pending_edit.cancel()
+    state.pending_edit = None
+    state.lines = []
+    state.last_rendered = ""
+    text = _render_card(sess, state, footer="(cleared)")
+    cleared_kb = build_footer_keyboard(user_id, screen="main", is_busy=False)
+    try:
+        await bot.edit_message_text(
+            chat_id=user_id,
+            message_id=state.msg_id,
+            text=text,
+            reply_markup=cleared_kb,
+        )
+    except Exception as e:
+        logger.debug("clear_card edit failed: %s", e)
+    reset_card(user_id, sess.id)
+
+
 def _card_is_busy(state: CardState) -> bool:
     """A live (msg_id-bearing, non-finalized) card means the session is
     actively producing output — show the *Stop* (Esc) button.

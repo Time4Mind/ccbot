@@ -30,6 +30,7 @@ from pathlib import Path
 
 import aiofiles
 
+from . import session_claude_io
 from .config import config
 from .session import Session, session_manager
 
@@ -120,7 +121,7 @@ async def aggregate_session(sess: Session) -> SessionUsage:
     if not sess.claude_session_id or not sess.workdir:
         out.tokens_total = sess.token_usage_total  # fall back to persisted counter
         return out
-    file_path = session_manager._build_session_file_path(
+    file_path = session_claude_io.build_session_file_path(
         sess.claude_session_id, sess.workdir
     )
     if file_path is None:
@@ -156,7 +157,7 @@ async def compute_user_usage(user_id: int) -> UserUsage:
         # Refresh cumulative counter on the Session record.
         if sess.token_usage_total != s.tokens_total:
             sess.token_usage_total = s.tokens_total
-    session_manager._save_state()
+    session_manager.save_state()
     return usage
 
 

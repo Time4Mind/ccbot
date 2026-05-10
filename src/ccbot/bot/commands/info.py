@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+from typing import Any
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -125,7 +126,7 @@ async def screenshot_command(
     )
 
 
-async def emit_screenshot_compact(query, bot: Bot, user_id: int) -> None:
+async def emit_screenshot_compact(query: Any, bot: Bot, user_id: int) -> None:
     """Delete the carrier message, reply with a compressed photo preview.
 
     Visually replaces the source menu in the chat. The photo carries a

@@ -147,7 +147,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                     if threshold is not None:
                         from .. import metrics
 
-                        session_manager._save_state()
+                        session_manager.save_state()
                         metrics.inc("session_token_alerts_emitted")
                         await push_event(
                             bot,

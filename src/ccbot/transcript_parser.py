@@ -72,7 +72,7 @@ class TranscriptParser:
 
     Expected JSONL entry structure:
     - type: "user" | "assistant" | "summary" | "file-history-snapshot" | ...
-    - message.content: list of blocks (text, tool_use, tool_result, thinking)
+    - message.content: list[Any] of blocks (text, tool_use, tool_result, thinking)
     - sessionId, cwd, timestamp, uuid: metadata fields
 
     Tool pairing model: tool_use blocks appear in assistant messages,
@@ -89,14 +89,14 @@ class TranscriptParser:
     EXPANDABLE_QUOTE_END = EXPANDABLE_QUOTE_END
 
     @staticmethod
-    def parse_line(line: str) -> dict | None:
+    def parse_line(line: str) -> dict[str, Any] | None:
         """Parse a single JSONL line.
 
         Args:
             line: A single line from the JSONL file
 
         Returns:
-            Parsed dict or None if line is empty/invalid
+            Parsed dict[str, Any] or None if line is empty/invalid
         """
         line = line.strip()
         if not line:
@@ -108,7 +108,7 @@ class TranscriptParser:
             return None
 
     @staticmethod
-    def get_message_type(data: dict) -> str | None:
+    def get_message_type(data: dict[str, Any]) -> str | None:
         """Get the message type from parsed data.
 
         Returns:
@@ -117,7 +117,7 @@ class TranscriptParser:
         return data.get("type")
 
     @staticmethod
-    def is_user_message(data: dict) -> bool:
+    def is_user_message(data: dict[str, Any]) -> bool:
         """Check if this is a user message."""
         return data.get("type") == "user"
 
@@ -134,7 +134,7 @@ class TranscriptParser:
         Returns:
             Combined text content only
         """
-        if not isinstance(content_list, list):
+        if not isinstance(content_list, list):  # pyright: ignore[reportUnnecessaryIsInstance]
             if isinstance(content_list, str):
                 return content_list
             return ""
@@ -162,11 +162,11 @@ class TranscriptParser:
     )
 
     @classmethod
-    def parse_message(cls, data: dict) -> ParsedMessage | None:
+    def parse_message(cls, data: dict[str, Any]) -> ParsedMessage | None:
         """Parse a message entry from the JSONL data.
 
         Args:
-            data: Parsed JSON dict from a JSONL line
+            data: Parsed JSON dict[str, Any] from a JSONL line
 
         Returns:
             ParsedMessage or None if not a parseable message
@@ -215,17 +215,17 @@ class TranscriptParser:
         )
 
     @staticmethod
-    def get_timestamp(data: dict) -> str | None:
+    def get_timestamp(data: dict[str, Any]) -> str | None:
         """Extract timestamp from message data."""
         return data.get("timestamp")
 
     @classmethod
     def parse_entries(
         cls,
-        entries: list[dict],
+        entries: list[dict[str, Any]],
         pending_tools: dict[str, PendingToolInfo] | None = None,
     ) -> tuple[list[ParsedEntry], dict[str, PendingToolInfo]]:
-        """Parse a list of JSONL entries into a flat list of display-ready messages.
+        """Parse a list[Any] of JSONL entries into a flat list[Any] of display-ready messages.
 
         This is the shared core logic used by both get_recent_messages (history)
         and check_for_updates (monitor).
@@ -247,7 +247,7 @@ class TranscriptParser:
         if pending_tools is None:
             pending_tools = {}
         else:
-            pending_tools = dict(pending_tools)  # don't mutate caller's dict
+            pending_tools = dict[str, Any](pending_tools)  # don't mutate caller's dict[str, Any]
 
         for data in entries:
             msg_type = cls.get_message_type(data)
@@ -564,7 +564,7 @@ class TranscriptParser:
         # Flush remaining pending tools at end.
         # In carry-over mode (monitor), keep them pending for the next call
         # without emitting entries. In one-shot mode (history), emit them.
-        remaining_pending = dict(pending_tools)
+        remaining_pending = dict[str, Any](pending_tools)
         if not _carry_over:
             for tool_id, tool_info in pending_tools.items():
                 result.append(

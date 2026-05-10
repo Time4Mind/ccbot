@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from telegram import BotCommand
 from telegram.ext import (
@@ -60,12 +61,12 @@ logger = logging.getLogger(__name__)
 
 # Module-globals owned by the lifecycle hooks.
 session_monitor: SessionMonitor | None = None
-_status_poll_task: asyncio.Task | None = None
-_quota_alerts_task: asyncio.Task | None = None
-_metrics_flush_task: asyncio.Task | None = None
+_status_poll_task: asyncio.Task[None] | None = None
+_quota_alerts_task: asyncio.Task[None] | None = None
+_metrics_flush_task: asyncio.Task[None] | None = None
 
 
-async def post_init(application: Application) -> None:
+async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") -> None:
     """First task after Application is built. Publish menu, recover state, start monitors."""
     global session_monitor, _status_poll_task, _quota_alerts_task, _metrics_flush_task
 
@@ -119,7 +120,7 @@ async def post_init(application: Application) -> None:
     logger.info("Metrics flush task started")
 
 
-async def post_shutdown(application: Application) -> None:
+async def post_shutdown(application: "Application[Any, Any, Any, Any, Any, Any]") -> None:
     """Stop background tasks, flush queues, close HTTP clients."""
     global _status_poll_task, _quota_alerts_task, _metrics_flush_task
 
@@ -159,7 +160,7 @@ async def post_shutdown(application: Application) -> None:
     await close_transcribe_client()
 
 
-def create_bot() -> Application:
+def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     """Build the Application, wire all handlers, return it ready to run_polling."""
     builder = (
         Application.builder()

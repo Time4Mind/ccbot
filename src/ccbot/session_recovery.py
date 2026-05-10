@@ -48,13 +48,13 @@ async def reconcile_with_tmux(mgr: "SessionManager") -> int:
                 sess.state = "lost"
                 lost += 1
     if lost:
-        mgr._save_state()
+        mgr.save_state()
         logger.info("Reconcile: marked %d sessions as lost on startup", lost)
     for uid, sid in list(mgr.active_sessions.items()):
         sess = mgr.sessions.get(sid)
         if sess is None or sess.state == "lost":
             del mgr.active_sessions[uid]
-    mgr._save_state()
+    mgr.save_state()
     return lost
 
 
@@ -81,7 +81,7 @@ async def resolve_stale_window_ids(mgr: "SessionManager") -> None:
     # --- Migrate window_states ---
     new_window_states: dict[str, WindowState] = {}
     for key, ws in mgr.window_states.items():
-        if mgr._is_window_id(key):
+        if mgr.is_window_id(key):
             if key in live_ids:
                 new_window_states[key] = ws
             else:
@@ -124,7 +124,7 @@ async def resolve_stale_window_ids(mgr: "SessionManager") -> None:
     for uid, offsets in mgr.user_window_offsets.items():
         new_offsets: dict[str, int] = {}
         for key, offset in offsets.items():
-            if mgr._is_window_id(key):
+            if mgr.is_window_id(key):
                 if key in live_ids:
                     new_offsets[key] = offset
                 else:
@@ -145,7 +145,7 @@ async def resolve_stale_window_ids(mgr: "SessionManager") -> None:
         mgr.user_window_offsets[uid] = new_offsets
 
     if changed:
-        mgr._save_state()
+        mgr.save_state()
         logger.info("Startup re-resolution complete")
 
     await cleanup_stale_session_map_entries(mgr, live_ids)
@@ -167,7 +167,7 @@ async def cleanup_old_format_session_map_keys(mgr: "SessionManager") -> None:
     old_keys = [
         key
         for key in session_map
-        if key.startswith(prefix) and not mgr._is_window_id(key[len(prefix) :])
+        if key.startswith(prefix) and not mgr.is_window_id(key[len(prefix) :])
     ]
     if not old_keys:
         return
@@ -198,7 +198,7 @@ async def cleanup_stale_session_map_entries(
         key
         for key in session_map
         if key.startswith(prefix)
-        and mgr._is_window_id(key[len(prefix) :])
+        and mgr.is_window_id(key[len(prefix) :])
         and key[len(prefix) :] not in live_ids
     ]
     if not stale_keys:

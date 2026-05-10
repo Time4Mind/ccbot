@@ -73,7 +73,7 @@ async def create_and_activate_session(
             ws.session_id = resume_session_id
             ws.cwd = str(selected_path)
             ws.window_name = created_wname
-            session_manager._save_state()
+            session_manager.save_state()
         elif ws.session_id != resume_session_id:
             logger.info(
                 "Resume override: window %s session_id %s -> %s",
@@ -82,7 +82,7 @@ async def create_and_activate_session(
                 resume_session_id,
             )
             ws.session_id = resume_session_id
-            session_manager._save_state()
+            session_manager.save_state()
 
     # Register Session record and make it active. Honor /new <name> if any.
     pending_name = (

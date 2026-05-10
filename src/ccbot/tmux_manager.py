@@ -216,7 +216,11 @@ class TmuxManager:
                 if not pane:
                     return None
                 lines = pane.capture_pane()
-                return "\n".join(lines) if isinstance(lines, list) else str(lines)
+                return (
+                    "\n".join(lines)
+                    if isinstance(lines, list)  # pyright: ignore[reportUnnecessaryIsInstance]
+                    else str(lines)
+                )
             except Exception as e:
                 logger.error(f"Failed to capture pane {window_id}: {e}")
                 return None

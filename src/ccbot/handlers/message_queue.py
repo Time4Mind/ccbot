@@ -27,8 +27,6 @@ from telegram.constants import ChatAction
 from telegram.error import RetryAfter
 
 from ..markdown_v2 import convert_markdown
-from ..terminal_parser import is_interactive_ui, parse_status_line
-from ..tmux_manager import tmux_manager
 from .message_sender import (
     NO_LINK_PREVIEW,
     PARSE_MODE,
@@ -572,35 +570,6 @@ async def _do_clear_status_message(
             logger.debug(f"Failed to delete status message {msg_id}: {e}")
 
 
-async def _check_and_send_status(
-    bot: Bot,
-    user_id: int,
-    window_id: str,
-) -> None:
-    """Check terminal for status line and send status message if present."""
-    if not window_id:
-        return
-    # Skip if there are more messages pending in the queue
-    queue = _message_queues.get(user_id)
-    if queue and not queue.empty():
-        return
-    w = await tmux_manager.find_window_by_id(window_id)
-    if not w:
-        return
-
-    pane_text = await tmux_manager.capture_pane(w.window_id)
-    if not pane_text:
-        return
-
-    # Suppress status updates while Claude is rendering an interactive picker
-    # (e.g. /model, /effort) — otherwise we ghost-edit the card with stale
-    # "running" status while the user is choosing.
-    if is_interactive_ui(pane_text):
-        return
-
-    status_line = parse_status_line(pane_text)
-    if status_line:
-        await _do_send_status_message(bot, user_id, window_id, status_line)
 
 
 async def enqueue_content_message(

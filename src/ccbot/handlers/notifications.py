@@ -76,7 +76,7 @@ class CardState:
         ""  # last text we sent to TG; lets touch_card_status skip no-op edits
     )
     last_edit_ts: float = 0.0  # monotonic seconds; gate for CARD_EDIT_LAG coalescing
-    pending_edit: asyncio.Task | None = None  # one deferred edit task at most
+    pending_edit: asyncio.Task[None] | None = None  # one deferred edit task at most
     is_continuation: bool = False  # True after a stale-pause or overflow split
 
 

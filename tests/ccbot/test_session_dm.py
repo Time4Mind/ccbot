@@ -8,7 +8,7 @@ from ccbot.session import Session, SessionManager
 @pytest.fixture
 def mgr(monkeypatch) -> SessionManager:
     monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
-    monkeypatch.setattr(SessionManager, "_save_state", lambda self: None)
+    monkeypatch.setattr(SessionManager, "save_state", lambda self: None)
     return SessionManager()
 
 

@@ -1,7 +1,7 @@
 """Directory browser and window picker UI for session creation.
 
 Provides UIs in Telegram for:
-  - Window picker: list unbound tmux windows for quick binding
+  - Window picker: list[Any] unbound tmux windows for quick binding
   - Directory browser: navigate directory hierarchies to create new sessions
 
 Key components:
@@ -17,6 +17,7 @@ import os
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -54,11 +55,11 @@ BROWSE_PAGE_KEY = "browse_page"
 BROWSE_DIRS_KEY = "browse_dirs"  # Cache of subdirs for current path
 UNBOUND_WINDOWS_KEY = "unbound_windows"  # Cache of (name, cwd) tuples
 STATE_SELECTING_SESSION = "selecting_session"
-SESSIONS_KEY = "cached_sessions"  # Cache of ClaudeSession list
+SESSIONS_KEY = "cached_sessions"  # Cache of ClaudeSession list[Any]
 SESSIONS_PAGE_KEY = "sessions_page"  # current page index in session picker
 
 
-def clear_browse_state(user_data: dict | None) -> None:
+def clear_browse_state(user_data: dict[str, Any] | None) -> None:
     """Clear directory browsing state keys from user_data."""
     if user_data is not None:
         user_data.pop(STATE_KEY, None)
@@ -67,14 +68,14 @@ def clear_browse_state(user_data: dict | None) -> None:
         user_data.pop(BROWSE_DIRS_KEY, None)
 
 
-def clear_window_picker_state(user_data: dict | None) -> None:
+def clear_window_picker_state(user_data: dict[str, Any] | None) -> None:
     """Clear window picker state keys from user_data."""
     if user_data is not None:
         user_data.pop(STATE_KEY, None)
         user_data.pop(UNBOUND_WINDOWS_KEY, None)
 
 
-def clear_session_picker_state(user_data: dict | None) -> None:
+def clear_session_picker_state(user_data: dict[str, Any] | None) -> None:
     """Clear session picker state keys from user_data."""
     if user_data is not None:
         user_data.pop(STATE_KEY, None)
@@ -89,7 +90,7 @@ def build_window_picker(
     Args:
         windows: List of (window_id, window_name, cwd) tuples.
 
-    Returns: (text, keyboard, window_ids) where window_ids is the ordered list for caching.
+    Returns: (text, keyboard, window_ids) where window_ids is the ordered list[Any] for caching.
     """
     window_ids = [wid for wid, _, _ in windows]
 
@@ -131,7 +132,7 @@ def build_directory_browser(
 ) -> tuple[str, InlineKeyboardMarkup, list[str]]:
     """Build directory browser UI.
 
-    Returns: (text, keyboard, subdirs) where subdirs is the full list for caching.
+    Returns: (text, keyboard, subdirs) where subdirs is the full list[Any] for caching.
     """
     path = Path(current_path).expanduser().resolve()
     if not path.exists() or not path.is_dir():

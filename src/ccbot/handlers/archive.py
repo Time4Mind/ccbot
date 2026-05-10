@@ -160,7 +160,7 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
             ws.session_id = sess.claude_session_id
             ws.cwd = workdir
             ws.window_name = created_wname
-            session_manager._save_state()
+            session_manager.save_state()
 
     session_manager.set_session_window(sess.id, created_wid)
     session_manager.set_active_session(user_id, sess.id)

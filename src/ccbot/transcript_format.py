@@ -52,12 +52,12 @@ def format_edit_diff(old_string: str, new_string: str) -> str:
     return "\n".join(out)
 
 
-def format_tool_use_summary(name: str, input_data: dict | Any) -> str:
+def format_tool_use_summary(name: str, input_data: dict[str, Any] | Any) -> str:
     """Format a tool_use block into a brief one-line summary.
 
     Returns ``**Name**(short summary)`` or ``**Name**`` when no useful
     summary can be extracted. Tool-specific selection prefers paths,
-    commands, and patterns over generic dict values.
+    commands, and patterns over generic dict[str, Any] values.
     """
     if not isinstance(input_data, dict):
         return f"**{name}**"
@@ -108,7 +108,7 @@ def format_tool_use_summary(name: str, input_data: dict | Any) -> str:
     return f"**{name}**"
 
 
-def extract_tool_result_text(content: list | Any) -> str:
+def extract_tool_result_text(content: list[Any] | Any) -> str:
     """Concatenate all text fragments from a tool_result content block."""
     if isinstance(content, str):
         return content
@@ -126,11 +126,11 @@ def extract_tool_result_text(content: list | Any) -> str:
 
 
 def extract_tool_result_images(
-    content: list | Any,
+    content: list[Any] | Any,
 ) -> list[tuple[str, bytes]] | None:
     """Extract base64 images from a tool_result content block.
 
-    Returns a list of ``(media_type, raw_bytes)`` or None if no images.
+    Returns a list[Any] of ``(media_type, raw_bytes)`` or None if no images.
     """
     if not isinstance(content, list):
         return None
@@ -161,7 +161,7 @@ def format_expandable_quote(text: str) -> str:
 def format_tool_result_text(
     text: str,
     tool_name: str | None = None,
-    tool_input_data: dict | None = None,
+    tool_input_data: dict[str, Any] | None = None,
 ) -> str:
     """Format tool result text with per-tool statistics + expandable quote.
 

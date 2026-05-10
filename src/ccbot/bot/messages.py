@@ -533,4 +533,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 # Re-export so existing callers (callbacks/dir_browser.py) keep working.
-from ._session_create import create_and_activate_session  # noqa: E402, F401
+from ._session_create import create_and_activate_session  # noqa: E402
+
+__all__ = ["create_and_activate_session"]

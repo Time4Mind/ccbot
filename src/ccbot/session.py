@@ -87,7 +87,7 @@ class SessionManager:
     def __post_init__(self) -> None:
         self._load_state()
 
-    def _save_state(self) -> None:
+    def save_state(self) -> None:
         state: dict[str, Any] = {
             "window_states": {k: v.to_dict() for k, v in self.window_states.items()},
             "user_window_offsets": {
@@ -109,7 +109,7 @@ class SessionManager:
         atomic_write_json(config.state_file, state)
         logger.debug("State saved to %s", config.state_file)
 
-    def _is_window_id(self, key: str) -> bool:
+    def is_window_id(self, key: str) -> bool:
         """Check if a key looks like a tmux window ID (e.g. '@0', '@12')."""
         return key.startswith("@") and len(key) > 1 and key[1:].isdigit()
 
@@ -152,7 +152,7 @@ class SessionManager:
                 # Detect old format: window_states keys that don't look like
                 # tmux window IDs ("@N"). resolve_stale_ids re-maps on startup.
                 needs_migration = any(
-                    not self._is_window_id(k) for k in self.window_states
+                    not self.is_window_id(k) for k in self.window_states
                 )
                 if needs_migration:
                     logger.info(
@@ -195,7 +195,7 @@ class SessionManager:
         # Also update WindowState.window_name if it exists
         if window_id in self.window_states:
             self.window_states[window_id].window_name = new_name
-        self._save_state()
+        self.save_state()
         logger.info("Updated display name: window_id %s -> '%s'", window_id, new_name)
 
     # --- Group chat ID management (supergroup forum topic routing) ---
@@ -262,7 +262,7 @@ class SessionManager:
             if not key.startswith(prefix):
                 continue
             window_id = key[len(prefix) :]
-            if not self._is_window_id(window_id):
+            if not self.is_window_id(window_id):
                 continue
             valid_wids.add(window_id)
             new_sid = info.get("session_id", "")
@@ -303,7 +303,7 @@ class SessionManager:
             changed = True
 
         if changed:
-            self._save_state()
+            self.save_state()
 
     # --- Window state management ---
 
@@ -317,7 +317,7 @@ class SessionManager:
         """Clear session association for a window (e.g., after /clear command)."""
         state = self.get_window_state(window_id)
         state.session_id = ""
-        self._save_state()
+        self.save_state()
         logger.info("Cleared session for window_id %s", window_id)
 
     @staticmethod
@@ -326,11 +326,6 @@ class SessionManager:
         from . import session_claude_io
 
         return session_claude_io.encode_cwd(cwd)
-
-    def _build_session_file_path(self, session_id: str, cwd: str) -> Path | None:
-        from . import session_claude_io
-
-        return session_claude_io.build_session_file_path(session_id, cwd)
 
     async def list_sessions_for_directory(self, cwd: str) -> list[ClaudeSession]:
         """List existing Claude sessions for a directory (newest first, max 10)."""
@@ -364,7 +359,7 @@ class SessionManager:
         )
         state.session_id = ""
         state.cwd = ""
-        self._save_state()
+        self.save_state()
         return None
 
     # --- User window offset management ---
@@ -376,7 +371,7 @@ class SessionManager:
         if user_id not in self.user_window_offsets:
             self.user_window_offsets[user_id] = {}
         self.user_window_offsets[user_id][window_id] = offset
-        self._save_state()
+        self.save_state()
 
     # --- DM mode: active session management ---
 
@@ -399,14 +394,14 @@ class SessionManager:
         if session_id not in self.sessions:
             raise KeyError(f"Unknown session id: {session_id}")
         self.active_sessions[user_id] = session_id
-        self._save_state()
+        self.save_state()
         logger.info("Active session for user %d: %s", user_id, session_id)
 
     def clear_active_session(self, user_id: int) -> None:
         """Drop the active-session pointer for a user (e.g. all sessions archived)."""
         if user_id in self.active_sessions:
             del self.active_sessions[user_id]
-            self._save_state()
+            self.save_state()
 
     def list_user_sessions(
         self,
@@ -464,7 +459,7 @@ class SessionManager:
             last_event_at=now,
         )
         self.sessions[sid] = sess
-        self._save_state()
+        self.save_state()
         from . import metrics
 
         metrics.inc("sessions_created")
@@ -493,7 +488,7 @@ class SessionManager:
         for uid, sid in list(self.active_sessions.items()):
             if sid == session_id:
                 del self.active_sessions[uid]
-        self._save_state()
+        self.save_state()
         from . import metrics
 
         metrics.inc(
@@ -508,7 +503,7 @@ class SessionManager:
             return
         sess.state = "lost"
         sess.window_id = ""
-        self._save_state()
+        self.save_state()
         logger.warning("Session %s marked lost", session_id)
 
     def list_archived(
@@ -572,7 +567,7 @@ class SessionManager:
         for uid, sid in list(self.active_sessions.items()):
             if sid == session_id:
                 del self.active_sessions[uid]
-        self._save_state()
+        self.save_state()
         logger.info("Deleted session record %s", session_id)
         return True
 
@@ -609,7 +604,7 @@ class SessionManager:
             raise ValueError(f"Unknown setting key: {key}")
         bucket = self.user_settings.setdefault(user_id, {})
         bucket[key] = value
-        self._save_state()
+        self.save_state()
 
     # --- Summary cache (Claude session id -> short readable summary) ---
 
@@ -635,14 +630,14 @@ class SessionManager:
             "mtime": file_mtime,
             "ts": time.time(),
         }
-        self._save_state()
+        self.save_state()
 
     def rename_session(self, session_id: str, new_name: str) -> None:
         sess = self.sessions.get(session_id)
         if not sess:
             return
         sess.name = new_name
-        self._save_state()
+        self.save_state()
 
     def set_session_window(self, session_id: str, window_id: str) -> None:
         """Re-attach a session to a (possibly new) tmux window after restore."""
@@ -652,14 +647,14 @@ class SessionManager:
         sess.window_id = window_id
         sess.state = "active"
         sess.last_event_at = time.time()
-        self._save_state()
+        self.save_state()
 
     def set_session_goal(self, session_id: str, goal: str) -> None:
         sess = self.sessions.get(session_id)
         if not sess:
             return
         sess.goal = goal
-        self._save_state()
+        self.save_state()
 
     def set_session_claude_id(self, session_id: str, claude_session_id: str) -> None:
         sess = self.sessions.get(session_id)
@@ -667,7 +662,7 @@ class SessionManager:
             return
         if sess.claude_session_id != claude_session_id:
             sess.claude_session_id = claude_session_id
-            self._save_state()
+            self.save_state()
 
     def get_last_switcher_msg(self, user_id: int) -> int | None:
         return self.last_switcher_msg_id.get(user_id)
@@ -675,12 +670,12 @@ class SessionManager:
     def set_last_switcher_msg(self, user_id: int, message_id: int) -> None:
         self.last_switcher_msg_id[user_id] = message_id
         # Persist eagerly: cheap, helps survive bot restart for switcher cleanup.
-        self._save_state()
+        self.save_state()
 
     def clear_last_switcher_msg(self, user_id: int) -> None:
         if user_id in self.last_switcher_msg_id:
             del self.last_switcher_msg_id[user_id]
-            self._save_state()
+            self.save_state()
 
     # --- Legacy thread binding management (used during migration; removed in Phase 1) ---
 
@@ -747,7 +742,7 @@ class SessionManager:
         *,
         start_byte: int = 0,
         end_byte: int | None = None,
-    ) -> tuple[list[dict], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """Get user/assistant messages for a window's session.
 
         Resolves window → session, then reads the JSONL.
@@ -763,7 +758,7 @@ class SessionManager:
             return [], 0
 
         # Read JSONL entries (optionally filtered by byte range)
-        entries: list[dict] = []
+        entries: list[dict[str, Any]] = []
         try:
             async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
                 if start_byte > 0:

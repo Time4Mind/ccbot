@@ -14,7 +14,7 @@ from ccbot.session import SessionManager
 @pytest.fixture
 def mgr(monkeypatch) -> SessionManager:
     monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
-    monkeypatch.setattr(SessionManager, "_save_state", lambda self: None)
+    monkeypatch.setattr(SessionManager, "save_state", lambda self: None)
     return SessionManager()
 
 
@@ -53,15 +53,15 @@ class TestDisplayNames:
 
 class TestIsWindowId:
     def test_valid_ids(self, mgr: SessionManager) -> None:
-        assert mgr._is_window_id("@0") is True
-        assert mgr._is_window_id("@12") is True
-        assert mgr._is_window_id("@999") is True
+        assert mgr.is_window_id("@0") is True
+        assert mgr.is_window_id("@12") is True
+        assert mgr.is_window_id("@999") is True
 
     def test_invalid_ids(self, mgr: SessionManager) -> None:
-        assert mgr._is_window_id("myproject") is False
-        assert mgr._is_window_id("@") is False
-        assert mgr._is_window_id("") is False
-        assert mgr._is_window_id("@abc") is False
+        assert mgr.is_window_id("myproject") is False
+        assert mgr.is_window_id("@") is False
+        assert mgr.is_window_id("") is False
+        assert mgr.is_window_id("@abc") is False
 
 
 class TestActiveSessions:

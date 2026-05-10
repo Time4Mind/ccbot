@@ -42,14 +42,15 @@ from ...handlers.directory_browser import (
 from ...handlers.message_sender import safe_edit
 from ...naming import generate_name
 from ...session import session_manager
-from .._common import logger as _common_logger  # noqa: F401  (re-exported)
 from .._common import open_more_in_place
 from ..messages import create_and_activate_session
 
 logger = logging.getLogger(__name__)
 
 
-async def _resolve_session_summaries(sessions: list, *, user_id: int) -> dict[str, str]:
+async def _resolve_session_summaries(
+    sessions: list[Any], *, user_id: int
+) -> dict[str, str]:
     """claude_session_id → display summary, honoring user Previews setting."""
     settings = session_manager.get_user_settings(user_id)
     mode = settings.get("previews", "economical")
@@ -93,7 +94,7 @@ async def _resolve_session_summaries(sessions: list, *, user_id: int) -> dict[st
 async def emit_session_picker(
     query: Any,
     context: ContextTypes.DEFAULT_TYPE,
-    sessions: list,
+    sessions: list[Any],
     *,
     page: int,
     user_id: int,

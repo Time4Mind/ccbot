@@ -78,7 +78,7 @@ class SessionMonitor:
         self.state.load()
 
         self._running = False
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[None] | None = None
         self._message_callback: Callable[[NewMessage], Awaitable[None]] | None = None
         # Per-session pending tool_use state carried across poll cycles
         self._pending_tools: dict[str, dict[str, Any]] = {}  # session_id -> pending
@@ -198,7 +198,7 @@ class SessionMonitor:
 
     async def _read_new_lines(
         self, session: TrackedSession, file_path: Path
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Read new lines from a session file using byte offset for efficiency.
 
         Detects file truncation (e.g. after /clear) and resets offset.

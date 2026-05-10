@@ -65,7 +65,8 @@ CB_SW_NOOP = "sw0"  # tap on already-active button (no-op)
 CB_FT_STOP = "ft:stop"  # send Escape to active session (busy state)
 CB_FT_KILL = "ft:kill"  # confirm-archive active session (idle state)
 CB_FT_CLEAR = "ft:clear"  # forward /clear to active session
-CB_FT_MORE = "ft:more"  # open the Menu screen
+CB_FT_MORE = "ft:more"  # open the Menu screen (pauses live-card updates)
+CB_FT_CLOSE = "ft:close"  # close Menu, resume live-card updates with catch-up
 
 # More menu
 CB_MM_LIST = "mm:list"

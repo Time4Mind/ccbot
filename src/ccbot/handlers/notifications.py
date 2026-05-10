@@ -79,6 +79,16 @@ class CardState:
     last_edit_ts: float = 0.0  # monotonic seconds; gate for CARD_EDIT_LAG coalescing
     pending_edit: asyncio.Task[None] | None = None  # one deferred edit task at most
     is_continuation: bool = False  # True after a stale-pause or overflow split
+    # User opened ≡ Menu / a sub-screen on the card's message. While set,
+    # session updates accumulate into ``lines`` but are NOT rendered to
+    # Telegram — otherwise the next event would overwrite whatever menu
+    # screen the user is looking at. Cleared by ``resume_card_view``
+    # (called from CB_FT_CLOSE) or implicitly when the card is reset.
+    in_menu_view: bool = False
+    # Set by ``finalize_task`` while ``in_menu_view`` is True so the
+    # delayed render on resume picks up the ``(task complete)`` footer
+    # and the cleanup that would normally happen at finalize time runs.
+    pending_complete_footer: str | None = None
 
 
 # Per-(user, session.id) card state.
@@ -275,6 +285,47 @@ def reset_card(user_id: int, session_id: str) -> None:
     _cards.pop((user_id, session_id), None)
 
 
+def pause_card_view(user_id: int, session_id: str) -> None:
+    """Mark the live card paused so session updates buffer instead of
+    rendering. Called when the user opens a Menu / sub-screen on the
+    card's message — otherwise a stream of tool calls would overwrite
+    whatever they're looking at."""
+    state = _cards.get((user_id, session_id))
+    if state is not None:
+        state.in_menu_view = True
+
+
+async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
+    """Re-render the card with whatever events accumulated while paused,
+    then drop the pause. If a finalize_task fired during the pause, the
+    catch-up render carries the ``(task complete)`` footer and resets
+    the card afterward exactly as the live path would have."""
+    state = _cards.get((user_id, sess.id))
+    if state is None or state.msg_id is None:
+        return
+    state.in_menu_view = False
+    if state.pending_edit is not None and not state.pending_edit.done():
+        state.pending_edit.cancel()
+    state.pending_edit = None
+    footer = state.pending_complete_footer or ""
+    text = _render_card(sess, state, footer=footer)
+    is_busy = footer == ""
+    keyboard = build_footer_keyboard(user_id, screen="main", is_busy=is_busy)
+    try:
+        await bot.edit_message_text(
+            chat_id=user_id,
+            message_id=state.msg_id,
+            text=text,
+            reply_markup=keyboard,
+        )
+        state.last_rendered = text
+        state.last_edit_ts = time.monotonic()
+    except Exception as e:
+        logger.debug("resume_card_view edit failed: %s", e)
+    if state.pending_complete_footer:
+        reset_card(user_id, sess.id)
+
+
 async def clear_card(bot: Bot, user_id: int, sess: Session) -> None:
     """Wipe the live card's body in response to a user-driven /clear.
 
@@ -389,6 +440,11 @@ async def _edit_card(
     """
     if state.msg_id is None:
         return False
+    # User is currently looking at a Menu / sub-screen on this card's
+    # message. Don't repaint — would clobber whatever they're navigating.
+    # State.lines keeps accumulating; resume_card_view will catch up.
+    if state.in_menu_view:
+        return True
     if reply_markup is None:
         reply_markup = build_footer_keyboard(
             user_id, screen="main", is_busy=_card_is_busy(state)
@@ -448,15 +504,7 @@ async def update_session_card(
     """
     state = get_card_state(user_id, sess)
 
-    # Trigger: long pause → fresh card.
-    if _is_stale(state):
-        state.msg_id = None
-        state.lines = []
-        state.is_continuation = True
-        state.last_rendered = ""
-
     new_line = _line_for_event(msg)
-
     # tool_result: replace the matching tool_use line in place.
     replaced = False
     if msg.content_type == "tool_result" and msg.tool_use_id:
@@ -465,6 +513,24 @@ async def update_session_card(
                 state.lines[i] = new_line
                 replaced = True
                 break
+
+    # User has the menu / a sub-screen open on this card's message.
+    # Buffer the event into ``state.lines`` so resume_card_view can catch
+    # up; do NOT trigger stale-card resets, overflow continuations, or
+    # any rendering — those would clobber the user's current view.
+    if state.in_menu_view:
+        if not replaced:
+            state.lines.append(new_line)
+        state.last_event_ts = time.time()
+        return
+
+    # Trigger: long pause → fresh card.
+    if _is_stale(state):
+        state.msg_id = None
+        state.lines = []
+        state.is_continuation = True
+        state.last_rendered = ""
+
     if not replaced:
         state.lines.append(new_line)
 
@@ -536,8 +602,13 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
 
     cleaned = (final_text or "").strip()
     if not cleaned:
+        # No final text from Claude (e.g. /clear with nothing else).
+        # Drop the card; no push — the previous "completion push"
+        # behaviour was removed when the result moved into the card body.
+        if state.in_menu_view:
+            state.pending_complete_footer = "(task complete)"
+            return
         reset_card(user_id, sess.id)
-        await push_event(bot, user_id, sess, text="✓ task complete")
         return
 
     formatted = split_overflow(cleaned)
@@ -545,6 +616,21 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     attachments = formatted.attachments
 
     has_history = bool(state.lines)
+
+    # User is on a Menu view — accumulate divider + answer into state and
+    # mark the card "completion-pending". resume_card_view will render
+    # the footer and reset. Attachments still go out (file delivery
+    # shouldn't wait on a UI navigation).
+    if state.in_menu_view:
+        if has_history:
+            state.lines.append(CardLine(text=_RESULT_DIVIDER))
+        state.lines.append(CardLine(text=cleaned))
+        state.last_event_ts = time.time()
+        state.pending_complete_footer = "(task complete)"
+        if attachments:
+            await _send_attachments(bot, user_id, attachments)
+        return
+
     if has_history:
         state.lines.append(CardLine(text=_RESULT_DIVIDER))
 

@@ -502,6 +502,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     import time as _time
 
     from .. import metrics
+    from ..handlers.notifications import resume_card_view
+
+    # If the user typed while looking at a Menu / sub-screen on this
+    # session's card, drop the pause so incoming events render again.
+    sess = session_manager.find_session_by_window(wid)
+    if sess is not None:
+        await resume_card_view(context.bot, user.id, sess)
 
     _t0 = _time.time()
     success, message = await session_manager.send_to_window(wid, text)

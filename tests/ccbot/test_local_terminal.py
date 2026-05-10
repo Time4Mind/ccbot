@@ -8,6 +8,7 @@ from ccbot.local_terminal import (
     _iterm_args,
     _quote_applescript,
     _terminal_app_args,
+    group_session_name,
 )
 
 
@@ -22,32 +23,56 @@ class TestQuoteApplescript:
         assert _quote_applescript("a\\b") == '"a\\\\b"'
 
 
-class TestBuildTmuxCommand:
-    def test_window_id_appended(self) -> None:
-        cmd = _build_tmux_command("@5")
-        assert "@5" in cmd
-        assert "tmux attach -t" in cmd
-        # switch-client (per-client) — not select-window (session-level),
-        # otherwise multi-window popups stomp on each other.
-        assert "switch-client -t" in cmd
-        assert "\\;" in cmd  # tmux command separator preserved
+class TestGroupSessionName:
+    def test_strips_at_prefix(self) -> None:
+        assert group_session_name("@5") == "ccbot-w5"
 
-    def test_uses_session_qualified_target(self) -> None:
-        """switch-client target carries the tmux session name so the
-        command is unambiguous regardless of attached client state."""
+    def test_handles_bare_id(self) -> None:
+        assert group_session_name("21") == "ccbot-w21"
+
+    def test_falls_back_for_empty(self) -> None:
+        # Defensive fallback so we never produce ``ccbot-w`` with no suffix.
+        assert group_session_name("@") == "ccbot-w0"
+
+
+class TestBuildTmuxCommand:
+    def test_uses_per_window_grouped_session(self) -> None:
+        """A grouped session — ``new-session -t <source> -s <source>-w<wid>``
+        — is what gives each terminal an independent current-window
+        view. Without it, ``select-window`` mutates the source's
+        current window and drags every other client onto it."""
+        cmd = _build_tmux_command("@5")
+        assert "new-session -d -t" in cmd
+        assert "ccbot-w5" in cmd
+        assert "select-window -t" in cmd
+        assert "attach-session -t" in cmd
+
+    def test_select_window_targets_group(self) -> None:
+        """``select-window`` must target the per-window grouped session
+        (``<group>:<wid>``), not the source — otherwise we're back to
+        mutating the source's current window."""
         cmd = _build_tmux_command("@7")
-        assert "ccbot:@7" in cmd
+        assert "ccbot-w7:@7" in cmd
+        # And the older session-level target must NOT be present —
+        # that was the bug we are fixing.
+        assert "ccbot:@7" not in cmd
+
+    def test_no_switch_client(self) -> None:
+        """``switch-client -t <session>:<wid>`` was the bug — it mutates
+        the source session's current window for every attached
+        client. The fix replaces it with grouped-session attach."""
+        cmd = _build_tmux_command("@1")
+        assert "switch-client" not in cmd
 
     def test_keeps_window_open_after_detach(self) -> None:
-        """`|| true; exec ${SHELL:-bash} -l` prevents the terminal from
-        snapping shut when the user detaches from tmux or attach fails."""
+        """``exec ${SHELL:-bash} -l`` prevents the terminal from snapping
+        shut when the user detaches from tmux or attach fails."""
         cmd = _build_tmux_command("@1")
-        assert "|| true" in cmd
         assert "exec ${SHELL:-bash} -l" in cmd
 
     def test_wrapped_in_bash_c_for_shell_semantics(self) -> None:
         """Without `bash -c`, iTerm/Terminal.app exec the command without
-        a shell — `\\;`, `||`, `;` all lose meaning, attach fails."""
+        a shell — ``;`` loses meaning, the chain falls apart."""
         cmd = _build_tmux_command("@9")
         assert cmd.startswith("bash -c ")
 
@@ -59,11 +84,13 @@ class TestBuildTmuxCommand:
         # shutil.which returned nothing on this host. Reject neither.
         assert "/tmux" in cmd or " tmux " in cmd
 
-    def test_session_name_quoted(self) -> None:
+    def test_swallows_new_session_failure(self) -> None:
+        """``new-session -s <existing>`` errors when the group already
+        exists from a previous open of the same window. ``2>/dev/null``
+        keeps it quiet so the chain proceeds to attach."""
         cmd = _build_tmux_command("@1")
-        # config.tmux_session_name comes from env / default; just sanity-check
-        # that the result is shell-safe (no unquoted spaces).
-        assert "tmux attach -t" in cmd
+        assert "new-session -d -t" in cmd
+        assert "2>/dev/null" in cmd
 
 
 class TestArgsBuilders:
@@ -87,12 +114,14 @@ class TestLinuxTemplates:
             assert name in LINUX_TEMPLATES
             assert "{shell}" in LINUX_TEMPLATES[name]
 
-    def test_build_linux_shell_cmd_attaches_and_keeps_open(self) -> None:
+    def test_build_linux_shell_cmd_uses_grouped_session(self) -> None:
+        """Linux path mirrors macOS: per-window grouped session so
+        ``select-window`` does not steal other already-attached clients."""
         cmd = _build_linux_shell_cmd("@7")
-        assert "tmux attach -t" in cmd
-        assert "select-window -t @7" in cmd
-        # `|| true` swallows non-zero attach exit so the trailing exec runs.
-        assert "|| true" in cmd
+        assert "new-session -d -t" in cmd
+        assert "ccbot-w7" in cmd
+        assert "select-window -t" in cmd
+        assert "attach-session -t" in cmd
         assert "exec bash -i" in cmd
 
     def test_expand_linux_template_returns_argv(self) -> None:
@@ -102,12 +131,11 @@ class TestLinuxTemplates:
         assert argv[2] == "bash"
         assert argv[3] == "-c"
         # Last element is the quoted shell snippet.
-        assert "select-window -t @5" in argv[4]
+        assert "ccbot-w5" in argv[4]
 
     def test_expand_linux_template_quotes_special_chars(self) -> None:
         argv = _expand_linux_template("kitty bash -c {shell}", "@1")
         # The shell snippet is delivered as a single argv element — the
-        # emulator should not see the tmux backslash-semicolon split into
-        # multiple args.
+        # emulator should not see ``;`` split into multiple args.
         assert len(argv) == 4
-        assert "tmux attach -t" in argv[3]
+        assert "new-session -d -t" in argv[3]

@@ -349,7 +349,15 @@ class TmuxManager:
         return await asyncio.to_thread(_sync_rename)
 
     async def kill_window(self, window_id: str) -> bool:
-        """Kill a tmux window by its ID."""
+        """Kill a tmux window by its ID.
+
+        Also tears down the matching per-window grouped session
+        (``<source>-w<wid>``) that ``local_terminal`` may have created.
+        Without this the group would linger as an empty view of the
+        remaining source windows, which both pollutes
+        ``list-sessions`` and makes the next reuse of the same window
+        id reattach to a confused leftover.
+        """
 
         def _sync_kill() -> bool:
             session = self.get_session()
@@ -361,12 +369,36 @@ class TmuxManager:
                     return False
                 window.kill()
                 logger.info("Killed window %s", window_id)
+                self._kill_grouped_session_for_window(window_id)
                 return True
             except Exception as e:
                 logger.error(f"Failed to kill window {window_id}: {e}")
                 return False
 
         return await asyncio.to_thread(_sync_kill)
+
+    def _kill_grouped_session_for_window(self, window_id: str) -> None:
+        """Kill the ``<source>-w<wid>`` grouped session, if present.
+
+        Synchronous helper for ``kill_window`` — runs in the same
+        worker thread so the cleanup happens atomically with the
+        window kill.
+        """
+        suffix = window_id.lstrip("@")
+        if not suffix:
+            return
+        target = f"{self.session_name}-w{suffix}"
+        try:
+            grouped = self.server.sessions.get(session_name=target)
+        except Exception:
+            return
+        if grouped is None:
+            return
+        try:
+            grouped.kill()
+            logger.info("Killed grouped session %s", target)
+        except Exception as e:
+            logger.debug("kill grouped session %s failed: %s", target, e)
 
     async def create_window(
         self,

@@ -150,6 +150,7 @@ async def resolve_stale_window_ids(mgr: "SessionManager") -> None:
 
     await cleanup_stale_session_map_entries(mgr, live_ids)
     await cleanup_old_format_session_map_keys(mgr)
+    cleanup_orphan_grouped_sessions(live_ids)
 
 
 async def cleanup_old_format_session_map_keys(mgr: "SessionManager") -> None:
@@ -178,6 +179,42 @@ async def cleanup_old_format_session_map_keys(mgr: "SessionManager") -> None:
     logger.info(
         "Cleaned up %d old-format session_map keys: %s", len(old_keys), old_keys
     )
+
+
+def cleanup_orphan_grouped_sessions(live_window_ids: set[str]) -> None:
+    """Kill ``<source>-w<wid>`` grouped sessions whose target window is gone.
+
+    ``local_terminal`` creates one grouped session per local terminal.
+    Normally ``tmux_manager.kill_window`` cleans these up, but a hard
+    crash, a manual ``tmux kill-window`` outside the bot, or a leftover
+    from before this cleanup existed can strand them. We sweep on
+    startup so ``list-sessions`` doesn't fill up with stale views.
+    """
+    prefix = f"{config.tmux_session_name}-w"
+    try:
+        sessions = list(tmux_manager.server.sessions)
+    except Exception as e:
+        logger.debug("orphan group sweep: could not list sessions: %s", e)
+        return
+    killed = 0
+    for s in sessions:
+        name = s.name or ""
+        if not name.startswith(prefix):
+            continue
+        suffix = name[len(prefix) :]
+        if not suffix.isdigit():
+            continue
+        wid = f"@{suffix}"
+        if wid in live_window_ids:
+            continue
+        try:
+            s.kill()
+            killed += 1
+            logger.info("Killed orphan grouped session %s (window %s gone)", name, wid)
+        except Exception as e:
+            logger.debug("kill orphan group %s failed: %s", name, e)
+    if killed:
+        logger.info("Cleaned up %d orphan grouped sessions", killed)
 
 
 async def cleanup_stale_session_map_entries(

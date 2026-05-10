@@ -128,34 +128,63 @@ def _resolve_tmux_bin() -> str:
     return shutil.which("tmux") or "tmux"
 
 
-def _build_tmux_command(window_id: str) -> str:
-    """tmux attach + per-client window switch + interactive-shell tail,
-    wrapped in ``bash -c '…'`` so the macOS host's terminal app runs it
-    through a real shell.
+def group_session_name(window_id: str) -> str:
+    """Per-window grouped-session name we attach each local terminal to.
 
-    Why ``switch-client`` and not ``select-window``: ``select-window``
-    mutates the SESSION's active window (server state), so when a
-    second terminal pops up for a different session window it
-    overwrites the first terminal's view — both clients end up looking
-    at the same window. ``switch-client -t <session>:@<wid>`` is
-    per-client and only affects the client running the command.
+    Grouped sessions (``tmux new-session -t <source> -s <name>``)
+    share the source's windows but maintain their own current-window
+    state. That's what gives each terminal an independent view —
+    without grouping, the older ``switch-client -t <source>:<wid>``
+    mutates the SOURCE session's current window and yanks every other
+    attached client onto the same window, which is exactly the bug
+    that was making a "+ new" session steal the user's previously-
+    open terminal.
+
+    Naming is deterministic per-window so repeat opens of the same
+    window reuse the same group rather than accumulating. ``@`` is
+    replaced because tmux session names disallow it.
+    """
+    suffix = window_id.lstrip("@") or "0"
+    return f"{config.tmux_session_name}-w{suffix}"
+
+
+def _build_tmux_command(window_id: str) -> str:
+    """tmux: open this window in its own client view, wrapped in
+    ``bash -c '…'`` so the macOS host's terminal app runs it through a
+    real shell.
+
+    The new client attaches to a *grouped* session
+    (``new-session -t <source> -s <source>-w<wid>``) instead of to the
+    source session directly. Grouped sessions share windows but track
+    their own current window — so ``select-window`` here only affects
+    THIS client, leaving every previously-attached terminal on
+    whatever window the user was watching. Earlier this used
+    ``switch-client -t <source>:<wid>`` under the assumption that
+    switch-client is per-client; it isn't — it mutates the source
+    session's current window and steals every other client.
 
     iTerm2's ``create tab with default profile command "X"`` and (in
     some macOS versions) Terminal.app's ``do script`` exec ``X``
     *without* a shell wrapper, so ``\\;``, ``||``, and ``;`` lose
     their shell semantics. Wrapping in ``bash -c`` makes the operator
     semantics explicit. The trailing ``exec ${SHELL:-bash} -l`` keeps
-    the window open after the user detaches and uses the user's
-    preferred login shell. ``tmux`` is invoked by absolute path
-    because iTerm's bash inherits a stripped PATH on macOS.
+    the window open after the user detaches. ``tmux`` is invoked by
+    absolute path because iTerm's bash inherits a stripped PATH on
+    macOS.
     """
     session_name = config.tmux_session_name
     session_q = shlex.quote(session_name)
     tmux_bin = shlex.quote(_resolve_tmux_bin())
-    target = shlex.quote(f"{session_name}:{window_id}")
+    group = group_session_name(window_id)
+    group_q = shlex.quote(group)
+    target_q = shlex.quote(f"{group}:{window_id}")
+    # Each tmux call is independent — failure of one (e.g. group already
+    # exists) does not abort the chain. The trailing exec always runs.
     inner = (
-        f"{tmux_bin} attach -t {session_q} \\; switch-client -t {target} "
-        f"|| true; exec ${{SHELL:-bash}} -l"
+        f"{tmux_bin} new-session -d -t {session_q} -s {group_q} 2>/dev/null; "
+        f"{tmux_bin} select-window -t {target_q} 2>/dev/null; "
+        f"{tmux_bin} attach-session -t {group_q}; "
+        f"exec ${{SHELL:-bash}} -l"
     )
     return f"bash -c {shlex.quote(inner)}"
 
@@ -166,15 +195,25 @@ def detect_linux_emulators() -> list[str]:
 
 
 def _build_linux_shell_cmd(window_id: str) -> str:
-    """The shell snippet the emulator runs: tmux attach + interactive shell.
+    """The shell snippet the emulator runs: tmux + interactive shell tail.
+
+    Same per-window grouped-session pattern as the macOS path: each
+    Linux terminal attaches to its own ``<source>-w<wid>`` group
+    rather than to ``<source>`` directly, so ``select-window`` does not
+    drag every other already-attached client off their window.
 
     The trailing ``exec bash -i`` keeps the window open after the user
-    detaches from tmux (otherwise the window would snap shut and you'd
-    lose terminal scrollback).
+    detaches from tmux (otherwise the window would snap shut and the
+    user would lose terminal scrollback).
     """
     session = shlex.quote(config.tmux_session_name)
+    group = group_session_name(window_id)
+    group_q = shlex.quote(group)
+    target_q = shlex.quote(f"{group}:{window_id}")
     return (
-        f"tmux attach -t {session} \\; select-window -t {window_id} || true; "
+        f"tmux new-session -d -t {session} -s {group_q} 2>/dev/null; "
+        f"tmux select-window -t {target_q} 2>/dev/null; "
+        f"tmux attach-session -t {group_q}; "
         "exec bash -i"
     )
 

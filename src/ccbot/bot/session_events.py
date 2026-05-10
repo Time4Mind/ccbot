@@ -45,10 +45,16 @@ logger = logging.getLogger(__name__)
 
 async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
     """Route one assistant turn (or streaming chunk) into the right live card."""
-    status = "complete" if msg.is_complete else "streaming"
     logger.info(
-        f"handle_new_message [{status}]: session={msg.session_id}, "
-        f"text_len={len(msg.text)}"
+        "claude_message",
+        extra={
+            "event": "claude_message",
+            "session_id": msg.session_id,
+            "status": "complete" if msg.is_complete else "streaming",
+            "role": msg.role,
+            "content_type": msg.content_type,
+            "text_len": len(msg.text),
+        },
     )
 
     targets = session_manager.all_user_sessions_with_claude_id(msg.session_id)

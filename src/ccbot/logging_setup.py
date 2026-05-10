@@ -1,0 +1,108 @@
+"""Logging configuration — human-readable by default, JSON when asked.
+
+Activated by ``main.py`` at process start. The JSON formatter is opt-in
+via ``CCBOT_LOG_FORMAT=json`` (or ``=structured``); any other value
+keeps the default human-readable single-line layout. JSON mode emits
+every ``extra={}`` key the call site passed, so downstream tooling
+(``jq``, log aggregators) can index events by feature without parsing
+free-form text.
+
+Public API:
+  configure_logging() -> None
+      Idempotent. Replaces the root logger's handlers with one based on
+      the resolved formatter; respects ``LOG_LEVEL`` env var (default
+      INFO).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import sys
+import time
+
+# Standard LogRecord attributes — anything else on the record is an
+# ``extra=`` payload contributed by the call site, and we surface those
+# in the JSON output verbatim.
+_STANDARD_LOGRECORD_ATTRS = frozenset(
+    {
+        "name",
+        "msg",
+        "args",
+        "levelname",
+        "levelno",
+        "pathname",
+        "filename",
+        "module",
+        "exc_info",
+        "exc_text",
+        "stack_info",
+        "lineno",
+        "funcName",
+        "created",
+        "msecs",
+        "relativeCreated",
+        "thread",
+        "threadName",
+        "processName",
+        "process",
+        "taskName",
+        "asctime",
+        "message",
+    }
+)
+
+
+class JsonFormatter(logging.Formatter):
+    """Single-line JSON per record, with ``extra={}`` keys hoisted to the top."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, object] = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(record.created))
+            + f".{int(record.msecs):03d}",
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        for key, value in record.__dict__.items():
+            if key in _STANDARD_LOGRECORD_ATTRS or key.startswith("_"):
+                continue
+            try:
+                json.dumps(value)
+                payload[key] = value
+            except TypeError:
+                payload[key] = repr(value)
+        if record.exc_info:
+            payload["exc"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False)
+
+
+def _resolve_format() -> str:
+    """``CCBOT_LOG_FORMAT`` env → ``"json"`` or ``"human"``."""
+    raw = os.environ.get("CCBOT_LOG_FORMAT", "").strip().lower()
+    if raw in ("json", "structured"):
+        return "json"
+    return "human"
+
+
+def configure_logging() -> None:
+    """Wire up the root logger. Safe to call multiple times — replaces handlers."""
+    level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+
+    handler = logging.StreamHandler(sys.stderr)
+    if _resolve_format() == "json":
+        handler.setFormatter(JsonFormatter())
+    else:
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        )
+
+    root = logging.getLogger()
+    root.setLevel(level)
+    # Replace any handlers that python-telegram-bot or our previous import
+    # paths may have already attached — keep one consistent stream.
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    root.addHandler(handler)

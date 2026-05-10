@@ -199,7 +199,10 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
     """Process message tasks for a user sequentially."""
     queue = _message_queues[user_id]
     lock = _queue_locks[user_id]
-    logger.info(f"Message queue worker started for user {user_id}")
+    logger.info(
+        "queue_worker_started",
+        extra={"event": "queue_worker_started", "user_id": user_id},
+    )
 
     while True:
         try:
@@ -262,14 +265,31 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
                     )
                     await asyncio.sleep(retry_secs)
             except Exception as e:
-                logger.error(f"Error processing message task for user {user_id}: {e}")
+                logger.error(
+                    "queue_task_error",
+                    extra={
+                        "event": "queue_task_error",
+                        "user_id": user_id,
+                        "error": str(e),
+                    },
+                )
             finally:
                 queue.task_done()
         except asyncio.CancelledError:
-            logger.info(f"Message queue worker cancelled for user {user_id}")
+            logger.info(
+                "queue_worker_cancelled",
+                extra={"event": "queue_worker_cancelled", "user_id": user_id},
+            )
             break
         except Exception as e:
-            logger.error(f"Unexpected error in queue worker for user {user_id}: {e}")
+            logger.error(
+                "queue_worker_error",
+                extra={
+                    "event": "queue_worker_error",
+                    "user_id": user_id,
+                    "error": str(e),
+                },
+            )
 
 
 async def _send_task_images(bot: Bot, chat_id: int, task: MessageTask) -> None:

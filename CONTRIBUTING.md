@@ -60,6 +60,14 @@ fix the offending content — never bypass with `--no-verify`.
 - **Module docstrings.** Every `.py` file starts with a module-level
   docstring: one-sentence summary on the first line, then a few lines
   on responsibilities and public API.
+- **Structured logging on hot paths.** Prefer
+  `logger.info("event_name", extra={"key": value, ...})` over
+  `logger.info(f"...")` in inbound/outbound message routers, queue
+  workers, and other repeated events. The first argument is a stable
+  `snake_case` event name; everything contextual goes in `extra=`.
+  This is what the optional `CCBOT_LOG_FORMAT=json` mode uses to
+  produce one JSON line per record. One-shot logs from rare paths can
+  stay as plain strings.
 - **600-LOC ceiling** under `src/ccbot/bot/`. Files in `src/ccbot/` may
   go up to 800 LOC temporarily; over that, decompose in the same PR.
 - **No comments explaining "what"** — the code says that. Only write

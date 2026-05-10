@@ -18,10 +18,10 @@ def main() -> None:
         hook_main()
         return
 
-    logging.basicConfig(
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        level=logging.WARNING,
-    )
+    from .logging_setup import configure_logging
+
+    configure_logging()
+    logging.getLogger().setLevel(logging.WARNING)
 
     # Import config before enabling DEBUG — avoid leaking debug logs on config errors
     try:

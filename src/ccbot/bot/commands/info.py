@@ -1,4 +1,4 @@
-"""Read-only info commands: /status, /history, /screenshot, /usage.
+"""Read-only info commands: /status, /history, /screenshot, /usage, /health.
 
 These also expose ``emit_*`` helpers used by the inline Menu callbacks
 when the user opens the same view from a button instead of a slash
@@ -249,3 +249,85 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if len(trimmed) > 3000:
             trimmed = trimmed[:3000] + "\n... (truncated)"
         await safe_reply(update.message, f"```\n{trimmed}\n```")
+
+
+# --- /health ---
+
+
+def _format_duration(seconds: float) -> str:
+    """Compact wall-clock formatter: 14h32m, 3m17s, etc."""
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m{s % 60:02d}s"
+    if s < 86400:
+        return f"{s // 3600}h{(s % 3600) // 60:02d}m"
+    return f"{s // 86400}d{(s % 86400) // 3600:02d}h"
+
+
+async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/health` — bot uptime, tmux state, queue depth, key counters."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    from ...handlers.message_queue import get_message_queue
+    from ...metrics import snapshot
+
+    snap = snapshot()
+    counters = snap.get("counters", {})
+    obs = snap.get("observations", {})
+
+    windows = await tmux_manager.list_windows()
+    live_window_count = len(windows)
+    sessions = list(session_manager.sessions.values())
+    active = sum(1 for s in sessions if s.state == "active")
+    idle = sum(1 for s in sessions if s.state == "idle")
+    archived = sum(1 for s in sessions if s.state in ("archived", "completed"))
+    lost = sum(1 for s in sessions if s.state == "lost")
+
+    queue = get_message_queue(user.id)
+    queue_size = queue.qsize() if queue is not None else 0
+
+    lines = [
+        "*Health*",
+        f"uptime: {_format_duration(snap.get('uptime_seconds', 0))}",
+        "",
+        "*tmux*",
+        f"windows alive: {live_window_count}",
+        "",
+        "*sessions*",
+        f"active: {active} · idle: {idle} · archived: {archived} · lost: {lost}",
+        "",
+        "*queue*",
+        f"depth (you): {queue_size}",
+    ]
+
+    interesting = (
+        "tg_messages_in",
+        "tg_send_failures",
+        "sessions_created",
+        "sessions_archived",
+        "sessions_completed",
+        "session_token_alerts_emitted",
+        "quota_alerts_emitted",
+    )
+    counter_lines = [f"{k}: {counters[k]}" for k in interesting if k in counters]
+    if counter_lines:
+        lines.append("")
+        lines.append("*counters*")
+        lines.extend(counter_lines)
+
+    if "tg_to_claude_latency_ms" in obs:
+        s = obs["tg_to_claude_latency_ms"]
+        lines.append("")
+        lines.append("*tg→claude latency (ms)*")
+        lines.append(
+            f"p50: {s['p50']:.0f} · p95: {s['p95']:.0f} · "
+            f"max: {s['max']:.0f} (n={s['count']})"
+        )
+
+    await safe_reply(update.message, "\n".join(lines))

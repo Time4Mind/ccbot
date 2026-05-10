@@ -499,8 +499,16 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await handle_interactive_ui(context.bot, user.id, wid)
         await asyncio.sleep(0.3)
 
+    import time as _time
+
+    from .. import metrics
+
+    _t0 = _time.time()
     success, message = await session_manager.send_to_window(wid, text)
+    metrics.observe("tg_to_claude_latency_ms", (_time.time() - _t0) * 1000.0)
+    metrics.inc("tg_messages_in")
     if not success:
+        metrics.inc("tg_send_failures")
         await safe_reply(update.message, f"❌ {message}")
         return
 

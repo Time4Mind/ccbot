@@ -64,10 +64,13 @@ def _label(user_id: int, key: str) -> str:
 
 async def _emit_push(bot: Bot, user_id: int, label: str, pct: int) -> None:
     """Send the user a one-line crossing notification for `label` at `pct`%."""
+    from .. import metrics
+
     emoji = "🔴" if pct >= 90 else "🟠" if pct >= 75 else "🟡"
     body = f"{emoji} {label}: {pct}%"
     try:
         await safe_send(bot, user_id, body)
+        metrics.inc("quota_alerts_emitted")
     except Exception as e:
         logger.debug("quota alert push failed: %s", e)
 

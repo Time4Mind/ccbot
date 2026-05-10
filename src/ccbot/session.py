@@ -465,6 +465,9 @@ class SessionManager:
         )
         self.sessions[sid] = sess
         self._save_state()
+        from . import metrics
+
+        metrics.inc("sessions_created")
         logger.info("Created session %s (%s) on window %s", sid, name, window_id or "-")
         return sess
 
@@ -491,6 +494,11 @@ class SessionManager:
             if sid == session_id:
                 del self.active_sessions[uid]
         self._save_state()
+        from . import metrics
+
+        metrics.inc(
+            "sessions_completed" if completed else "sessions_archived"
+        )
         logger.info("Archived session %s (completed=%s)", session_id, completed)
 
     def mark_session_lost(self, session_id: str) -> None:

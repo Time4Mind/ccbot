@@ -145,7 +145,10 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                     sess.token_usage_total = su.tokens_total
                     threshold = pop_session_token_alert(sess, user_id)
                     if threshold is not None:
+                        from .. import metrics
+
                         session_manager._save_state()
+                        metrics.inc("session_token_alerts_emitted")
                         await push_event(
                             bot,
                             user_id,

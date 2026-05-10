@@ -23,12 +23,14 @@ from ..config import config
 from ..handlers.message_queue import shutdown_workers
 from ..handlers.quota_alerts import quota_alerts_loop
 from ..handlers.status_polling import status_poll_loop
+from ..metrics import metrics_flush_loop
 from ..session import session_manager
 from ..session_monitor import NewMessage, SessionMonitor
 from ..transcribe import close_client as close_transcribe_client
 from ._common import CC_COMMANDS
 from .callbacks import callback_handler
 from .commands.info import (
+    health_command,
     history_command,
     screenshot_command,
     status_command,
@@ -60,11 +62,12 @@ logger = logging.getLogger(__name__)
 session_monitor: SessionMonitor | None = None
 _status_poll_task: asyncio.Task | None = None
 _quota_alerts_task: asyncio.Task | None = None
+_metrics_flush_task: asyncio.Task | None = None
 
 
 async def post_init(application: Application) -> None:
     """First task after Application is built. Publish menu, recover state, start monitors."""
-    global session_monitor, _status_poll_task, _quota_alerts_task
+    global session_monitor, _status_poll_task, _quota_alerts_task, _metrics_flush_task
 
     await application.bot.delete_my_commands()
 
@@ -112,10 +115,13 @@ async def post_init(application: Application) -> None:
     _quota_alerts_task = asyncio.create_task(quota_alerts_loop(application.bot))
     logger.info("Quota alerts task started")
 
+    _metrics_flush_task = asyncio.create_task(metrics_flush_loop())
+    logger.info("Metrics flush task started")
+
 
 async def post_shutdown(application: Application) -> None:
     """Stop background tasks, flush queues, close HTTP clients."""
-    global _status_poll_task, _quota_alerts_task
+    global _status_poll_task, _quota_alerts_task, _metrics_flush_task
 
     if _status_poll_task:
         _status_poll_task.cancel()
@@ -134,6 +140,15 @@ async def post_shutdown(application: Application) -> None:
             pass
         _quota_alerts_task = None
         logger.info("Quota alerts stopped")
+
+    if _metrics_flush_task:
+        _metrics_flush_task.cancel()
+        try:
+            await _metrics_flush_task
+        except asyncio.CancelledError:
+            pass
+        _metrics_flush_task = None
+        logger.info("Metrics flush stopped")
 
     await shutdown_workers()
 
@@ -176,6 +191,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("stop", stop_command))
     application.add_handler(CommandHandler("archive", archive_command))
     application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("health", health_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Forward any other /command to Claude Code.
     application.add_handler(MessageHandler(filters.COMMAND, forward_command_handler))

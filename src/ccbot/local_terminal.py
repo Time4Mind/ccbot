@@ -107,8 +107,7 @@ async def _is_iterm_running() -> bool:
         proc = await asyncio.create_subprocess_exec(
             "osascript",
             "-e",
-            'tell application "System Events" to (name of processes) '
-            'contains "iTerm2"',
+            'tell application "System Events" to (name of processes) contains "iTerm2"',
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -223,9 +222,7 @@ async def _spawn(args: list[str]) -> None:
         logger.warning("local_terminal: spawn raised: %s", e)
 
 
-async def open_terminal_for_window(
-    window_id: str, user_id: int | None = None
-) -> None:
+async def open_terminal_for_window(window_id: str, user_id: int | None = None) -> None:
     """Pop a native terminal attached to the given tmux window.
 
     Silent on unsupported platforms and on every spawn failure — this is

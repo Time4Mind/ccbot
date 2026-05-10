@@ -35,9 +35,7 @@ FLUSH_INTERVAL_SECONDS = 60.0
 
 
 _counters: dict[str, int] = defaultdict(int)
-_observations: dict[str, deque[float]] = defaultdict(
-    lambda: deque(maxlen=OBS_WINDOW)
-)
+_observations: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=OBS_WINDOW))
 _started_at = time.time()
 
 

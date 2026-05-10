@@ -570,8 +570,6 @@ async def _do_clear_status_message(
             logger.debug(f"Failed to delete status message {msg_id}: {e}")
 
 
-
-
 async def enqueue_content_message(
     bot: Bot,
     user_id: int,

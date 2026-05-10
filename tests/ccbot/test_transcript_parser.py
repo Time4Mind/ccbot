@@ -114,7 +114,8 @@ class TestFormatToolUseSummary:
 
     def test_non_dict_input(self):
         assert (
-            transcript_format.format_tool_use_summary("Read", "not a dict") == "**Read**"
+            transcript_format.format_tool_use_summary("Read", "not a dict")
+            == "**Read**"
         )
 
     def test_truncation_at_200_chars(self):

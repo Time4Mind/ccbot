@@ -387,12 +387,8 @@ def render_help(
     else:
         rows.append(
             [
-                InlineKeyboardButton(
-                    t(user_id, "btn.back"), callback_data=CB_HLP_HOME
-                ),
-                InlineKeyboardButton(
-                    t(user_id, "btn.menu"), callback_data=CB_MM_BACK
-                ),
+                InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_HLP_HOME),
+                InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_MM_BACK),
             ]
         )
     return text, InlineKeyboardMarkup(rows)

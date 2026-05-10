@@ -95,9 +95,7 @@ class TestSessionTokenAlert:
     def _user_settings_returns(self, monkeypatch, settings: dict) -> None:
         from ccbot.session import session_manager
 
-        monkeypatch.setattr(
-            session_manager, "get_user_settings", lambda uid: settings
-        )
+        monkeypatch.setattr(session_manager, "get_user_settings", lambda uid: settings)
 
     def test_below_lowest_threshold_silent(self, monkeypatch) -> None:
         self._user_settings_returns(
@@ -136,6 +134,6 @@ class TestSessionTokenAlert:
             name="x",
             token_usage_total=config.session_token_alert_defaults[0],
         )
-        assert pop_session_token_alert(sess, 1) == (
-            config.session_token_alert_defaults[0]
+        assert (
+            pop_session_token_alert(sess, 1) == (config.session_token_alert_defaults[0])
         )

@@ -181,9 +181,7 @@ def format_tool_result_text(
         if not written:
             written_lines = line_count
         else:
-            written_lines = written.count("\n") + (
-                0 if written.endswith("\n") else 1
-            )
+            written_lines = written.count("\n") + (0 if written.endswith("\n") else 1)
         return f"  ⎿  Wrote {written_lines} lines"
 
     if tool_name == "Bash":

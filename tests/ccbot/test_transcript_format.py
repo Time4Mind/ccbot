@@ -6,9 +6,7 @@ from ccbot import transcript_format
 class TestFormatToolUseSummary:
     def test_read_uses_file_path(self) -> None:
         assert (
-            transcript_format.format_tool_use_summary(
-                "Read", {"file_path": "/x.py"}
-            )
+            transcript_format.format_tool_use_summary("Read", {"file_path": "/x.py"})
             == "**Read**(/x.py)"
         )
 
@@ -32,9 +30,7 @@ class TestFormatToolUseSummary:
 
     def test_todowrite_counts_items(self) -> None:
         assert (
-            transcript_format.format_tool_use_summary(
-                "TodoWrite", {"todos": [1, 2, 3]}
-            )
+            transcript_format.format_tool_use_summary("TodoWrite", {"todos": [1, 2, 3]})
             == "**TodoWrite**(3 item(s))"
         )
 
@@ -62,7 +58,9 @@ class TestExtractToolResultText:
 class TestExtractToolResultImages:
     def test_no_images_returns_none(self) -> None:
         assert (
-            transcript_format.extract_tool_result_images([{"type": "text", "text": "x"}])
+            transcript_format.extract_tool_result_images(
+                [{"type": "text", "text": "x"}]
+            )
             is None
         )
 

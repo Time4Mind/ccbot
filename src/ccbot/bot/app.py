@@ -122,7 +122,9 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     logger.info("Metrics flush task started")
 
 
-async def post_shutdown(application: "Application[Any, Any, Any, Any, Any, Any]") -> None:
+async def post_shutdown(
+    application: "Application[Any, Any, Any, Any, Any, Any]",
+) -> None:
     """Stop background tasks, flush queues, close HTTP clients."""
     global _status_poll_task, _quota_alerts_task, _metrics_flush_task
 

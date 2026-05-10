@@ -491,9 +491,7 @@ class SessionManager:
         self.save_state()
         from . import metrics
 
-        metrics.inc(
-            "sessions_completed" if completed else "sessions_archived"
-        )
+        metrics.inc("sessions_completed" if completed else "sessions_archived")
         logger.info("Archived session %s (completed=%s)", session_id, completed)
 
     def mark_session_lost(self, session_id: str) -> None:

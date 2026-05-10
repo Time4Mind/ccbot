@@ -18,9 +18,7 @@ class TestEncodeCwd:
         )
 
     def test_alphanumeric_preserved(self) -> None:
-        assert (
-            session_claude_io.encode_cwd("abc123XYZ-foo") == "abc123XYZ-foo"
-        )
+        assert session_claude_io.encode_cwd("abc123XYZ-foo") == "abc123XYZ-foo"
 
     def test_dots_become_dashes(self) -> None:
         assert session_claude_io.encode_cwd("/foo/bar.baz") == "-foo-bar-baz"

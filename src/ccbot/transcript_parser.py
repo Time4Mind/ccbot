@@ -247,7 +247,9 @@ class TranscriptParser:
         if pending_tools is None:
             pending_tools = {}
         else:
-            pending_tools = dict[str, Any](pending_tools)  # don't mutate caller's dict[str, Any]
+            pending_tools = dict[str, Any](
+                pending_tools
+            )  # don't mutate caller's dict[str, Any]
 
         for data in entries:
             msg_type = cls.get_message_type(data)
@@ -376,7 +378,9 @@ class TranscriptParser:
                     elif btype == "thinking":
                         thinking_text = block.get("thinking", "")
                         if thinking_text:
-                            quoted = transcript_format.format_expandable_quote(thinking_text)
+                            quoted = transcript_format.format_expandable_quote(
+                                thinking_text
+                            )
                             result.append(
                                 ParsedEntry(
                                     role="assistant",
@@ -415,8 +419,12 @@ class TranscriptParser:
                     if btype == "tool_result":
                         tool_use_id = block.get("tool_use_id", "")
                         result_content = block.get("content", "")
-                        result_text = transcript_format.extract_tool_result_text(result_content)
-                        result_images = transcript_format.extract_tool_result_images(result_content)
+                        result_text = transcript_format.extract_tool_result_text(
+                            result_content
+                        )
+                        result_images = transcript_format.extract_tool_result_images(
+                            result_content
+                        )
                         is_error = block.get("is_error", False)
                         is_interrupted = result_text == cls._INTERRUPTED_TEXT
                         tool_info = pending_tools.pop(tool_use_id, None)
@@ -463,8 +471,11 @@ class TranscriptParser:
                                 entry_text += f"\n  ⎿  Error: {error_summary}"
                                 # If multi-line error, add expandable quote
                                 if "\n" in result_text:
-                                    entry_text += "\n" + transcript_format.format_expandable_quote(
-                                        result_text
+                                    entry_text += (
+                                        "\n"
+                                        + transcript_format.format_expandable_quote(
+                                            result_text
+                                        )
                                     )
                             else:
                                 entry_text += "\n  ⎿  Error"
@@ -485,7 +496,9 @@ class TranscriptParser:
                                 old_s = tool_input_data.get("old_string", "")
                                 new_s = tool_input_data.get("new_string", "")
                                 if old_s and new_s:
-                                    diff_text = transcript_format.format_edit_diff(old_s, new_s)
+                                    diff_text = transcript_format.format_edit_diff(
+                                        old_s, new_s
+                                    )
                                     if diff_text:
                                         added = sum(
                                             1
@@ -504,15 +517,20 @@ class TranscriptParser:
                                             "\n"
                                             + stats
                                             + "\n"
-                                            + transcript_format.format_expandable_quote(diff_text)
+                                            + transcript_format.format_expandable_quote(
+                                                diff_text
+                                            )
                                         )
                             # For other tools, append formatted result text
                             elif (
                                 result_text
                                 and cls.EXPANDABLE_QUOTE_START not in tool_summary
                             ):
-                                entry_text += "\n" + transcript_format.format_tool_result_text(
-                                    result_text, tool_name, tool_input_data
+                                entry_text += (
+                                    "\n"
+                                    + transcript_format.format_tool_result_text(
+                                        result_text, tool_name, tool_input_data
+                                    )
                                 )
                             result.append(
                                 ParsedEntry(

@@ -1,0 +1,44 @@
+# Local guardrails against re-introducing personal infra leaks.
+# After cloning, run `pre-commit install` once to wire these in.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: forbid-personal-markers
+        name: forbid personal infra markers
+        # Greps tracked source/docs for known-personal IPs, hostnames, paths,
+        # IDs, and Telegram bot tokens. Exits non-zero on any hit.
+        # `--exclude` skips the config files themselves — they intentionally
+        # spell the markers out as part of the rule.
+        entry: >-
+          bash -c
+          'grep -rEn "(111\.88\.254\.135|111\.88\.241\.204|172\.17\.0\.1|ogame-sina|pet_projects/kvn|ssh_kvn|/Users/a-s-nosko|@yandex-team\.ru|Stefania_tg_bot|449692402|8613999021)"
+          --include="*.md" --include="*.py" --include="*.toml"
+          --include="*.yml" --include="*.yaml" --include="*.sh"
+          --include="*.json" --include="*.example"
+          --exclude=".pre-commit-config.yaml" --exclude="gitleaks.toml"
+          --exclude-dir=".venv" --exclude-dir=".git"
+          --exclude-dir="node_modules" --exclude-dir=".pytest_cache"
+          --exclude-dir="doc/operator-private" .
+          && exit 1 || exit 0'
+        language: system
+        pass_filenames: false
+
+      - id: forbid-corporate-author
+        name: forbid corporate author email on commit
+        stages: [commit-msg, pre-push]
+        # Blocks any commit/push made under a *@yandex-team.ru git identity.
+        entry: >-
+          bash -c
+          'email=$(git config user.email);
+          if [[ "$email" == *yandex-team.ru* ]]; then
+            echo "ERROR: corporate email $email is forbidden in this repo.";
+            echo "Run: git config user.email time.for.mindwar@gmail.com";
+            exit 1;
+          fi'
+        language: system
+        pass_filenames: false

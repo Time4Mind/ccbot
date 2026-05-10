@@ -311,6 +311,103 @@ class UsageInfo:
     parsed_lines: list[str]  # Cleaned content lines from the modal
 
 
+@dataclass
+class UsageBreakdown:
+    """Structured extract of the three usage rows + extra-usage flag.
+
+    Each `pct` is the percentage Claude reports as "used"; `reset_hhmm` is
+    the wall-clock reset time in 24h format ("HH:MM"). Either may be None
+    if the row was missing or malformed in the captured pane.
+    """
+
+    session_pct: int | None = None
+    session_reset_hhmm: str | None = None
+    week_pct: int | None = None
+    week_reset_hhmm: str | None = None
+    week_sonnet_pct: int | None = None
+    week_sonnet_reset_hhmm: str | None = None
+    extra_enabled: bool = False
+
+
+def _parse_clock_to_24h(text: str) -> str | None:
+    """Parse a strings like '9:59pm', '4pm', '12:00am' to 24h 'HH:MM'."""
+    m = re.match(r"\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", text, re.IGNORECASE)
+    if not m:
+        return None
+    hour = int(m.group(1))
+    minute = int(m.group(2)) if m.group(2) else 0
+    ampm = m.group(3).lower()
+    if ampm == "pm" and hour != 12:
+        hour += 12
+    elif ampm == "am" and hour == 12:
+        hour = 0
+    if not (0 <= hour < 24 and 0 <= minute < 60):
+        return None
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _parse_pct(text: str) -> int | None:
+    m = re.search(r"(\d+)\s*%\s*used", text)
+    return int(m.group(1)) if m else None
+
+
+def extract_usage_breakdown(info: UsageInfo) -> UsageBreakdown:
+    """Walk parsed_lines, looking for the three section headers and
+    pulling the percentage + reset time + extra flag out of each.
+    """
+    out = UsageBreakdown()
+    state: str | None = None
+    for raw in info.parsed_lines:
+        s = raw.strip()
+        if "Current session" in s:
+            state = "session"
+            continue
+        if "Current week" in s and "all models" in s.lower():
+            state = "week_all"
+            continue
+        if "Current week" in s and "Sonnet" in s:
+            state = "week_sonnet"
+            continue
+        if s.startswith("Extra usage"):
+            state = "extra"
+            # The label itself sometimes lives on its own line; the value
+            # follows. Don't reset state — pick up "not enabled" / "enabled"
+            # below.
+            continue
+
+        if state == "session":
+            pct = _parse_pct(s)
+            if pct is not None:
+                out.session_pct = pct
+            elif s.lower().startswith("resets"):
+                out.session_reset_hhmm = _parse_clock_to_24h(
+                    re.sub(r"^resets\s*", "", s, flags=re.IGNORECASE)
+                )
+        elif state == "week_all":
+            pct = _parse_pct(s)
+            if pct is not None:
+                out.week_pct = pct
+            elif s.lower().startswith("resets"):
+                out.week_reset_hhmm = _parse_clock_to_24h(
+                    re.sub(r"^resets\s*", "", s, flags=re.IGNORECASE)
+                )
+        elif state == "week_sonnet":
+            pct = _parse_pct(s)
+            if pct is not None:
+                out.week_sonnet_pct = pct
+            elif s.lower().startswith("resets"):
+                out.week_sonnet_reset_hhmm = _parse_clock_to_24h(
+                    re.sub(r"^resets\s*", "", s, flags=re.IGNORECASE)
+                )
+        elif state == "extra":
+            low = s.lower()
+            if "not enabled" in low:
+                out.extra_enabled = False
+            elif "enabled" in low:
+                out.extra_enabled = True
+    return out
+
+
 def parse_usage_output(pane_text: str) -> UsageInfo | None:
     """Extract usage information from Claude Code's /usage settings tab.
 
@@ -332,8 +429,16 @@ def parse_usage_output(pane_text: str) -> UsageInfo | None:
     for i, line in enumerate(lines):
         stripped = line.strip()
         if start_idx is None:
-            # The usage tab header line
-            if "Settings:" in stripped and "Usage" in stripped:
+            # Modern modal: tabs line "Status  Config  Usage  Stats".
+            # Legacy modal: "Settings:" prefix + "Usage" word.
+            is_modern = (
+                "Status" in stripped
+                and "Config" in stripped
+                and "Usage" in stripped
+                and "Stats" in stripped
+            )
+            is_legacy = "Settings:" in stripped and "Usage" in stripped
+            if is_modern or is_legacy:
                 start_idx = i + 1  # skip the header itself
         else:
             if stripped.startswith("Esc to"):

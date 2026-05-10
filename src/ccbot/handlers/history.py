@@ -77,7 +77,7 @@ async def send_history(
     end_byte: int = 0,
     user_id: int | None = None,
     bot: Bot | None = None,
-    message_thread_id: int | None = None,
+    extra_rows: list[list[InlineKeyboardButton]] | None = None,
 ) -> None:
     """Send or edit message history for a window's session.
 
@@ -91,7 +91,6 @@ async def send_history(
         end_byte: End byte offset (0 = to end of file).
         user_id: User ID for updating read offset (required for unread mode).
         bot: Bot instance for direct send mode (when edit=False and bot is provided).
-        message_thread_id: Telegram topic thread_id for targeted send.
     """
     display_name = session_manager.get_display_name(window_id)
     # Determine if this is unread mode (specific byte range)
@@ -139,13 +138,7 @@ async def send_history(
             if edit:
                 await safe_edit(target, text, reply_markup=keyboard)
             elif bot is not None and user_id is not None:
-                await safe_send(
-                    bot,
-                    session_manager.resolve_chat_id(user_id, message_thread_id),
-                    text,
-                    message_thread_id=message_thread_id,
-                    reply_markup=keyboard,
-                )
+                await safe_send(bot, user_id, text, reply_markup=keyboard)
             else:
                 await safe_reply(target, text, reply_markup=keyboard)
             # Update offset even if no assistant messages
@@ -213,17 +206,17 @@ async def send_history(
             page_index,
         )
 
+    # Append caller-supplied extra keyboard rows (used by the inline Menu's
+    # "History" sub-screen to add a Menu-grid below pagination).
+    if extra_rows:
+        existing_rows = list(keyboard.inline_keyboard) if keyboard is not None else []
+        keyboard = InlineKeyboardMarkup(existing_rows + [list(r) for r in extra_rows])
+
     if edit:
         await safe_edit(target, text, reply_markup=keyboard)
     elif bot is not None and user_id is not None:
         # Direct send mode (for unread catch-up after window switch)
-        await safe_send(
-            bot,
-            session_manager.resolve_chat_id(user_id, message_thread_id),
-            text,
-            message_thread_id=message_thread_id,
-            reply_markup=keyboard,
-        )
+        await safe_send(bot, user_id, text, reply_markup=keyboard)
     else:
         await safe_reply(target, text, reply_markup=keyboard)
 

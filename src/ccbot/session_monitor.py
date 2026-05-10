@@ -49,6 +49,9 @@ class NewMessage:
     role: str = "assistant"  # "user" or "assistant"
     tool_name: str | None = None  # For tool_use messages, the tool name
     image_data: list[tuple[str, bytes]] | None = None  # From tool_result images
+    stop_reason: str | None = (
+        None  # Assistant stop_reason: "end_turn" | "tool_use" | etc.
+    )
 
 
 class SessionMonitor:
@@ -75,7 +78,7 @@ class SessionMonitor:
         self.state.load()
 
         self._running = False
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[None] | None = None
         self._message_callback: Callable[[NewMessage], Awaitable[None]] | None = None
         # Per-session pending tool_use state carried across poll cycles
         self._pending_tools: dict[str, dict[str, Any]] = {}  # session_id -> pending
@@ -195,7 +198,7 @@ class SessionMonitor:
 
     async def _read_new_lines(
         self, session: TrackedSession, file_path: Path
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Read new lines from a session file using byte offset for efficiency.
 
         Detects file truncation (e.g. after /clear) and resets offset.
@@ -361,6 +364,7 @@ class SessionMonitor:
                             role=entry.role,
                             tool_name=entry.tool_name,
                             image_data=entry.image_data,
+                            stop_reason=entry.stop_reason,
                         )
                     )
 

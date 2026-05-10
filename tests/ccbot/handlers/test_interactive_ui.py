@@ -32,12 +32,15 @@ def mock_bot():
 @pytest.fixture
 def _clear_interactive_state():
     """Ensure interactive state is clean before and after each test."""
-    from ccbot.handlers.interactive_ui import _interactive_mode, _interactive_msgs
+    from ccbot.handlers.interactive_ui import (
+        _active_interactive_window,
+        _interactive_msgs,
+    )
 
-    _interactive_mode.clear()
+    _active_interactive_window.clear()
     _interactive_msgs.clear()
     yield
-    _interactive_mode.clear()
+    _active_interactive_window.clear()
     _interactive_msgs.clear()
 
 
@@ -52,23 +55,20 @@ class TestHandleInteractiveUI:
         mock_window = MagicMock()
         mock_window.window_id = window_id
 
-        with (
-            patch("ccbot.handlers.interactive_ui.tmux_manager") as mock_tmux,
-            patch("ccbot.handlers.interactive_ui.session_manager") as mock_sm,
-        ):
+        with patch("ccbot.handlers.interactive_ui.tmux_manager") as mock_tmux:
             mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
             mock_tmux.capture_pane = AsyncMock(return_value=sample_pane_settings)
-            mock_sm.resolve_chat_id.return_value = 100
 
             result = await handle_interactive_ui(
-                mock_bot, user_id=1, window_id=window_id, thread_id=42
+                mock_bot, user_id=100, window_id=window_id
             )
 
         assert result is True
         mock_bot.send_message.assert_called_once()
         call_kwargs = mock_bot.send_message.call_args
+        # In DM mode chat_id == user_id; no message_thread_id is passed.
         assert call_kwargs.kwargs["chat_id"] == 100
-        assert call_kwargs.kwargs["message_thread_id"] == 42
+        assert "message_thread_id" not in call_kwargs.kwargs
         assert call_kwargs.kwargs["reply_markup"] is not None
 
     @pytest.mark.asyncio
@@ -78,15 +78,12 @@ class TestHandleInteractiveUI:
         mock_window = MagicMock()
         mock_window.window_id = window_id
 
-        with (
-            patch("ccbot.handlers.interactive_ui.tmux_manager") as mock_tmux,
-            patch("ccbot.handlers.interactive_ui.session_manager"),
-        ):
+        with patch("ccbot.handlers.interactive_ui.tmux_manager") as mock_tmux:
             mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
             mock_tmux.capture_pane = AsyncMock(return_value="$ echo hello\nhello\n$\n")
 
             result = await handle_interactive_ui(
-                mock_bot, user_id=1, window_id=window_id, thread_id=42
+                mock_bot, user_id=1, window_id=window_id
             )
 
         assert result is False

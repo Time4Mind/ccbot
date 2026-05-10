@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ def _find_ccbot_path() -> str:
     return "ccbot"
 
 
-def _is_hook_installed(settings: dict) -> bool:
+def _is_hook_installed(settings: dict[str, Any]) -> bool:
     """Check if ccbot hook is already installed in the settings.
 
     Detects both 'ccbot hook' and full paths like '/path/to/ccbot hook'.
@@ -87,7 +88,7 @@ def _install_hook() -> int:
     settings_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Read existing settings
-    settings: dict = {}
+    settings: dict[str, Any] = {}
     if settings_file.exists():
         try:
             settings = json.loads(settings_file.read_text())

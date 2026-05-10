@@ -216,7 +216,11 @@ class TmuxManager:
                 if not pane:
                     return None
                 lines = pane.capture_pane()
-                return "\n".join(lines) if isinstance(lines, list) else str(lines)
+                return (
+                    "\n".join(lines)
+                    if isinstance(lines, list)  # pyright: ignore[reportUnnecessaryIsInstance]
+                    else str(lines)
+                )
             except Exception as e:
                 logger.error(f"Failed to capture pane {window_id}: {e}")
                 return None
@@ -419,8 +423,12 @@ class TmuxManager:
                     pane = window.active_pane
                     if pane:
                         cmd = config.claude_command
+                        if config.claude_flags:
+                            cmd = f"{cmd} {config.claude_flags}"
                         if resume_session_id:
                             cmd = f"{cmd} --resume {resume_session_id}"
+                        if config.is_sandbox:
+                            cmd = f"IS_SANDBOX=1 {cmd}"
                         pane.send_keys(cmd, enter=True)
 
                 logger.info(

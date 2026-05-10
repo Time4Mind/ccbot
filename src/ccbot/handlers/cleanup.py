@@ -1,49 +1,39 @@
-"""Unified cleanup API for topic state.
+"""Unified cleanup API for session state.
 
-Provides centralized cleanup functions that coordinate state cleanup across
-all modules, preventing memory leaks when topics are deleted.
+Provides centralized cleanup that coordinates state across all modules,
+preventing memory leaks when a session is archived, killed, or its tmux
+window vanishes externally.
 
 Functions:
-  - clear_topic_state: Clean up all memory state for a specific topic
+  - clear_session_state: Clean up all in-memory state for a (user, window) pair.
 """
-
-from typing import Any
 
 from telegram import Bot
 
-from .interactive_ui import clear_interactive_msg
-from .message_queue import clear_status_msg_info, clear_tool_msg_ids_for_topic
+from .interactive_ui import clear_interactive_msg, clear_interactive_for_window
+from .message_queue import clear_status_msg_info, clear_tool_msg_ids_for_window
 
 
-async def clear_topic_state(
+async def clear_session_state(
     user_id: int,
-    thread_id: int,
+    window_id: str,
     bot: Bot | None = None,
-    user_data: dict[str, Any] | None = None,
 ) -> None:
-    """Clear all memory state associated with a topic.
+    """Clear all in-memory state associated with a (user, window) pair.
 
-    This should be called when:
-      - A topic is closed or deleted
-      - A thread binding becomes stale (window deleted externally)
+    Called when:
+      - A session is archived (auto-idle TTL or `/done`/`/kill`).
+      - A tmux window vanishes externally.
 
     Cleans up:
-      - _status_msg_info (status message tracking)
-      - _tool_msg_ids (tool_use → message_id mapping)
-      - _interactive_msgs and _interactive_mode (interactive UI state)
-      - user_data pending state (_pending_thread_id, _pending_thread_text)
+      - status message tracking
+      - tool_use → message_id tracking
+      - interactive UI message and active-marker (best effort delete from chat)
     """
-    # Clear status message tracking
-    clear_status_msg_info(user_id, thread_id)
+    clear_status_msg_info(user_id, window_id)
+    clear_tool_msg_ids_for_window(user_id, window_id)
 
-    # Clear tool message ID tracking
-    clear_tool_msg_ids_for_topic(user_id, thread_id)
-
-    # Clear interactive UI state (also deletes message from chat)
-    await clear_interactive_msg(user_id, bot, thread_id)
-
-    # Clear pending thread state from user_data
-    if user_data is not None:
-        if user_data.get("_pending_thread_id") == thread_id:
-            user_data.pop("_pending_thread_id", None)
-            user_data.pop("_pending_thread_text", None)
+    if bot is not None:
+        await clear_interactive_msg(user_id, bot, window_id)
+    else:
+        clear_interactive_for_window(user_id, window_id)

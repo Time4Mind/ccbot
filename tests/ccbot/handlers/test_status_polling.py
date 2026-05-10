@@ -24,12 +24,15 @@ def mock_bot():
 @pytest.fixture
 def _clear_interactive_state():
     """Ensure interactive state is clean before and after each test."""
-    from ccbot.handlers.interactive_ui import _interactive_mode, _interactive_msgs
+    from ccbot.handlers.interactive_ui import (
+        _active_interactive_window,
+        _interactive_msgs,
+    )
 
-    _interactive_mode.clear()
+    _active_interactive_window.clear()
     _interactive_msgs.clear()
     yield
-    _interactive_mode.clear()
+    _active_interactive_window.clear()
     _interactive_msgs.clear()
 
 
@@ -61,11 +64,9 @@ class TestStatusPollerSettingsDetection:
             mock_tmux.capture_pane = AsyncMock(return_value=sample_pane_settings)
             mock_handle_ui.return_value = True
 
-            await update_status_message(
-                mock_bot, user_id=1, window_id=window_id, thread_id=42
-            )
+            await update_status_message(mock_bot, user_id=1, window_id=window_id)
 
-            mock_handle_ui.assert_called_once_with(mock_bot, 1, window_id, 42)
+            mock_handle_ui.assert_called_once_with(mock_bot, 1, window_id)
 
     @pytest.mark.asyncio
     async def test_normal_pane_no_interactive_ui(self, mock_bot: AsyncMock):
@@ -89,16 +90,14 @@ class TestStatusPollerSettingsDetection:
                 new_callable=AsyncMock,
             ) as mock_handle_ui,
             patch(
-                "ccbot.handlers.status_polling.enqueue_status_update",
+                "ccbot.handlers.status_polling.touch_card_status",
                 new_callable=AsyncMock,
             ),
         ):
             mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
             mock_tmux.capture_pane = AsyncMock(return_value=normal_pane)
 
-            await update_status_message(
-                mock_bot, user_id=1, window_id=window_id, thread_id=42
-            )
+            await update_status_message(mock_bot, user_id=1, window_id=window_id)
 
             mock_handle_ui.assert_not_called()
 
@@ -118,23 +117,20 @@ class TestStatusPollerSettingsDetection:
         with (
             patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux_poll,
             patch("ccbot.handlers.interactive_ui.tmux_manager") as mock_tmux_ui,
-            patch("ccbot.handlers.interactive_ui.session_manager") as mock_sm,
         ):
             mock_tmux_poll.find_window_by_id = AsyncMock(return_value=mock_window)
             mock_tmux_poll.capture_pane = AsyncMock(return_value=sample_pane_settings)
             mock_tmux_ui.find_window_by_id = AsyncMock(return_value=mock_window)
             mock_tmux_ui.capture_pane = AsyncMock(return_value=sample_pane_settings)
-            mock_sm.resolve_chat_id.return_value = 100
 
-            await update_status_message(
-                mock_bot, user_id=1, window_id=window_id, thread_id=42
-            )
+            await update_status_message(mock_bot, user_id=100, window_id=window_id)
 
-            # Verify bot.send_message was called with keyboard
+            # Verify bot.send_message was called with keyboard.
+            # In DM mode chat_id == user_id; no message_thread_id is passed.
             mock_bot.send_message.assert_called_once()
             call_kwargs = mock_bot.send_message.call_args.kwargs
             assert call_kwargs["chat_id"] == 100
-            assert call_kwargs["message_thread_id"] == 42
+            assert "message_thread_id" not in call_kwargs
             keyboard = call_kwargs["reply_markup"]
             assert keyboard is not None
             # Verify the message text contains model picker content

@@ -173,13 +173,16 @@ async def safe_send(
     text: str,
     message_thread_id: int | None = None,
     **kwargs: Any,
-) -> None:
-    """Send message with formatting, falling back to plain text on failure."""
+) -> Message | None:
+    """Send message with formatting, falling back to plain text on failure.
+
+    Returns the sent Message on success, None on failure.
+    """
     kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)
     if message_thread_id is not None:
         kwargs.setdefault("message_thread_id", message_thread_id)
     try:
-        await bot.send_message(
+        return await bot.send_message(
             chat_id=chat_id,
             text=_ensure_formatted(text),
             parse_mode=PARSE_MODE,
@@ -189,10 +192,11 @@ async def safe_send(
         raise
     except Exception:
         try:
-            await bot.send_message(
+            return await bot.send_message(
                 chat_id=chat_id, text=strip_sentinels(text), **kwargs
             )
         except RetryAfter:
             raise
         except Exception as e:
             logger.error(f"Failed to send message to {chat_id}: {e}")
+            return None

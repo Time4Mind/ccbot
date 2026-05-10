@@ -18,10 +18,11 @@ def _reset_client():
 
 @pytest.fixture
 def mock_config():
-    """Patch config with test values."""
+    """Patch config with test values; force VOICE_BACKEND=openai."""
     with patch.object(transcribe, "config") as cfg:
         cfg.openai_api_key = "sk-test-key"
         cfg.openai_base_url = "https://api.openai.com/v1"
+        cfg.voice_backend = "openai"
         yield cfg
 
 

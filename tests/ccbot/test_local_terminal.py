@@ -30,6 +30,14 @@ class TestBuildTmuxCommand:
         assert "select-window -t @5" in cmd
         assert "\\;" in cmd  # tmux command separator
 
+    def test_keeps_window_open_after_detach(self) -> None:
+        """Trailing `|| true; exec bash -l` prevents the terminal from
+        snapping shut when the user detaches from tmux or attach fails.
+        """
+        cmd = _build_tmux_command("@1")
+        assert "|| true" in cmd
+        assert "exec bash -l" in cmd
+
     def test_session_name_quoted(self) -> None:
         cmd = _build_tmux_command("@1")
         # config.tmux_session_name comes from env / default; just sanity-check

@@ -1,295 +1,241 @@
-# CCBot
+# ccbot
 
-[English README](README.md)
-[中文文档](README_CN.md)
+[![test](https://github.com/Time4Mind/ccbot/actions/workflows/test.yml/badge.svg)](https://github.com/Time4Mind/ccbot/actions/workflows/test.yml)
+[![secrets-scan](https://github.com/Time4Mind/ccbot/actions/workflows/secrets-scan.yml/badge.svg)](https://github.com/Time4Mind/ccbot/actions/workflows/secrets-scan.yml)
 
-Удалённое управление сессиями Claude Code через Telegram — мониторинг, интерактивное управление и работа с AI-сессиями в tmux.
+[English README](README.md) · [中文文档](README_CN.md)
 
-https://github.com/user-attachments/assets/15ffb38e-5eb9-4720-93b9-412e4961dc93
+Личный Telegram-бот, соединяющий приватный 1-1 DM с N параллельными сессиями
+Claude Code в tmux. Один пользователь, N сессий, инлайн-переключатель в
+самом свежем сообщении бота.
 
-## Зачем CCBot?
+## Зачем
 
-Claude Code работает в терминале. Когда вы отходите от компьютера — в дороге, дома или просто не за рабочим местом — сессия продолжает выполняться, но вы теряете видимость и контроль.
+Claude Code живёт в терминале. Отошёл от стола — потерял видимость, но
+сессия продолжает работать. ccbot позволяет:
 
-CCBot позволяет **бесшовно продолжать ту же самую сессию через Telegram**. Ключевая идея: он работает поверх **tmux**, а не через Claude Code SDK. Процесс Claude Code остаётся в tmux-окне на вашей машине, а CCBot только читает вывод и отправляет нажатия клавиш. Это означает:
+- **Переключаться с десктопа на телефон в середине работы.** Claude
+  делает рефакторинг — идёшь на прогулку и продолжаешь следить и
+  отвечать из Telegram.
+- **Возвращаться на десктоп в любой момент.** Сессии живут в реальных
+  tmux-окнах, `tmux attach` возвращает в терминал с полной историей.
+- **Параллельно вести несколько сессий.** У каждой — своё tmux-окно
+  и свой процесс `claude`. Переключение активной сессии в Telegram не
+  ставит остальные на паузу.
 
-- **Переключение с десктопа на телефон в середине работы** — Claude делает рефакторинг? Можно отойти и продолжать наблюдать/отвечать из Telegram.
-- **Мгновенное возвращение к десктопу** — tmux-сессия не прерывается; `tmux attach` возвращает вас в тот же терминал с полной историей и контекстом.
-- **Параллельная работа с несколькими сессиями** — каждый Telegram topic соответствует отдельному tmux-окну.
+Бот — тонкий слой управления над tmux: процесс Claude Code остаётся
+ровно там, где был. ccbot читает его вывод и отправляет нажатия
+клавиш.
 
-Большинство других Telegram-ботов для Claude Code используют отдельные API-сессии через SDK. Такие сессии изолированы и не продолжаются в вашем терминале. CCBot работает иначе: это тонкий слой управления над tmux, поэтому терминал остаётся источником истины, и вы всегда можете вернуться к нему.
+## Отличия от upstream
 
-## Возможности
+Этот форк (`feat/dm-multisession`) сознательно расходится с upstream
+`ccbot` в нескольких принципиальных моментах:
 
-- **Сессии по темам** — каждый Telegram topic 1:1 связан с tmux-окном и Claude-сессией
-- **Уведомления в реальном времени** — ответы ассистента, thinking-контент, tool use/result, вывод локальных команд
-- **Интерактивный UI** — управление AskUserQuestion, ExitPlanMode и Permission Prompt через inline-клавиатуру
-- **Голосовые сообщения** — голосовые сообщения транскрибируются через OpenAI и пересылаются как текст
-- **Отправка сообщений** — проброс текста в Claude Code через tmux
-- **Проброс slash-команд** — любая `/command` уходит напрямую в Claude Code (например, `/clear`, `/compact`, `/cost`)
-- **Создание новых сессий** — запуск Claude Code из Telegram через браузер директорий
-- **Возобновление сессий** — выберите существующую Claude-сессию в директории, чтобы продолжить с того места, где остановились
-- **Завершение сессий** — закрытие topic автоматически завершает связанное tmux-окно
-- **История сообщений** — пагинация истории диалога (сначала новые)
-- **Трекинг сессий через hook** — авто-связывание tmux-окон с Claude-сессиями через `SessionStart`
-- **Персистентное состояние** — привязки topic/window и read-offset сохраняются после перезапуска
+- **Только DM.** Никаких супергрупп, форум-топиков, thread-routing'а.
+  Бот видит исключительно приватный 1-1 чат с одним allowlisted
+  Telegram-юзером.
+- **Один пользователь.** В `ALLOWED_USERS` ровно один числовой
+  Telegram-id. Multi-tenant — out of scope.
+- **Только bypass-режим.** `claude` запускается с
+  `--dangerously-skip-permissions`. Релэя permission-промптов в
+  Telegram нет — если не доверяешь модели полный доступ к хосту,
+  используй upstream.
+- **Multi-session с инлайн-переключателем.** В одном DM может жить
+  много сессий; инлайн-клавиатура под последним сообщением бота
+  переключает между ними.
+- **MarkdownV2** в pipeline'е (через `telegramify-markdown`) с авто-
+  фолбэком на plain text при ошибке парсинга. В upstream — HTML.
+- **Hook-based session tracking.** `SessionStart` хук Claude Code
+  пишет `session_map.json`; монитор бота его опрашивает. Никаких
+  process-tree introspection или claude SDK.
+- **Голос — local-first.** `whisper.cpp` (по умолчанию) или Apple
+  Speech через PyObjC на macOS. OpenAI-fallback есть, но выключен —
+  API-ключ для запуска не нужен.
+
+Полная архитектурная мотивация — в `doc/dm-multisession-spec.md`.
+Карта реализации — в `doc/dm-multisession-plan.md`.
 
 ## Требования
 
-- **tmux** — должен быть установлен и доступен в PATH
-- **Claude Code** — CLI-инструмент `claude` должен быть установлен
+- **tmux** в `PATH`
+- **Claude Code** CLI (`claude`) с активным Max-аккаунтом
+- **Python 3.12+**
+- **uv** (рекомендуется) для управления зависимостями
+- macOS (Apple Silicon) или Linux arm64
 
-## Установка
+Опционально:
 
-### Вариант 1: установка из GitHub (рекомендуется)
+- **`ffmpeg`** + **`whisper-cli`** для локальной голосовой транскрипции
+- **`pyobjc-framework-Speech`** для нативного Apple Speech-бэкенда
+  (`uv sync --extra apple-speech`)
 
-```bash
-# Через uv (рекомендуется)
-uv tool install git+https://github.com/six-ddc/ccmux.git
-
-# Или через pipx
-pipx install git+https://github.com/six-ddc/ccmux.git
-```
-
-### Вариант 2: установка из исходников
+## Быстрый старт
 
 ```bash
-git clone https://github.com/six-ddc/ccmux.git
-cd ccmux
+git clone https://github.com/Time4Mind/ccbot.git
+cd ccbot
 uv sync
+cp .env.example ~/.ccbot/.env   # вписать TELEGRAM_BOT_TOKEN + ALLOWED_USERS
+ccbot hook --install            # один раз: регистрация Claude Code SessionStart-хука
+ccbot                           # foreground; для prod — systemd-юнит
 ```
 
 ## Конфигурация
 
-**1. Создайте Telegram-бота и включите Threaded Mode:**
+Обязательные env-переменные в `~/.ccbot/.env` (или `./.env`):
 
-1. Напишите [@BotFather](https://t.me/BotFather), создайте бота и получите токен
-2. Откройте профиль @BotFather и нажмите **Open App**
-3. Выберите вашего бота, затем **Settings** > **Bot Settings**
-4. Включите **Threaded Mode**
+| Переменная           | Описание                                        |
+| -------------------- | ----------------------------------------------- |
+| `TELEGRAM_BOT_TOKEN` | Токен от [@BotFather](https://t.me/BotFather)   |
+| `ALLOWED_USERS`      | Один числовой Telegram-user-id                  |
 
-**2. Настройте переменные окружения:**
+Чаще всего настраиваемые опциональные:
 
-Создайте `~/.ccbot/.env`:
+| Переменная                  | По умолчанию | Эффект |
+| --------------------------- | ------------ | ------ |
+| `CCBOT_DIR`                 | `~/.ccbot`   | Каталог конфигов и состояния |
+| `TMUX_SESSION_NAME`         | `ccbot`      | tmux-сессия, где живут все session-окна |
+| `CLAUDE_COMMAND`            | `claude`     | бинарь для старта сессии |
+| `CLAUDE_FLAGS`              | `--dangerously-skip-permissions` | флаги для `claude` |
+| `SESSION_IDLE_TTL`          | `4h`         | active → archived через столько простоя |
+| `ARCHIVE_PURGE_AFTER`       | `14d`        | архивные сессии удаляются из state через столько |
+| `QUOTA_ALERT_POLL_INTERVAL` | `5m`         | как часто опрашивается живой `/usage` |
+| `VOICE_BACKEND`             | `auto`       | `auto` / `whisper` / `apple` / `off` |
+| `WHISPER_MODEL_PATH`        | `~/.ccbot/models/ggml-medium.bin` | модель whisper.cpp |
+| `BG_NOTIFY_MODE`            | `separate`   | `separate` (карточка на сессию) или `footer` |
+| `TG_PROXY_URL`              | _(не задан)_ | outbound-прокси для Bot API (`socks5://…` или `http://…`) |
 
-```ini
-TELEGRAM_BOT_TOKEN=your_bot_token_here
-ALLOWED_USERS=your_telegram_user_id
-```
+Полный список — в `doc/dm-multisession-spec.md` § 14.
 
-**Обязательные:**
+## Установка хука
 
-| Переменная | Описание |
-| ---------- | -------- |
-| `TELEGRAM_BOT_TOKEN` | Токен бота от @BotFather |
-| `ALLOWED_USERS` | Список Telegram user ID через запятую |
-
-**Опциональные:**
-
-| Переменная | По умолчанию | Описание |
-| ---------- | ------------ | -------- |
-| `CCBOT_DIR` | `~/.ccbot` | Каталог конфигурации/состояния (`.env` грузится отсюда) |
-| `TMUX_SESSION_NAME` | `ccbot` | Имя tmux-сессии |
-| `CLAUDE_COMMAND` | `claude` | Команда запуска в новых окнах |
-| `MONITOR_POLL_INTERVAL` | `2.0` | Интервал опроса в секундах |
-| `CCBOT_SHOW_HIDDEN_DIRS` | `false` | Показывать скрытые (dot) директории в браузере каталогов |
-| `OPENAI_API_KEY` | _(нет)_ | API-ключ OpenAI для транскрипции голосовых сообщений |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Базовый URL OpenAI API (для прокси или совместимых API) |
-
-Форматирование сообщений всегда HTML через `chatgpt-md-converter` (`chatgpt_md_converter`).
-Переключателя формата на MarkdownV2 во время выполнения нет.
-
-> Если бот запущен на VPS без интерактивного терминала для подтверждений, можно использовать:
->
-> ```
-> CLAUDE_COMMAND=IS_SANDBOX=1 claude --dangerously-skip-permissions
-> ```
-
-## Настройка Hook (рекомендуется)
-
-Авто-установка через CLI:
+Бот трекает связки tmux-окно → Claude-session через `SessionStart`-хук
+Claude Code. Авто-установка одной командой:
 
 ```bash
 ccbot hook --install
 ```
 
-Или вручную добавьте в `~/.claude/settings.json`:
+Или вручную в `~/.claude/settings.json`:
 
 ```json
 {
   "hooks": {
     "SessionStart": [
-      {
-        "hooks": [{ "type": "command", "command": "ccbot hook", "timeout": 5 }]
-      }
+      { "hooks": [{ "type": "command", "command": "ccbot hook", "timeout": 5 }] }
     ]
   }
 }
 ```
 
-Это записывает отображение window-session в `$CCBOT_DIR/session_map.json` (по умолчанию `~/.ccbot/`), чтобы бот автоматически отслеживал, какая Claude-сессия работает в каждом tmux-окне — даже после `/clear` или рестарта сессии.
-
 ## Использование
 
-```bash
-# Если установлено через uv tool / pipx
-ccbot
+Бот публикует небольшое slash-меню в `/`-меню Telegram плюс инлайн-
+кнопку `≡ Меню` под самым свежим сообщением:
 
-# Если запуск из исходников
-uv run ccbot
-```
+| Команда   | Эффект |
+| --------- | ------ |
+| `/menu`   | Открыть инлайн ≡ Меню |
+| `/help`   | Краткий гайд (раздельные секции с инлайн-навигацией) |
+| `/health` | Uptime, состояние tmux, очереди, latency, счётчики |
+| `/done`   | Закрыть активную сессию (архивировать как «выполнено») |
 
-### Команды
+Остальные действия — за инлайн-меню: `List`, `Status`, `History`,
+`Shot`, `New`, `Archive`, `Settings`. Большинство пользователей вообще
+не печатает слэш-команды, как только обнаруживают меню.
 
-**Команды бота:**
+### Сессии и переключатель
 
-| Команда | Описание |
-| ------- | -------- |
-| `/start` | Показать приветственное сообщение |
-| `/history` | История сообщений для текущего topic |
-| `/screenshot` | Снимок терминала |
-| `/esc` | Отправить Escape для прерывания Claude |
+Отправь любой текст в DM, чтобы создать первую сессию — бот откроет
+браузер директорий, ты выберешь проект, в tmux-окне стартанёт
+`claude`. Дальнейший текст в DM роутится в **активную** сессию.
 
-**Команды Claude Code (пробрасываются через tmux):**
+В самом свежем сообщении бота — инлайн-переключатель (`▷ session-A
+· session-B · + new`). Тап на неактивную сессию переключает активную
+и показывает context-preview; тап на активную — no-op. Reply-цитата
+на сообщение бота из неактивной сессии роутит твой текст туда разово,
+без смены активной.
 
-| Команда | Описание |
-| ------- | -------- |
-| `/clear` | Очистить историю диалога |
-| `/compact` | Уплотнить контекст диалога |
-| `/cost` | Показать статистику токенов/стоимости |
-| `/help` | Справка Claude Code |
-| `/memory` | Редактировать CLAUDE.md |
+### Алерты по токенам
 
-Любая неизвестная `/command` также пробрасывается в Claude Code как есть (например, `/review`, `/doctor`, `/init`).
+Два потока, оба отдельным push-уведомлением:
 
-### Workflow по topic
+- **Per-session token alerts.** Три порога (по умолчанию
+  100k/200k/400k, шаг 50k через Settings → Token alerts). Стреляет
+  один раз на сессию на каждый порог.
+- **5h / weekly / weekly-Sonnet quota alerts.** Фоновая задача
+  опрашивает живой `/usage` каждые `QUOTA_ALERT_POLL_INTERVAL` и
+  пушит, когда процент пересекает те же 50/75/90 %, что и stoplight-
+  emoji.
 
-**1 topic = 1 window = 1 session.** Бот работает в режиме Telegram Forum Topics.
+### Голос и медиа
 
-**Создание новой сессии:**
+- **Голосовые сообщения** транскрибируются локально (whisper.cpp /
+  Apple Speech) и попадают в активную сессию как набранный текст.
+- **Фото и документы** ложатся в `<workdir>/.ccbot-inbox/`, Claude
+  получает синтетическое сообщение через tmux. Файлы авто-чистятся
+  через 24 часа.
 
-1. Создайте новый topic в Telegram-группе
-2. Отправьте любое сообщение в topic
-3. Появится браузер директорий — выберите каталог проекта
-4. Если в каталоге есть существующие Claude-сессии, появится выбор сессий — возобновите существующую или начните новую
-5. Будет создано tmux-окно, запустится `claude` (с `--resume` при возобновлении), и ваше отложенное сообщение отправится в сессию
+## Архитектура
 
-**Отправка сообщений:**
-
-После привязки topic к сессии отправляйте текст или голосовые сообщения в topic — текст уходит в Claude Code через tmux, голосовые сообщения автоматически транскрибируются и пересылаются как текст.
-
-**Завершение сессии:**
-
-Закройте (или удалите) topic в Telegram. Связанное tmux-окно будет автоматически завершено, привязка удалена.
-
-### История сообщений
-
-Навигация через inline-кнопки:
-
-```
-📋 [project-name] Messages (42 total)
-
-───── 14:32 ─────
-
-👤 fix the login bug
-
-───── 14:33 ─────
-
-I'll look into the login bug...
-
-[◀ Older]    [2/9]    [Newer ▶]
-```
-
-### Уведомления
-
-Монитор опрашивает session JSONL-файлы каждые 2 секунды и отправляет уведомления о:
-
-- **Ответах ассистента** — текстовые ответы Claude
-- **Thinking-контенте** — отображается как раскрываемые цитаты
-- **Tool use/result** — краткие сводки (например, `Read 42 lines`, `Found 5 matches`)
-- **Выводе локальных команд** — stdout команд вроде `git status`, префикс `❯ command_name`
-
-Уведомления отправляются в topic, привязанный к окну сессии.
-
-Примечание по форматированию:
-- Telegram-сообщения рендерятся с parse mode `HTML` через `chatgpt-md-converter`
-- Длинные сообщения делятся с учётом HTML-тегов, чтобы сохранять код-блоки и форматирование
-
-## Запуск Claude Code в tmux
-
-### Вариант 1: создать через Telegram (рекомендуется)
-
-1. Создайте новый topic в Telegram-группе
-2. Отправьте любое сообщение
-3. Выберите каталог проекта в браузере
-
-### Вариант 2: создать вручную
-
-```bash
-tmux attach -t ccbot
-tmux new-window -n myproject -c ~/Code/myproject
-# Затем запустите Claude Code в новом окне
-claude
-```
-
-Окно должно находиться в tmux-сессии `ccbot` (настраивается через `TMUX_SESSION_NAME`). Hook автоматически зарегистрирует его в `session_map.json` при запуске Claude.
-
-## Обзор архитектуры
-
-```
-┌─────────────┐      ┌─────────────┐      ┌─────────────┐
-│  Topic ID   │ ───▶ │ Window ID   │ ───▶ │ Session ID  │
-│ (Telegram)  │      │ (tmux @id)  │      │  (Claude)   │
-└─────────────┘      └─────────────┘      └─────────────┘
-   thread_bindings       session_map.json
-   (state.json)          (записывается hook)
-```
-
-## Хранение данных
-
-| Путь | Описание |
-| ---- | -------- |
-| `$CCBOT_DIR/state.json` | Привязки topic, состояния окон, display names и read-offset на пользователя |
-| `$CCBOT_DIR/session_map.json` | Hook-таблица `{tmux_session:window_id: {session_id, cwd, window_name}}` |
-| `$CCBOT_DIR/monitor_state.json` | Byte-offset монитора по сессиям (предотвращает дубли) |
-| `~/.claude/projects/` | Данные сессий Claude Code (только чтение) |
-
-## Структура файлов
+Полная карта модулей — `.claude/rules/architecture.md`. Кратко:
 
 ```
 src/ccbot/
-├── __init__.py            # Точка входа пакета
-├── main.py                # CLI-диспетчер (hook подкоманда + запуск бота)
-├── hook.py                # Hook-подкоманда для трекинга сессий (+ --install)
-├── config.py              # Конфигурация из переменных окружения
-├── bot.py                 # Настройка Telegram-бота, обработчики команд, topic routing
-├── session.py             # Управление сессиями, persist состояния, история сообщений
-├── session_monitor.py     # Мониторинг JSONL-файлов (polling + обнаружение изменений)
-├── monitor_state.py       # Persist состояния монитора (byte-offset)
-├── transcript_parser.py   # Парсинг JSONL-транскриптов Claude Code
-├── terminal_parser.py     # Парсинг terminal pane (interactive UI + status line)
-├── html_converter.py      # Markdown -> Telegram HTML + HTML-aware splitting
-├── screenshot.py          # Terminal text -> PNG с поддержкой ANSI-цветов
-├── transcribe.py          # Транскрипция голоса в текст через OpenAI API
-├── utils.py               # Общие утилиты (atomic JSON writes, JSONL helpers)
-├── tmux_manager.py        # Управление tmux-окнами (list, create, send keys, kill)
-├── fonts/                 # Встроенные шрифты для рендера скриншотов
+├── main.py                 — CLI entry point (`ccbot`, `ccbot hook`)
+├── config.py               — загрузчик env-vars (singleton)
+├── session.py              — Session + SessionManager (state.json)
+├── session_monitor.py      — JSONL polling, NewMessage callbacks
+├── transcript_parser.py    — парсинг JSONL-турнов
+├── terminal_parser.py      — детект interactive UI + status line
+├── tmux_manager.py         — обёртка над libtmux
+├── markdown_v2.py          — MD → Telegram MarkdownV2
+├── telegram_sender.py      — split_message по 4096-char лимиту
+├── transcribe.py           — voice → text диспетчер
+├── usage.py                — токен-агрегатор + alert-логика
+├── i18n.py                 — UI-строки en / ru / zh
+├── bot/                    — Telegram-handlers (≤ 600 LOC на файл)
+│   ├── app.py              — bootstrap, post_init / post_shutdown
+│   ├── messages.py         — text / voice / photo / document / forward
+│   ├── session_events.py   — claude → TG dispatch
+│   ├── commands/           — тела slash-команд
+│   └── callbacks/          — по файлу на CB_* префикс
 └── handlers/
-    ├── __init__.py        # Экспорты handler-модулей
-    ├── callback_data.py   # Константы callback data (префиксы CB_*)
-    ├── directory_browser.py # Inline UI браузера директорий
-    ├── history.py         # Пагинация истории сообщений
-    ├── interactive_ui.py  # Обработка interactive UI (AskUser, ExitPlan, Permissions)
-    ├── message_queue.py   # Очередь сообщений на пользователя + worker (merge, rate limit)
-    ├── message_sender.py  # safe_reply / safe_edit / safe_send helpers
-    ├── response_builder.py # Сборка ответных сообщений (tool_use, thinking и т.д.)
-    └── status_polling.py  # Polling terminal status line
+    ├── notifications.py    — live cards + push events
+    ├── archive.py          — /archive рендер + idle sweeps
+    ├── quota_alerts.py     — фоновый /usage poll
+    ├── interactive_ui.py   — AskUserQuestion / ExitPlanMode
+    ├── menu.py             — компоновка инлайн-клавиатур
+    └── …
 ```
 
-## Участники
+Состояние — в `$CCBOT_DIR` (по умолчанию `~/.ccbot/`):
 
-Спасибо всем, кто вносит вклад! Мы поощряем использование Claude Code для совместной разработки.
+| Файл                | Содержимое |
+| ------------------- | ---------- |
+| `state.json`        | сессии, active_sessions, window states, user settings |
+| `session_map.json`  | hook-генерируемая tmux-window → claude-session карта |
+| `monitor_state.json`| per-JSONL byte offsets (защита от дублей при рестарте) |
 
-<a href="https://github.com/six-ddc/ccmux/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=six-ddc/ccmux" />
-</a>
+## Развёртывание
+
+systemd-юнит лежит в `scripts/ccbot.service`. Для VPS-хостов без
+прямого доступа к `api.telegram.org` — SSH-tunnel-рецепт через
+`TG_PROXY_URL` в `doc/deploy.md`. Полная пошаговая Linux-инсталляция
+(для AI-агента) — `doc/install-linux.md`.
+
+## Контрибуция
+
+См. [CONTRIBUTING.md](CONTRIBUTING.md). Кратко: PR'ы, согласующиеся с
+инвариантами DM-only / single-user / bypass-only — welcome. CI должен
+быть зелёным; pre-commit-хуки должны пройти; один PR — одна цель.
+
+## Безопасность
+
+См. [SECURITY.md](SECURITY.md): threat model и процесс репорта.
+Уязвимости — через GitHub Security Advisories, не публичные issue.
+
+## Лицензия
+
+См. [LICENSE](LICENSE).

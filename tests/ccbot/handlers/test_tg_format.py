@@ -52,6 +52,26 @@ class TestSplitOverflow:
         assert r.attachments, "expected attachment for wide table"
         assert "table-1.md" in r.attachments[0].filename
 
+    def test_six_col_weather_table_extracted(self) -> None:
+        """Regression for the bug: live-card path was bypassing split_overflow,
+        so a 6-column weather forecast landed inline. The fix wires
+        split_overflow into ``finalize_task`` — this test asserts the helper
+        catches that exact shape."""
+        table = (
+            "| День | Дата | День | Ночь | Осадки | Ветер |\n"
+            "|------|------|------|------|--------|-------|\n"
+            "| Вс | 10 мая | +13° | +11° | дождь | 6 м/с |\n"
+            "| Пн | 11 мая | +13° | +12° | дождь | 2 м/с |\n"
+        )
+        r = split_overflow("Forecast:\n\n" + table)
+        assert len(r.attachments) == 1
+        assert r.attachments[0].filename == "table-1.md"
+        # Inline text loses the rows, gains a placeholder.
+        assert "| Вс | 10 мая" not in r.text
+        assert "table 6×" in r.text
+        # The full table body is preserved in the attachment (UTF-8).
+        assert "| Вс | 10 мая".encode("utf-8") in r.attachments[0].content
+
     @pytest.mark.parametrize(
         "lang,ext",
         [

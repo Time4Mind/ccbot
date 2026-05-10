@@ -40,6 +40,7 @@ from ..telegram_sender import split_message
 from .message_sender import safe_send
 from .menu import build_footer_keyboard
 from .switcher import session_emoji
+from .tg_format import Attachment, split_overflow
 
 logger = logging.getLogger(__name__)
 
@@ -503,6 +504,13 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
         await push_event(bot, user_id, sess, text="✓ task complete")
         return
 
+    # Pull oversized fenced code blocks and wide markdown tables into file
+    # attachments — replaces them inline with a short placeholder, returns
+    # the list of attachments to send as separate documents after the card.
+    formatted = split_overflow(cleaned)
+    cleaned = formatted.text
+    attachments = formatted.attachments
+
     # Compute body budget so each chunk + header + footer fits CARD_HARD_LIMIT.
     state.lines = []
     overhead = len(_render_card(sess, state, footer="(task complete)"))
@@ -530,11 +538,32 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
         await _send_card(bot, user_id, sess, state, text=text)
         state.last_edit_ts = time.monotonic()
 
+    # Send any extracted overflow attachments (wide tables, long code).
+    if attachments:
+        await _send_attachments(bot, user_id, attachments)
+
     # Reset for next task — a new card will spawn on the next event.
     reset_card(user_id, sess.id)
     # Push completion summary as a separate message.
     summary = _summary_for_push(cleaned)
     await push_event(bot, user_id, sess, text=f"✓ {summary}")
+
+
+async def _send_attachments(
+    bot: Bot, user_id: int, attachments: list[Attachment]
+) -> None:
+    """Send extracted overflow content as separate Telegram documents."""
+    import io as _io
+
+    for att in attachments:
+        try:
+            await bot.send_document(
+                chat_id=user_id,
+                document=_io.BytesIO(att.content),
+                filename=att.filename,
+            )
+        except Exception as e:
+            logger.debug("attachment %s send failed: %s", att.filename, e)
 
 
 async def push_event(

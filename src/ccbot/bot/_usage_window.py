@@ -44,44 +44,63 @@ async def _ensure_usage_window() -> str | None:
     return wid
 
 
+async def _poll_usage_modal(wid: str) -> object | None:
+    """Send /usage, poll the pane for quota rows, dismiss with Escape."""
+    from ..terminal_parser import extract_usage_breakdown, parse_usage_output
+
+    info = None
+    resolved = False
+    try:
+        await tmux_manager.send_keys(wid, "/usage")
+        for _ in range(60):  # 60 × 200 ms = 12 s
+            await asyncio.sleep(0.2)
+            pane_text = await tmux_manager.capture_pane(wid)
+            if not pane_text:
+                continue
+            candidate = parse_usage_output(pane_text)
+            if not candidate or not candidate.parsed_lines:
+                continue
+            info = candidate
+            breakdown = extract_usage_breakdown(candidate)
+            if (
+                breakdown.session_pct is not None
+                or breakdown.week_pct is not None
+                or breakdown.week_sonnet_pct is not None
+            ):
+                resolved = True
+                break
+        try:
+            await tmux_manager.send_keys(wid, "Escape", enter=False, literal=False)
+        except Exception as e:
+            logger.debug("fetch_claude_usage: dismiss failed: %s", e)
+    except Exception as e:
+        logger.debug("fetch_claude_usage: tmux failed: %s", e)
+        return None
+    return info if resolved else None
+
+
 async def fetch_claude_usage() -> object | None:
     """Open /usage in the dedicated window, return the parsed UsageInfo.
 
     The modal frame paints instantly but the Current-session/week rows
     populate asynchronously (Claude shows a "Loading usage data…"
-    placeholder first), so we keep polling until at least one quota row
-    resolves or the 5 s budget runs out. Returns ``None`` on failure.
+    placeholder first). Long-parked Claude Code instances can wedge the
+    modal indefinitely, so on failure we kill the window and retry once
+    against a fresh process. Returns ``None`` on persistent failure.
     """
-    from ..terminal_parser import extract_usage_breakdown, parse_usage_output
-
     async with _usage_window_lock:
         wid = await _ensure_usage_window()
         if not wid:
             return None
-        info = None
+        info = await _poll_usage_modal(wid)
+        if info is not None:
+            return info
+        logger.info("fetch_claude_usage: window %s did not resolve, recreating", wid)
         try:
-            await tmux_manager.send_keys(wid, "/usage")
-            for _ in range(25):  # 25 × 200 ms = 5 s
-                await asyncio.sleep(0.2)
-                pane_text = await tmux_manager.capture_pane(wid)
-                if not pane_text:
-                    continue
-                candidate = parse_usage_output(pane_text)
-                if not candidate or not candidate.parsed_lines:
-                    continue
-                info = candidate
-                breakdown = extract_usage_breakdown(candidate)
-                if (
-                    breakdown.session_pct is not None
-                    or breakdown.week_pct is not None
-                    or breakdown.week_sonnet_pct is not None
-                ):
-                    break
-            try:
-                await tmux_manager.send_keys(wid, "Escape", enter=False, literal=False)
-            except Exception as e:
-                logger.debug("fetch_claude_usage: dismiss failed: %s", e)
+            await tmux_manager.kill_window(wid)
         except Exception as e:
-            logger.debug("fetch_claude_usage: tmux failed: %s", e)
+            logger.debug("fetch_claude_usage: kill stale window failed: %s", e)
+        wid = await _ensure_usage_window()
+        if not wid:
             return None
-    return info
+        return await _poll_usage_modal(wid)

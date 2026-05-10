@@ -361,13 +361,13 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     first_part = True
     last_msg_id: int | None = None
     pending_attachments: list[bytes] = []  # placeholder for type narrowing
-    pending_attachments_named: list[tuple[str, bytes]] = []
+    pending_attachments_named: list[tuple[str, bytes, str]] = []
     for part in task.parts:
         # Pull oversized code/tables out into downloadable attachments.
         formatted = split_overflow(part)
         part = formatted.text
         for att in formatted.attachments:
-            pending_attachments_named.append((att.filename, att.content))
+            pending_attachments_named.append((att.filename, att.content, att.kind))
         sent = None
 
         # For first part, try to convert status message to content (edit instead of delete)
@@ -388,16 +388,26 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
         if sent:
             last_msg_id = sent.message_id
 
-    # 2.5. Send any extracted file attachments after the textual messages.
-    for filename, content in pending_attachments_named:
+    # 2.5. Send extracted attachments after the textual messages.
+    # ``kind="photo"`` table extracts get rasterised to PNG for an inline
+    # image; everything else lands as a plain document.
+    for filename, content, kind in pending_attachments_named:
         try:
             import io as _io
 
-            await bot.send_document(
-                chat_id=chat_id,
-                document=_io.BytesIO(content),
-                filename=filename,
-            )
+            if kind == "photo":
+                from ..screenshot import text_to_image
+                from .tg_format import pretty_pad_table
+
+                source = content.decode("utf-8", errors="replace")
+                png = await text_to_image(pretty_pad_table(source), with_ansi=False)
+                await bot.send_photo(chat_id=chat_id, photo=_io.BytesIO(png))
+            else:
+                await bot.send_document(
+                    chat_id=chat_id,
+                    document=_io.BytesIO(content),
+                    filename=filename,
+                )
         except RetryAfter:
             raise
         except Exception as e:

@@ -552,16 +552,32 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
 async def _send_attachments(
     bot: Bot, user_id: int, attachments: list[Attachment]
 ) -> None:
-    """Send extracted overflow content as separate Telegram documents."""
+    """Send extracted overflow content. ``kind="photo"`` table extracts
+    are rasterised via ``screenshot.text_to_image`` so wide tables land
+    as inline images rather than `.md` files; everything else (oversized
+    code blocks) goes through ``send_document`` as before.
+    """
     import io as _io
+
+    from ..screenshot import text_to_image
+    from .tg_format import pretty_pad_table
 
     for att in attachments:
         try:
-            await bot.send_document(
-                chat_id=user_id,
-                document=_io.BytesIO(att.content),
-                filename=att.filename,
-            )
+            if att.kind == "photo":
+                source = att.content.decode("utf-8", errors="replace")
+                rendered = pretty_pad_table(source)
+                png = await text_to_image(rendered, with_ansi=False)
+                await bot.send_photo(
+                    chat_id=user_id,
+                    photo=_io.BytesIO(png),
+                )
+            else:
+                await bot.send_document(
+                    chat_id=user_id,
+                    document=_io.BytesIO(att.content),
+                    filename=att.filename,
+                )
         except Exception as e:
             logger.debug("attachment %s send failed: %s", att.filename, e)
 

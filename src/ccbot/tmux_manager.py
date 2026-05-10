@@ -427,8 +427,15 @@ class TmuxManager:
                             cmd = f"{cmd} {config.claude_flags}"
                         if resume_session_id:
                             cmd = f"{cmd} --resume {resume_session_id}"
+                        # CCBOT_INTERFACE=telegram lets Claude (via the
+                        # output-format guidance in CLAUDE.md) tailor its
+                        # response style to the Telegram surface — short
+                        # summaries + screenshot-friendly tables instead
+                        # of wide markdown.
                         if config.is_sandbox:
-                            cmd = f"IS_SANDBOX=1 {cmd}"
+                            cmd = f"IS_SANDBOX=1 CCBOT_INTERFACE=telegram {cmd}"
+                        else:
+                            cmd = f"CCBOT_INTERFACE=telegram {cmd}"
                         pane.send_keys(cmd, enter=True)
 
                 logger.info(

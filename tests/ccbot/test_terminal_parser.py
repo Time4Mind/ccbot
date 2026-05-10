@@ -5,8 +5,10 @@ import pytest
 from ccbot.terminal_parser import (
     extract_bash_output,
     extract_interactive_content,
+    extract_usage_breakdown,
     is_interactive_ui,
     parse_status_line,
+    parse_usage_output,
     strip_pane_chrome,
 )
 
@@ -263,3 +265,86 @@ class TestExtractBashOutput:
         result = extract_bash_output(pane, "echo hi")
         assert result is not None
         assert not result.endswith("\n")
+
+
+# ── parse_usage_output ───────────────────────────────────────────────────
+
+
+_USAGE_BODY = (
+    "Current session\n"
+    "█████▋   38% used\n"
+    "Resets 4pm (Europe/Moscow)\n"
+    "\n"
+    "Current week (all models)\n"
+    "███▎       18% used\n"
+    "Resets May 17 at 4pm (Europe/Moscow)\n"
+    "\n"
+    "Current week (Sonnet)\n"
+    "▏          1% used\n"
+    "Resets May 17 at 4pm (Europe/Moscow)\n"
+)
+
+
+class TestParseUsageOutput:
+    """The /usage modal has three valid start signals."""
+
+    def test_modern_header_detected(self):
+        pane = "Status  Config  Usage  Stats\n\n" + _USAGE_BODY + "\nEsc to cancel"
+        info = parse_usage_output(pane)
+        assert info is not None
+        # Header line itself is dropped; the first content row stays.
+        assert info.parsed_lines[0].startswith("Current session")
+        # Esc-sentinel line is dropped too.
+        assert not any("Esc to" in ln for ln in info.parsed_lines)
+
+    def test_legacy_settings_header_detected(self):
+        pane = "Settings: Usage\n" + _USAGE_BODY + "\nEsc to cancel"
+        info = parse_usage_output(pane)
+        assert info is not None
+        assert info.parsed_lines[0].startswith("Current session")
+
+    def test_body_only_when_header_scrolled_off(self):
+        """On a small pane (80×24) a tall /usage modal pushes the tab row
+        above the viewport. ``capture_pane`` reads only what's visible,
+        so the parser sees a body without a header. The fallback must
+        still recognise it — otherwise the bot hangs in
+        ``_poll_usage_modal`` until the 12-second timeout and then
+        recreates the window."""
+        pane = _USAGE_BODY  # no header, no "Esc to cancel"
+        info = parse_usage_output(pane)
+        assert info is not None
+        assert info.parsed_lines[0].startswith("Current session")
+        # And the body-only capture must still drive ``extract_usage_breakdown``
+        # to a usable breakdown — otherwise ``_poll_usage_modal`` would
+        # consider the modal "not yet loaded".
+        breakdown = extract_usage_breakdown(info)
+        assert breakdown.session_pct == 38
+        assert breakdown.week_pct == 18
+        assert breakdown.week_sonnet_pct == 1
+
+    def test_body_only_with_partial_esc_sentinel(self):
+        """The Esc sentinel may also be off-screen on a smaller capture
+        — the body fallback shouldn't insist on finding it."""
+        pane = (
+            "Current week (all models)\n"
+            "███▎       18% used\n"
+            "Resets May 17 at 4pm (Europe/Moscow)\n"
+        )
+        info = parse_usage_output(pane)
+        assert info is not None
+        breakdown = extract_usage_breakdown(info)
+        assert breakdown.week_pct == 18
+
+    def test_progress_bar_chars_stripped(self):
+        info = parse_usage_output(_USAGE_BODY)
+        assert info is not None
+        # Block chars must be stripped so ``_parse_pct`` matches at start.
+        assert any(ln.startswith("38%") for ln in info.parsed_lines)
+
+    def test_unrelated_chat_returns_none(self):
+        pane = "some random claude conversation\n> user prompt\nassistant reply\n"
+        assert parse_usage_output(pane) is None
+
+    def test_empty_input_returns_none(self):
+        assert parse_usage_output("") is None
+        assert parse_usage_output("   \n  \n") is None

@@ -418,26 +418,36 @@ def extract_usage_breakdown(info: UsageInfo) -> UsageBreakdown:
 def parse_usage_output(pane_text: str) -> UsageInfo | None:
     """Extract usage information from Claude Code's /usage settings tab.
 
-    The /usage modal shows a Settings overlay with a "Usage" tab containing
-    progress bars and reset times.  This parser looks for the Settings header
-    line, then collects all content until "Esc to cancel".
+    Three start signals, tried in order:
 
-    Returns UsageInfo with cleaned lines, or None if not detected.
+    * modern tabs row ``Status  Config  Usage  Stats``,
+    * legacy header ``Settings: ... Usage``,
+    * body fallback — any ``Current session`` / ``Current week`` line.
+
+    The last one matters because ``tmux capture-pane`` reads only the
+    visible viewport (no scrollback by default). On a narrow pane the
+    modal body is taller than the visible rows, the tabs row scrolls
+    above the top, and the header-only detection returns ``None`` even
+    though every usage row is right there in the capture. The fallback
+    catches exactly that case.
+
+    Returns ``UsageInfo`` with cleaned lines, or ``None`` if neither
+    signal is present.
     """
     if not pane_text:
         return None
 
     lines = pane_text.strip().split("\n")
 
-    # Find the Settings header that indicates we're in the usage modal
     start_idx: int | None = None
     end_idx: int | None = None
 
+    # Pass 1: header-based detection. Stops once a "Esc to" dismiss
+    # line is encountered after the header so we don't leak the bot's
+    # chat above the modal into the parsed body.
     for i, line in enumerate(lines):
         stripped = line.strip()
         if start_idx is None:
-            # Modern modal: tabs line "Status  Config  Usage  Stats".
-            # Legacy modal: "Settings:" prefix + "Usage" word.
             is_modern = (
                 "Status" in stripped
                 and "Config" in stripped
@@ -452,8 +462,23 @@ def parse_usage_output(pane_text: str) -> UsageInfo | None:
                 end_idx = i
                 break
 
+    # Pass 2: header escaped the captured viewport. Scan for the body
+    # signature — these phrases are unique to this modal.
     if start_idx is None:
-        return None
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if "Current session" in stripped or "Current week" in stripped:
+                start_idx = i
+                break
+        if start_idx is None:
+            return None
+        # Look for the dismiss sentinel in the remainder; if it's gone
+        # too (long modal on a tiny pane) we keep everything.
+        for j in range(start_idx, len(lines)):
+            if lines[j].strip().startswith("Esc to"):
+                end_idx = j
+                break
+
     if end_idx is None:
         end_idx = len(lines)
 

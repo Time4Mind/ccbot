@@ -118,6 +118,16 @@ async def _is_iterm_running() -> bool:
         return False
 
 
+def _resolve_tmux_bin() -> str:
+    """Absolute path to ``tmux`` so the iTerm-spawned bash (which lacks
+    Homebrew PATH on Apple Silicon) can still find it.
+
+    Falls back to bare ``tmux`` if ``shutil.which`` returns nothing —
+    user gets a clearer error than a silent close-on-spawn.
+    """
+    return shutil.which("tmux") or "tmux"
+
+
 def _build_tmux_command(window_id: str) -> str:
     """tmux attach + select-window + interactive-shell tail, wrapped in
     ``bash -c '…'`` so the macOS host's terminal app runs it through a
@@ -126,15 +136,17 @@ def _build_tmux_command(window_id: str) -> str:
     iTerm2's ``create tab with default profile command "X"`` and (in
     some macOS versions) Terminal.app's ``do script`` exec ``X``
     *without* a shell wrapper, so ``\\;``, ``||``, and ``;`` lose
-    their shell semantics — tmux ends up with garbage argv, attach
-    fails, the tab closes. Wrapping in ``bash -c`` makes the operator
-    semantics explicit. The trailing ``exec bash -l`` keeps the window
-    open after the user detaches from tmux.
+    their shell semantics. Wrapping in ``bash -c`` makes the operator
+    semantics explicit. The trailing ``exec ${SHELL:-bash} -l`` keeps
+    the window open after the user detaches and uses the user's
+    preferred login shell. ``tmux`` is invoked by absolute path
+    because iTerm's bash inherits a stripped PATH on macOS.
     """
     session = shlex.quote(config.tmux_session_name)
+    tmux_bin = shlex.quote(_resolve_tmux_bin())
     inner = (
-        f"tmux attach -t {session} \\; select-window -t {window_id} "
-        f"|| true; exec bash -l"
+        f"{tmux_bin} attach -t {session} \\; select-window -t {window_id} "
+        f"|| true; exec ${{SHELL:-bash}} -l"
     )
     return f"bash -c {shlex.quote(inner)}"
 

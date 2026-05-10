@@ -119,20 +119,24 @@ async def _is_iterm_running() -> bool:
 
 
 def _build_tmux_command(window_id: str) -> str:
-    """tmux attach + select-window + interactive-shell tail.
+    """tmux attach + select-window + interactive-shell tail, wrapped in
+    ``bash -c '…'`` so the macOS host's terminal app runs it through a
+    real shell.
 
-    ``\\;`` is tmux's command separator (bash escapes it through to tmux's
-    argv). The trailing ``|| true; exec bash -l`` mirrors what the Linux
-    helper does — it keeps the window open after the user detaches from
-    tmux (or after attach fails for any reason). Without it, iTerm tabs
-    and Terminal.app windows configured to close on shell exit will snap
-    shut the moment the user types Ctrl-b d.
+    iTerm2's ``create tab with default profile command "X"`` and (in
+    some macOS versions) Terminal.app's ``do script`` exec ``X``
+    *without* a shell wrapper, so ``\\;``, ``||``, and ``;`` lose
+    their shell semantics — tmux ends up with garbage argv, attach
+    fails, the tab closes. Wrapping in ``bash -c`` makes the operator
+    semantics explicit. The trailing ``exec bash -l`` keeps the window
+    open after the user detaches from tmux.
     """
     session = shlex.quote(config.tmux_session_name)
-    return (
+    inner = (
         f"tmux attach -t {session} \\; select-window -t {window_id} "
         f"|| true; exec bash -l"
     )
+    return f"bash -c {shlex.quote(inner)}"
 
 
 def detect_linux_emulators() -> list[str]:

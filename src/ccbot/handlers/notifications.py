@@ -114,56 +114,32 @@ def _trim(s: str, limit: int = 200) -> str:
     return s
 
 
-_BULLET_RE = re.compile(r"^[\s>#*\-•]+")
+_EXPQUOTE_BLOCK_RE = re.compile(
+    r"\x02EXPQUOTE_START\x02.*?\x02EXPQUOTE_END\x02",
+    re.DOTALL,
+)
 
 
-def _summary_for_push(text: str, *, limit: int = 200) -> str:
-    """Pick a useful one-liner summary from a final assistant text turn.
+def _strip_for_card(text: str) -> str:
+    """Drop expandable-quote sentinels + their content from a card line.
 
-    Strategy:
-      1. Take the first non-empty paragraph (split on a blank line).
-      2. If it ends with a heading-only line, drop into the next paragraph.
-      3. Walk to the first sentence terminator (".!?") inside the limit
-         range so we don't truncate mid-sentence.
-      4. Strip leading markdown bullet/heading markers.
-      5. Cap at `limit` chars.
+    The quote sentinels ``\x02EXPQUOTE_START\x02 … \x02EXPQUOTE_END\x02``
+    are meant for the history view's MarkdownV2 renderer. On the live
+    card each event is a one-liner, and a 160-char trim happily cuts
+    through the middle of a sentinel — leaving raw ``EXPQUOTE_S…`` in
+    the chat. Strip the whole quote block here; the user gets the
+    one-line summary (``Output 64 lines``) without the noise.
+
+    Also collapses ``$HOME`` to ``~`` so a Bash command line on a Mac
+    doesn't waste 30+ chars on ``/Users/<user>/...``.
     """
-    if not text:
-        return "task complete"
+    import os
 
-    paragraphs = [p.strip() for p in text.strip().split("\n\n") if p.strip()]
-    if not paragraphs:
-        return "task complete"
-
-    para = paragraphs[0]
-    # If the first paragraph is just a heading (one short line ending without
-    # a period), prefer the next paragraph as the meaningful summary.
-    if (
-        len(paragraphs) > 1
-        and "\n" not in para
-        and len(para) < 80
-        and not para.rstrip().endswith((".", "!", "?", ":"))
-    ):
-        para = paragraphs[1]
-
-    # Take the first sentence inside the budget when possible.
-    # Floor of 8 chars avoids absurdly short cuts ("ok." etc).
-    earliest = -1
-    for sep in (". ", "! ", "? "):
-        idx = para.find(sep)
-        if 8 <= idx <= limit and (earliest == -1 or idx < earliest):
-            earliest = idx
-    if earliest > 0:
-        # Keep the punctuation, drop the trailing space.
-        para = para[: earliest + 1]
-
-    para = para.replace("\n", " ").strip()
-    # Strip leading markdown bullet/heading markers from each line.
-    para = _BULLET_RE.sub("", para).strip()
-
-    if len(para) > limit:
-        para = para[: limit - 1] + "…"
-    return para or "task complete"
+    out = _EXPQUOTE_BLOCK_RE.sub("", text)
+    home = os.path.expanduser("~")
+    if home and home != "/":
+        out = out.replace(home, "~")
+    return out
 
 
 def _line_for_event(msg: NewMessage) -> CardLine:
@@ -179,7 +155,7 @@ def _line_for_event(msg: NewMessage) -> CardLine:
       👤 user-echoed text
       (no prefix) assistant text
     """
-    text = msg.text or ""
+    text = _strip_for_card(msg.text or "")
     if msg.content_type == "thinking":
         return CardLine(text=f"∴ {_trim(text, 160)}")
     if msg.content_type == "tool_use":
@@ -588,9 +564,11 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     if attachments:
         await _send_attachments(bot, user_id, attachments)
 
+    # No separate "✓ done" push under the card — the result is already
+    # rendered inside the card with a "(task complete)" footer, and an
+    # extra message just doubles the noise. Errors and AskUserQuestion
+    # still emit pushes (those need to ping the user).
     reset_card(user_id, sess.id)
-    summary = _summary_for_push(cleaned)
-    await push_event(bot, user_id, sess, text=f"✓ {summary}")
 
 
 async def _send_attachments(

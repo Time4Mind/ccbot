@@ -64,6 +64,28 @@ class TestIsWindowId:
         assert mgr.is_window_id("@abc") is False
 
 
+class TestLocalTerminalSetting:
+    """The setting is 3-state (off / manual / auto); legacy ``on`` migrates."""
+
+    def test_default_is_off(self, mgr: SessionManager) -> None:
+        assert mgr.get_user_settings(1).get("local_terminal") == "off"
+
+    def test_explicit_manual_stays(self, mgr: SessionManager) -> None:
+        mgr.user_settings[1] = {"local_terminal": "manual"}
+        assert mgr.get_user_settings(1).get("local_terminal") == "manual"
+
+    def test_explicit_auto_stays(self, mgr: SessionManager) -> None:
+        mgr.user_settings[1] = {"local_terminal": "auto"}
+        assert mgr.get_user_settings(1).get("local_terminal") == "auto"
+
+    def test_legacy_on_migrates_to_auto(self, mgr: SessionManager) -> None:
+        """Pre-PR state where the setting was binary on/off — the stored
+        ``on`` reads back as ``auto`` so old users keep their old auto-
+        spawn behavior without re-clicking the settings screen."""
+        mgr.user_settings[1] = {"local_terminal": "on"}
+        assert mgr.get_user_settings(1).get("local_terminal") == "auto"
+
+
 class TestActiveSessions:
     def test_no_active_session_initially(self, mgr: SessionManager) -> None:
         assert mgr.get_active_session(100) is None

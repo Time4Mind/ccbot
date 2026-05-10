@@ -30,6 +30,7 @@ from .callback_data import (
     CB_FT_KILL,
     CB_FT_MORE,
     CB_FT_STOP,
+    CB_FT_TERM,
     CB_MM_ARCHIVE,
     CB_MM_BACK,
     CB_MM_HISTORY,
@@ -108,6 +109,53 @@ def _has_active_session(user_id: int) -> bool:
     return session_manager.get_active_session(user_id) is not None
 
 
+def _can_offer_terminal(user_id: int) -> bool:
+    """Show the "Open terminal" button in Menu?
+
+    Visible iff:
+      * the user has an active session,
+      * ``local_terminal`` is ``manual`` or ``auto`` (``off`` opts out
+        of the feature entirely),
+      * the platform can actually spawn a terminal (macOS always can;
+        Linux needs a configured ``local_terminal_cmd`` whose emulator
+        is on PATH — otherwise the click would silently no-op),
+      * no tmux client is already attached to this window's group
+        session (one is already enough).
+    """
+    import platform
+    import shutil
+
+    sess = session_manager.get_active_session(user_id)
+    if sess is None or not sess.window_id:
+        return False
+    settings = session_manager.get_user_settings(user_id)
+    mode = settings.get("local_terminal", "off")
+    if mode not in ("manual", "auto"):
+        return False
+    system = platform.system()
+    if system == "Linux":
+        template = settings.get("local_terminal_cmd", "") or ""
+        if not template:
+            return False
+        # Template's first word is the emulator binary.
+        first = template.split(" ", 1)[0]
+        if not first or shutil.which(first) is None:
+            return False
+    elif system != "Darwin":
+        return False
+    # Tmux side: hide the button when a terminal is already attached.
+    from ..tmux_manager import tmux_manager
+
+    try:
+        if tmux_manager.has_client_for_window(sess.window_id):
+            return False
+    except Exception:
+        # Defensive: if the probe fails, fall through to "offer button" —
+        # better one stray button than the user having no way to reopen.
+        pass
+    return True
+
+
 def _footer_top_row(
     user_id: int, *, is_busy: bool = True
 ) -> list[InlineKeyboardButton]:
@@ -170,9 +218,17 @@ def _more_grid(
             [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_BACK)]
         )
     else:
-        # Menu top-level: surface a Close button so the user can return to
-        # the live card. Without it, a busy session's events are buffered
-        # silently and the user has no way to drop back to the card view.
+        # Menu top-level. Optionally show "Open terminal" when the
+        # user's setting permits it AND no terminal is currently attached
+        # — keeps the chat from accumulating a no-op button when the
+        # user already has the terminal up.
+        if _can_offer_terminal(user_id):
+            rows.append(
+                [InlineKeyboardButton(t(user_id, "btn.term"), callback_data=CB_FT_TERM)]
+            )
+        # Close button: surface a way to return to the live card. Without
+        # it, a busy session's events are buffered silently and the user
+        # has no way to drop back to the card view.
         rows.append(
             [InlineKeyboardButton(t(user_id, "btn.close"), callback_data=CB_FT_CLOSE)]
         )
@@ -197,7 +253,7 @@ def _settings_main_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
         elif value_key == "auto_approve":
             value_str = t(user_id, f"approve.{cur}") if cur else "?"
         elif value_key == "local_terminal":
-            value_str = t(user_id, f"approve.{cur}") if cur else "?"
+            value_str = t(user_id, f"local.{cur}") if cur else "?"
         elif value_key == "session_token_alerts":
             arr = cur if isinstance(cur, list) else []
             value_str = " / ".join(f"{int(v) // 1000}k" for v in arr)
@@ -303,15 +359,16 @@ def _settings_local_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     rows.append(
         [
             InlineKeyboardButton(
-                _highlight(t(user_id, f"approve.{v}"), cur == v),
+                _highlight(t(user_id, f"local.{v}"), cur == v),
                 callback_data=f"{CB_ST_LOCAL}{v}",
             )
-            for v in ("off", "on")
+            for v in ("off", "manual", "auto")
         ]
     )
 
-    # On Linux + on, surface emulator picker. Empty list → claude-fallback only.
-    if cur == "on" and platform.system() == "Linux":
+    # Linux + a terminal-enabled mode: surface the emulator picker.
+    # Empty list → fall back to the claude-typed snippet flow.
+    if cur in ("manual", "auto") and platform.system() == "Linux":
         detected = detect_linux_emulators()
         if detected:
             for i in range(0, len(detected), 2):

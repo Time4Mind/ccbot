@@ -192,7 +192,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         screen_name = "settings_approve"
     elif data.startswith(CB_ST_LOCAL):
         value = data[len(CB_ST_LOCAL) :]
-        if value in ("off", "on"):
+        if value in ("off", "manual", "auto"):
             session_manager.update_user_setting(user.id, "local_terminal", value)
         screen_name = "settings_local"
     elif data.startswith(CB_ST_LTERM):

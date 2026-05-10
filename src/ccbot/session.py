@@ -587,11 +587,16 @@ class SessionManager:
         # triggers a one-shot push notification when the session crosses it.
         # Adjustable in 50_000-token steps via Settings.
         "session_token_alerts": [100_000, 200_000, 400_000],
-        # macOS UX: when "on", every newly-created session also pops a
-        # native Terminal/iTerm window attached to its tmux window, so the
-        # user can drive the session by hand from the desktop in parallel
-        # with the Telegram UI. On Linux, also requires
-        # ``local_terminal_cmd`` (or CCBOT_LOCAL_TERMINAL_CMD env).
+        # Three states for the desktop terminal companion:
+        #   off    — never spawn, never offer
+        #   manual — don't auto-spawn, but show "Open terminal" in Menu
+        #            when the active session has no attached tmux client
+        #   auto   — auto-spawn on session create AND show the manual
+        #            button whenever no client is attached
+        # On Linux ``manual``/``auto`` also need ``local_terminal_cmd``
+        # (or CCBOT_LOCAL_TERMINAL_CMD env) — without an emulator template
+        # the button is hidden because the click would silently no-op.
+        # Legacy binary "on" is auto-migrated to "auto" on read.
         "local_terminal": "off",
         # Linux: command template used by ``local_terminal``. Empty means
         # "fall back to CCBOT_LOCAL_TERMINAL_CMD or skip". Templates are
@@ -606,6 +611,11 @@ class SessionManager:
         stored = self.user_settings.get(user_id, {})
         merged: dict[str, Any] = dict(self.DEFAULT_USER_SETTINGS)
         merged.update(stored)
+        # Backwards-compat: the old binary value "on" maps to the new
+        # 3-state "auto". Read-side only; stored value lingers until the
+        # user picks something on the settings screen.
+        if merged.get("local_terminal") == "on":
+            merged["local_terminal"] = "auto"
         return merged
 
     def update_user_setting(self, user_id: int, key: str, value: Any) -> None:

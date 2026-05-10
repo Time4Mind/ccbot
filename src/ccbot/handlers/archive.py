@@ -164,7 +164,7 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
 
     session_manager.set_session_window(sess.id, created_wid)
     session_manager.set_active_session(user_id, sess.id)
-    if session_manager.get_user_settings(user_id).get("local_terminal") == "on":
+    if session_manager.get_user_settings(user_id).get("local_terminal") == "auto":
         from ..local_terminal import open_terminal_for_window
 
         await open_terminal_for_window(created_wid, user_id=user_id)

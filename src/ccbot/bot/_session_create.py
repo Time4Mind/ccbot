@@ -99,7 +99,7 @@ async def create_and_activate_session(
         session_manager.set_session_claude_id(sess.id, ws.session_id)
     session_manager.set_active_session(user.id, sess.id)
 
-    if session_manager.get_user_settings(user.id).get("local_terminal") == "on":
+    if session_manager.get_user_settings(user.id).get("local_terminal") == "auto":
         await open_terminal_for_window(created_wid, user_id=user.id)
 
     status = "Resumed" if resume_session_id else "Created"

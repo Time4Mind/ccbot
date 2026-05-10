@@ -33,6 +33,7 @@ _EN: dict[str, str] = {
     "btn.clear": "🧹 Clear",
     "btn.menu": "≡ Menu",
     "btn.close": "× Close",
+    "btn.term": "🖥 Open terminal",
     "btn.back": "← Back",
     "btn.cancel": "× Cancel",
     "btn.confirm": "✓ Confirm",
@@ -130,6 +131,7 @@ _EN: dict[str, str] = {
     "toast.restored": "Restored",
     "toast.already_gone": "Already gone",
     "toast.nothing_to_kill": "Nothing to kill",
+    "toast.term_opened": "🖥 Terminal opened",
     # /usage compact display
     "usage.title": "*Claude Code*",
     "usage.unavailable": "Live usage unavailable.",
@@ -166,6 +168,10 @@ _EN: dict[str, str] = {
     ),
     "approve.off": "off",
     "approve.on": "on",
+    # Local terminal — 3-state (off / manual / auto).
+    "local.off": "off",
+    "local.manual": "manual",
+    "local.auto": "auto",
     # Settings group: per-session token alert thresholds
     "settings.group.token_alerts": "Token alerts",
     "settings.tokens.body": (
@@ -291,6 +297,7 @@ _RU: dict[str, str] = {
     "btn.clear": "🧹 Очистить",
     "btn.menu": "≡ Меню",
     "btn.close": "× Закрыть",
+    "btn.term": "🖥 Открыть терминал",
     "btn.back": "← Назад",
     "btn.cancel": "× Отмена",
     "btn.confirm": "✓ Подтвердить",
@@ -380,6 +387,7 @@ _RU: dict[str, str] = {
     "toast.restored": "Восстановлена",
     "toast.already_gone": "Уже нет",
     "toast.nothing_to_kill": "Убивать нечего",
+    "toast.term_opened": "🖥 Терминал открыт",
     "usage.title": "*Claude Code*",
     "usage.unavailable": "Живые данные usage недоступны.",
     "usage.5h": "5ч",
@@ -413,6 +421,10 @@ _RU: dict[str, str] = {
     ),
     "approve.off": "выкл",
     "approve.on": "вкл",
+    # Local terminal — 3-state (off / manual / auto).
+    "local.off": "выкл",
+    "local.manual": "по кнопке",
+    "local.auto": "всегда",
     "settings.group.token_alerts": "Алерты по токенам",
     "settings.tokens.body": (
         "*Алерты по токенам сессии*\n\n"
@@ -532,6 +544,7 @@ _ZH: dict[str, str] = {
     "btn.clear": "🧹 清空",
     "btn.menu": "≡ 菜单",
     "btn.close": "× 关闭",
+    "btn.term": "🖥 打开终端",
     "btn.back": "← 返回",
     "btn.cancel": "× 取消",
     "btn.confirm": "✓ 确认",
@@ -616,6 +629,7 @@ _ZH: dict[str, str] = {
     "toast.restored": "已恢复",
     "toast.already_gone": "已不存在",
     "toast.nothing_to_kill": "没什么可终止的",
+    "toast.term_opened": "🖥 已打开终端",
     "usage.title": "*Claude Code*",
     "usage.unavailable": "实时使用数据不可用。",
     "usage.5h": "5小时",
@@ -649,6 +663,10 @@ _ZH: dict[str, str] = {
     ),
     "approve.off": "关",
     "approve.on": "开",
+    # Local terminal — 3-state (off / manual / auto).
+    "local.off": "关",
+    "local.manual": "按钮",
+    "local.auto": "总是",
     "settings.group.token_alerts": "Token 提醒",
     "settings.tokens.body": (
         "*会话 Token 提醒*\n\n"

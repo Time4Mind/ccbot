@@ -484,42 +484,61 @@ async def update_session_card(
         )
 
 
+_RESULT_DIVIDER = "\n────── Результат ──────"
+
+
 async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) -> None:
-    """Mark the current task as complete: replace the live card's body with
-    the full final assistant answer, then drop the live-card pointer so the
-    next event opens a fresh card. Long answers spill into continuation
-    cards via `split_message` to respect Telegram's 4096-char limit.
+    """Append the final assistant answer to the current live card.
+
+    Earlier this method *replaced* the card body with the final answer
+    and dropped tool history. The new behaviour keeps the tool log
+    visible and appends the final text after a "Результат" divider so
+    the user sees the journey + result in a single message. Long
+    answers still spill into continuation cards via ``split_message``
+    to respect Telegram's 4096-char limit. ``_ensure_room`` trims
+    oldest tool lines if the divider+answer combo wouldn't fit.
     """
     state = get_card_state(user_id, sess)
-    # Cancel any pending coalesced edit — we want this completion to land
-    # immediately, not via the deferred path.
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
     state.pending_edit = None
 
     cleaned = (final_text or "").strip()
-    # Empty final turn — drop the card and emit only the push summary.
     if not cleaned:
         reset_card(user_id, sess.id)
         await push_event(bot, user_id, sess, text="✓ task complete")
         return
 
-    # Pull oversized fenced code blocks and wide markdown tables into file
-    # attachments — replaces them inline with a short placeholder, returns
-    # the list of attachments to send as separate documents after the card.
     formatted = split_overflow(cleaned)
     cleaned = formatted.text
     attachments = formatted.attachments
 
-    # Compute body budget so each chunk + header + footer fits CARD_HARD_LIMIT.
-    state.lines = []
+    has_history = bool(state.lines)
+    if has_history:
+        state.lines.append(CardLine(text=_RESULT_DIVIDER))
+
+    # Body budget for the answer chunk after header + tool history + divider.
     overhead = len(_render_card(sess, state, footer="(task complete)"))
     body_budget = max(200, CARD_HARD_LIMIT - overhead - 1)
     chunks = split_message(cleaned, max_length=body_budget)
 
-    # First chunk → live card (edit in place, or send fresh if no card yet).
-    state.lines = [CardLine(text=chunks[0])]
+    state.lines.append(CardLine(text=chunks[0]))
     state.last_event_ts = time.time()
+
+    # If the combined card still overflows, _ensure_room trims old tool
+    # lines from the front; if even that fails, open a continuation card
+    # holding only divider + answer.
+    overflow = _ensure_room(sess, state)
+    if overflow:
+        state.msg_id = None
+        state.lines = (
+            [CardLine(text=_RESULT_DIVIDER), CardLine(text=chunks[0])]
+            if has_history
+            else [CardLine(text=chunks[0])]
+        )
+        state.is_continuation = True
+        state.last_rendered = ""
+
     text = _render_card(sess, state, footer="(task complete)")
     if state.msg_id is None:
         await _send_card(bot, user_id, sess, state, text=text)
@@ -528,7 +547,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
             state.last_rendered = text
     state.last_edit_ts = time.monotonic()
 
-    # Remaining chunks → fresh continuation cards.
+    # Remaining chunks → fresh continuation cards (answer-only).
     for chunk in chunks[1:]:
         state.msg_id = None
         state.lines = [CardLine(text=chunk)]
@@ -538,13 +557,10 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
         await _send_card(bot, user_id, sess, state, text=text)
         state.last_edit_ts = time.monotonic()
 
-    # Send any extracted overflow attachments (wide tables, long code).
     if attachments:
         await _send_attachments(bot, user_id, attachments)
 
-    # Reset for next task — a new card will spawn on the next event.
     reset_card(user_id, sess.id)
-    # Push completion summary as a separate message.
     summary = _summary_for_push(cleaned)
     await push_event(bot, user_id, sess, text=f"✓ {summary}")
 

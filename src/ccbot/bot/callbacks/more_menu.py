@@ -13,7 +13,6 @@ from ...handlers.archive import DEFAULT_LOOKBACK_SECONDS, build_archive_page
 from ...handlers.callback_data import (
     CB_FT_CLEAR,
     CB_FT_KILL,
-    CB_FT_STOP,
     CB_MM_ARCHIVE,
     CB_MM_BACK,
     CB_MM_HISTORY,
@@ -33,7 +32,7 @@ from ...handlers.message_sender import safe_send
 from ...handlers.switcher import build_switcher_keyboard
 from ...i18n import t
 from ...session import session_manager
-from .._common import active_window, is_window_busy, set_view
+from .._common import active_window, set_view
 from .._usage_window import fetch_claude_usage
 from ..commands.info import emit_screenshot_compact
 from ..commands.lifecycle import build_live_sessions_text
@@ -91,12 +90,8 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         rows: list[list[InlineKeyboardButton]] = []
         active_sess = session_manager.get_active_session(user.id)
         if active_sess is not None and active_sess.window_id:
-            busy = await is_window_busy(active_sess.window_id)
             ctl_row: list[InlineKeyboardButton] = [
-                InlineKeyboardButton(
-                    t(user.id, "btn.stop") if busy else t(user.id, "btn.kill"),
-                    callback_data=CB_FT_STOP if busy else CB_FT_KILL,
-                ),
+                InlineKeyboardButton(t(user.id, "btn.kill"), callback_data=CB_FT_KILL),
                 InlineKeyboardButton(
                     t(user.id, "btn.clear"), callback_data=CB_FT_CLEAR
                 ),

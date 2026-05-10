@@ -23,7 +23,7 @@ from ...handlers.directory_browser import (
 from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_send
 from ...session import session_manager
-from .._common import is_window_busy, render_session_preview
+from .._common import render_session_preview
 
 logger = logging.getLogger(__name__)
 
@@ -43,15 +43,17 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             return True
         session_manager.set_active_session(user.id, target_id)
 
-        # Stop-vs-Kill choice based on whether the target window is busy.
-        is_busy = await is_window_busy(sess.window_id) if sess.window_id else False
-
+        # Switcher preview is a management surface, not real-time control.
+        # Always render Kill — Stop lives on the live card where _card_is_busy
+        # tracks whether a task is actually running. Polling
+        # ``is_window_busy`` here gave false positives on completed
+        # sessions (parse_status_line flickers between tool calls).
         try:
             preview = await render_session_preview(sess)
             await query.edit_message_text(text=preview)
         except Exception as e:
             logger.debug("preview edit_message_text failed: %s", e)
-        keyboard = build_footer_keyboard(user.id, screen="main", is_busy=is_busy)
+        keyboard = build_footer_keyboard(user.id, screen="main", is_busy=False)
         if keyboard is not None:
             try:
                 await query.edit_message_reply_markup(reply_markup=keyboard)

@@ -19,7 +19,6 @@ from ..handlers.menu import build_footer_keyboard
 from ..handlers.message_sender import safe_send
 from ..handlers.switcher import build_session_preview
 from ..session import Session, session_manager
-from ..tmux_manager import tmux_manager
 
 logger = logging.getLogger(__name__)
 
@@ -111,24 +110,6 @@ async def render_session_preview(sess: Session) -> str:
     )
 
 
-async def is_window_busy(window_id: str) -> bool:
-    """Best-effort: does the pane currently show a Claude status line?
-
-    Used to choose between Stop and Kill in the dynamic footer.
-    """
-    if not window_id:
-        return False
-    w = await tmux_manager.find_window_by_id(window_id)
-    if not w:
-        return False
-    pane_text = await tmux_manager.capture_pane(w.window_id)
-    if not pane_text:
-        return False
-    from ..terminal_parser import parse_status_line
-
-    return bool(parse_status_line(pane_text))
-
-
 def is_media_message(msg: Any) -> bool:
     """True if `msg` is a Telegram message that carries non-text media.
 
@@ -195,7 +176,6 @@ __all__ = [
     "active_window",
     "is_media_message",
     "is_user_allowed",
-    "is_window_busy",
     "logger",
     "open_more_in_place",
     "render_session_preview",

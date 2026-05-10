@@ -1,5 +1,5 @@
-"""Session lifecycle slash commands: /new, /list, /use, /rename, /kill,
-/done, /stop, /menu, /archive.
+"""Session lifecycle slash commands: /new, /list, /kill, /done, /stop,
+/menu, /archive.
 
 The /list rendering helpers (``build_live_sessions_text``, ``shorten_workdir``)
 live here too because they're also used by the Menu→List callback path.
@@ -41,7 +41,6 @@ from ...tmux_manager import tmux_manager
 from .._common import (
     active_window,
     is_user_allowed,
-    render_session_preview,
     resolve_ident,
     shorten_workdir,
 )
@@ -165,72 +164,6 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     sent = await safe_reply(update.message, body, reply_markup=keyboard)
     if sent and keyboard is not None:
         session_manager.set_last_switcher_msg(user.id, sent.message_id)
-
-
-# --- /use ---
-
-
-async def use_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """`/use <name-or-id>` — make the named session active."""
-    user = update.effective_user
-    if not user or not is_user_allowed(user.id):
-        return
-    if not update.message:
-        return
-
-    args = (update.message.text or "").split(maxsplit=1)
-    if len(args) < 2:
-        await safe_reply(update.message, "Usage: `/use <name-or-id>`")
-        return
-    sess = resolve_ident(args[1].strip())
-    if sess is None:
-        await safe_reply(update.message, "❌ Session not found.")
-        return
-    if sess.state in ("archived", "completed"):
-        await safe_reply(
-            update.message,
-            f"❌ `{sess.name}` is archived. Use /archive to restore it.",
-        )
-        return
-    if sess.state == "lost":
-        await safe_reply(
-            update.message,
-            f"❌ `{sess.name}` is lost (tmux window vanished). Use /archive to restore.",
-        )
-        return
-    session_manager.set_active_session(user.id, sess.id)
-    preview = await render_session_preview(sess)
-    keyboard = build_footer_keyboard(user.id, screen="main")
-    sent = await safe_reply(update.message, preview, reply_markup=keyboard)
-    if sent and keyboard is not None:
-        session_manager.set_last_switcher_msg(user.id, sent.message_id)
-
-
-# --- /rename ---
-
-
-async def rename_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """`/rename <old-name-or-id> <new-name>`."""
-    user = update.effective_user
-    if not user or not is_user_allowed(user.id):
-        return
-    if not update.message:
-        return
-
-    args = (update.message.text or "").split(maxsplit=2)
-    if len(args) < 3:
-        await safe_reply(update.message, "Usage: `/rename <old> <new-name>`")
-        return
-    sess = resolve_ident(args[1].strip())
-    if sess is None:
-        await safe_reply(update.message, "❌ Session not found.")
-        return
-    new_name = args[2].strip()
-    session_manager.rename_session(sess.id, new_name)
-    if sess.window_id:
-        await tmux_manager.rename_window(sess.window_id, new_name)
-        session_manager.update_display_name(sess.window_id, new_name)
-    await safe_reply(update.message, f"✅ Renamed to `{new_name}`")
 
 
 # --- /kill, /done — share archive_session ---

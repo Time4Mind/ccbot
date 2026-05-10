@@ -81,6 +81,7 @@ CB_ST_LAG = "st:lag:"  # st:lag:<value>
 CB_ST_VOICE = "st:voice:"  # st:voice:<value>
 CB_ST_WDAY = "st:wday:"  # st:wday:<mon|tue|...|sun>
 CB_ST_APPROVE = "st:apr:"  # st:apr:<off|webfetch|all>
+CB_ST_TOK = "st:tok:"  # st:tok:<slot>:<+|->  bump session-token threshold
 CB_ST_BACK = "st:back"  # back to Menu
 
 # Confirmation dialogs (id-bearing variants take session.id)

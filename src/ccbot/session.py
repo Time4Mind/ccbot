@@ -114,6 +114,8 @@ class Session:
         archived_at: Unix timestamp of archival, 0 while active.
         token_usage_total: Cumulative input+output tokens (parsed from JSONL).
         message_count: Cumulative claude turn count.
+        alerted_token_thresholds: Per-session token alerts already pushed
+            (see ``usage.pop_session_token_alert``).
     """
 
     id: str
@@ -128,6 +130,7 @@ class Session:
     archived_at: float = 0.0
     token_usage_total: int = 0
     message_count: int = 0
+    alerted_token_thresholds: list[int] = field(default_factory=list)
 
     @staticmethod
     def new_id() -> str:
@@ -148,6 +151,7 @@ class Session:
             "archived_at": self.archived_at,
             "token_usage_total": self.token_usage_total,
             "message_count": self.message_count,
+            "alerted_token_thresholds": list(self.alerted_token_thresholds),
         }
 
     @classmethod
@@ -155,6 +159,14 @@ class Session:
         state_val = data.get("state", "active")
         if state_val not in ("active", "idle", "archived", "completed", "lost"):
             state_val = "active"
+        raw_alerts = data.get("alerted_token_thresholds") or []
+        alerts: list[int] = []
+        if isinstance(raw_alerts, list):
+            for v in raw_alerts:
+                try:
+                    alerts.append(int(v))
+                except (TypeError, ValueError):
+                    continue
         return cls(
             id=data["id"],
             name=data.get("name", ""),
@@ -168,6 +180,7 @@ class Session:
             archived_at=float(data.get("archived_at", 0.0)),
             token_usage_total=int(data.get("token_usage_total", 0)),
             message_count=int(data.get("message_count", 0)),
+            alerted_token_thresholds=alerts,
         )
 
 
@@ -1098,6 +1111,10 @@ class SessionManager:
         # permissions doesn't already bypass (e.g. WebFetch per-domain
         # trust). "off" = surface in TG, "on" = auto-Yes on every prompt.
         "auto_approve": "off",
+        # Three ascending per-session token thresholds (in tokens). Each
+        # triggers a one-shot push notification when the session crosses it.
+        # Adjustable in 50_000-token steps via Settings.
+        "session_token_alerts": [100_000, 200_000, 400_000],
     }
 
     def get_user_settings(self, user_id: int) -> dict[str, Any]:

@@ -6,8 +6,8 @@ monitoring intervals from environment variables (with .env support).
 The module-level `config` instance is imported by nearly every other module.
 
 DM mode adds: SESSION_IDLE_TTL, ARCHIVE_PURGE_AFTER, MAX_SESSIONS,
-SESSION_TOKEN_BUDGET_5H, MAX_5H_TOKENS, MAX_WEEKLY_TOKENS, PREVIEW_*,
-BG_NOTIFY_MODE, VOICE_BACKEND, WHISPER_MODEL_PATH, INBOX_TTL_HOURS.
+PREVIEW_*, BG_NOTIFY_MODE, VOICE_BACKEND, WHISPER_MODEL_PATH,
+INBOX_TTL_HOURS, QUOTA_ALERT_POLL_INTERVAL.
 
 Key class: Config (singleton instantiated as `config`).
 """
@@ -137,13 +137,20 @@ class Config:
         self.archive_purge_after: float = _parse_duration(
             os.getenv("ARCHIVE_PURGE_AFTER", "14d"), 14 * 86400
         )
-        self.session_token_budget_5h: int = int(
-            os.getenv("SESSION_TOKEN_BUDGET_5H", "15000")
+        # Per-session token alert defaults — three thresholds the user can
+        # adjust in Settings. Each must be a positive multiple of 50_000.
+        self.session_token_alert_defaults: tuple[int, int, int] = (
+            100_000,
+            200_000,
+            400_000,
         )
+        self.session_token_alert_step: int = 50_000
 
-        # Budgets — Max x20 starting estimates, calibrated empirically.
-        self.max_5h_tokens: int = int(os.getenv("MAX_5H_TOKENS", "50000"))
-        self.max_weekly_tokens: int = int(os.getenv("MAX_WEEKLY_TOKENS", "640000"))
+        # Background-poll interval for the live /usage modal (used by the
+        # quota-crossing alarms in handlers/quota_alerts.py).
+        self.quota_alert_poll_interval: float = _parse_duration(
+            os.getenv("QUOTA_ALERT_POLL_INTERVAL", "5m"), 5 * 60
+        )
 
         # Preview
         self.preview_user_lines: int = int(os.getenv("PREVIEW_USER_LINES", "4"))

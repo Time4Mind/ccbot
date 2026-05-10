@@ -165,6 +165,14 @@ _EN: dict[str, str] = {
     ),
     "approve.off": "off",
     "approve.on": "on",
+    # Settings group: per-session token alert thresholds
+    "settings.group.token_alerts": "Token alerts",
+    "settings.tokens.body": (
+        "*Per-session token alerts*\n\n"
+        "Three thresholds. The bot pushes one notification each time a "
+        "session's lifetime token usage crosses one of these — adjust in "
+        "50k-token steps."
+    ),
 }
 
 _RU: dict[str, str] = {
@@ -294,6 +302,12 @@ _RU: dict[str, str] = {
     ),
     "approve.off": "выкл",
     "approve.on": "вкл",
+    "settings.group.token_alerts": "Алерты по токенам",
+    "settings.tokens.body": (
+        "*Алерты по токенам сессии*\n\n"
+        "Три порога. Бот один раз пришлёт уведомление, когда\n"
+        "суммарный расход сессии переходит каждый — шаг 50k."
+    ),
 }
 
 _ZH: dict[str, str] = {
@@ -418,6 +432,12 @@ _ZH: dict[str, str] = {
     ),
     "approve.off": "关",
     "approve.on": "开",
+    "settings.group.token_alerts": "Token 提醒",
+    "settings.tokens.body": (
+        "*会话 Token 提醒*\n\n"
+        "三个阈值。每当会话累计 token 跨过一个阈值时,\n"
+        "机器人发送一次推送通知,步长 50k。"
+    ),
 }
 
 TRANSLATIONS: dict[str, dict[str, str]] = {

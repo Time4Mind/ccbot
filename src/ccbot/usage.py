@@ -4,7 +4,7 @@ DM-multisession spec section 5: usage is sourced from the assistant turns in
 ~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl; each assistant message
 records ``usage.input_tokens``, ``usage.output_tokens``, and cache totals.
 
-We do not maintain incremental in-memory counters in v0.1 — /status reads the
+We do not maintain incremental in-memory counters — /status reads the
 JSONL files at call time and computes the rolling 5h and weekly aggregates.
 For typical session sizes this is sub-second; if it becomes hot we can move
 to the same byte-offset approach used by SessionMonitor.
@@ -13,10 +13,10 @@ Public API:
   parse_session_usage(file_path) -> list[Turn]
   aggregate_session(sess) -> SessionUsage
   compute_user_usage(user_id) -> UserUsage
-  notify_quota_crossings(...) — called after a session emits a complete turn
-
-The 5h and weekly budgets are read from config (MAX_5H_TOKENS, MAX_WEEKLY_TOKENS).
-Per-session 5h budget for soft warnings is SESSION_TOKEN_BUDGET_5H.
+  format_usage_breakdown_compact(...) — render the live /usage modal block
+  format_usage_status(...) — /status text body
+  pop_session_token_alert(sess, user_id) -> int | None
+      next per-session token threshold this session has just crossed
 """
 
 from __future__ import annotations
@@ -294,28 +294,23 @@ def format_usage_breakdown_compact(user_id: int, info: object) -> str | None:
 
 
 def format_usage_status(user_id: int, usage: UserUsage) -> str:
-    """Render the /status text.
+    """Render the /status text — per-session 5h tokens + lifetime totals.
 
-    Header carries 5h / weekly aggregates against the configured caps.
     Sessions are split into Active / Archived / Lost groups; each line is
     name + 5h tokens + lifetime tokens, marked with ✓ for the active one.
+    Real %-of-quota lives in the Menu→Status view (see
+    ``format_usage_breakdown_compact``); /status text reports raw numbers.
     """
     del user_id
     lines: list[str] = []
-    cap_5h = max(1, config.max_5h_tokens)
-    cap_w = max(1, config.max_weekly_tokens)
-    pct_5h = int(100 * usage.tokens_5h / cap_5h)
-    pct_w = int(100 * usage.tokens_weekly / cap_w)
-    lines.append("*Local estimate*")
-    lines.append(
-        f"5h window: {pct_5h:>3}% ({usage.tokens_5h // 1000}k / {cap_5h // 1000}k est)"
-    )
-    lines.append(
-        f"Weekly:    {pct_w:>3}% ({usage.tokens_weekly // 1000}k / "
-        f"{cap_w // 1000}k est)"
-    )
-    if not usage.sessions:
-        return "\n".join(lines)
+    if usage.sessions:
+        lines.append(
+            f"*Tokens* — {usage.tokens_5h // 1000}k 5h · "
+            f"{usage.tokens_weekly // 1000}k weekly · "
+            f"{usage.tokens_total // 1000}k lifetime"
+        )
+    else:
+        return "_No sessions yet._"
 
     active = session_manager.get_active_session(
         min(config.allowed_users) if config.allowed_users else 0
@@ -361,28 +356,40 @@ def format_usage_status(user_id: int, usage: UserUsage) -> str:
     return "\n".join(lines)
 
 
-# --- Quota crossings ---
-
-# Per-session "warning emitted" set; kept in memory (best-effort).
-# Each entry is a session_id whose 75% threshold was already announced this 5h window.
-_warned_sessions: set[str] = set()
+# --- Per-session token alerts ---
 
 
-def reset_quota_warnings() -> None:
-    """Drop all 'already warned' markers — call when 5h window resets."""
-    _warned_sessions.clear()
+def _user_token_thresholds(user_id: int) -> list[int]:
+    """User-configurable session-token alert thresholds, ascending order."""
+    settings = session_manager.get_user_settings(user_id)
+    raw = settings.get("session_token_alerts")
+    if not isinstance(raw, list) or len(raw) != 3:
+        raw = list(config.session_token_alert_defaults)
+    out: list[int] = []
+    for v in raw:
+        try:
+            out.append(max(0, int(v)))
+        except (TypeError, ValueError):
+            out.append(0)
+    return sorted(t for t in out if t > 0)
 
 
-def should_warn_quota(session_usage: SessionUsage) -> bool:
-    """Return True iff this session just crossed 75% of SESSION_TOKEN_BUDGET_5H
-    and we have not yet warned about this crossing.
+def pop_session_token_alert(sess: Session, user_id: int) -> int | None:
+    """Return the next per-session token threshold this session crossed, once.
+
+    Mutates ``sess.alerted_token_thresholds`` to remember which thresholds
+    have already fired. Caller is expected to persist the Session record.
+    Returns the integer threshold (e.g. 100_000) or None.
     """
-    cap = config.session_token_budget_5h
-    if cap <= 0:
-        return False
-    if session_usage.tokens_5h * 4 < cap * 3:  # less than 75%
-        return False
-    if session_usage.session_id in _warned_sessions:
-        return False
-    _warned_sessions.add(session_usage.session_id)
-    return True
+    thresholds = _user_token_thresholds(user_id)
+    if not thresholds:
+        return None
+    fired: set[int] = set(sess.alerted_token_thresholds or [])
+    for th in thresholds:
+        if th in fired:
+            continue
+        if sess.token_usage_total >= th:
+            fired.add(th)
+            sess.alerted_token_thresholds = sorted(fired)
+            return th
+    return None

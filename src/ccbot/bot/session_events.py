@@ -38,7 +38,7 @@ from ..handlers.notifications import (
 )
 from ..session import session_manager
 from ..session_monitor import NewMessage
-from ..usage import aggregate_session, should_warn_quota
+from ..usage import aggregate_session, pop_session_token_alert
 
 logger = logging.getLogger(__name__)
 
@@ -137,26 +137,23 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 except OSError:
                     pass
 
-            # G6 soft quota crossing — separate push, not card-merged.
+            # Per-session token alerts — fire once per crossing, push outside
+            # the live card so it survives card-recycling.
             if msg.role == "assistant" and msg.content_type == "text":
                 try:
                     su = await aggregate_session(sess)
                     sess.token_usage_total = su.tokens_total
-                    if should_warn_quota(su):
-                        pct = (
-                            su.tokens_5h * 100 // max(1, config.session_token_budget_5h)
-                        )
+                    threshold = pop_session_token_alert(sess, user_id)
+                    if threshold is not None:
+                        session_manager._save_state()
                         await push_event(
                             bot,
                             user_id,
                             sess,
-                            text=(
-                                f"⚠ burned {pct}% of 5h quota "
-                                f"({config.session_token_budget_5h // 1000}k)"
-                            ),
+                            text=f"⚠ reached {threshold // 1000}k tokens",
                         )
                 except Exception as e:
-                    logger.debug("quota check failed: %s", e)
+                    logger.debug("token-alert check failed: %s", e)
         else:
             # Streaming chunk — best-effort card update.
             await update_session_card(bot, user_id, sess, msg)

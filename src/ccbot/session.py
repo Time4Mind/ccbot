@@ -51,6 +51,30 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
+def key_matches_window(key: str, window_id: str) -> bool:
+    """True if a session_map.json key targets ``window_id`` in our tmux server.
+
+    Accepts both canonical keys (``<source>:<wid>``) and grouped-
+    session keys (``<source>-w<digits>:<wid>``) — when ccbot's local-
+    terminal helper attaches a per-window grouped session, an old
+    Claude hook build that resolves ``#{session_name}`` lands on the
+    grouped name and writes the wrong-prefix variant. Newer hooks
+    prefer ``#{session_group}`` and produce canonical keys.
+    """
+    base = config.tmux_session_name
+    suffix = f":{window_id}"
+    if not key.endswith(suffix):
+        return False
+    prefix = key[: -len(suffix)]
+    if prefix == base:
+        return True
+    grouped = f"{base}-w"
+    if not prefix.startswith(grouped):
+        return False
+    tail = prefix[len(grouped) :]
+    return bool(tail) and tail.isdigit()
+
+
 @dataclass
 class SessionManager:
     """Manages session state for Claude Code.
@@ -205,6 +229,11 @@ class SessionManager:
     ) -> bool:
         """Poll session_map.json until an entry for window_id appears.
 
+        Accepts both canonical ``<source>:<wid>`` keys and grouped-
+        session keys ``<source>-w<digits>:<wid>`` — older Claude hook
+        builds wrote the latter when called from a client attached to a
+        grouped session (see ``hook.py`` for the canonical fix).
+
         Returns True if the entry was found within timeout, False otherwise.
         """
         logger.debug(
@@ -212,7 +241,6 @@ class SessionManager:
             window_id,
             timeout,
         )
-        key = f"{config.tmux_session_name}:{window_id}"
         deadline = asyncio.get_event_loop().time() + timeout
         while asyncio.get_event_loop().time() < deadline:
             try:
@@ -220,9 +248,11 @@ class SessionManager:
                     async with aiofiles.open(config.session_map_file, "r") as f:
                         content = await f.read()
                     session_map = json.loads(content)
-                    info = session_map.get(key, {})
-                    if info.get("session_id"):
-                        # Found — load into window_states immediately
+                    if any(
+                        info.get("session_id")
+                        for k, info in session_map.items()
+                        if key_matches_window(k, window_id)
+                    ):
                         logger.debug(
                             "session_map entry found for window_id %s", window_id
                         )
@@ -239,10 +269,11 @@ class SessionManager:
     async def load_session_map(self) -> None:
         """Read session_map.json and update window_states with new session associations.
 
-        Keys in session_map are formatted as "tmux_session:window_id" (e.g. "ccbot:@12").
-        Only entries matching our tmux_session_name are processed.
-        Also cleans up window_states entries not in current session_map.
-        Updates window_display_names from the "window_name" field in values.
+        Accepts canonical (``<source>:<wid>``) and grouped-session
+        (``<source>-w<digits>:<wid>``) keys — see ``key_matches_window``
+        for why the latter exists. Cleans up window_states entries not
+        present in the map. Updates window_display_names from the
+        ``window_name`` field in values.
         """
         if not config.session_map_file.exists():
             return
@@ -253,16 +284,17 @@ class SessionManager:
         except (json.JSONDecodeError, OSError):
             return
 
-        prefix = f"{config.tmux_session_name}:"
         valid_wids: set[str] = set()
         changed = False
 
         for key, info in session_map.items():
-            # Only process entries for our tmux session
-            if not key.startswith(prefix):
-                continue
-            window_id = key[len(prefix) :]
-            if not self.is_window_id(window_id):
+            # Extract window_id from any accepted key shape.
+            window_id = ""
+            if ":" in key:
+                candidate = key.rsplit(":", 1)[1]
+                if self.is_window_id(candidate) and key_matches_window(key, candidate):
+                    window_id = candidate
+            if not window_id:
                 continue
             valid_wids.add(window_id)
             new_sid = info.get("session_id", "")

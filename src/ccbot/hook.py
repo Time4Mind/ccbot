@@ -194,6 +194,13 @@ def hook_main() -> None:
         logger.warning("TMUX_PANE not set, cannot determine window")
         return
 
+    # Ask tmux for the SESSION GROUP name as well as the session name.
+    # When ccbot's local-terminal helper attaches a per-window grouped
+    # session (``ccbot-w<wid>``), ``#{session_name}`` resolves to that
+    # grouped name — not the source ``ccbot``. ``#{session_group}`` is
+    # the canonical name shared by every member of the group, so it
+    # always points at the source. Fall back to ``session_name`` only
+    # when ``session_group`` is empty (no grouping in play).
     result = subprocess.run(
         [
             "tmux",
@@ -201,22 +208,24 @@ def hook_main() -> None:
             "-t",
             pane_id,
             "-p",
-            "#{session_name}:#{window_id}:#{window_name}",
+            "#{session_name}:#{session_group}:#{window_id}:#{window_name}",
         ],
         capture_output=True,
         text=True,
     )
     raw_output = result.stdout.strip()
-    # Expected format: "session_name:@id:window_name"
-    parts = raw_output.split(":", 2)
-    if len(parts) < 3:
+    # Expected format: "session_name:session_group:@id:window_name"
+    parts = raw_output.split(":", 3)
+    if len(parts) < 4:
         logger.warning(
-            "Failed to parse session:window_id:window_name from tmux (pane=%s, output=%s)",
+            "Failed to parse session:group:window_id:window_name from tmux "
+            "(pane=%s, output=%s)",
             pane_id,
             raw_output,
         )
         return
-    tmux_session_name, window_id, window_name = parts
+    raw_session_name, session_group, window_id, window_name = parts
+    tmux_session_name = session_group or raw_session_name
     # Key uses window_id for uniqueness
     session_window_key = f"{tmux_session_name}:{window_id}"
 

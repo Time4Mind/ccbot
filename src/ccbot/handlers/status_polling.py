@@ -51,9 +51,7 @@ def _parse_first_yes_option(pane_text: str) -> str | None:
     return None
 
 
-async def _maybe_auto_approve(
-    user_id: int, window_id: str, pane_text: str
-) -> bool:
+async def _maybe_auto_approve(user_id: int, window_id: str, pane_text: str) -> bool:
     """Auto-Yes on the in-pane Yes/No prompt when the user opted in.
 
     Returns True iff a key was sent — caller should then skip surfacing the
@@ -78,6 +76,7 @@ async def _maybe_auto_approve(
         window_id,
     )
     return True
+
 
 logger = logging.getLogger(__name__)
 

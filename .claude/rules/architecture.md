@@ -2,19 +2,19 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         Telegram Bot (bot.py)                       │
+│                       Telegram Bot (bot/ package)                   │
 │  - DM-based routing: 1 user = active_session -> tmux window        │
-│  - /list /use /new /done /archive /status /kill /stop slash cmds   │
-│  - Inline switcher under last bot message (A8)                     │
-│  - /history: Paginated message history (default: latest page)      │
-│  - /screenshot: Capture tmux pane as PNG                           │
-│  - /esc: Send Escape to interrupt Claude                           │
+│  - Inline ≡ Menu surface (List / Status / History / Shot / New /   │
+│    Archive / Settings) hosting most actions                        │
+│  - Slash commands (bot/commands/):  lifecycle.py + info.py         │
+│  - Callback dispatch (bot/callbacks/): one file per CB_* prefix    │
 │  - Send text → Claude Code via tmux keystrokes                     │
 │  - Forward /commands to Claude Code                                │
-│  - Tool use → tool result: edit message in-place                   │
+│  - Tool use → tool result: edit live card in-place                 │
 │  - Interactive UI: AskUserQuestion / ExitPlanMode / Permission     │
 │  - Per-user message queue + worker (merge, rate limit)             │
 │  - MarkdownV2 output with auto fallback to plain text              │
+│  - i18n via ccbot.i18n.t (en / ru / zh)                            │
 ├──────────────────────┬──────────────────────────────────────────────┤
 │  markdown_v2.py      │  telegram_sender.py                         │
 │  MD → MarkdownV2     │  split_message (4096 limit)                 │
@@ -70,19 +70,56 @@
 
 Additional modules:
   screenshot.py       ─ Terminal text → PNG rendering (ANSI color, font fallback)
-  transcribe.py       ─ Voice-to-text transcription via OpenAI API (gpt-4o-transcribe)
+  transcribe.py       ─ Voice-to-text transcription via whisper.cpp / Apple / OpenAI
+  i18n.py             ─ Per-user UI strings (en / ru / zh)
+  naming.py           ─ Haiku-generated session names + readable summaries
+  usage.py            ─ Token usage aggregator + compact /usage breakdown
   main.py             ─ CLI entry point
   utils.py            ─ Shared utilities (ccbot_dir, atomic_write_json)
 
+bot/ package (was bot.py before A1, split per CLAUDE.md size budget):
+  __init__.py         ─ Re-exports create_bot, forward_command_handler
+  app.py              ─ create_bot, post_init/shutdown, handler registration
+  _common.py          ─ is_user_allowed, active_window, resolve_ident,
+                       render_session_preview, set_view, open_more_in_place,
+                       is_window_busy, shorten_workdir, CC_COMMANDS
+  _usage_window.py    ─ Dedicated ccbot-usage tmux window for /usage queries
+  _session_create.py  ─ create_and_activate_session (dir-browser → tmux flow)
+  messages.py         ─ text/voice/photo/document handlers, forward_command_handler,
+                       bash !cmd capture
+  session_events.py   ─ handle_new_message — claude → TG dispatch
+  commands/lifecycle.py    ─ /new /list /use /rename /kill /done /stop
+                            /menu /archive  (+ archive_session shared helper)
+  commands/info.py         ─ /status /history /screenshot /usage  (+ emit_*)
+  callbacks/__init__.py    ─ Top-level dispatcher; tries each handler in order
+  callbacks/dir_browser.py ─ CB_DIR_*, CB_SESSION_*  (+ Haiku summary cache)
+  callbacks/window_picker.py ─ CB_WIN_*
+  callbacks/switcher.py    ─ CB_SW_*
+  callbacks/archive.py     ─ CB_ARC_*
+  callbacks/footer.py      ─ CB_FT_STOP/KILL/CLEAR/MORE
+  callbacks/more_menu.py   ─ CB_MM_LIST/STATUS/HISTORY/SHOT/NEW/ARCHIVE/SETTINGS/BACK
+  callbacks/settings.py    ─ CB_ST_GRP + CB_ST_PREV/LAG/VOICE/LANG/WDAY/APPROVE
+  callbacks/confirm.py     ─ CB_CONF_KILL/DONE/DEL × YES/NO
+  callbacks/history_pagination.py ─ CB_HISTORY_PREV/NEXT
+  callbacks/interactive_ui.py     ─ CB_ASK_*  (Up/Down/Left/Right/Esc/Enter/...)
+  callbacks/screenshot_keys.py    ─ CB_SCREENSHOT_REFRESH + CB_KEYS_*
+
 Handler modules (handlers/):
-  message_sender.py   ─ safe_reply/safe_edit/safe_send + rate_limit_send
+  message_sender.py   ─ safe_reply/safe_edit/safe_send + send_with_fallback
   message_queue.py    ─ Per-user queue + worker (merge, status dedup)
-  status_polling.py   ─ Background status line polling (1s interval)
-  response_builder.py ─ Response pagination and formatting
+  status_polling.py   ─ Background status line polling (1s interval) +
+                       auto-approve hook for interactive prompts
+  notifications.py    ─ Live card per session + push events + completion
+  archive.py          ─ /archive page rendering + restore + idle/purge sweeps
+  history.py          ─ Paginated /history rendering (with optional extra rows)
+  inbox.py            ─ photo/document inbox under <workdir>/.ccbot-inbox/
   interactive_ui.py   ─ AskUserQuestion / ExitPlanMode / Permission UI
-  directory_browser.py─ Directory selection + session picker UI for new topics
-  cleanup.py          ─ Topic state cleanup on close/delete
-  callback_data.py    ─ Callback data constants
+  directory_browser.py─ Directory + session picker UI builders
+  switcher.py         ─ Inline session-switcher keyboard
+  menu.py             ─ Footer / More / Settings keyboard composition
+  cleanup.py          ─ Per-window state cleanup on archive
+  callback_data.py    ─ Callback data prefix constants
+  tg_format.py        ─ Table/code overflow → file attachment
 
 State files (~/.ccbot/ or $CCBOT_DIR/):
   state.json         ─ thread bindings + window states + display names + read offsets

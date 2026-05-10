@@ -39,10 +39,11 @@ class TestForwardCommand:
         context = _make_context()
 
         with (
-            patch("ccbot.bot.is_user_allowed", return_value=True),
-            patch("ccbot.bot.session_manager") as mock_sm,
-            patch("ccbot.bot.tmux_manager") as mock_tmux,
-            patch("ccbot.bot.safe_reply", new_callable=AsyncMock),
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.session_manager") as mock_sm,
+            patch("ccbot.bot._common.session_manager", mock_sm),
+            patch("ccbot.bot.messages.tmux_manager") as mock_tmux,
+            patch("ccbot.bot.messages.safe_reply", new_callable=AsyncMock),
         ):
             mock_sm.get_active_window.return_value = "@5"
             mock_sm.get_display_name.return_value = "project"
@@ -62,10 +63,11 @@ class TestForwardCommand:
         context = _make_context()
 
         with (
-            patch("ccbot.bot.is_user_allowed", return_value=True),
-            patch("ccbot.bot.session_manager") as mock_sm,
-            patch("ccbot.bot.tmux_manager") as mock_tmux,
-            patch("ccbot.bot.safe_reply", new_callable=AsyncMock),
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.session_manager") as mock_sm,
+            patch("ccbot.bot._common.session_manager", mock_sm),
+            patch("ccbot.bot.messages.tmux_manager") as mock_tmux,
+            patch("ccbot.bot.messages.safe_reply", new_callable=AsyncMock),
         ):
             mock_sm.get_active_window.return_value = "@5"
             mock_sm.get_display_name.return_value = "project"
@@ -85,10 +87,11 @@ class TestForwardCommand:
         context = _make_context()
 
         with (
-            patch("ccbot.bot.is_user_allowed", return_value=True),
-            patch("ccbot.bot.session_manager") as mock_sm,
-            patch("ccbot.bot.tmux_manager") as mock_tmux,
-            patch("ccbot.bot.safe_reply", new_callable=AsyncMock),
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.session_manager") as mock_sm,
+            patch("ccbot.bot._common.session_manager", mock_sm),
+            patch("ccbot.bot.messages.tmux_manager") as mock_tmux,
+            patch("ccbot.bot.messages.safe_reply", new_callable=AsyncMock),
         ):
             mock_sm.get_active_window.return_value = "@5"
             mock_sm.get_display_name.return_value = "project"

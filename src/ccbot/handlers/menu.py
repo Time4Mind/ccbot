@@ -30,7 +30,6 @@ from .callback_data import (
     CB_FT_KILL,
     CB_FT_MORE,
     CB_FT_STOP,
-    CB_FT_TERM,
     CB_MM_ARCHIVE,
     CB_MM_BACK,
     CB_MM_HISTORY,
@@ -109,11 +108,11 @@ def _has_active_session(user_id: int) -> bool:
     return session_manager.get_active_session(user_id) is not None
 
 
-def _can_offer_terminal(user_id: int) -> bool:
-    """Show the "Open terminal" button in Menu?
+def can_offer_terminal(user_id: int) -> bool:
+    """Show the "Open terminal" button (in /list) for this user?
 
     Visible iff:
-      * the user has an active session,
+      * the user has an active session with a live window_id,
       * ``local_terminal`` is ``manual`` or ``auto`` (``off`` opts out
         of the feature entirely),
       * the platform can actually spawn a terminal (macOS always can;
@@ -218,17 +217,11 @@ def _more_grid(
             [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_BACK)]
         )
     else:
-        # Menu top-level. Optionally show "Open terminal" when the
-        # user's setting permits it AND no terminal is currently attached
-        # — keeps the chat from accumulating a no-op button when the
-        # user already has the terminal up.
-        if _can_offer_terminal(user_id):
-            rows.append(
-                [InlineKeyboardButton(t(user_id, "btn.term"), callback_data=CB_FT_TERM)]
-            )
-        # Close button: surface a way to return to the live card. Without
-        # it, a busy session's events are buffered silently and the user
-        # has no way to drop back to the card view.
+        # Menu top-level: surface a Close button so the user can return to
+        # the live card. Without it, a busy session's events are buffered
+        # silently and the user has no way to drop back to the card view.
+        # ("Open terminal" lives on the /list screen — it's a session-
+        # level action, not a global one.)
         rows.append(
             [InlineKeyboardButton(t(user_id, "btn.close"), callback_data=CB_FT_CLOSE)]
         )

@@ -167,27 +167,33 @@ def _summary_for_push(text: str, *, limit: int = 200) -> str:
 
 
 def _line_for_event(msg: NewMessage) -> CardLine:
-    """Build a single one-line summary of one Claude event."""
+    """Build a single one-line summary of one Claude event.
+
+    Glyph prefix conveys the event type without the verbose
+    ``[<tool> ✓]`` framing the body already implies via the bold
+    ``**Tool**(...)`` summary:
+
+      ∴  thinking
+      ▷  tool_use (in flight)
+      ✓  tool_result (completed; will replace the ▷ line in place)
+      👤 user-echoed text
+      (no prefix) assistant text
+    """
     text = msg.text or ""
     if msg.content_type == "thinking":
         return CardLine(text=f"∴ {_trim(text, 160)}")
     if msg.content_type == "tool_use":
-        tname = msg.tool_name or "tool"
         return CardLine(
-            text=f"[{tname}] {_trim(text, 160)}",
+            text=f"▷ {_trim(text, 160)}",
             tool_use_id=msg.tool_use_id,
             is_tool=True,
         )
     if msg.content_type == "tool_result":
-        tname = msg.tool_name or "result"
-        # Show a tiny success marker; the matching tool_use line will be
-        # replaced in update_session_card so we don't render two lines per tool.
         return CardLine(
-            text=f"[{tname} ✓] {_trim(text, 160)}",
+            text=f"✓ {_trim(text, 160)}",
             tool_use_id=msg.tool_use_id,
             is_tool=True,
         )
-    # text content (assistant or user echo)
     if msg.role == "user":
         return CardLine(text=f"👤 {_trim(text, 200)}")
     return CardLine(text=_trim(text, 200))

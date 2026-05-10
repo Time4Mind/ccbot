@@ -31,18 +31,25 @@ class TestBuildTmuxCommand:
         assert "\\;" in cmd  # tmux command separator preserved
 
     def test_keeps_window_open_after_detach(self) -> None:
-        """Trailing `|| true; exec bash -l` prevents the terminal from
-        snapping shut when the user detaches from tmux or attach fails.
-        """
+        """`|| true; exec ${SHELL:-bash} -l` prevents the terminal from
+        snapping shut when the user detaches from tmux or attach fails."""
         cmd = _build_tmux_command("@1")
         assert "|| true" in cmd
-        assert "exec bash -l" in cmd
+        assert "exec ${SHELL:-bash} -l" in cmd
 
     def test_wrapped_in_bash_c_for_shell_semantics(self) -> None:
         """Without `bash -c`, iTerm/Terminal.app exec the command without
         a shell — `\\;`, `||`, `;` all lose meaning, attach fails."""
         cmd = _build_tmux_command("@9")
         assert cmd.startswith("bash -c ")
+
+    def test_uses_absolute_tmux_path(self) -> None:
+        """iTerm's bash inherits a stripped PATH on Apple Silicon —
+        ``tmux`` from Homebrew is invoked by absolute path."""
+        cmd = _build_tmux_command("@1")
+        # Either an absolute path, OR a bare 'tmux' fallback when
+        # shutil.which returned nothing on this host. Reject neither.
+        assert "/tmux" in cmd or " tmux " in cmd
 
     def test_session_name_quoted(self) -> None:
         cmd = _build_tmux_command("@1")

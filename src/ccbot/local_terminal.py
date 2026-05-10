@@ -119,11 +119,20 @@ async def _is_iterm_running() -> bool:
 
 
 def _build_tmux_command(window_id: str) -> str:
-    """`tmux attach -t <session> \\; select-window -t @<wid>`."""
+    """tmux attach + select-window + interactive-shell tail.
+
+    ``\\;`` is tmux's command separator (bash escapes it through to tmux's
+    argv). The trailing ``|| true; exec bash -l`` mirrors what the Linux
+    helper does — it keeps the window open after the user detaches from
+    tmux (or after attach fails for any reason). Without it, iTerm tabs
+    and Terminal.app windows configured to close on shell exit will snap
+    shut the moment the user types Ctrl-b d.
+    """
     session = shlex.quote(config.tmux_session_name)
-    # tmux's literal `\;` separates commands inside a single attach call;
-    # AppleScript will receive it verbatim through our quoting helper.
-    return f"tmux attach -t {session} \\; select-window -t {window_id}"
+    return (
+        f"tmux attach -t {session} \\; select-window -t {window_id} "
+        f"|| true; exec bash -l"
+    )
 
 
 def detect_linux_emulators() -> list[str]:

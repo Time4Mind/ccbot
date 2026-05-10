@@ -26,6 +26,7 @@ from ..i18n import LANGUAGES, t
 from ..session import session_manager
 from .callback_data import (
     CB_FT_CLEAR,
+    CB_FT_CLOSE,
     CB_FT_KILL,
     CB_FT_MORE,
     CB_FT_STOP,
@@ -167,6 +168,13 @@ def _more_grid(
     if exclude is not None:
         rows.append(
             [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_BACK)]
+        )
+    else:
+        # Menu top-level: surface a Close button so the user can return to
+        # the live card. Without it, a busy session's events are buffered
+        # silently and the user has no way to drop back to the card view.
+        rows.append(
+            [InlineKeyboardButton(t(user_id, "btn.close"), callback_data=CB_FT_CLOSE)]
         )
     return rows
 

@@ -12,12 +12,13 @@ from ...handlers.callback_data import (
     CB_CONF_KILL_NO,
     CB_CONF_KILL_YES,
     CB_FT_CLEAR,
+    CB_FT_CLOSE,
     CB_FT_KILL,
     CB_FT_MORE,
     CB_FT_STOP,
 )
 from ...handlers.menu import build_footer_keyboard, render_more_text
-from ...handlers.notifications import clear_card
+from ...handlers.notifications import clear_card, pause_card_view, resume_card_view
 from ...i18n import t
 from ...session import session_manager
 from ...tmux_manager import tmux_manager
@@ -89,9 +90,24 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         return True
 
     if data == CB_FT_MORE:
+        # Pause the active session's live card so events buffered while
+        # the user navigates the Menu / sub-screens don't repaint over
+        # whatever screen they're looking at. resume on CB_FT_CLOSE.
+        sess = session_manager.get_active_session(user.id)
+        if sess is not None:
+            pause_card_view(user.id, sess.id)
         text = render_more_text(user.id)
         keyboard = build_footer_keyboard(user.id, screen="more")
         await set_view(query, context.bot, user.id, text, keyboard)
+        await query.answer()
+        return True
+
+    if data == CB_FT_CLOSE:
+        # Resume the active session's live card with whatever events
+        # accumulated during the menu navigation.
+        sess = session_manager.get_active_session(user.id)
+        if sess is not None:
+            await resume_card_view(context.bot, user.id, sess)
         await query.answer()
         return True
 

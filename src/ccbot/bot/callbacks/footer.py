@@ -19,6 +19,7 @@ from ...handlers.callback_data import (
     CB_FT_TERM,
 )
 from ...handlers.menu import build_footer_keyboard, render_more_text
+from .more_menu import build_list_view
 from ...handlers.notifications import clear_card, pause_card_view, resume_card_view
 from ...i18n import t
 from ...session import session_manager
@@ -115,12 +116,12 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
     if data == CB_FT_TERM:
         # Manual "Open terminal" — spawns a native Terminal/iTerm tab on
         # macOS or the user's configured emulator on Linux, attached to
-        # the active session's tmux window. The button is only rendered
-        # in Menu when the user's setting permits it AND no client is
-        # currently attached to this window's group; a stale tap (race
-        # between the user opening Menu and a terminal already arriving)
-        # is harmless because the spawn just adds another attached
-        # client at the desired window.
+        # the active session's tmux window. The button lives on /list
+        # and is only rendered when the user's setting permits it AND
+        # no client is currently attached to this window's group; a
+        # stale tap (race between the user opening /list and a terminal
+        # already arriving) is harmless because the spawn just adds
+        # another attached client at the desired window.
         from ...local_terminal import open_terminal_for_window
 
         sess = session_manager.get_active_session(user.id)
@@ -129,10 +130,9 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             return True
         await open_terminal_for_window(sess.window_id, user_id=user.id)
         await query.answer(t(user.id, "toast.term_opened"))
-        # Re-render the Menu so the button disappears now that a client
-        # is (about to be) attached.
-        text = render_more_text(user.id)
-        keyboard = build_footer_keyboard(user.id, screen="more")
+        # Re-render the /list view so the button disappears now that a
+        # client is (about to be) attached.
+        text, keyboard = build_list_view(user.id)
         await set_view(query, context.bot, user.id, text, keyboard)
         return True
 

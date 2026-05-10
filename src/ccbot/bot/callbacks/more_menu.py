@@ -13,6 +13,7 @@ from ...handlers.archive import DEFAULT_LOOKBACK_SECONDS, build_archive_page
 from ...handlers.callback_data import (
     CB_FT_CLEAR,
     CB_FT_KILL,
+    CB_FT_TERM,
     CB_MM_ARCHIVE,
     CB_MM_BACK,
     CB_MM_HISTORY,
@@ -25,6 +26,7 @@ from ...handlers.callback_data import (
 from ...handlers.history import send_history
 from ...handlers.menu import (
     build_footer_keyboard,
+    can_offer_terminal,
     render_more_text,
     render_settings_text,
 )
@@ -38,6 +40,37 @@ from ..commands.info import emit_screenshot_compact
 from ..commands.lifecycle import build_live_sessions_text
 
 logger = logging.getLogger(__name__)
+
+
+def build_list_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Render the ``/list`` body + keyboard for ``user_id``.
+
+    Factored out so the "Open terminal" callback (in footer.py) can
+    re-render the same screen after a spawn — Telegram's
+    ``editMessageText`` needs both the new text and the new markup, so
+    the duplication has to happen somewhere.
+    """
+    body = build_live_sessions_text(user_id) or t(user_id, "list.empty")
+    rows: list[list[InlineKeyboardButton]] = []
+    active_sess = session_manager.get_active_session(user_id)
+    if active_sess is not None and active_sess.window_id:
+        ctl_row: list[InlineKeyboardButton] = [
+            InlineKeyboardButton(t(user_id, "btn.kill"), callback_data=CB_FT_KILL),
+            InlineKeyboardButton(t(user_id, "btn.clear"), callback_data=CB_FT_CLEAR),
+        ]
+        if can_offer_terminal(user_id):
+            ctl_row.append(
+                InlineKeyboardButton(t(user_id, "btn.term"), callback_data=CB_FT_TERM)
+            )
+        rows.append(ctl_row)
+    sw = build_switcher_keyboard(user_id, include_lost=True)
+    if sw is not None:
+        for sw_row in sw.inline_keyboard:
+            rows.append(list(sw_row))
+    rows.append(
+        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_BACK)]
+    )
+    return body, InlineKeyboardMarkup(rows)
 
 
 async def _emit_new_flow(
@@ -86,30 +119,12 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
 
     if data == CB_MM_LIST:
         await query.answer()
-        body = build_live_sessions_text(user.id) or t(user.id, "list.empty")
-        rows: list[list[InlineKeyboardButton]] = []
-        active_sess = session_manager.get_active_session(user.id)
-        if active_sess is not None and active_sess.window_id:
-            # /list view is a management surface (kill / clear / switch).
-            # Real-time interrupt belongs on the live card where the busy
-            # signal is fresh — here we always show Kill, otherwise the
-            # button would freeze on whichever state was true at the
-            # moment the menu was opened.
-            ctl_row: list[InlineKeyboardButton] = [
-                InlineKeyboardButton(t(user.id, "btn.kill"), callback_data=CB_FT_KILL),
-                InlineKeyboardButton(
-                    t(user.id, "btn.clear"), callback_data=CB_FT_CLEAR
-                ),
-            ]
-            rows.append(ctl_row)
-        sw = build_switcher_keyboard(user.id, include_lost=True)
-        if sw is not None:
-            for sw_row in sw.inline_keyboard:
-                rows.append(list(sw_row))
-        rows.append(
-            [InlineKeyboardButton(t(user.id, "btn.back"), callback_data=CB_MM_BACK)]
-        )
-        kb = InlineKeyboardMarkup(rows)
+        # /list view is a management surface (kill / clear / open-terminal
+        # / switch). Real-time interrupt belongs on the live card where
+        # the busy signal is fresh — here we always show Kill, otherwise
+        # the button would freeze on whichever state was true at the
+        # moment the menu was opened.
+        body, kb = build_list_view(user.id)
         try:
             await query.edit_message_text(text=body, reply_markup=kb)
         except Exception as e:

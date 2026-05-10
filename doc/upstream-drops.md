@@ -18,8 +18,11 @@ Companion to `doc/dm-multisession-spec.md` and the `B5` rule in
 
 Sweep cadence: monthly, per `B5` of `ccbot-tz-followup.md`.
 
-Last classified: 2026-05-10. Range:
-`git log feat/dm-multisession..upstream/main` (86 commits).
+Last classified: 2026-05-10 (re-swept same day after cherry-pick
+verification). Range: `git log feat/dm-multisession..upstream/main`
+(86 commits). Net result of the verification: **all 15 cherry-pick
+candidates are already present** at the file paths the refactor moved
+them to, so no new commits are needed.
 
 ---
 
@@ -126,28 +129,32 @@ upstream meta-commits with no code value to us.
 | `10cf776` | feat: add /model command support | already covered by command-forwarding |
 | `55d54be` | fix: remove extraneous f-string prefixes in main.py | nothing to backport |
 
-## Cherry-pick candidates
+## Cherry-pick candidates — verified, all already present
 
-Backwards-compatible bugfixes worth verifying we don't already have,
-then backporting with a `cherry-pick: <sha> — <subject>` commit.
+Verified via `git cherry-pick --no-commit <sha>` dry-runs (2026-05-10
+re-sweep). Every candidate either applied as a no-op or hit a conflict
+purely because the surrounding code moved during our refactors
+(`bot.py` → `bot/`, `session.py` → `session_*.py`, `transcript_parser.py`
+→ `transcript_format.py`, thread_id passthrough removed). The fixes
+themselves were verified present at their new locations.
 
-| Upstream | Subject | Verification target |
-| -------- | ------- | ------------------- |
-| `f5ddd7f` | fix: show correct line count for Write tool results | `transcript_parser` Write summary |
-| `4e7bf99` | feat: add CCBOT_SHOW_TOOL_CALLS and CCBOT_SHOW_USER_MESSAGES | we read both today; commit may extend semantics |
-| `69bb86d` | telegramify-markdown >= 0.5.0, < 1.0.0 pin | check `pyproject.toml` |
-| `aebc7a9` | fix: convert markdown tables before splitting | `tg_format.py` overflow path |
-| `72cf5b6` | fix: handle hook timeout when resuming sessions | `_session_create.py` resume path |
-| `c769cc0` | fix: recover from corrupted byte offset in JSONL reading | `monitor_state.py` |
-| `3178d75` | fix: clean up stale session_map entries on startup | `session_manager.load_session_map` |
-| `70183a0` | fix: strip ANSI escape codes from parsed message text | `transcript_parser` text path |
-| `dc75228` | fix: file size check to prevent delayed message delivery | `session_monitor` |
-| `84dd4c7` | Fix Korean (Hangul) characters rendered with wrong font in screenshots | `screenshot.py` font fallback |
-| `65f4bbe` | fix: clear status message when user sends new input | `handlers/message_queue.py` |
-| `fbc6112` | fix: send interactive UI as plain text instead of markdown | `handlers/interactive_ui.py` |
-| `49bf869` | fix: anchor parse_status_line on chrome separator | `terminal_parser.parse_status_line` |
-| `0bd53d4` | Fix JSONL partial line read causing missed messages | `session_monitor` byte-offset logic |
-| `af6fc14` | fix: prevent Claude Code from overriding tmux window names | `tmux_manager` rename guard |
+| Upstream | Subject | Where it now lives |
+| -------- | ------- | ------------------ |
+| `f5ddd7f` | fix: show correct line count for Write tool results | `transcript_format.format_tool_result_text` (Write branch reads `tool_input_data["content"]`) + `transcript_parser.parse_entries` plumbs Write through `input_data` |
+| `4e7bf99` | feat: CCBOT_SHOW_TOOL_CALLS / CCBOT_SHOW_USER_MESSAGES | `config.py:show_user_messages`, `show_tool_calls` |
+| `69bb86d` | telegramify-markdown >= 0.5.0, < 1.0.0 pin | `pyproject.toml` |
+| `aebc7a9` | fix: convert markdown tables before splitting | `markdown_v2.convert_markdown_tables` applied in `handlers/response_builder.py` |
+| `72cf5b6` | fix: handle hook timeout when resuming sessions | `bot/_session_create.py:create_and_activate_session` (15s timeout on resume + manual fallback) |
+| `c769cc0` | fix: recover from corrupted byte offset in JSONL reading | `session_monitor._read_new_lines` (mid-line offset detect + readline) |
+| `3178d75` | fix: clean up stale session_map entries on startup | `session_recovery.cleanup_stale_session_map_entries` (free function, called from `resolve_stale_window_ids`) |
+| `70183a0` | fix: strip ANSI escape codes from parsed message text | `transcript_parser._RE_ANSI_ESCAPE`, applied in `parse_message` |
+| `dc75228` | fix: file size check to prevent delayed message delivery | `session_monitor` (mtime + size guard before skipping reads) |
+| `84dd4c7` | Fix Hangul rendered with wrong font in screenshots | `screenshot._font_tier` (Jamo + Syllables ranges in Noto CJK tier) |
+| `65f4bbe` | fix: clear status message when user sends new input | `handlers/message_queue._do_send_status_message` (orphan delete safety net) |
+| `fbc6112` | fix: send interactive UI as plain text instead of markdown | `handlers/interactive_ui.handle_interactive_ui` (`bot.send_message` direct, no markdown) |
+| `49bf869` | fix: anchor parse_status_line on chrome separator | `terminal_parser.parse_status_line` (chrome-separator search) |
+| `0bd53d4` | Fix JSONL partial line read causing missed messages | `session_monitor._read_new_lines` (`safe_offset` only advances on parse) |
+| `af6fc14` | fix: prevent Claude Code from overriding tmux window names | `tmux_manager.create_window` (`set_window_option allow-rename off`) |
 
 ## Adapt candidates
 

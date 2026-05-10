@@ -1,4 +1,4 @@
-"""Footer callbacks (CB_FT_STOP / KILL / CLEAR / MORE) — top row of the live card."""
+"""Footer callbacks (CB_FT_STOP / KILL / CLEAR / MORE / TERM) — top row of the live card."""
 
 from __future__ import annotations
 
@@ -12,15 +12,13 @@ from ...handlers.callback_data import (
     CB_CONF_KILL_NO,
     CB_CONF_KILL_YES,
     CB_FT_CLEAR,
-    CB_FT_CLOSE,
     CB_FT_KILL,
     CB_FT_MORE,
     CB_FT_STOP,
     CB_FT_TERM,
 )
 from ...handlers.menu import build_footer_keyboard, render_more_text
-from .more_menu import build_list_view
-from ...handlers.notifications import clear_card, pause_card_view, resume_card_view
+from ...handlers.notifications import clear_card, pause_card_view
 from ...i18n import t
 from ...session import session_manager
 from ...tmux_manager import tmux_manager
@@ -94,7 +92,9 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
     if data == CB_FT_MORE:
         # Pause the active session's live card so events buffered while
         # the user navigates the Menu / sub-screens don't repaint over
-        # whatever screen they're looking at. resume on CB_FT_CLOSE.
+        # whatever screen they're looking at. The pause is auto-released
+        # by ``resume_card_view`` from text_handler when the user types
+        # the next message, so no explicit "close" button is needed.
         sess = session_manager.get_active_session(user.id)
         if sess is not None:
             pause_card_view(user.id, sess.id)
@@ -104,24 +104,14 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         await query.answer()
         return True
 
-    if data == CB_FT_CLOSE:
-        # Resume the active session's live card with whatever events
-        # accumulated during the menu navigation.
-        sess = session_manager.get_active_session(user.id)
-        if sess is not None:
-            await resume_card_view(context.bot, user.id, sess)
-        await query.answer()
-        return True
-
     if data == CB_FT_TERM:
         # Manual "Open terminal" — spawns a native Terminal/iTerm tab on
         # macOS or the user's configured emulator on Linux, attached to
-        # the active session's tmux window. The button lives on /list
-        # and is only rendered when the user's setting permits it AND
-        # no client is currently attached to this window's group; a
-        # stale tap (race between the user opening /list and a terminal
-        # already arriving) is harmless because the spawn just adds
-        # another attached client at the desired window.
+        # the active session's tmux window. The button lives on the
+        # footer top row alongside Stop/Kill/Clear/Menu, gated on
+        # ``can_offer_terminal``. A stale tap (race between the user
+        # tapping and a terminal already arriving) is harmless — the
+        # spawn just adds another attached client at the desired window.
         from ...local_terminal import open_terminal_for_window
 
         sess = session_manager.get_active_session(user.id)
@@ -130,10 +120,14 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             return True
         await open_terminal_for_window(sess.window_id, user_id=user.id)
         await query.answer(t(user.id, "toast.term_opened"))
-        # Re-render the /list view so the button disappears now that a
-        # client is (about to be) attached.
-        text, keyboard = build_list_view(user.id)
-        await set_view(query, context.bot, user.id, text, keyboard)
+        # Refresh the footer keyboard on the current message so the Term
+        # button drops out (next render will see the attached client).
+        keyboard = build_footer_keyboard(user.id, screen="main", is_busy=False)
+        if keyboard is not None:
+            try:
+                await query.edit_message_reply_markup(reply_markup=keyboard)
+            except Exception as e:
+                logger.debug("term post-spawn keyboard refresh failed: %s", e)
         return True
 
     return False

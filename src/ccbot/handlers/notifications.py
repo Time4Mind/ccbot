@@ -83,7 +83,8 @@ class CardState:
     # session updates accumulate into ``lines`` but are NOT rendered to
     # Telegram — otherwise the next event would overwrite whatever menu
     # screen the user is looking at. Cleared by ``resume_card_view``
-    # (called from CB_FT_CLOSE) or implicitly when the card is reset.
+    # (called from text_handler when the user types) or implicitly
+    # when the card is reset.
     in_menu_view: bool = False
     # Set by ``finalize_task`` while ``in_menu_view`` is True so the
     # delayed render on resume picks up the ``(task complete)`` footer

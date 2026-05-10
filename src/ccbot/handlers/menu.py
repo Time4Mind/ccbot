@@ -28,6 +28,7 @@ from .callback_data import (
     CB_FT_CLEAR,
     CB_FT_KILL,
     CB_FT_MORE,
+    CB_FT_STOP,
     CB_MM_ARCHIVE,
     CB_MM_BACK,
     CB_MM_HISTORY,
@@ -111,19 +112,22 @@ def _footer_top_row(
 ) -> list[InlineKeyboardButton]:
     """Default top row. See module docstring for layout rules.
 
-    ``is_busy`` is preserved as a parameter for API stability (callers
-    pass it through), but the visible layout is the same in both states:
-    Kill + Clear + Menu. Earlier we shifted between Stop (Esc on busy)
-    and Kill (archive on idle); the `Stop` semantic stays available via
-    the `/stop` slash command for users who want a non-terminating
-    interrupt.
+    Busy session shows *Stop* (sends Escape — interrupt the running
+    task without terminating). Idle session shows *Kill* (archive the
+    whole session). The is_busy signal comes from
+    ``notifications._card_is_busy`` which keys off "card is alive" so
+    the button doesn't flicker between tool calls.
     """
-    del is_busy  # historic param; row layout no longer differs by busy state
     row: list[InlineKeyboardButton] = []
     if _has_active_session(user_id):
-        row.append(
-            InlineKeyboardButton(t(user_id, "btn.kill"), callback_data=CB_FT_KILL)
-        )
+        if is_busy:
+            row.append(
+                InlineKeyboardButton(t(user_id, "btn.stop"), callback_data=CB_FT_STOP)
+            )
+        else:
+            row.append(
+                InlineKeyboardButton(t(user_id, "btn.kill"), callback_data=CB_FT_KILL)
+            )
         row.append(
             InlineKeyboardButton(t(user_id, "btn.clear"), callback_data=CB_FT_CLEAR)
         )

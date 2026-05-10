@@ -294,8 +294,18 @@ def reset_card(user_id: int, session_id: str) -> None:
 
 
 def _card_is_busy(state: CardState) -> bool:
-    """Heuristic: card is busy iff its header carries a tmux status line."""
-    return bool(state.status_text)
+    """A live (msg_id-bearing, non-finalized) card means the session is
+    actively producing output — show the *Stop* (Esc) button.
+
+    Earlier this checked ``state.status_text`` (the tmux spinner line),
+    but that flickers between tool calls — the spinner is only painted
+    while a tool is running, leaving gaps of 100-500 ms where the
+    keyboard would flip Stop ↔ Kill mid-task. The card itself is a
+    much steadier signal: ``msg_id`` is set when the bot first sent or
+    edited a card and is cleared by ``reset_card`` only at task
+    completion. A continuation card mid-task also has ``msg_id`` set.
+    """
+    return state.msg_id is not None
 
 
 async def _send_card(
@@ -305,11 +315,19 @@ async def _send_card(
     state: CardState,
     *,
     text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
 ) -> None:
-    """Send a brand-new card message and remember it as the live card."""
-    keyboard = build_footer_keyboard(
-        user_id, screen="main", is_busy=_card_is_busy(state)
-    )
+    """Send a brand-new card message and remember it as the live card.
+
+    ``reply_markup`` overrides the default footer keyboard. Used by
+    ``finalize_task`` to attach the idle-state Kill row to a completed
+    result instead of the busy-state Stop row.
+    """
+    if reply_markup is None:
+        reply_markup = build_footer_keyboard(
+            user_id, screen="main", is_busy=_card_is_busy(state)
+        )
+    keyboard = reply_markup
     try:
         sent = await bot.send_message(
             chat_id=user_id,
@@ -539,11 +557,15 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
         state.is_continuation = True
         state.last_rendered = ""
 
+    # Finalised card → ``is_busy=False`` keyboard so the user sees Kill,
+    # not Stop, on a completed result.
+    done_kb = build_footer_keyboard(user_id, screen="main", is_busy=False)
+
     text = _render_card(sess, state, footer="(task complete)")
     if state.msg_id is None:
-        await _send_card(bot, user_id, sess, state, text=text)
+        await _send_card(bot, user_id, sess, state, text=text, reply_markup=done_kb)
     else:
-        if await _edit_card(bot, user_id, state, text=text):
+        if await _edit_card(bot, user_id, state, text=text, reply_markup=done_kb):
             state.last_rendered = text
     state.last_edit_ts = time.monotonic()
 
@@ -554,7 +576,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
         state.is_continuation = True
         state.last_rendered = ""
         text = _render_card(sess, state, footer="(task complete)")
-        await _send_card(bot, user_id, sess, state, text=text)
+        await _send_card(bot, user_id, sess, state, text=text, reply_markup=done_kb)
         state.last_edit_ts = time.monotonic()
 
     if attachments:

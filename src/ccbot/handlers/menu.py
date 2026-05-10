@@ -42,6 +42,7 @@ from .callback_data import (
     CB_ST_GRP,
     CB_ST_LAG,
     CB_ST_LANG,
+    CB_ST_LOCAL,
     CB_ST_PREV,
     CB_ST_TOK,
     CB_ST_VOICE,
@@ -62,6 +63,7 @@ Screen = Literal[
     "settings_weeklyday",
     "settings_approve",
     "settings_tokens",
+    "settings_local",
 ]
 
 # Group key -> (label translation key, sub-screen name, settings-dict key)
@@ -87,6 +89,12 @@ _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
         "settings.group.token_alerts",
         "settings_tokens",
         "session_token_alerts",
+    ),
+    (
+        "local_terminal",
+        "settings.group.local_terminal",
+        "settings_local",
+        "local_terminal",
     ),
 )
 
@@ -170,6 +178,8 @@ def _settings_main_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
         elif value_key == "weekly_reset_day":
             value_str = t(user_id, f"day.{cur}") if cur else "?"
         elif value_key == "auto_approve":
+            value_str = t(user_id, f"approve.{cur}") if cur else "?"
+        elif value_key == "local_terminal":
             value_str = t(user_id, f"approve.{cur}") if cur else "?"
         elif value_key == "session_token_alerts":
             arr = cur if isinstance(cur, list) else []
@@ -256,6 +266,20 @@ def _settings_approve_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             InlineKeyboardButton(
                 _highlight(t(user_id, f"approve.{v}"), cur == v),
                 callback_data=f"{CB_ST_APPROVE}{v}",
+            )
+            for v in ("off", "on")
+        ],
+        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+    ]
+
+
+def _settings_local_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
+    cur = session_manager.get_user_settings(user_id).get("local_terminal", "off")
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(t(user_id, f"approve.{v}"), cur == v),
+                callback_data=f"{CB_ST_LOCAL}{v}",
             )
             for v in ("off", "on")
         ],
@@ -355,6 +379,8 @@ def build_footer_keyboard(
         rows.extend(_settings_approve_grid(user_id))
     elif screen == "settings_tokens":
         rows.extend(_settings_tokens_grid(user_id))
+    elif screen == "settings_local":
+        rows.extend(_settings_local_grid(user_id))
     else:
         top = _footer_top_row(user_id, is_busy=is_busy)
         if top:
@@ -402,6 +428,7 @@ _GROUP_TEXT_KEYS: dict[str, str] = {
     "settings_weeklyday": "settings.weeklyday.body",
     "settings_approve": "settings.approve.body",
     "settings_tokens": "settings.tokens.body",
+    "settings_local": "settings.local.body",
 }
 
 

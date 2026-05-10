@@ -173,6 +173,15 @@ _EN: dict[str, str] = {
         "session's lifetime token usage crosses one of these — adjust in "
         "50k-token steps."
     ),
+    # Settings group: pop a native Terminal/iTerm window per new session
+    "settings.group.local_terminal": "Local terminal",
+    "settings.local.body": (
+        "*Local terminal*\n\n"
+        "When `on`, every new session also opens a native macOS "
+        "Terminal/iTerm window attached to its tmux window — drive "
+        "the session by hand from the desktop in parallel with the "
+        "Telegram UI. No-op on non-macOS hosts."
+    ),
 }
 
 _RU: dict[str, str] = {
@@ -308,6 +317,13 @@ _RU: dict[str, str] = {
         "Три порога. Бот один раз пришлёт уведомление, когда\n"
         "суммарный расход сессии переходит каждый — шаг 50k."
     ),
+    "settings.group.local_terminal": "Локальный терминал",
+    "settings.local.body": (
+        "*Локальный терминал*\n\n"
+        "Если `on`, при создании каждой сессии бот открывает\n"
+        "нативное окно Terminal/iTerm с `tmux attach` — управляй\n"
+        "сессией с десктопа параллельно с Telegram. Только macOS."
+    ),
 }
 
 _ZH: dict[str, str] = {
@@ -437,6 +453,13 @@ _ZH: dict[str, str] = {
         "*会话 Token 提醒*\n\n"
         "三个阈值。每当会话累计 token 跨过一个阈值时,\n"
         "机器人发送一次推送通知,步长 50k。"
+    ),
+    "settings.group.local_terminal": "本地终端",
+    "settings.local.body": (
+        "*本地终端*\n\n"
+        "开启后,每当创建新会话,机器人也会在 macOS\n"
+        "Terminal/iTerm 中打开一个附加到 tmux 窗口的本地\n"
+        "终端窗口,可与 Telegram 并行手动操作。仅限 macOS。"
     ),
 }
 

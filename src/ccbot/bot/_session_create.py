@@ -16,6 +16,7 @@ import logging
 from telegram.ext import ContextTypes
 
 from ..handlers.message_sender import safe_edit, safe_send
+from ..local_terminal import open_terminal_for_window
 from ..session import session_manager
 from ..tmux_manager import tmux_manager
 
@@ -97,6 +98,9 @@ async def create_and_activate_session(
     if ws.session_id:
         session_manager.set_session_claude_id(sess.id, ws.session_id)
     session_manager.set_active_session(user.id, sess.id)
+
+    if session_manager.get_user_settings(user.id).get("local_terminal") == "on":
+        await open_terminal_for_window(created_wid)
 
     status = "Resumed" if resume_session_id else "Created"
     await safe_edit(query, f"✅ {message}\n\n{status}. Send messages here.")

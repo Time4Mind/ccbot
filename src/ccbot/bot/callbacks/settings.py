@@ -14,6 +14,7 @@ from ...handlers.callback_data import (
     CB_ST_GRP,
     CB_ST_LAG,
     CB_ST_LANG,
+    CB_ST_LOCAL,
     CB_ST_PREV,
     CB_ST_TOK,
     CB_ST_VOICE,
@@ -38,6 +39,7 @@ _GROUP_TO_SCREEN = {
     "weekly_reset_day": "settings_weeklyday",
     "auto_approve": "settings_approve",
     "session_token_alerts": "settings_tokens",
+    "local_terminal": "settings_local",
 }
 
 
@@ -100,6 +102,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         CB_ST_WDAY,
         CB_ST_APPROVE,
         CB_ST_TOK,
+        CB_ST_LOCAL,
     )
     if not any(data.startswith(p) for p in setter_prefixes):
         return False
@@ -138,6 +141,11 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         if value in ("off", "on"):
             session_manager.update_user_setting(user.id, "auto_approve", value)
         screen_name = "settings_approve"
+    elif data.startswith(CB_ST_LOCAL):
+        value = data[len(CB_ST_LOCAL) :]
+        if value in ("off", "on"):
+            session_manager.update_user_setting(user.id, "local_terminal", value)
+        screen_name = "settings_local"
     elif data.startswith(CB_ST_TOK):
         # Format: st:tok:<slot>:<+|->
         payload = data[len(CB_ST_TOK) :]

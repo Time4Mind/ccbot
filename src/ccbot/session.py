@@ -589,6 +589,11 @@ class SessionManager:
         # triggers a one-shot push notification when the session crosses it.
         # Adjustable in 50_000-token steps via Settings.
         "session_token_alerts": [100_000, 200_000, 400_000],
+        # macOS UX: when "on", every newly-created session also pops a
+        # native Terminal/iTerm window attached to its tmux window, so the
+        # user can drive the session by hand from the desktop in parallel
+        # with the Telegram UI. No-op on non-macOS hosts.
+        "local_terminal": "off",
     }
 
     def get_user_settings(self, user_id: int) -> dict[str, Any]:

@@ -63,6 +63,8 @@ See @.claude/rules/dm-architecture.md for DM routing model, active_sessions, swi
 See @.claude/rules/message-handling.md for message queue, merging, and rate limiting.
 See @.claude/rules/output-format.md for the rules that shape Claude's reply
 formatting when running inside a ccbot session (`CCBOT_INTERFACE=telegram`).
+See @.claude/rules/secrets.md for where credentials live (`~/.ccbot/.env`)
+and where they must not (CLAUDE.md, any tracked file).
 See @doc/dm-multisession-spec.md for the product spec (UX, env vars, acceptance criteria).
 See @doc/dm-multisession-plan.md for the implementation plan and hotspot map.
 

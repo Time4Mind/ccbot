@@ -27,6 +27,9 @@ TABLE_MAX_WIDTH = 60
 class Attachment:
     filename: str
     content: bytes
+    # ``"document"`` (default) → ``bot.send_document``
+    # ``"photo"`` → ``bot.send_photo`` (PNG screenshot of a wide table)
+    kind: str = "document"
 
 
 @dataclass
@@ -105,6 +108,41 @@ def _table_width(table_text: str) -> int:
     return max((len(line) for line in table_text.splitlines()), default=0)
 
 
+def pretty_pad_table(md_text: str) -> str:
+    """Re-pad markdown-table cells so each column reaches a uniform width.
+
+    LLMs frequently emit raw `| a | very long | b |` rows where the
+    column edges drift line-to-line. Monospace-render output looks
+    ragged. This helper parses the table, computes max width per
+    column, and pads cells to that width — separator row gets a
+    consistent run of dashes too.
+
+    Non-table input passes through untouched.
+    """
+    lines = md_text.splitlines()
+    rows: list[list[str]] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            return md_text
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        rows.append(cells)
+    if len(rows) < 2:
+        return md_text
+    cols = max(len(r) for r in rows)
+    rows = [r + [""] * (cols - len(r)) for r in rows]
+    widths = [max(len(r[c]) for r in rows) for c in range(cols)]
+    out: list[str] = []
+    for i, r in enumerate(rows):
+        # Separator row (second line, mostly dashes) — replace with a clean
+        # run of `-` matching column widths.
+        if i == 1 and all(set(c) <= {"-", ":"} for c in r):
+            out.append("|" + "|".join("-" * (widths[c] + 2) for c in range(cols)) + "|")
+            continue
+        out.append("| " + " | ".join(r[c].ljust(widths[c]) for c in range(cols)) + " |")
+    return "\n".join(out)
+
+
 def split_overflow(text: str) -> FormatResult:
     """Pull long fenced code and wide tables into attachments; keep small ones inline."""
     if not text:
@@ -131,24 +169,30 @@ def split_overflow(text: str) -> FormatResult:
     if new_text != out_text:
         out_text = new_text
 
-    # 2) Markdown tables.
+    # 2) Markdown tables → PNG attachments. Wide tables don't render well
+    # inline on phones, but a monospaced screenshot does. Caller in
+    # ``notifications._send_attachments`` rasterises ``kind="photo"``
+    # entries via ``screenshot.text_to_image`` just before sending.
     tables = _table_rows(out_text)
     if tables:
         lines = out_text.splitlines()
-        # Walk in reverse so indices stay valid.
         for start, end, slab in reversed(tables):
             cols = _table_cols(slab)
             width = _table_width(slab)
             if cols <= TABLE_MAX_COLS and width <= TABLE_MAX_WIDTH:
                 continue
             idx = len(attachments) + 1
+            # Store the source markdown — sender will pretty-pad and
+            # render to PNG. Use UTF-8 bytes so the Attachment.content
+            # field stays byte-typed across kinds.
             attachments.append(
                 Attachment(
-                    filename=f"table-{idx}.md",
+                    filename=f"table-{idx}.png",
                     content=(slab + "\n").encode("utf-8"),
+                    kind="photo",
                 )
             )
-            replacement = f"_(table {cols}×{end - start} attached as table-{idx}.md)_"
+            replacement = f"_(table {cols}×{end - start} attached as table-{idx}.png)_"
             lines = lines[:start] + [replacement] + lines[end:]
         out_text = "\n".join(lines)
 

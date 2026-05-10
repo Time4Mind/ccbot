@@ -379,24 +379,25 @@ class SessionMonitor:
     async def _load_current_session_map(self) -> dict[str, str]:
         """Load current session_map and return window_key -> session_id mapping.
 
-        Keys in session_map are formatted as "tmux_session:window_id"
-        (e.g. "ccbot:@12"). Old-format keys ("ccbot:window_name") are also
-        accepted so that sessions running before a code upgrade continue
-        to be monitored until the hook re-fires with new format.
-        Only entries matching our tmux_session_name are processed.
+        Accepts canonical ``<source>:<wid>`` keys and grouped-session
+        ``<source>-w<digits>:<wid>`` keys — the latter is what an older
+        Claude hook build writes when called from a client attached to
+        a per-window grouped session (see ``session.key_matches_window``).
         """
+        from .session import key_matches_window
+
         window_to_session: dict[str, str] = {}
         if config.session_map_file.exists():
             try:
                 async with aiofiles.open(config.session_map_file, "r") as f:
                     content = await f.read()
                 session_map = json.loads(content)
-                prefix = f"{config.tmux_session_name}:"
                 for key, info in session_map.items():
-                    # Only process entries for our tmux session
-                    if not key.startswith(prefix):
+                    if ":" not in key:
                         continue
-                    window_key = key[len(prefix) :]
+                    window_key = key.rsplit(":", 1)[1]
+                    if not key_matches_window(key, window_key):
+                        continue
                     session_id = info.get("session_id", "")
                     if session_id:
                         window_to_session[window_key] = session_id

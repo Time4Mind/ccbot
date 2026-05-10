@@ -220,7 +220,13 @@ def cleanup_orphan_grouped_sessions(live_window_ids: set[str]) -> None:
 async def cleanup_stale_session_map_entries(
     mgr: "SessionManager", live_ids: set[str]
 ) -> None:
-    """Drop session_map.json entries for tmux windows that no longer exist."""
+    """Drop session_map.json entries for tmux windows that no longer exist.
+
+    Also handles grouped-session prefixes (``<source>-w<digits>:<wid>``)
+    — same matcher as ``session.key_matches_window``.
+    """
+    from .session import key_matches_window
+
     if not config.session_map_file.exists():
         return
     try:
@@ -230,14 +236,17 @@ async def cleanup_stale_session_map_entries(
     except (json.JSONDecodeError, OSError):
         return
 
-    prefix = f"{config.tmux_session_name}:"
-    stale_keys = [
-        key
-        for key in session_map
-        if key.startswith(prefix)
-        and mgr.is_window_id(key[len(prefix) :])
-        and key[len(prefix) :] not in live_ids
-    ]
+    stale_keys: list[str] = []
+    for key in session_map:
+        if ":" not in key:
+            continue
+        candidate = key.rsplit(":", 1)[1]
+        if not mgr.is_window_id(candidate):
+            continue
+        if not key_matches_window(key, candidate):
+            continue
+        if candidate not in live_ids:
+            stale_keys.append(key)
     if not stale_keys:
         return
 

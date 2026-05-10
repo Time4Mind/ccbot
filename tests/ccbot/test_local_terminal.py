@@ -28,7 +28,7 @@ class TestBuildTmuxCommand:
         assert "@5" in cmd
         assert "tmux attach -t" in cmd
         assert "select-window -t @5" in cmd
-        assert "\\;" in cmd  # tmux command separator
+        assert "\\;" in cmd  # tmux command separator preserved
 
     def test_keeps_window_open_after_detach(self) -> None:
         """Trailing `|| true; exec bash -l` prevents the terminal from
@@ -37,6 +37,12 @@ class TestBuildTmuxCommand:
         cmd = _build_tmux_command("@1")
         assert "|| true" in cmd
         assert "exec bash -l" in cmd
+
+    def test_wrapped_in_bash_c_for_shell_semantics(self) -> None:
+        """Without `bash -c`, iTerm/Terminal.app exec the command without
+        a shell — `\\;`, `||`, `;` all lose meaning, attach fails."""
+        cmd = _build_tmux_command("@9")
+        assert cmd.startswith("bash -c ")
 
     def test_session_name_quoted(self) -> None:
         cmd = _build_tmux_command("@1")

@@ -16,6 +16,10 @@ Constants:
 CB_HISTORY_PREV = "hp:"  # history page older
 CB_HISTORY_NEXT = "hn:"  # history page newer
 
+# /help inline doc
+CB_HLP_HOME = "hlp:home"  # back to top-level help screen
+CB_HLP_SEC = "hlp:s:"  # hlp:s:<section_key>  open a help section
+
 # Directory browser
 CB_DIR_SELECT = "db:sel:"
 CB_DIR_UP = "db:up"

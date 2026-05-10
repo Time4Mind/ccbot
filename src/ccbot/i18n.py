@@ -185,6 +185,103 @@ _EN: dict[str, str] = {
         "the auto-detected list is wrong for your setup."
     ),
     "settings.local.claude_help": "🪄 Configure via Claude",
+    # /help inline mini-doc
+    "help.home.body": (
+        "*Help*\n\n"
+        "ccbot bridges this DM to N parallel Claude Code sessions running "
+        "in tmux. Tap a section below for a quick tour."
+    ),
+    "help.btn.overview": "Overview",
+    "help.btn.sessions": "Sessions",
+    "help.btn.menu": "Menu",
+    "help.btn.commands": "Commands",
+    "help.btn.voice": "Voice & files",
+    "help.btn.alerts": "Alerts",
+    "help.btn.terminal": "Local terminal",
+    "help.btn.tips": "Tips",
+    "help.body.overview": (
+        "*Overview*\n\n"
+        "One private DM, many parallel Claude Code sessions. Send any "
+        "text — it goes to your *active* session. Each session lives in "
+        "its own tmux window with its own claude process; switching the "
+        "active session never pauses the others.\n\n"
+        "The inline keyboard under the most recent bot message hosts "
+        "the session switcher and the ≡ Menu surface."
+    ),
+    "help.body.sessions": (
+        "*Sessions*\n\n"
+        "• *Create.* Send any text from an empty DM, or tap ≡ Menu → 🆕 "
+        "New, then pick a project directory.\n"
+        "• *Switch.* Tap a session button in the inline switcher under "
+        "the latest bot message.\n"
+        "• *Reply-quote.* Reply to a non-active session's bot message — "
+        "your text is routed there for that one message only.\n"
+        "• *Done.* `/done [name]` archives a session as completed.\n"
+        "• *Idle TTL.* Sessions auto-archive after 4h with no input.\n"
+        "• *Restore.* ≡ Menu → 📦 Archive → tap *Restore*."
+    ),
+    "help.body.menu": (
+        "*≡ Menu*\n\n"
+        "Open via /menu or the ≡ Menu inline button. Items:\n"
+        "• 📋 *List* — live sessions with usage\n"
+        "• 📊 *Status* — Claude Code 5h / weekly / sonnet quotas\n"
+        "• 📜 *History* — paginated transcript of the active session\n"
+        "• 📸 *Shot* — terminal screenshot (PNG with ANSI colors)\n"
+        "• 🆕 *New* — create a session from a directory browser\n"
+        "• 📦 *Archive* — restore / inspect / delete archived sessions\n"
+        "• ⚙ *Settings* — language, voice, alerts, local terminal, …"
+    ),
+    "help.body.commands": (
+        "*Slash commands*\n\n"
+        "Bot-side:\n"
+        "• `/menu` — open the inline menu\n"
+        "• `/help` — this help\n"
+        "• `/done [name]` — archive a session\n"
+        "• `/health` — uptime, queues, latency, counters\n\n"
+        "Claude Code passthrough — any other `/cmd` is forwarded:\n"
+        "• `/model` `/effort` `/clear` `/compact` `/cost` `/memory` …\n\n"
+        "Type a leading `!` to capture local shell output and forward."
+    ),
+    "help.body.voice": (
+        "*Voice & files*\n\n"
+        "• *Voice.* Send a voice message — transcribed locally "
+        "(whisper.cpp / Apple Speech) and routed to the active session "
+        "as if you typed it.\n"
+        "• *Photo / document.* Lands in `<workdir>/.ccbot-inbox/` and "
+        "Claude is told via tmux. Files auto-clean after 24h; the "
+        "Telegram `file_id` is retained for 30d for `/restore-file`."
+    ),
+    "help.body.alerts": (
+        "*Alerts*\n\n"
+        "*Per-session token alerts.* Three thresholds (defaults "
+        "100k / 200k / 400k). Bot pushes once per session per crossing. "
+        "Adjust via Settings → Token alerts (50k step ±).\n\n"
+        "*Quota alerts.* 5h / weekly / weekly-Sonnet quotas are sampled "
+        "from the live `/usage` modal every 5 min. Bot pushes when % "
+        "crosses 50, 75, or 90."
+    ),
+    "help.body.terminal": (
+        "*Local terminal*\n\n"
+        "Settings → Local terminal: when *on*, every new session pops "
+        "a native window already attached to its tmux window — drive "
+        "the session by hand from the desktop in parallel.\n\n"
+        "macOS: Terminal.app / iTerm2 (auto, prefers iTerm tabs).\n"
+        "Linux: pick an emulator from the auto-detected list, or use "
+        "*Configure via Claude* for unusual setups.\n\n"
+        "Direct attach also works any time: `tmux attach -t ccbot`."
+    ),
+    "help.body.tips": (
+        "*Tips*\n\n"
+        "• *Auto-approve.* Settings → Auto-approve auto-Yes's "
+        "interactive prompts that --dangerously-skip-permissions "
+        "doesn't already bypass (e.g. WebFetch domain trust).\n"
+        "• *Card edit lag.* Settings → Live lag controls how often the "
+        "live session card is re-edited (lower = snappier, higher = "
+        "less rate-limit pressure).\n"
+        "• *Languages.* Settings → Language: en / ru / zh.\n"
+        "• *Outbound proxy.* Set `TG_PROXY_URL` if the host can't reach "
+        "api.telegram.org directly."
+    ),
 }
 
 _RU: dict[str, str] = {
@@ -331,6 +428,100 @@ _RU: dict[str, str] = {
         "если автодетект не угадал."
     ),
     "settings.local.claude_help": "🪄 Настроить через Claude",
+    "help.home.body": (
+        "*Помощь*\n\n"
+        "ccbot связывает этот личный чат с N параллельными сессиями "
+        "Claude Code в tmux. Тапни нужный раздел ниже."
+    ),
+    "help.btn.overview": "Обзор",
+    "help.btn.sessions": "Сессии",
+    "help.btn.menu": "Меню",
+    "help.btn.commands": "Команды",
+    "help.btn.voice": "Голос и файлы",
+    "help.btn.alerts": "Алерты",
+    "help.btn.terminal": "Локальный терминал",
+    "help.btn.tips": "Советы",
+    "help.body.overview": (
+        "*Обзор*\n\n"
+        "Один личный DM, много параллельных сессий Claude Code. Любой "
+        "текст летит в *активную* сессию. У каждой сессии своё tmux-окно "
+        "и свой процесс claude — переключение активной не ставит другие "
+        "на паузу.\n\n"
+        "Инлайн-клавиатура под последним сообщением бота — это "
+        "переключатель сессий и ≡ Меню."
+    ),
+    "help.body.sessions": (
+        "*Сессии*\n\n"
+        "• *Создать.* Просто отправь любой текст в пустой DM, или "
+        "≡ Меню → 🆕 New, выбери директорию.\n"
+        "• *Переключить.* Тапни кнопку сессии в инлайн-переключателе.\n"
+        "• *Reply-quote.* Ответь (Telegram-цитата) на сообщение бота из "
+        "неактивной сессии — твой текст уйдёт туда разово, без смены "
+        "активной.\n"
+        "• *Закрыть.* `/done [имя]` — отмечает сессию как готовую.\n"
+        "• *Idle TTL.* Без ввода 4 часа — авто-архив.\n"
+        "• *Восстановить.* ≡ Меню → 📦 Archive → *Restore*."
+    ),
+    "help.body.menu": (
+        "*≡ Меню*\n\n"
+        "Открывается через /menu или инлайн-кнопку ≡. Пункты:\n"
+        "• 📋 *List* — живые сессии с расходом\n"
+        "• 📊 *Status* — лимиты Claude Code (5ч / неделя / sonnet)\n"
+        "• 📜 *History* — постраничный transcript активной\n"
+        "• 📸 *Shot* — скриншот терминала (PNG с ANSI)\n"
+        "• 🆕 *New* — создать сессию через выбор директории\n"
+        "• 📦 *Archive* — восстановить / посмотреть / удалить\n"
+        "• ⚙ *Settings* — язык, голос, алерты, терминал, ..."
+    ),
+    "help.body.commands": (
+        "*Слэш-команды*\n\n"
+        "Бот:\n"
+        "• `/menu` — открыть инлайн-меню\n"
+        "• `/help` — эта справка\n"
+        "• `/done [имя]` — архивировать сессию\n"
+        "• `/health` — uptime, очереди, latency, счётчики\n\n"
+        "Claude Code (форвардятся как есть):\n"
+        "• `/model` `/effort` `/clear` `/compact` `/cost` `/memory` …\n\n"
+        "Префикс `!` — захват вывода локальной шелл-команды и форвард."
+    ),
+    "help.body.voice": (
+        "*Голос и файлы*\n\n"
+        "• *Голос.* Отправь голосовое — оно расшифровывается локально "
+        "(whisper.cpp / Apple Speech) и уходит в активную сессию как "
+        "текст.\n"
+        "• *Фото / документ.* Кладётся в `<workdir>/.ccbot-inbox/`, "
+        "Claude получает синтетическое сообщение через tmux. TTL 24ч; "
+        "Telegram `file_id` хранится 30д для `/restore-file`."
+    ),
+    "help.body.alerts": (
+        "*Алерты*\n\n"
+        "*Per-session по токенам.* Три порога (по умолчанию "
+        "100k / 200k / 400k). Бот шлёт push один раз на сессию на каждый "
+        "переход. Настройка: Settings → Token alerts (шаг 50k через ±).\n\n"
+        "*Квоты Claude Code.* 5ч / неделя / неделя Sonnet — бот опрашивает "
+        "живой `/usage` каждые 5 мин и пушит при пересечении 50, 75, 90 %."
+    ),
+    "help.body.terminal": (
+        "*Локальный терминал*\n\n"
+        "Settings → Local terminal: при *on* каждая новая сессия "
+        "автоматически открывает нативное окно, уже привязанное к её "
+        "tmux-window — управляй с десктопа параллельно с Telegram.\n\n"
+        "macOS: Terminal.app / iTerm2 (auto, предпочитает вкладки в iTerm).\n"
+        "Linux: выбор эмулятора из списка, либо *Configure via Claude* "
+        "для нестандартных кейсов.\n\n"
+        "В любой момент работает прямой `tmux attach -t ccbot`."
+    ),
+    "help.body.tips": (
+        "*Советы*\n\n"
+        "• *Auto-approve.* Settings → Auto-approve авто-Yes-ит модалки, "
+        "которые --dangerously-skip-permissions не закрывает сам "
+        "(WebFetch domain trust и т.п.).\n"
+        "• *Live lag.* Settings → Live lag — частота перерисовки "
+        "карточки сессии. Меньше = шустрее, больше = меньше rate-limit.\n"
+        "• *Языки.* Settings → Language: en / ru / zh.\n"
+        "• *Outbound proxy.* `TG_PROXY_URL` если api.telegram.org "
+        "недоступен напрямую."
+    ),
 }
 
 _ZH: dict[str, str] = {
@@ -472,6 +663,94 @@ _ZH: dict[str, str] = {
         "不符合实际环境,请点击 *Configure via Claude*。"
     ),
     "settings.local.claude_help": "🪄 通过 Claude 配置",
+    "help.home.body": (
+        "*帮助*\n\n"
+        "ccbot 将这个私聊连接到 N 个并行运行在 tmux 中的\n"
+        "Claude Code 会话。点击下方对应章节查看简介。"
+    ),
+    "help.btn.overview": "概览",
+    "help.btn.sessions": "会话",
+    "help.btn.menu": "菜单",
+    "help.btn.commands": "命令",
+    "help.btn.voice": "语音和文件",
+    "help.btn.alerts": "提醒",
+    "help.btn.terminal": "本地终端",
+    "help.btn.tips": "技巧",
+    "help.body.overview": (
+        "*概览*\n\n"
+        "一个私聊,多个并行的 Claude Code 会话。任何文本会发送到\n"
+        "当前的 *活动* 会话。每个会话拥有独立的 tmux 窗口和 claude\n"
+        "进程,切换活动会话不会暂停其他会话。\n\n"
+        "最新机器人消息下方的内联键盘是会话切换器和 ≡ 菜单。"
+    ),
+    "help.body.sessions": (
+        "*会话*\n\n"
+        "• *创建。* 在空 DM 中发送任意文本,或 ≡ 菜单 → 🆕 New,\n"
+        "选择一个目录。\n"
+        "• *切换。* 点击切换器中的会话按钮。\n"
+        "• *引用回复。* 回复非活动会话的机器人消息 — 你的文本\n"
+        "只单次路由到该会话,不更改活动状态。\n"
+        "• *完成。* `/done [name]` — 标记并归档。\n"
+        "• *闲置 TTL。* 4 小时无输入自动归档。\n"
+        "• *恢复。* ≡ 菜单 → 📦 Archive → *Restore*。"
+    ),
+    "help.body.menu": (
+        "*≡ 菜单*\n\n"
+        "通过 /menu 或 ≡ 菜单内联按钮打开:\n"
+        "• 📋 *List* — 实时会话列表(含用量)\n"
+        "• 📊 *Status* — 5h / 周 / sonnet 配额\n"
+        "• 📜 *History* — 当前会话的分页转录\n"
+        "• 📸 *Shot* — 终端截图(PNG 带 ANSI 颜色)\n"
+        "• 🆕 *New* — 通过目录浏览器创建会话\n"
+        "• 📦 *Archive* — 恢复 / 查看 / 删除\n"
+        "• ⚙ *Settings* — 语言 / 语音 / 提醒 / 终端 …"
+    ),
+    "help.body.commands": (
+        "*斜杠命令*\n\n"
+        "Bot 端:\n"
+        "• `/menu` — 打开内联菜单\n"
+        "• `/help` — 本帮助\n"
+        "• `/done [name]` — 归档会话\n"
+        "• `/health` — 运行时间 / 队列 / 延迟 / 计数器\n\n"
+        "Claude Code 透传(原样转发):\n"
+        "• `/model` `/effort` `/clear` `/compact` `/cost` `/memory` …\n\n"
+        "前缀 `!` — 捕获本地 shell 命令的输出并转发。"
+    ),
+    "help.body.voice": (
+        "*语音和文件*\n\n"
+        "• *语音。* 发送语音消息 — 在本地转写\n"
+        "(whisper.cpp / Apple Speech)然后作为文本发送给活动会话。\n"
+        "• *照片 / 文档。* 落到 `<workdir>/.ccbot-inbox/`,Claude 通过\n"
+        "tmux 收到合成消息。TTL 24 小时;Telegram `file_id` 保留 30 天\n"
+        "用于 `/restore-file`。"
+    ),
+    "help.body.alerts": (
+        "*提醒*\n\n"
+        "*Per-session token 提醒。* 三个阈值(默认 100k / 200k / 400k)。\n"
+        "每个会话每个阈值推送一次。Settings → Token alerts(50k 步长)。\n\n"
+        "*配额提醒。* 5h / 周 / 周-Sonnet 配额 — 机器人每 5 分钟轮询\n"
+        "实时 `/usage` 弹窗,百分比跨过 50 / 75 / 90 时推送。"
+    ),
+    "help.body.terminal": (
+        "*本地终端*\n\n"
+        "Settings → Local terminal:开启后,每次新建会话也会弹出\n"
+        "本地原生窗口,自动 attach 到对应 tmux 窗口 —\n"
+        "桌面手动操作和 Telegram 并行。\n\n"
+        "macOS:Terminal.app / iTerm2(自动,iTerm 优先用 tab)。\n"
+        "Linux:从自动检测列表选择,或 *Configure via Claude*\n"
+        "处理特殊环境。\n\n"
+        "随时也可直接 `tmux attach -t ccbot`。"
+    ),
+    "help.body.tips": (
+        "*技巧*\n\n"
+        "• *自动同意。* Settings → Auto-approve 自动 Yes\n"
+        "--dangerously-skip-permissions 未覆盖的提示。\n"
+        "• *Live lag。* Settings → Live lag — 会话卡片重绘频率,\n"
+        "更小 = 更灵敏,更大 = 更省 rate-limit。\n"
+        "• *语言。* Settings → Language:en / ru / zh。\n"
+        "• *出站代理。* `TG_PROXY_URL` 如果主机无法\n"
+        "直接访问 api.telegram.org。"
+    ),
 }
 
 TRANSLATIONS: dict[str, dict[str, str]] = {

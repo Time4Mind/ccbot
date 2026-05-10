@@ -1,10 +1,10 @@
-"""Read-only info commands: /status, /history, /screenshot, /usage, /health.
+"""Read-only info commands: /status, /history, /screenshot, /usage, /health, /help.
 
-These also expose ``emit_*`` helpers used by the inline Menu callbacks
-when the user opens the same view from a button instead of a slash
-command. ``build_screenshot_keyboard`` lives here because both the
-/screenshot command and the CB_KEYS_* / CB_SCREENSHOT_REFRESH callback
-paths need it.
+These also expose ``emit_*`` / ``render_help`` helpers used by the
+inline Menu and Help callbacks when the user opens the same view from
+a button instead of a slash command. ``build_screenshot_keyboard``
+lives here because both the /screenshot command and the CB_KEYS_* /
+CB_SCREENSHOT_REFRESH callback paths need it.
 """
 
 from __future__ import annotations
@@ -332,3 +332,78 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
     await safe_reply(update.message, "\n".join(lines))
+
+
+# --- /help — inline mini-doc with section buttons ---
+
+
+HELP_SECTIONS: tuple[str, ...] = (
+    "overview",
+    "sessions",
+    "menu",
+    "commands",
+    "voice",
+    "alerts",
+    "terminal",
+    "tips",
+)
+
+
+def render_help(
+    user_id: int, section: str = "home"
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build (text, keyboard) for either the top-level help screen or one section.
+
+    The home screen lists the section buttons. A section screen renders the
+    body for that section plus a back row that returns to home / Menu.
+    """
+    from ...handlers.callback_data import CB_HLP_HOME, CB_HLP_SEC, CB_MM_BACK
+
+    if section == "home":
+        text = t(user_id, "help.home.body")
+    elif section in HELP_SECTIONS:
+        text = t(user_id, f"help.body.{section}")
+    else:
+        text = t(user_id, "help.home.body")
+        section = "home"
+
+    section_buttons: list[InlineKeyboardButton] = []
+    for s in HELP_SECTIONS:
+        label = t(user_id, f"help.btn.{s}")
+        if s == section:
+            label = f"• {label}"
+        section_buttons.append(
+            InlineKeyboardButton(label, callback_data=f"{CB_HLP_SEC}{s}")
+        )
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for i in range(0, len(section_buttons), 2):
+        rows.append(section_buttons[i : i + 2])
+
+    if section == "home":
+        rows.append(
+            [InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_MM_BACK)]
+        )
+    else:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    t(user_id, "btn.back"), callback_data=CB_HLP_HOME
+                ),
+                InlineKeyboardButton(
+                    t(user_id, "btn.menu"), callback_data=CB_MM_BACK
+                ),
+            ]
+        )
+    return text, InlineKeyboardMarkup(rows)
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/help` — open the inline mini-doc. Other sections are reachable via taps."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+    text, keyboard = render_help(user.id, "home")
+    await safe_reply(update.message, text, reply_markup=keyboard)

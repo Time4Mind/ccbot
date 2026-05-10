@@ -19,6 +19,7 @@ from . import (
     confirm,
     dir_browser,
     footer,
+    help as help_callbacks,
     history_pagination,
     interactive_ui,
     more_menu,
@@ -44,6 +45,7 @@ _HANDLERS = (
     confirm.handle,
     interactive_ui.handle,
     screenshot_keys.handle,
+    help_callbacks.handle,
 )
 
 

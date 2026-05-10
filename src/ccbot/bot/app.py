@@ -32,6 +32,7 @@ from ._common import CC_COMMANDS
 from .callbacks import callback_handler
 from .commands.info import (
     health_command,
+    help_command,
     history_command,
     screenshot_command,
     status_command,
@@ -77,6 +78,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     # footer. Hidden commands still work when typed.
     bot_commands = [
         BotCommand("menu", "Open menu"),
+        BotCommand("help", "Quick guide / inline doc"),
         BotCommand("done", "Mark a session as done"),
     ]
     for cmd_name in ("model", "effort", "compact", "memory"):
@@ -193,6 +195,7 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     application.add_handler(CommandHandler("archive", archive_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("health", health_command))
+    application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Forward any other /command to Claude Code.
     application.add_handler(MessageHandler(filters.COMMAND, forward_command_handler))

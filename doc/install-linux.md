@@ -42,7 +42,7 @@ Debian/Ubuntu (для других — адаптировать пакетный
 | Параметр                 | Пример                       | Где взять |
 |--------------------------|------------------------------|-----------|
 | `TELEGRAM_BOT_TOKEN`     | `123456:ABC-DEF...`          | [@BotFather](https://t.me/BotFather) → `/newbot` |
-| `ALLOWED_USERS`          | `449692402`                  | [@userinfobot](https://t.me/userinfobot) |
+| `ALLOWED_USERS`          | `123456789` (свой числовой id) | [@userinfobot](https://t.me/userinfobot) |
 | Каталог установки        | `/opt/ccbot` (рекомендация) | — |
 | Системный пользователь   | текущий `$USER`              | под ним работает Claude Code |
 | Нужен ли whisper-голос?  | да/нет                       | при «нет» этап 6 пропускается |
@@ -146,7 +146,7 @@ sudo chown "$USER:$USER" /opt
 cd /opt
 git clone https://github.com/Time4Mind/ccbot.git
 cd ccbot
-git checkout feat/dm-multisession   # ветка фолка с DM-режимом
+# DM-режим живёт в main; отдельной ветки больше нет.
 uv sync                              # создаст .venv и поставит зависимости
 ```
 
@@ -336,8 +336,8 @@ journalctl -u "ccbot@$USER.service" -n 50 --no-pager
 - [ ] `tmux`, `ffmpeg`, `git`, `curl`, `python3.12`, `uv` установлены.
 - [ ] `claude --version` работает, `claude auth status` показывает
       активную подписку.
-- [ ] `/opt/ccbot` склонирован, ветка `feat/dm-multisession`,
-      `uv sync` отработал без ошибок.
+- [ ] `/opt/ccbot` склонирован (ветка `main`), `uv sync` отработал
+      без ошибок.
 - [ ] `uv run ruff check` и `uv run pyright src/ccbot/` чистые.
 - [ ] `~/.ccbot/.env` существует, mode 600, заполнены
       `TELEGRAM_BOT_TOKEN` и `ALLOWED_USERS`.
@@ -352,6 +352,33 @@ journalctl -u "ccbot@$USER.service" -n 50 --no-pager
 
 ---
 
+## 12.1. Local terminal (опционально)
+
+В Settings → *Локальный терминал* (или `local_terminal`) трёхпозиционный
+переключатель — `выкл` / `по кнопке` / `всегда`:
+
+- `выкл` — бот ничего не открывает, кнопки нет.
+- `по кнопке` — авто-спавна нет; в footer-строке рядом со
+  *Стоп / Очистить / Меню* появляется *🖥 Терминал* у активной
+  сессии, у которой нет аттаченного клиента к её tmux-окну.
+- `всегда` — бот открывает терминал при создании каждой сессии
+  и плюс показывает ту же кнопку, когда терминала нет.
+
+На Linux нужен один из эмуляторов на PATH; бот автодетектит
+gnome-terminal / konsole / kitty / wezterm / alacritty / tilix /
+foot / xterm. Если ни один не нашёлся, тапни *🪄 Configure via
+Claude* в том же экране настроек — будет подсказка как написать
+свой шаблон в `local_terminal_cmd` (или env-переменную
+`CCBOT_LOCAL_TERMINAL_CMD`).
+
+Под капотом каждый локальный терминал подключается к собственной
+*grouped session* `ccbot-w<wid>` (через `tmux new-session -t ccbot
+-s ccbot-w<wid>`). Это нужно чтобы у каждого клиента был свой
+current-window, иначе открытие терминала под новую сессию утаскивает
+все остальные клиенты на это же окно.
+
+---
+
 ## 13. Частые проблемы
 
 | Симптом | Вероятная причина | Что делать |
@@ -362,6 +389,8 @@ journalctl -u "ccbot@$USER.service" -n 50 --no-pager
 | Хук не срабатывает | `ccbot` не в PATH у claude-процесса | `which ccbot` под нужным юзером; либо подставь абсолютный путь в `~/.claude/settings.json` |
 | Голос не распознаётся | `whisper-cli` не в PATH или модель битая | прогон `whisper-cli -m <path> -f sample.wav` руками |
 | 401/403 от Telegram API | Токен отозван или сеть блокирует api.telegram.org | новый токен через BotFather или `TG_PROXY_URL` |
+| *🖥 Терминал* не появляется | Настройка `local_terminal=off` или эмулятор не на PATH | в Settings выбери `по кнопке`/`всегда` и установи один из gnome-terminal / kitty / wezterm / alacritty |
+| Кнопка *🖥 Терминал* пропадает после переключения сессии | у новой активной сессии уже есть аттаченный клиент к её окну | это by-design — кнопка показывается только когда клиента нет |
 
 ---
 

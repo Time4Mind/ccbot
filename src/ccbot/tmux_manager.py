@@ -377,6 +377,33 @@ class TmuxManager:
 
         return await asyncio.to_thread(_sync_kill)
 
+    def has_client_for_window(self, window_id: str) -> bool:
+        """True iff some tmux client is attached to this window's group session.
+
+        Each local terminal lives on a per-window grouped session named
+        ``<source>-w<wid>`` (see ``local_terminal._build_tmux_command``).
+        The Menu's "Open terminal" button uses this to hide itself when
+        the user already has a terminal pointed at the active session.
+
+        ``server.cmd`` returns one ``list-clients`` line per attached
+        client; an empty stdout means "group exists but unattached" or
+        "group does not exist", both of which mean we should show the
+        button.
+        """
+        suffix = window_id.lstrip("@")
+        if not suffix:
+            return False
+        target = f"{self.session_name}-w{suffix}"
+        try:
+            result = self.server.cmd("list-clients", "-t", target)
+        except Exception:
+            return False
+        stdout = result.stdout if hasattr(result, "stdout") else []
+        if not stdout:
+            return False
+        # libtmux returns stdout as a list of lines.
+        return any(line.strip() for line in stdout)
+
     def _kill_grouped_session_for_window(self, window_id: str) -> None:
         """Kill the ``<source>-w<wid>`` grouped session, if present.
 

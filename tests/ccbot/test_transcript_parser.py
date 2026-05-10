@@ -1,14 +1,15 @@
-"""Tests for ccbot.transcript_parser — pure logic, no I/O."""
+"""Tests for ccbot.transcript_parser + ccbot.transcript_format — pure logic, no I/O."""
 
 import pytest
 
+from ccbot import transcript_format
 from ccbot.transcript_parser import (
     ParsedMessage,
     TranscriptParser,
 )
 
-EXPQUOTE_START = TranscriptParser.EXPANDABLE_QUOTE_START
-EXPQUOTE_END = TranscriptParser.EXPANDABLE_QUOTE_END
+EXPQUOTE_START = transcript_format.EXPANDABLE_QUOTE_START
+EXPQUOTE_END = transcript_format.EXPANDABLE_QUOTE_END
 
 
 # ── parse_line ───────────────────────────────────────────────────────────
@@ -109,16 +110,16 @@ class TestFormatToolUseSummary:
         ],
     )
     def test_tool_summary(self, name: str, input_data: dict, expected: str):
-        assert TranscriptParser.format_tool_use_summary(name, input_data) == expected
+        assert transcript_format.format_tool_use_summary(name, input_data) == expected
 
     def test_non_dict_input(self):
         assert (
-            TranscriptParser.format_tool_use_summary("Read", "not a dict") == "**Read**"
+            transcript_format.format_tool_use_summary("Read", "not a dict") == "**Read**"
         )
 
     def test_truncation_at_200_chars(self):
         long_value = "x" * 250
-        result = TranscriptParser.format_tool_use_summary(
+        result = transcript_format.format_tool_use_summary(
             "Bash", {"command": long_value}
         )
         assert len(long_value) > 200
@@ -146,7 +147,7 @@ class TestExtractToolResultText:
         ids=["string", "text_blocks", "mixed", "none"],
     )
     def test_extract_tool_result_text(self, content: str | list | None, expected: str):
-        assert TranscriptParser.extract_tool_result_text(content) == expected
+        assert transcript_format.extract_tool_result_text(content) == expected
 
 
 # ── parse_message ────────────────────────────────────────────────────────
@@ -247,7 +248,7 @@ class TestFormatEditDiff:
         ids=["single_line", "multi_line", "identical"],
     )
     def test_format_edit_diff(self, old: str, new: str, check):
-        result = TranscriptParser._format_edit_diff(old, new)
+        result = transcript_format.format_edit_diff(old, new)
         assert check(result), f"Check failed for ({old!r}, {new!r}): {result!r}"
 
 
@@ -309,7 +310,7 @@ class TestFormatToolResultText:
         ids=["Read", "Write", "Bash", "Grep", "Glob", "Task", "WebFetch", "empty"],
     )
     def test_format_tool_result_text(self, text: str, tool_name: str, check):
-        result = TranscriptParser._format_tool_result_text(text, tool_name)
+        result = transcript_format.format_tool_result_text(text, tool_name)
         assert check(result), f"Failed check for {tool_name!r}: {result!r}"
 
 

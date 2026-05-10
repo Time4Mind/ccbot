@@ -73,9 +73,13 @@ Additional modules:
   transcribe.py       ─ Voice-to-text transcription via whisper.cpp / Apple / OpenAI
   i18n.py             ─ Per-user UI strings (en / ru / zh)
   naming.py           ─ Haiku-generated session names + readable summaries
-  usage.py            ─ Token usage aggregator + compact /usage breakdown
+  usage.py            ─ Token usage aggregator + per-session token alerts
   main.py             ─ CLI entry point
   utils.py            ─ Shared utilities (ccbot_dir, atomic_write_json)
+  session_models.py   ─ Session / WindowState / ClaudeSession dataclasses
+  session_recovery.py ─ Startup hygiene: reconcile w/ tmux + resolve stale window IDs
+  session_claude_io.py─ Read-only Claude transcript discovery (encode_cwd, list, get)
+  transcript_format.py─ Tool-summary + tool-result formatting (was inside TranscriptParser)
 
 bot/ package (was bot.py before A1, split per CLAUDE.md size budget):
   __init__.py         ─ Re-exports create_bot, forward_command_handler

@@ -6,18 +6,23 @@ Tool pairing: tool_use blocks in assistant messages are matched with
 tool_result blocks in subsequent user messages via tool_use_id.
 
 Shared by both session.py (history) and session_monitor.py (real-time).
-Format reference: https://github.com/desis123/claude-code-viewer
+Tool-summary and tool-result formatting helpers live in
+``transcript_format`` — re-exported here for backward compatibility.
 
 Key classes: TranscriptParser (static methods), ParsedEntry, ParsedMessage, PendingToolInfo.
 """
 
-import base64
-import difflib
 import json
 import logging
 import re
 from dataclasses import dataclass
 from typing import Any
+
+from . import transcript_format
+from .transcript_format import (
+    EXPANDABLE_QUOTE_END,
+    EXPANDABLE_QUOTE_START,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +82,11 @@ class TranscriptParser:
     # Magic string constants
     _NO_CONTENT_PLACEHOLDER = "(no content)"
     _INTERRUPTED_TEXT = "[Request interrupted by user for tool use]"
-    _MAX_SUMMARY_LENGTH = 200
+
+    # Re-export of expandable-quote sentinels for callers that still
+    # reach in via TranscriptParser (markdown_v2, message_sender).
+    EXPANDABLE_QUOTE_START = EXPANDABLE_QUOTE_START
+    EXPANDABLE_QUOTE_END = EXPANDABLE_QUOTE_END
 
     @staticmethod
     def parse_line(line: str) -> dict | None:
@@ -152,129 +161,6 @@ class TranscriptParser:
         r"<(bash-input|bash-stdout|bash-stderr|local-command-caveat|system-reminder)"
     )
 
-    @staticmethod
-    def _format_edit_diff(old_string: str, new_string: str) -> str:
-        """Generate a compact unified diff between old_string and new_string."""
-        old_lines = old_string.splitlines(keepends=True)
-        new_lines = new_string.splitlines(keepends=True)
-        diff = difflib.unified_diff(old_lines, new_lines, lineterm="")
-        # Skip the --- / +++ header lines
-        result_lines: list[str] = []
-        for line in diff:
-            if line.startswith("---") or line.startswith("+++"):
-                continue
-            # Strip trailing newline for clean display
-            result_lines.append(line.rstrip("\n"))
-        return "\n".join(result_lines)
-
-    @classmethod
-    def format_tool_use_summary(cls, name: str, input_data: dict | Any) -> str:
-        """Format a tool_use block into a brief summary line.
-
-        Args:
-            name: Tool name (e.g. "Read", "Write", "Bash")
-            input_data: The tool input dict
-
-        Returns:
-            Formatted string like "**Read**(file.py)"
-        """
-        if not isinstance(input_data, dict):
-            return f"**{name}**"
-
-        # Pick a meaningful short summary based on tool name
-        summary = ""
-        if name in ("Read", "Glob"):
-            summary = input_data.get("file_path") or input_data.get("pattern", "")
-        elif name == "Write":
-            summary = input_data.get("file_path", "")
-        elif name in ("Edit", "NotebookEdit"):
-            summary = input_data.get("file_path") or input_data.get("notebook_path", "")
-            # Note: Edit/Update diff and stats are generated in tool_result stage,
-            # not here. We just show the tool name and file path.
-        elif name == "Bash":
-            summary = input_data.get("command", "")
-        elif name == "Grep":
-            summary = input_data.get("pattern", "")
-        elif name == "Task":
-            summary = input_data.get("description", "")
-        elif name == "WebFetch":
-            summary = input_data.get("url", "")
-        elif name == "WebSearch":
-            summary = input_data.get("query", "")
-        elif name == "TodoWrite":
-            todos = input_data.get("todos", [])
-            if isinstance(todos, list):
-                summary = f"{len(todos)} item(s)"
-        elif name == "TodoRead":
-            summary = ""
-        elif name == "AskUserQuestion":
-            questions = input_data.get("questions", [])
-            if isinstance(questions, list) and questions:
-                q = questions[0]
-                if isinstance(q, dict):
-                    summary = q.get("question", "")
-        elif name == "ExitPlanMode":
-            summary = ""
-        elif name == "Skill":
-            summary = input_data.get("skill", "")
-        else:
-            # Generic: show first string value
-            for v in input_data.values():
-                if isinstance(v, str) and v:
-                    summary = v
-                    break
-
-        if summary:
-            if len(summary) > cls._MAX_SUMMARY_LENGTH:
-                summary = summary[: cls._MAX_SUMMARY_LENGTH] + "…"
-            return f"**{name}**({summary})"
-        return f"**{name}**"
-
-    @staticmethod
-    def extract_tool_result_text(content: list | Any) -> str:
-        """Extract text from a tool_result content block."""
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            parts = []
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    t = item.get("text", "")
-                    if t:
-                        parts.append(t)
-                elif isinstance(item, str):
-                    parts.append(item)
-            return "\n".join(parts)
-        return ""
-
-    @staticmethod
-    def extract_tool_result_images(
-        content: list | Any,
-    ) -> list[tuple[str, bytes]] | None:
-        """Extract base64-encoded images from a tool_result content block.
-
-        Returns list of (media_type, raw_bytes) tuples, or None if no images found.
-        """
-        if not isinstance(content, list):
-            return None
-        images: list[tuple[str, bytes]] = []
-        for item in content:
-            if not isinstance(item, dict) or item.get("type") != "image":
-                continue
-            source = item.get("source")
-            if not isinstance(source, dict) or source.get("type") != "base64":
-                continue
-            media_type = source.get("media_type", "image/png")
-            data_str = source.get("data", "")
-            if not data_str:
-                continue
-            try:
-                raw_bytes = base64.b64decode(data_str)
-                images.append((media_type, raw_bytes))
-            except Exception:
-                logger.debug("Failed to decode base64 image in tool_result")
-        return images if images else None
-
     @classmethod
     def parse_message(cls, data: dict) -> ParsedMessage | None:
         """Parse a message entry from the JSONL data.
@@ -332,97 +218,6 @@ class TranscriptParser:
     def get_timestamp(data: dict) -> str | None:
         """Extract timestamp from message data."""
         return data.get("timestamp")
-
-    EXPANDABLE_QUOTE_START = "\x02EXPQUOTE_START\x02"
-    EXPANDABLE_QUOTE_END = "\x02EXPQUOTE_END\x02"
-
-    @classmethod
-    def _format_expandable_quote(cls, text: str) -> str:
-        """Format text as a Telegram expandable blockquote.
-
-        Wraps text with sentinel markers. The actual MarkdownV2 formatting
-        (> prefix, || suffix, escaping) is done in convert_markdown() after
-        telegramify processes the surrounding content.
-        """
-        return f"{cls.EXPANDABLE_QUOTE_START}{text}{cls.EXPANDABLE_QUOTE_END}"
-
-    @classmethod
-    def _format_tool_result_text(
-        cls,
-        text: str,
-        tool_name: str | None = None,
-        tool_input_data: dict | None = None,
-    ) -> str:
-        """Format tool result text with statistics summary.
-
-        Shows relevant statistics for each tool type, with expandable quote for full content.
-
-        No truncation here — per project principles, truncation is handled
-        only at the send layer (split_message / _render_expandable_quote).
-        """
-        if not text:
-            return ""
-
-        line_count = text.count("\n") + 1 if text else 0
-
-        # Tool-specific statistics
-        if tool_name == "Read":
-            # Read: show line count instead of full content
-            return f"  ⎿  Read {line_count} lines"
-
-        elif tool_name == "Write":
-            # Write: prefer the input content's line count (the tool result is
-            # usually just "File created successfully at: ..."). Fall back to
-            # counting lines in `text` when input data isn't supplied.
-            written = tool_input_data.get("content", "") if tool_input_data else ""
-            if not written:
-                written_lines = line_count
-            else:
-                written_lines = written.count("\n") + (
-                    0 if written.endswith("\n") else 1
-                )
-            return f"  ⎿  Wrote {written_lines} lines"
-
-        elif tool_name == "Bash":
-            # Bash: show output line count
-            if line_count > 0:
-                stats = f"  ⎿  Output {line_count} lines"
-                return stats + "\n" + cls._format_expandable_quote(text)
-            return cls._format_expandable_quote(text)
-
-        elif tool_name == "Grep":
-            # Grep: show match count (count non-empty lines)
-            matches = len([line for line in text.split("\n") if line.strip()])
-            stats = f"  ⎿  Found {matches} matches"
-            return stats + "\n" + cls._format_expandable_quote(text)
-
-        elif tool_name == "Glob":
-            # Glob: show file count
-            files = len([line for line in text.split("\n") if line.strip()])
-            stats = f"  ⎿  Found {files} files"
-            return stats + "\n" + cls._format_expandable_quote(text)
-
-        elif tool_name == "Task":
-            # Task: show output length
-            if line_count > 0:
-                stats = f"  ⎿  Agent output {line_count} lines"
-                return stats + "\n" + cls._format_expandable_quote(text)
-            return cls._format_expandable_quote(text)
-
-        elif tool_name == "WebFetch":
-            # WebFetch: show content length
-            char_count = len(text)
-            stats = f"  ⎿  Fetched {char_count} characters"
-            return stats + "\n" + cls._format_expandable_quote(text)
-
-        elif tool_name == "WebSearch":
-            # WebSearch: show results count (estimate by sections)
-            results = text.count("\n\n") + 1 if text else 0
-            stats = f"  ⎿  {results} search results"
-            return stats + "\n" + cls._format_expandable_quote(text)
-
-        # Default: expandable quote without stats
-        return cls._format_expandable_quote(text)
 
     @classmethod
     def parse_entries(
@@ -528,7 +323,7 @@ class TranscriptParser:
                         tool_id = block.get("id", "")
                         name = block.get("name", "unknown")
                         inp = block.get("input", {})
-                        summary = cls.format_tool_use_summary(name, inp)
+                        summary = transcript_format.format_tool_use_summary(name, inp)
 
                         # ExitPlanMode: emit plan content as text before tool_use entry
                         if name == "ExitPlanMode" and isinstance(inp, dict):
@@ -581,7 +376,7 @@ class TranscriptParser:
                     elif btype == "thinking":
                         thinking_text = block.get("thinking", "")
                         if thinking_text:
-                            quoted = cls._format_expandable_quote(thinking_text)
+                            quoted = transcript_format.format_expandable_quote(thinking_text)
                             result.append(
                                 ParsedEntry(
                                     role="assistant",
@@ -620,8 +415,8 @@ class TranscriptParser:
                     if btype == "tool_result":
                         tool_use_id = block.get("tool_use_id", "")
                         result_content = block.get("content", "")
-                        result_text = cls.extract_tool_result_text(result_content)
-                        result_images = cls.extract_tool_result_images(result_content)
+                        result_text = transcript_format.extract_tool_result_text(result_content)
+                        result_images = transcript_format.extract_tool_result_images(result_content)
                         is_error = block.get("is_error", False)
                         is_interrupted = result_text == cls._INTERRUPTED_TEXT
                         tool_info = pending_tools.pop(tool_use_id, None)
@@ -668,7 +463,7 @@ class TranscriptParser:
                                 entry_text += f"\n  ⎿  Error: {error_summary}"
                                 # If multi-line error, add expandable quote
                                 if "\n" in result_text:
-                                    entry_text += "\n" + cls._format_expandable_quote(
+                                    entry_text += "\n" + transcript_format.format_expandable_quote(
                                         result_text
                                     )
                             else:
@@ -690,7 +485,7 @@ class TranscriptParser:
                                 old_s = tool_input_data.get("old_string", "")
                                 new_s = tool_input_data.get("new_string", "")
                                 if old_s and new_s:
-                                    diff_text = cls._format_edit_diff(old_s, new_s)
+                                    diff_text = transcript_format.format_edit_diff(old_s, new_s)
                                     if diff_text:
                                         added = sum(
                                             1
@@ -709,14 +504,14 @@ class TranscriptParser:
                                             "\n"
                                             + stats
                                             + "\n"
-                                            + cls._format_expandable_quote(diff_text)
+                                            + transcript_format.format_expandable_quote(diff_text)
                                         )
                             # For other tools, append formatted result text
                             elif (
                                 result_text
                                 and cls.EXPANDABLE_QUOTE_START not in tool_summary
                             ):
-                                entry_text += "\n" + cls._format_tool_result_text(
+                                entry_text += "\n" + transcript_format.format_tool_result_text(
                                     result_text, tool_name, tool_input_data
                                 )
                             result.append(
@@ -733,7 +528,7 @@ class TranscriptParser:
                             result.append(
                                 ParsedEntry(
                                     role="assistant",
-                                    text=cls._format_tool_result_text(
+                                    text=transcript_format.format_tool_result_text(
                                         result_text, tool_name, tool_input_data
                                     )
                                     if result_text

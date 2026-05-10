@@ -641,11 +641,16 @@ async def push_event(
     except Exception as e:
         logger.debug("push_event failed: %s", e)
         return
-    # Migrate the switcher onto the latest pushed message.
+    # Migrate the switcher onto the latest pushed message. The keyboard's
+    # busy state mirrors whether the session has a live card right now —
+    # finalize_task / completion-style pushes happen after reset_card so
+    # the live state is gone, the user is at idle and should see Kill.
     if sent is not None:
         _register_msg(user_id, sent.message_id, sess.id)
+        live = _cards.get((user_id, sess.id))
+        is_busy = live is not None and live.msg_id is not None
         keyboard: InlineKeyboardMarkup | None = build_footer_keyboard(
-            user_id, screen="main"
+            user_id, screen="main", is_busy=is_busy
         )
         if keyboard is not None:
             try:

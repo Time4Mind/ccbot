@@ -28,7 +28,7 @@ from ...handlers.interactive_ui import (
 )
 from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_send
-from ...handlers.notifications import refresh_panel, transfer_card_to_carrier
+from ...handlers.notifications import transfer_card_to_carrier
 from ...session import session_manager
 from ...terminal_parser import extract_interactive_content, is_interactive_ui
 from ...tmux_manager import tmux_manager
@@ -179,8 +179,14 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         # session keeps its working/finished status for the panel render.
         bg_status.mark_seen(user.id, target_id)
         bg_status.prune_seen(user.id)
-        # Active card may need a re-render to drop the just-seen entry.
-        await refresh_panel(context.bot, user.id)
+        # NB: do NOT call refresh_panel here. The carrier message just
+        # got painted with the history view (or the pending interactive
+        # UI). refresh_panel re-renders the live card on the same
+        # message_id with the fresh-session state, whose ``lines`` is
+        # empty — overwriting the history we just put there with a
+        # header-only card. The next real claude event for the active
+        # session will re-render the card naturally; the panel update
+        # arrives with it.
 
         await query.answer(f"→ {sess.name or sess.id}")
         return True

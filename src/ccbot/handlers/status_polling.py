@@ -194,6 +194,21 @@ async def update_status_message(
     if not is_bg_session and sess is not None and is_card_busy(user_id, sess.id):
         try:
             await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+            logger.info(
+                "typing_fired source=status_polling user=%d sess=%s wid=%s status=%r",
+                user_id,
+                sess.id,
+                window_id,
+                status_line[:40] if status_line else "",
+                extra={
+                    "event": "typing_fired",
+                    "source": "status_polling",
+                    "user_id": user_id,
+                    "session_id": sess.id,
+                    "window_id": window_id,
+                    "status_line": status_line[:80] if status_line else "",
+                },
+            )
         except Exception as e:
             logger.debug("send_chat_action TYPING failed: %s", e)
     await touch_card_status(bot, user_id, window_id, status_line)

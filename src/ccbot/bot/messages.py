@@ -90,6 +90,17 @@ async def forward_command_handler(
         "Forwarding command %s to window %s (user=%d)", cc_slash, display, user.id
     )
     await update.message.chat.send_action(ChatAction.TYPING)
+    logger.info(
+        "typing_fired source=forward_command user=%d wid=%s",
+        user.id,
+        wid,
+        extra={
+            "event": "typing_fired",
+            "source": "forward_command",
+            "user_id": user.id,
+            "window_id": wid,
+        },
+    )
     success, message = await session_manager.send_to_window(wid, cc_slash)
     if success:
         # /clear: drop the session association so we re-detect once a new
@@ -222,6 +233,17 @@ async def unsupported_content_handler(
         text_to_send = "\n".join(body_parts)
 
         await msg.chat.send_action(ChatAction.TYPING)
+        logger.info(
+            "typing_fired source=caption_forward user=%d wid=%s",
+            user.id,
+            wid,
+            extra={
+                "event": "typing_fired",
+                "source": "caption_forward",
+                "user_id": user.id,
+                "window_id": wid,
+            },
+        )
         clear_status_msg_info(user.id, wid)
         success, message = await session_manager.send_to_window(wid, text_to_send)
         if not success:
@@ -266,6 +288,19 @@ async def _forward_inbox_file(
     )
     try:
         await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        logger.info(
+            "typing_fired source=inbox_file_forward user=%d wid=%s label=%s",
+            user_id,
+            wid,
+            label,
+            extra={
+                "event": "typing_fired",
+                "source": "inbox_file_forward",
+                "user_id": user_id,
+                "window_id": wid,
+                "label": label,
+            },
+        )
     except Exception:
         pass
     clear_status_msg_info(user_id, wid)
@@ -431,6 +466,17 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     await update.message.chat.send_action(ChatAction.TYPING)
+    logger.info(
+        "typing_fired source=voice_handler user=%d wid=%s",
+        user.id,
+        wid,
+        extra={
+            "event": "typing_fired",
+            "source": "voice_handler",
+            "user_id": user.id,
+            "window_id": wid,
+        },
+    )
     clear_status_msg_info(user.id, wid)
 
     success, message = await session_manager.send_to_window(wid, text)
@@ -610,6 +656,17 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     await update.message.chat.send_action(ChatAction.TYPING)
+    logger.info(
+        "typing_fired source=text_handler user=%d wid=%s",
+        user.id,
+        wid,
+        extra={
+            "event": "typing_fired",
+            "source": "text_handler",
+            "user_id": user.id,
+            "window_id": wid,
+        },
+    )
 
     # New message pushes pane content down — kill any in-flight bash capture.
     cancel_bash_capture(user.id, wid)

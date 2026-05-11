@@ -519,6 +519,17 @@ async def _process_status_update_task(
         if "esc to interrupt" in status_text.lower():
             try:
                 await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+                logger.info(
+                    "typing_fired source=message_queue.status_edit user=%d wid=%s",
+                    user_id,
+                    wid,
+                    extra={
+                        "event": "typing_fired",
+                        "source": "message_queue.status_edit",
+                        "user_id": user_id,
+                        "window_id": wid,
+                    },
+                )
             except RetryAfter:
                 raise
             except Exception:
@@ -575,6 +586,17 @@ async def _do_send_status_message(
     if "esc to interrupt" in text.lower():
         try:
             await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+            logger.info(
+                "typing_fired source=message_queue.status_send user=%d wid=%s",
+                user_id,
+                window_id,
+                extra={
+                    "event": "typing_fired",
+                    "source": "message_queue.status_send",
+                    "user_id": user_id,
+                    "window_id": window_id,
+                },
+            )
         except RetryAfter:
             raise
         except Exception:

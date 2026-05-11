@@ -744,18 +744,15 @@ async def update_session_card(
     msg_id_in = state.msg_id
     in_menu_view_in = state.in_menu_view
 
-    # Fresh card opening (no msg_id yet, no buffered lines) → seed the
-    # head with a handful of transcript entries from before the user's
-    # most recent message so the new card carries prior-turn context
-    # instead of starting blank. One-shot: subsequent events for this
-    # card take the normal append-only path. Skipped when in menu view
-    # (resume_card_view handles its own catch-up rendering).
-    if (
-        state.msg_id is None
-        and not state.lines
-        and not state.in_menu_view
-        and config.card_prior_context > 0
-    ):
+    # Fresh-content card → seed the head with a handful of transcript
+    # entries from before the user's most recent message so the new
+    # card carries prior-turn context instead of starting blank.
+    # One-shot: triggers when ``state.lines`` is empty, regardless of
+    # whether ``msg_id`` is set (it is set after a switcher tap that
+    # claimed the carrier — but ``state.lines`` is still empty for a
+    # fresh session). Skipped during menu-view buffering —
+    # resume_card_view handles its own catch-up rendering.
+    if not state.lines and not state.in_menu_view and config.card_prior_context > 0:
         try:
             seed = await _seed_prior_context_lines(sess)
         except Exception as e:

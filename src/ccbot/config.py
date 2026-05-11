@@ -183,6 +183,38 @@ class Config:
             bg_mode = "separate"
         self.bg_notify_mode: str = bg_mode
 
+        # Background-session status panel: max badges shown at the end of the
+        # active card. Older entries collapse to a "+N more" tail.
+        try:
+            bg_max = int(os.getenv("BG_STATUS_MAX", "4"))
+        except ValueError:
+            bg_max = 4
+        self.bg_status_max: int = max(1, bg_max)
+
+        # Per-session token-usage thresholds (in absolute tokens) that drive
+        # the ⚠️🟢/🟡/🔴 quota badge on the bg-status panel and active card
+        # header. Crossing each threshold flips the colour; lower thresholds
+        # keep their colour until the session is archived. Comma-separated
+        # triple in env, ascending.
+        raw_q = os.getenv("BG_STATUS_QUOTA_THRESHOLDS", "100000,200000,400000")
+        thr: list[int] = []
+        for part in raw_q.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                thr.append(int(part))
+            except ValueError:
+                continue
+        if len(thr) < 3:
+            thr = [100_000, 200_000, 400_000]
+        thr = sorted(thr)[:3]
+        self.bg_status_quota_thresholds: tuple[int, int, int] = (
+            thr[0],
+            thr[1],
+            thr[2],
+        )
+
         # Voice
         voice_backend = os.getenv("VOICE_BACKEND", "auto").strip().lower()
         if voice_backend not in ("auto", "whisper", "apple", "off"):

@@ -22,6 +22,7 @@ from pathlib import Path
 from telegram import Bot
 
 from ..config import config
+from ..handlers import bg_status
 from ..handlers.interactive_ui import (
     INTERACTIVE_TOOL_NAMES,
     clear_interactive_mode,
@@ -33,11 +34,15 @@ from ..handlers.interactive_ui import (
 from ..handlers.message_queue import get_message_queue
 from ..handlers.notifications import (
     finalize_task,
+    is_active_for_user,
     push_event,
+    refresh_panel,
     update_session_card,
 )
 from ..session import session_manager
 from ..session_monitor import NewMessage
+from ..terminal_parser import extract_interactive_content
+from ..tmux_manager import tmux_manager
 from ..usage import aggregate_session, pop_session_token_alert
 
 logger = logging.getLogger(__name__)
@@ -86,6 +91,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         if not wid:
             continue
         session_manager.touch_session(sess.id)
+        is_active = is_active_for_user(user_id, sess)
 
         if not config.show_tool_calls and msg.content_type in (
             "tool_use",
@@ -95,6 +101,26 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
 
         # Tools that render their own UI go through the interactive-UI surface.
         if msg.tool_name in INTERACTIVE_TOOL_NAMES and msg.content_type == "tool_use":
+            if not is_active:
+                # Background session: never show the UI in chat — instead
+                # snapshot the prompt and flip the bg-status badge to ❓.
+                # The switcher-tap handler renders the snapshot when the
+                # user opens the session.
+                await asyncio.sleep(0.3)
+                w = await tmux_manager.find_window_by_id(wid)
+                ui_tuple: tuple[str, str] | None = None
+                if w:
+                    pane_text = await tmux_manager.capture_pane(w.window_id)
+                    if pane_text:
+                        ui = extract_interactive_content(pane_text)
+                        if ui is not None:
+                            ui_tuple = (ui.content, ui.name)
+                if bg_status.update_status(
+                    user_id, sess.id, "needs_action", interactive_ui=ui_tuple
+                ):
+                    await refresh_panel(bot, user_id)
+                continue
+
             set_interactive_mode(user_id, wid)
             queue = get_message_queue(user_id)
             if queue:
@@ -130,10 +156,21 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 and msg.content_type == "text"
                 and msg.stop_reason in ("end_turn", "stop_sequence", "max_tokens")
             )
+            # The live-card calls below silently buffer (in_menu_view=True
+            # is already set on bg sessions by the carrier-transfer path)
+            # so a switch-back later renders the full tool history. The
+            # bg-status badge below is the chat-visible signal while bg.
             if is_terminal_text:
                 await finalize_task(bot, user_id, sess, msg.text or "")
             else:
                 await update_session_card(bot, user_id, sess, msg)
+
+            if not is_active:
+                new_status: bg_status.Status = (
+                    "finished" if is_terminal_text else "working"
+                )
+                if bg_status.update_status(user_id, sess.id, new_status):
+                    await refresh_panel(bot, user_id)
 
             claude_sess = await session_manager.resolve_session_for_window(wid)
             if claude_sess and claude_sess.file_path:
@@ -143,8 +180,9 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 except OSError:
                     pass
 
-            # Per-session token alerts — fire once per crossing, push outside
-            # the live card so it survives card-recycling.
+            # Per-session token alerts — push is gone in bg-molchit mode;
+            # the threshold crossing now flips the ⚠️🟢/🟡/🔴 glyph on
+            # the bg panel row (or active card header).
             if msg.role == "assistant" and msg.content_type == "text":
                 try:
                     su = await aggregate_session(sess)
@@ -155,14 +193,16 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
 
                         session_manager.save_state()
                         metrics.inc("session_token_alerts_emitted")
-                        await push_event(
-                            bot,
-                            user_id,
-                            sess,
-                            text=f"⚠ reached {threshold // 1000}k tokens",
-                        )
+                        level = bg_status.threshold_to_quota_level(threshold)
+                        if level != "none" and bg_status.update_quota(
+                            user_id, sess.id, level
+                        ):
+                            await refresh_panel(bot, user_id)
                 except Exception as e:
                     logger.debug("token-alert check failed: %s", e)
         else:
             # Streaming chunk — best-effort card update.
             await update_session_card(bot, user_id, sess, msg)
+            if not is_active:
+                if bg_status.update_status(user_id, sess.id, "working"):
+                    await refresh_panel(bot, user_id)

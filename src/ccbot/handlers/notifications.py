@@ -37,6 +37,7 @@ from ..config import config
 from ..session import Session, session_manager
 from ..session_monitor import NewMessage
 from ..telegram_sender import split_message
+from . import bg_status
 from .message_sender import safe_send
 from .menu import build_footer_keyboard
 from .switcher import session_emoji
@@ -237,7 +238,13 @@ def _collapse_old_tools(state: CardState) -> None:
     state.lines = new_lines
 
 
-def _render_card(sess: Session, state: CardState, *, footer: str = "") -> str:
+def _render_card(
+    sess: Session,
+    state: CardState,
+    *,
+    footer: str = "",
+    user_id: int | None = None,
+) -> str:
     emoji = session_emoji(sess)
     state_label = sess.state
     if state.status_text:
@@ -245,7 +252,17 @@ def _render_card(sess: Session, state: CardState, *, footer: str = "") -> str:
         # separate ephemeral "Esc to interrupt" message.
         state_label = f"{state_label} · {_trim(state.status_text, 60)}"
     cont_marker = " · …continued" if state.is_continuation else ""
-    header = f"{emoji} *{sess.name or sess.id}* · {state_label}{cont_marker}"
+    # Active-session quota glyph in the header — ⚠️🟢/🟡/🔴 when the
+    # session has crossed a usage threshold. Same data source as the
+    # bg-panel rows for non-active sessions.
+    quota_glyph = ""
+    if user_id is not None:
+        quota_glyph = bg_status.quota_glyph_for(user_id, sess.id)
+    name_part = sess.name or sess.id
+    if quota_glyph:
+        header = f"{emoji} *{name_part}* {quota_glyph} · {state_label}{cont_marker}"
+    else:
+        header = f"{emoji} *{name_part}* · {state_label}{cont_marker}"
     if sess.goal:
         header += f"\ngoal: {sess.goal}"
     body = "\n".join(line.text for line in state.lines)
@@ -255,10 +272,20 @@ def _render_card(sess: Session, state: CardState, *, footer: str = "") -> str:
     if footer:
         parts.append("─────")
         parts.append(footer)
+    # Background-session panel — always at the very bottom of the message
+    # so a finished session in the background isn't lost above a long
+    # tool-call log. Empty string when the user has no bg sessions to
+    # show.
+    if user_id is not None:
+        panel = bg_status.render_panel(user_id, active_session_id=sess.id)
+        if panel:
+            parts.append(panel)
     return "\n".join(parts)
 
 
-def _ensure_room(sess: Session, state: CardState) -> bool:
+def _ensure_room(
+    sess: Session, state: CardState, *, user_id: int | None = None
+) -> bool:
     """Trim oldest lines while the rendered card exceeds CARD_HARD_LIMIT.
 
     Returns True if a fresh card should be opened (we trimmed everything
@@ -266,9 +293,15 @@ def _ensure_room(sess: Session, state: CardState) -> bool:
     """
     while len(state.lines) > CARD_MAX_LINES:
         state.lines.pop(0)
-    while state.lines and len(_render_card(sess, state)) > CARD_HARD_LIMIT:
+    while (
+        state.lines
+        and len(_render_card(sess, state, user_id=user_id)) > CARD_HARD_LIMIT
+    ):
         state.lines.pop(0)
-    return len(state.lines) <= 1 and len(_render_card(sess, state)) > CARD_HARD_LIMIT
+    return (
+        len(state.lines) <= 1
+        and len(_render_card(sess, state, user_id=user_id)) > CARD_HARD_LIMIT
+    )
 
 
 def _is_stale(state: CardState) -> bool:
@@ -457,7 +490,7 @@ async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
         state.pending_edit.cancel()
     state.pending_edit = None
     footer = state.pending_complete_footer or ""
-    text = _render_card(sess, state, footer=footer)
+    text = _render_card(sess, state, footer=footer, user_id=user_id)
     is_busy = footer == ""
     keyboard = build_footer_keyboard(user_id, screen="main", is_busy=is_busy)
     try:
@@ -492,7 +525,7 @@ async def clear_card(bot: Bot, user_id: int, sess: Session) -> None:
     state.pending_edit = None
     state.lines = []
     state.last_rendered = ""
-    text = _render_card(sess, state, footer="(cleared)")
+    text = _render_card(sess, state, footer="(cleared)", user_id=user_id)
     cleared_kb = build_footer_keyboard(user_id, screen="main", is_busy=False)
     try:
         await bot.edit_message_text(
@@ -630,7 +663,7 @@ async def _deferred_edit(
         # Stale guard: card may have been reset (finalize_task) while we slept.
         if state.msg_id is None:
             return
-        text = _render_card(sess, state)
+        text = _render_card(sess, state, user_id=user_id)
         if text == state.last_rendered:
             return
         if await _edit_card(bot, user_id, state, text=text):
@@ -707,7 +740,7 @@ async def update_session_card(
     _collapse_old_tools(state)
 
     # Trigger: card overflow → continuation card.
-    overflow = _ensure_room(sess, state)
+    overflow = _ensure_room(sess, state, user_id=user_id)
     if overflow:
         # Couldn't fit even one line — start a fresh card holding only the new line.
         state.msg_id = None
@@ -715,7 +748,7 @@ async def update_session_card(
         state.is_continuation = True
         state.last_rendered = ""
 
-    text = _render_card(sess, state)
+    text = _render_card(sess, state, user_id=user_id)
 
     if state.msg_id is None:
         await _send_card(bot, user_id, sess, state, text=text)
@@ -832,7 +865,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
         state.lines.append(CardLine(text=_RESULT_DIVIDER))
 
     # Body budget for the answer chunk after header + tool history + divider.
-    overhead = len(_render_card(sess, state, footer="(task complete)"))
+    overhead = len(_render_card(sess, state, footer="(task complete)", user_id=user_id))
     body_budget = max(200, CARD_HARD_LIMIT - overhead - 1)
     chunks = split_message(cleaned, max_length=body_budget)
 
@@ -842,7 +875,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     # If the combined card still overflows, _ensure_room trims old tool
     # lines from the front; if even that fails, open a continuation card
     # holding only divider + answer.
-    overflow = _ensure_room(sess, state)
+    overflow = _ensure_room(sess, state, user_id=user_id)
     if overflow:
         state.msg_id = None
         state.lines = (
@@ -857,7 +890,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     # not Stop, on a completed result.
     done_kb = build_footer_keyboard(user_id, screen="main", is_busy=False)
 
-    text = _render_card(sess, state, footer="(task complete)")
+    text = _render_card(sess, state, footer="(task complete)", user_id=user_id)
     if state.msg_id is None:
         await _send_card(bot, user_id, sess, state, text=text, reply_markup=done_kb)
     else:
@@ -871,7 +904,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
         state.lines = [CardLine(text=chunk)]
         state.is_continuation = True
         state.last_rendered = ""
-        text = _render_card(sess, state, footer="(task complete)")
+        text = _render_card(sess, state, footer="(task complete)", user_id=user_id)
         await _send_card(bot, user_id, sess, state, text=text, reply_markup=done_kb)
         state.last_edit_ts = time.monotonic()
 
@@ -973,6 +1006,59 @@ def is_active_for_user(user_id: int, sess: Session) -> bool:
     return active is not None and active.id == sess.id
 
 
+async def repost_card(bot: Bot, user_id: int, sess: Session) -> None:
+    """Resend the active live card as a fresh message and drop the old one.
+
+    Used to keep the card visually below the user's latest message when
+    ``card_position`` is set to ``repost``. No-op when the session has no
+    live card or the card is paused (menu / sub-screen open).
+    """
+    state = _cards.get((user_id, sess.id))
+    if state is None or state.msg_id is None or state.in_menu_view:
+        return
+    if state.pending_edit is not None and not state.pending_edit.done():
+        state.pending_edit.cancel()
+        state.pending_edit = None
+    old_msg_id = state.msg_id
+    state.msg_id = None  # force _send_card to create a fresh message
+    text = _render_card(sess, state, user_id=user_id)
+    await _send_card(bot, user_id, sess, state, text=text)
+    state.last_rendered = text
+    state.last_edit_ts = time.monotonic()
+    if state.msg_id and state.msg_id != old_msg_id:
+        try:
+            await bot.delete_message(chat_id=user_id, message_id=old_msg_id)
+        except Exception as e:
+            logger.debug("repost_card delete old failed: %s", e)
+
+
+async def refresh_panel(bot: Bot, user_id: int) -> None:
+    """Re-render the active session's live card so the bg-status panel
+    (and active quota glyph) reflects the latest bg_status state.
+
+    No-op when:
+      - the user has no active session
+      - the active session has no live card yet
+      - the card is paused (menu/sub-screen open)
+      - a deferred edit is already queued — that edit will pick up the
+        latest panel state on its own when it fires
+    """
+    active = session_manager.get_active_session(user_id)
+    if active is None:
+        return
+    state = _cards.get((user_id, active.id))
+    if state is None or state.msg_id is None or state.in_menu_view:
+        return
+    if state.pending_edit is not None and not state.pending_edit.done():
+        return
+    text = _render_card(active, state, user_id=user_id)
+    if text == state.last_rendered:
+        return
+    if await _edit_card(bot, user_id, state, text=text):
+        state.last_rendered = text
+        state.last_edit_ts = time.monotonic()
+
+
 async def touch_card_status(
     bot: Bot, user_id: int, window_id: str, status_text: str
 ) -> None:
@@ -992,7 +1078,7 @@ async def touch_card_status(
     was_busy = bool(state.status_text)
     state.status_text = status_text
     is_busy = bool(state.status_text)
-    rendered = _render_card(sess, state)
+    rendered = _render_card(sess, state, user_id=user_id)
     if rendered == state.last_rendered and was_busy == is_busy:
         return
 

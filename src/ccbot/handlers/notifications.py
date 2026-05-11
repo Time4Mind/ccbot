@@ -633,9 +633,7 @@ async def _send_card(
         # "we're sending a card", which by definition means Stop is
         # the user's intent. ``finalize_task`` overrides ``reply_markup``
         # explicitly with the Kill keyboard when a turn completes.
-        reply_markup = build_footer_keyboard(
-            user_id, screen="main", is_busy=True
-        )
+        reply_markup = build_footer_keyboard(user_id, screen="main", is_busy=True)
     keyboard = reply_markup
     try:
         sent = await bot.send_message(

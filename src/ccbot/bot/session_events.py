@@ -103,6 +103,19 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         if is_active:
             try:
                 await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+                logger.info(
+                    "typing_fired source=session_events user=%d sess=%s ctype=%s",
+                    user_id,
+                    sess.id,
+                    msg.content_type,
+                    extra={
+                        "event": "typing_fired",
+                        "source": "session_events",
+                        "user_id": user_id,
+                        "session_id": sess.id,
+                        "content_type": msg.content_type,
+                    },
+                )
             except Exception as e:
                 logger.debug("send_chat_action TYPING failed: %s", e)
 

@@ -179,6 +179,14 @@ async def send_history(
             # Strip expandable quote sentinels for history view
             msg_text = msg_text.replace(_start, "").replace(_end, "")
 
+            # Balance triple-backtick code fences inside this entry so an
+            # unclosed ``` (typical in tool_result diffs / Edit blocks)
+            # can't bleed into the next entry and turn the rest of the
+            # page into one giant <pre>. If the count is odd we append a
+            # closing fence; even counts pass through untouched.
+            if msg_text.count("```") % 2 == 1:
+                msg_text = msg_text + "\n```"
+
             # Add prefix based on role/type
             if msg_role == "user":
                 # User message with emoji prefix (no newline)

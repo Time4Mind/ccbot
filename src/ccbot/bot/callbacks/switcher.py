@@ -160,9 +160,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                         logger.debug("preview reply markup failed: %s", e)
 
             if query.message and footer_kb is not None:
-                session_manager.set_last_switcher_msg(
-                    user.id, query.message.message_id
-                )
+                session_manager.set_last_switcher_msg(user.id, query.message.message_id)
 
         # Panel housekeeping: the user has now "seen" this session, so any
         # finalised badge can leave the panel; the previously-active

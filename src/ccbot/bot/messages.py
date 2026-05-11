@@ -139,17 +139,13 @@ def _forward_attribution(msg: Any) -> str:
     chat = getattr(msg, "forward_from_chat", None)
     if chat is not None:
         handle = (
-            getattr(chat, "username", None)
-            or getattr(chat, "title", None)
-            or "channel"
+            getattr(chat, "username", None) or getattr(chat, "title", None) or "channel"
         )
         return f"[forwarded from @{handle}]\n"
     usr = getattr(msg, "forward_from", None)
     if usr is not None:
         handle = (
-            getattr(usr, "username", None)
-            or getattr(usr, "first_name", None)
-            or "user"
+            getattr(usr, "username", None) or getattr(usr, "first_name", None) or "user"
         )
         return f"[forwarded from @{handle}]\n"
     return ""

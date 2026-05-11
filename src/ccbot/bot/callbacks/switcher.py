@@ -8,6 +8,7 @@ from typing import Any
 
 from telegram.ext import ContextTypes
 
+from ...handlers import bg_status
 from ...handlers.callback_data import CB_SW_NEW, CB_SW_NOOP, CB_SW_USE
 from ...handlers.directory_browser import (
     BROWSE_DIRS_KEY,
@@ -20,10 +21,16 @@ from ...handlers.directory_browser import (
     clear_session_picker_state,
     clear_window_picker_state,
 )
+from ...handlers.interactive_ui import (
+    adopt_interactive_msg,
+    render_interactive_keyboard,
+)
 from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_send
-from ...handlers.notifications import transfer_card_to_carrier
+from ...handlers.notifications import refresh_panel, transfer_card_to_carrier
 from ...session import session_manager
+from ...terminal_parser import extract_interactive_content, is_interactive_ui
+from ...tmux_manager import tmux_manager
 from .._common import render_session_preview
 
 logger = logging.getLogger(__name__)
@@ -77,27 +84,66 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
 
         session_manager.set_active_session(user.id, target_id)
 
-        # Switcher preview is a management surface, not real-time control.
-        # Always render Kill — Stop lives on the live card where _card_is_busy
-        # tracks whether a task is actually running. Polling
-        # ``is_window_busy`` here gave false positives on completed
-        # sessions (parse_status_line flickers between tool calls).
-        try:
-            preview = await render_session_preview(sess)
-            await query.edit_message_text(text=preview)
-        except Exception as e:
-            logger.debug("preview edit_message_text failed: %s", e)
-        keyboard = build_footer_keyboard(user.id, screen="main", is_busy=False)
-        if keyboard is not None:
+        # If this bg session has a stashed AskUserQuestion / ExitPlanMode /
+        # permission prompt, paint that UI on the carrier instead of the
+        # standard preview. Re-verify against the live pane first — claude
+        # may have moved on while the badge was up.
+        showed_interactive_ui = False
+        pending_ui = bg_status.get_pending_interactive_ui(user.id, target_id)
+        if pending_ui is not None and sess.window_id and query.message is not None:
+            w = await tmux_manager.find_window_by_id(sess.window_id)
+            if w:
+                pane = await tmux_manager.capture_pane(w.window_id)
+                if pane and is_interactive_ui(pane):
+                    content_obj = extract_interactive_content(pane)
+                    if content_obj is not None:
+                        kb = render_interactive_keyboard(
+                            sess.window_id, content_obj.name
+                        )
+                        try:
+                            await query.edit_message_text(
+                                text=content_obj.content, reply_markup=kb
+                            )
+                            adopt_interactive_msg(
+                                user.id,
+                                sess.window_id,
+                                query.message.message_id,
+                            )
+                            showed_interactive_ui = True
+                        except Exception as e:
+                            logger.debug("pending UI edit_message_text failed: %s", e)
+
+        if not showed_interactive_ui:
+            # Switcher preview is a management surface, not real-time control.
+            # Always render Kill — Stop lives on the live card where _card_is_busy
+            # tracks whether a task is actually running. Polling
+            # ``is_window_busy`` here gave false positives on completed
+            # sessions (parse_status_line flickers between tool calls).
             try:
-                await query.edit_message_reply_markup(reply_markup=keyboard)
+                preview = await render_session_preview(sess)
+                await query.edit_message_text(text=preview)
             except Exception as e:
-                logger.debug("preview reply markup failed: %s", e)
-            else:
-                if query.message:
-                    session_manager.set_last_switcher_msg(
-                        user.id, query.message.message_id
-                    )
+                logger.debug("preview edit_message_text failed: %s", e)
+            keyboard = build_footer_keyboard(user.id, screen="main", is_busy=False)
+            if keyboard is not None:
+                try:
+                    await query.edit_message_reply_markup(reply_markup=keyboard)
+                except Exception as e:
+                    logger.debug("preview reply markup failed: %s", e)
+                else:
+                    if query.message:
+                        session_manager.set_last_switcher_msg(
+                            user.id, query.message.message_id
+                        )
+
+        # Panel housekeeping: the user has now "seen" this session, so any
+        # finalised badge can leave the panel; the previously-active
+        # session keeps its working/finished status for the panel render.
+        bg_status.mark_seen(user.id, target_id)
+        bg_status.prune_seen(user.id)
+        # Active card may need a re-render to drop the just-seen entry.
+        await refresh_panel(context.bot, user.id)
+
         await query.answer(f"→ {sess.name or sess.id}")
         return True
 

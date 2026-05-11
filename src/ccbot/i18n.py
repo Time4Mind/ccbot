@@ -195,6 +195,18 @@ _EN: dict[str, str] = {
     "local.off": "off",
     "local.manual": "manual",
     "local.auto": "auto",
+    # Settings group: user-message disposition relative to the live card.
+    "settings.group.card_position": "Card position",
+    "settings.cardpos.body": (
+        "*Card position*\n\n"
+        "Where the live card sits after you type:\n"
+        "• `push` — leave it (your message pushes the card up)\n"
+        "• `delete` — delete your message so the card stays last\n"
+        "• `repost` — resend the card below your message"
+    ),
+    "cardpos.push": "push",
+    "cardpos.delete": "delete",
+    "cardpos.repost": "repost",
     # Settings group: per-session token alert thresholds
     "settings.group.token_alerts": "Token alerts",
     "settings.tokens.body": (
@@ -477,6 +489,17 @@ _RU: dict[str, str] = {
     "local.off": "выкл",
     "local.manual": "по кнопке",
     "local.auto": "всегда",
+    "settings.group.card_position": "Положение карточки",
+    "settings.cardpos.body": (
+        "*Положение карточки*\n\n"
+        "Где остаётся живая карточка после твоего сообщения:\n"
+        "• `push` — оставить как есть (твоё сообщение сдвигает карточку вверх)\n"
+        "• `delete` — удалить твоё сообщение, чтобы карточка оставалась последней\n"
+        "• `repost` — переслать карточку под твоё сообщение"
+    ),
+    "cardpos.push": "push",
+    "cardpos.delete": "удалить",
+    "cardpos.repost": "переслать",
     "settings.group.token_alerts": "Алерты по токенам",
     "settings.tokens.body": (
         "*Алерты по токенам сессии*\n\n"
@@ -749,6 +772,17 @@ _ZH: dict[str, str] = {
     "local.off": "关",
     "local.manual": "按钮",
     "local.auto": "总是",
+    "settings.group.card_position": "卡片位置",
+    "settings.cardpos.body": (
+        "*卡片位置*\n\n"
+        "你输入后,实时卡片的位置:\n"
+        "• `push` — 保持原样(你的消息把卡片推上去)\n"
+        "• `delete` — 删除你的消息,卡片留在最下方\n"
+        "• `repost` — 在你消息下方重新发送卡片"
+    ),
+    "cardpos.push": "push",
+    "cardpos.delete": "删除",
+    "cardpos.repost": "重发",
     "settings.group.token_alerts": "Token 提醒",
     "settings.tokens.body": (
         "*会话 Token 提醒*\n\n"

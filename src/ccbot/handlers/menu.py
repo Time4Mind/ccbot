@@ -40,6 +40,7 @@ from .callback_data import (
     CB_MM_STATUS,
     CB_ST_APPROVE,
     CB_ST_BACK,
+    CB_ST_CPOS,
     CB_ST_GRP,
     CB_ST_LAG,
     CB_ST_LANG,
@@ -67,6 +68,7 @@ Screen = Literal[
     "settings_approve",
     "settings_tokens",
     "settings_local",
+    "settings_cardpos",
 ]
 
 # Group key -> (label translation key, sub-screen name, settings-dict key)
@@ -98,6 +100,12 @@ _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
         "settings.group.local_terminal",
         "settings_local",
         "local_terminal",
+    ),
+    (
+        "card_position",
+        "settings.group.card_position",
+        "settings_cardpos",
+        "card_position",
     ),
 )
 
@@ -252,6 +260,8 @@ def _settings_main_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             value_str = t(user_id, f"approve.{cur}") if cur else "?"
         elif value_key == "local_terminal":
             value_str = t(user_id, f"local.{cur}") if cur else "?"
+        elif value_key == "card_position":
+            value_str = t(user_id, f"cardpos.{cur}") if cur else "?"
         elif value_key == "session_token_alerts":
             arr = cur if isinstance(cur, list) else []
             value_str = " / ".join(f"{int(v) // 1000}k" for v in arr)
@@ -420,6 +430,20 @@ def _settings_tokens_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     return rows
 
 
+def _settings_cardpos_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
+    cur = session_manager.get_user_settings(user_id).get("card_position", "push")
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(t(user_id, f"cardpos.{v}"), cur == v),
+                callback_data=f"{CB_ST_CPOS}{v}",
+            )
+            for v in ("push", "delete", "repost")
+        ],
+        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+    ]
+
+
 def _settings_weeklyday_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     cur = session_manager.get_user_settings(user_id).get("weekly_reset_day", "mon")
     rows: list[list[InlineKeyboardButton]] = []
@@ -489,6 +513,8 @@ def build_footer_keyboard(
         rows.extend(_settings_tokens_grid(user_id))
     elif screen == "settings_local":
         rows.extend(_settings_local_grid(user_id))
+    elif screen == "settings_cardpos":
+        rows.extend(_settings_cardpos_grid(user_id))
     else:
         top = _footer_top_row(user_id, is_busy=is_busy)
         if top:
@@ -537,6 +563,7 @@ _GROUP_TEXT_KEYS: dict[str, str] = {
     "settings_approve": "settings.approve.body",
     "settings_tokens": "settings.tokens.body",
     "settings_local": "settings.local.body",
+    "settings_cardpos": "settings.cardpos.body",
 }
 
 

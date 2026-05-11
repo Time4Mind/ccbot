@@ -23,8 +23,13 @@ from telegram import Bot
 
 from ..config import config
 from ..session import session_manager
-from ..terminal_parser import is_interactive_ui, parse_status_line
+from ..terminal_parser import (
+    extract_interactive_content,
+    is_interactive_ui,
+    parse_status_line,
+)
 from ..tmux_manager import tmux_manager
+from . import bg_status
 from .archive import idle_archive_sweep, purge_sweep
 from .cleanup import clear_session_state
 from .inbox import inbox_sweep
@@ -34,7 +39,7 @@ from .interactive_ui import (
     handle_interactive_ui,
 )
 from .message_queue import get_message_queue
-from .notifications import touch_card_status
+from .notifications import refresh_panel, touch_card_status
 
 # Match option lines like "  1. Yes" / " ❯ 2. Yes, and don't ask again".
 _OPTION_LINE_RE = re.compile(r"^[\s❯>]*?(\d+)\.\s+(.+?)\s*$")
@@ -122,12 +127,37 @@ async def update_status_message(
         await clear_interactive_msg(user_id, bot, window_id)
         should_check_new_ui = False
 
+    sess = session_manager.find_session_by_window(window_id)
+    active = session_manager.get_active_session(user_id)
+    # Treat orphan windows (no session record) as "active-like": there's
+    # no bg-status row to flip, so falling through to the legacy handler
+    # is the safer default. Only suppress when we know this is a
+    # background-session window for a different active session.
+    is_bg_session = sess is not None and active is not None and active.id != sess.id
+
     # Check for permission prompt (interactive UI not triggered via JSONL).
     if (
         should_check_new_ui
         and interactive_window is None
         and is_interactive_ui(pane_text)
     ):
+        if is_bg_session and sess is not None:
+            # Background session: never surface the prompt in chat. Stash
+            # the snapshot in bg_status and flip ❓ on the panel. The
+            # switcher-tap handler renders it when the user looks at the
+            # session.
+            content_obj = extract_interactive_content(pane_text)
+            ui_tuple = (
+                (content_obj.content, content_obj.name)
+                if content_obj is not None
+                else None
+            )
+            if bg_status.update_status(
+                user_id, sess.id, "needs_action", interactive_ui=ui_tuple
+            ):
+                await refresh_panel(bot, user_id)
+            return
+
         # User-configurable auto-approve takes precedence — bypass the TG
         # surface entirely when the setting matches.
         if await _maybe_auto_approve(user_id, window_id, pane_text):
@@ -139,6 +169,13 @@ async def update_status_message(
         )
         await handle_interactive_ui(bot, user_id, window_id)
         return
+
+    # No interactive UI on this pane right now. If we previously stashed
+    # one for a bg session (e.g. claude dismissed the prompt without our
+    # input), clear it so the ❓ badge doesn't lie.
+    if is_bg_session and sess is not None and not is_interactive_ui(pane_text):
+        if bg_status.clear_pending_ui(user_id, sess.id):
+            await refresh_panel(bot, user_id)
 
     # Lift status into the card header. Skip when skip_status to avoid
     # piling on top of an active enqueued event.

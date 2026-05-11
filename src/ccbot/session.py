@@ -112,6 +112,10 @@ class SessionManager:
         self._load_state()
 
     def save_state(self) -> None:
+        # Local import to avoid an init-time cycle: bg_status imports
+        # session_manager, which is constructed by importing this module.
+        from .handlers import bg_status
+
         state: dict[str, Any] = {
             "window_states": {k: v.to_dict() for k, v in self.window_states.items()},
             "user_window_offsets": {
@@ -129,6 +133,7 @@ class SessionManager:
                 str(uid): vals for uid, vals in self.user_settings.items()
             },
             "summary_cache": self.summary_cache,
+            "bg_status": bg_status.serialize_per_user(),
         }
         atomic_write_json(config.state_file, state)
         logger.debug("State saved to %s", config.state_file)
@@ -172,6 +177,11 @@ class SessionManager:
                     for uid, vals in state.get("user_settings", {}).items()
                 }
                 self.summary_cache = dict(state.get("summary_cache", {}))
+
+                # Late import — handlers package imports session_manager.
+                from .handlers import bg_status
+
+                bg_status.load_per_user(state.get("bg_status"))
 
                 # Detect old format: window_states keys that don't look like
                 # tmux window IDs ("@N"). resolve_stale_ids re-maps on startup.
@@ -540,6 +550,11 @@ class SessionManager:
         for uid, sid in list(self.active_sessions.items()):
             if sid == session_id:
                 del self.active_sessions[uid]
+        # Drop any bg-status panel entry — an archived session shouldn't
+        # linger as a stale ✅/❓ badge on the next user message.
+        from .handlers import bg_status
+
+        bg_status.clear_for_session(session_id)
         self.save_state()
         from . import metrics
 
@@ -553,6 +568,10 @@ class SessionManager:
             return
         sess.state = "lost"
         sess.window_id = ""
+        # Lost sessions can't make progress; remove from the bg panel.
+        from .handlers import bg_status
+
+        bg_status.clear_for_session(session_id)
         self.save_state()
         logger.warning("Session %s marked lost", session_id)
 
@@ -617,6 +636,9 @@ class SessionManager:
         for uid, sid in list(self.active_sessions.items()):
             if sid == session_id:
                 del self.active_sessions[uid]
+        from .handlers import bg_status
+
+        bg_status.clear_for_session(session_id)
         self.save_state()
         logger.info("Deleted session record %s", session_id)
         return True
@@ -656,6 +678,15 @@ class SessionManager:
         # manually via env. Use ``{shell}`` as the placeholder for the
         # shell-quoted attach snippet.
         "local_terminal_cmd": "",
+        # Disposition of the user's outgoing text relative to the live
+        # session card. Telegram appends new messages to the bottom, so
+        # a fresh user line pushes the card up out of sight:
+        #   push   — leave it (current behaviour; card scrolls up)
+        #   delete — delete the user's message after dispatch so the
+        #            card stays as the latest chat entry
+        #   repost — resend the live card as a new message below the
+        #            user line and drop the previous card message
+        "card_position": "push",
     }
 
     def get_user_settings(self, user_id: int) -> dict[str, Any]:

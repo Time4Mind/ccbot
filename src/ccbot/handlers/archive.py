@@ -18,6 +18,7 @@ import time
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from ..config import config
+from ..i18n import t
 from ..session import Session, session_manager
 from ..tmux_manager import tmux_manager
 from .callback_data import (
@@ -38,19 +39,20 @@ PAGE_SIZE = 5
 DEFAULT_LOOKBACK_SECONDS = 72 * 3600
 
 
-def _format_age(ts: float, now: float | None = None) -> str:
+def _format_age(user_id: int, ts: float, now: float | None = None) -> str:
+    """Compact human age (``5m``, ``3h``, ``2d``) with localized ``ago`` suffix."""
     if not ts:
         return "?"
     if now is None:
         now = time.time()
     delta = max(0.0, now - ts)
     if delta < 60:
-        return f"{int(delta)}s ago"
+        return t(user_id, "archive.age.s", n=int(delta))
     if delta < 3600:
-        return f"{int(delta / 60)}m ago"
+        return t(user_id, "archive.age.m", n=int(delta / 60))
     if delta < 86400:
-        return f"{int(delta / 3600)}h ago"
-    return f"{int(delta / 86400)}d ago"
+        return t(user_id, "archive.age.h", n=int(delta / 3600))
+    return t(user_id, "archive.age.d", n=int(delta / 86400))
 
 
 def build_archive_page(
@@ -58,8 +60,18 @@ def build_archive_page(
     page: int,
     lookback_seconds: float | None,
     show_all: bool,
+    user_id: int,
+    back_callback: str | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
-    """Render one page of /archive."""
+    """Render one page of /archive.
+
+    ``back_callback`` — when set, append a final Back row pointing at that
+    callback. Used by the Menu→Archive entry path (and its in-archive
+    navigation) so the user can always escape back to Menu without
+    relying on Telegram's reply-thread depth. The ``/archive`` slash
+    command passes ``None`` because its message is a fresh reply, not a
+    Menu-rooted view.
+    """
     sessions = session_manager.list_archived(max_age_seconds=lookback_seconds)
     total = len(sessions)
     pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
@@ -67,23 +79,23 @@ def build_archive_page(
     start = page * PAGE_SIZE
     chunk = sessions[start : start + PAGE_SIZE]
 
-    header = "*Archived sessions*"
-    if show_all:
-        header += " (0–14d)"
-    else:
-        header += " (0–72h)"
+    title = t(user_id, "archive.title")
+    range_suffix = t(user_id, "archive.range_14d" if show_all else "archive.range_72h")
+    header = f"*{title}*{range_suffix}"
     if total == 0:
-        body = ["No archived sessions in this window."]
+        body = [t(user_id, "archive.empty")]
     else:
-        body = [f"page {page + 1}/{pages} — {total} total"]
+        body = [
+            t(user_id, "archive.page_line", page=page + 1, pages=pages, total=total)
+        ]
         for sess in chunk:
             label = "✓" if sess.state == "completed" else "·"
             ts = sess.archived_at or sess.last_event_at
-            age = _format_age(ts) if ts else "?"
+            age = _format_age(user_id, ts) if ts else "?"
             usage = (
-                f"{sess.token_usage_total // 1000}k tok"
+                t(user_id, "archive.tokens_k", k=sess.token_usage_total // 1000)
                 if sess.token_usage_total
-                else "0 tok"
+                else t(user_id, "archive.tokens_zero")
             )
             body.append(
                 f"{label} `{sess.id}` *{sess.name}* — {sess.state}, {age}, {usage}"
@@ -94,15 +106,15 @@ def build_archive_page(
         rows.append(
             [
                 InlineKeyboardButton(
-                    f"⤴ Restore {sess.name or sess.id}",
+                    t(user_id, "btn.restore_with_name", name=sess.name or sess.id),
                     callback_data=f"{CB_ARC_RESTORE}{sess.id}"[:64],
                 ),
                 InlineKeyboardButton(
-                    "🔍 Inspect",
+                    t(user_id, "btn.inspect"),
                     callback_data=f"{CB_ARC_INSPECT}{sess.id}"[:64],
                 ),
                 InlineKeyboardButton(
-                    "🗑 Delete",
+                    t(user_id, "btn.delete"),
                     callback_data=f"{CB_ARC_DELETE}{sess.id}"[:64],
                 ),
             ]
@@ -115,7 +127,8 @@ def build_archive_page(
         )
     nav_row.append(
         InlineKeyboardButton(
-            ("→ 14d" if not show_all else "→ 72h"), callback_data=CB_ARC_ALL
+            t(user_id, "btn.to_14d" if not show_all else "btn.to_72h"),
+            callback_data=CB_ARC_ALL,
         )
     )
     if page < pages - 1:
@@ -123,6 +136,11 @@ def build_archive_page(
             InlineKeyboardButton("▶", callback_data=f"{CB_ARC_PAGE}{page + 1}")
         )
     rows.append(nav_row)
+
+    if back_callback is not None:
+        rows.append(
+            [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=back_callback)]
+        )
 
     text = "\n".join([header, ""] + body)
     return text, InlineKeyboardMarkup(rows)

@@ -94,7 +94,11 @@ ccbot                           # 前台;生产环境用 systemd 单元
 | `QUOTA_ALERT_POLL_INTERVAL` | `5m`         | 实时 `/usage` 弹窗的采样间隔 |
 | `VOICE_BACKEND`             | `auto`       | `auto` / `whisper` / `apple` / `off` |
 | `WHISPER_MODEL_PATH`        | `~/.ccbot/models/ggml-medium.bin` | whisper.cpp 模型 |
-| `BG_NOTIFY_MODE`            | `separate`   | `separate`(每会话一张卡)或 `footer` |
+| `BG_NOTIFY_MODE`            | `separate`   | _(legacy)_ 兼容性保留;后台会话现在静默 — 见「后台会话」 |
+| `BG_STATUS_MAX`             | `4`          | bg-status 面板最多显示的徽章数;多余的折叠为 `+N more` |
+| `BG_STATUS_QUOTA_THRESHOLDS`| `100000,200000,400000` | 每会话 token 阈值,翻转 ⚠️🟢/🟡/🔴 配额标志 |
+| `CARD_PRIOR_CONTEXT`        | `5`          | 全新 live-card 顶部预加载的转录条数;`0` 关闭 |
+| `CARD_EDIT_LAG`             | `2.0`        | live-card 编辑的合并窗口(秒) |
 | `TG_PROXY_URL`              | _(未设)_     | Bot API 出站代理(`socks5://…` 或 `http://…`) |
 
 完整列表在 `doc/dm-multisession-spec.md` § 14。
@@ -142,28 +146,65 @@ ccbot hook --install
 你选择项目,tmux 窗口中启动 `claude`。后续 DM 中的文本路由到**活动**
 会话。
 
-最新机器人消息携带内联会话切换器(`▷ session-A · session-B · + new`)。
-点击非活动会话按钮会切换活动会话并显示上下文预览;点击活动按钮是
-no-op。引用回复(Telegram quote)非活动会话的机器人消息,会把那一
-条回复路由到该会话,但不更改活动会话。
+最新机器人消息携带内联会话切换器(`▷ session-A · session-B · + new`),
+`≡ 菜单` 按钮锚定在最底行,这样它的位置在不同视图之间始终保持稳定。
 
-### Token 提醒
+点击非活动会话按钮会**把该会话的完整转录历史画到 carrier-消息上**
+并同时切换活动会话 — 不需要额外的 `≡ 菜单 → 历史` 一步。分页按钮
+(◀ Older / Newer ▶) 下方仍保留底部键盘。点击已活动的按钮是 no-op。
 
-两个流,都作为单独的推送:
+引用回复(Telegram quote)非活动会话的机器人消息,会把那一条回复
+路由到该会话,但不更改活动会话。
 
-- **Per-session token 提醒。** 三个阈值(默认 100k/200k/400k,
-  Settings → Token alerts 中以 50k 为步长调整)。每会话每阈值触发
-  一次。
-- **5h / 周 / 周-Sonnet 配额提醒。** 后台任务每
-  `QUOTA_ALERT_POLL_INTERVAL` 采样一次实时 `/usage` 弹窗,当百分比
-  跨过 stoplight emoji 同样的 50/75/90 % 时推送。
+### 后台会话
+
+后台(非活动)会话**在聊天中保持静默** — 不发出 live-card 编辑、
+推送通知或 AskUserQuestion 提示。它们的状态仅以活动会话卡片底部的
+紧凑面板形式呈现:
+
+```
+[session-A] ⏳         ← 后台运行中
+[scraper]   ✅         ← 完成
+[chores]    ❌         ← 出错
+[v frontend] ❓ ⚠️🟡    ← 需要用户操作 + 跨越 token 阈值
+```
+
+面板在活动卡片的编辑之间「黏住」,这样已完成的后台会话不会丢失在
+长 tool-log 之上。在切换器中点击该徽章对应的会话,会把它从面板中
+移除(你「看到了」)。如果徽章是 `❓`,切换器点击会画出存好的
+AskUserQuestion / ExitPlanMode 提示,带和前台提示相同的箭头 /
+Enter / Esc 键盘。
+
+当会话跨过 `BG_STATUS_QUOTA_THRESHOLDS` 的某档阈值时,其配额标志
+翻转为 `⚠️🟢` / `🟡` / `🔴`。活动会话的卡片头部也显示相同的标志。
+**不发送任何推送通知** — 视觉指示就是警报本身。
+
+### Live-card 用户体验调整
+
+全新 live-card(回合结束 / clear / 溢出之后)会从转录中预加载多达
+`CARD_PRIOR_CONTEXT`(默认 5)条你最近消息之前的条目,这样上下文
+不会在回合之间消失。
+
+`Settings → Card position` 控制你发出的文本与 live-card 的关系:
+- `push` — 保持不变(你的消息把卡片推上去;默认)
+- `delete` — 机器人删掉你的消息,卡片留作最新一条
+- `repost` — 机器人在你消息下方重新发送卡片,并删除旧的
+
+Telegram 聊天头部的 **`正在输入…`** 指示由真实的 claude 事件驱动。
+只要活动会话仍在发出事件(tool 调用、思考、文本),`正在输入…` 就
+持续显示;空闲会话会让它在 Telegram 的 ~5 秒窗口内自然消失。
 
 ### 语音和媒体
 
 - **语音消息** 在本地转写(whisper.cpp / Apple Speech),并以你
-  键入的方式路由到活动会话。
+  键入的方式路由到活动会话。机器人回复转写文本,这样你可以验证
+  Claude 收到了什么。
 - **照片和文档** 落到 `<workdir>/.ccbot-inbox/`,Claude 通过 tmux
   收到通知。文件在上传 24 小时后自动清理。
+- **带媒体的转发消息**(包含视频 / GIF / 贴纸但有 caption 文本的
+  频道帖子) — caption 加上任何隐藏的 `text_link` URL 都会被提取
+  并路由到活动会话,前缀为 `[forwarded from @channel]`。媒体本体
+  被丢弃 — Claude 处理不了。
 
 ## 架构
 

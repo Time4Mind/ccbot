@@ -314,11 +314,27 @@ def _render_card(
     quota_glyph = ""
     if user_id is not None:
         quota_glyph = bg_status.quota_glyph_for(user_id, sess.id)
+    # Last-event timestamp — HH:MM in the bot host's local time, included
+    # so the user can tell at a glance whether the card is fresh or has
+    # been static for a while. Updates naturally when an event bumps
+    # ``last_event_ts``; spinner-only ticks via ``touch_card_status``
+    # don't move it, so a 10-minute silent session shows a stale stamp
+    # and the user knows nothing has happened.
+    ts_suffix = ""
+    if state.last_event_ts > 0:
+        import datetime as _dt
+
+        ts_suffix = " · " + _dt.datetime.fromtimestamp(state.last_event_ts).strftime(
+            "%H:%M"
+        )
     name_part = sess.name or sess.id
     if quota_glyph:
-        header = f"{emoji} *{name_part}* {quota_glyph} · {state_label}{cont_marker}"
+        header = (
+            f"{emoji} *{name_part}* {quota_glyph} · "
+            f"{state_label}{cont_marker}{ts_suffix}"
+        )
     else:
-        header = f"{emoji} *{name_part}* · {state_label}{cont_marker}"
+        header = f"{emoji} *{name_part}* · {state_label}{cont_marker}{ts_suffix}"
     if sess.goal:
         header += f"\ngoal: {sess.goal}"
     body = "\n".join(line.text for line in state.lines)
@@ -596,18 +612,31 @@ async def clear_card(bot: Bot, user_id: int, sess: Session) -> None:
 
 
 def _card_is_busy(state: CardState) -> bool:
-    """A live (msg_id-bearing, non-finalized) card means the session is
-    actively producing output — show the *Stop* (Esc) button.
+    """Is this card actually producing output right now? Drives the
+    Stop ↔ Kill keyboard split.
 
-    Earlier this checked ``state.status_text`` (the tmux spinner line),
-    but that flickers between tool calls — the spinner is only painted
-    while a tool is running, leaving gaps of 100-500 ms where the
-    keyboard would flip Stop ↔ Kill mid-task. The card itself is a
-    much steadier signal: ``msg_id`` is set when the bot first sent or
-    edited a card and is cleared by ``reset_card`` only at task
-    completion. A continuation card mid-task also has ``msg_id`` set.
+    Naively keying off ``msg_id`` (card is alive) gave a false positive
+    on sessions the user switched into but hadn't started working in —
+    the carrier transfer leaves ``msg_id`` set even though no work is
+    in flight, so Stop hung around until the next finalize. Naively
+    keying off ``status_text`` (the tmux spinner) was the original
+    behaviour and flickered Stop ↔ Kill between tool_use and
+    tool_result.
+
+    Compromise: ``msg_id`` AND (spinner OR recent event). ``recent``
+    means within the last ``2 × CARD_EDIT_LAG`` seconds — long enough
+    to bridge the ~100-500 ms gap between a tool returning and the
+    next status update, short enough that an idle card flips to Kill
+    within a couple of seconds.
     """
-    return state.msg_id is not None
+    if state.msg_id is None:
+        return False
+    if state.status_text:
+        return True
+    if state.last_event_ts <= 0:
+        return False
+    grace = max(2.0, config.card_edit_lag * 2)
+    return (time.time() - state.last_event_ts) < grace
 
 
 async def _send_card(

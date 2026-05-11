@@ -308,45 +308,9 @@ journalctl -u "ccbot@$USER.service" -n 50 --no-pager
 
 В журнале должны быть те же строки, что и в smoke-test.
 
-### 10.1. Без systemd: runit / tmux + supervisor
-
-Когда хост — chroot на Android (NetHunter / Termux + Kali) или любая
-другая среда без systemd, есть `scripts/ccbot-supervisor.sh`. Это
-foreground-цикл, который:
-
-1. ждёт reachable Telegram API (curl до api.telegram.org или
-   `CCBOT_NET_PROBE_URL`), отстреливая VPN-flap'ы по `CCBOT_NET_RETRY_SEC`
-   секунд между попытками;
-2. запускает `uv run ccbot`;
-3. на любом выходе (TimedOut, KeyboardInterrupt, crash) — спит
-   `CCBOT_RESTART_BACKOFF` секунд и возвращается к шагу 1.
-
-Запускать его можно вручную в tmux-пейне:
-
-```bash
-tmux new-session -d -s ccbot -n __main__ -c /root
-tmux send-keys -t ccbot:__main__ '/opt/ccbot/scripts/ccbot-supervisor.sh' Enter
-```
-
-…или подвесить как runit-сервис (Termux-стиль): создай
-`<runsvdir>/ccbot/run` со строкой
-`exec /opt/ccbot/scripts/ccbot-supervisor.sh 2>&1`, и `runsvdir` будет
-держать его живым автоматически (включая после ребута, если runsvdir
-сам запускается из стартап-скрипта Termux).
-
-Авто-вход на каждую SSH-сессию (резервный путь, если runsv/cron
-почему-то лежит) — `/etc/profile.d/ccbot-autostart.sh`:
-
-```sh
-#!/bin/sh
-# Idempotent: запускает supervisor только если он ещё не крутится.
-if [ "${UID:-$(id -u)}" = "0" ] && ! pgrep -f ccbot-supervisor.sh > /dev/null 2>&1; then
-    tmux has-session -t ccbot 2>/dev/null \
-        || tmux new-session -d -s ccbot -n __main__ -c /root
-    tmux send-keys -t ccbot:__main__ \
-        '/root/ccbot/scripts/ccbot-supervisor.sh' Enter
-fi
-```
+Если на хосте нет systemd (chroot, контейнер без init, и т.п.), смотри
+`doc/deploy.md` → «Без systemd» — там описан platform-agnostic
+supervisor с авто-рестартом и ожиданием сети.
 
 ---
 

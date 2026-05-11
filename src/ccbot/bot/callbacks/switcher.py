@@ -22,6 +22,7 @@ from ...handlers.directory_browser import (
 )
 from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_send
+from ...handlers.notifications import detach_paused_cards_at_message
 from ...session import session_manager
 from .._common import render_session_preview
 
@@ -42,6 +43,12 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             await query.answer("Session not available", show_alert=True)
             return True
         session_manager.set_active_session(user.id, target_id)
+        # Carrier message is about to host the new active session's
+        # preview — release any older session's pause bound to it so
+        # the displaced session resumes normal card rendering on its
+        # next event instead of buffering silently.
+        if query.message is not None:
+            detach_paused_cards_at_message(user.id, query.message.message_id)
 
         # Switcher preview is a management surface, not real-time control.
         # Always render Kill — Stop lives on the live card where _card_is_busy

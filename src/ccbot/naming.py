@@ -1,12 +1,19 @@
 """H6 — auto-generated session names via a one-shot Haiku call.
 
-`generate_name(seed_text)` shells out to ``claude --model haiku --no-resume``
-with a fixed prompt and returns a kebab-case name on success, or None on any
-failure (network, missing CLI, malformed output). Cost: tiny — ~50 tokens of
-input/output, single turn, charged to the user's Max x20 subscription.
+``generate_name(seed_text)`` shells out to ``claude --model haiku --print``
+with a fixed prompt and returns a kebab-case name on success, or None on
+any failure (network, missing CLI, malformed output). Cost: tiny — ~50
+tokens of input/output, single turn, charged to the user's Max x20
+subscription.
 
-Triggered at most once per session by `maybe_auto_name`, which inspects the
-Session record and the seed message and decides whether to fire.
+``--print`` makes the call non-interactive and one-shot, so it never
+attempts to resume a prior session — no need for the old ``--no-resume``
+flag (which was removed from the upstream CLI and started failing every
+invocation with ``unknown option '--no-resume'``).
+
+Triggered at most once per session by ``maybe_auto_name``, which
+inspects the Session record and the seed message and decides whether to
+fire.
 """
 
 from __future__ import annotations
@@ -82,10 +89,7 @@ async def generate_name(seed_text: str) -> str | None:
         return None
     claude_bin = config.claude_command or "claude"
     prompt = _PROMPT_TEMPLATE.format(seed=seed)
-    cmd = (
-        f"{shlex.quote(claude_bin)} --model haiku --no-resume "
-        f"--print {shlex.quote(prompt)}"
-    )
+    cmd = f"{shlex.quote(claude_bin)} --model haiku --print {shlex.quote(prompt)}"
     raw = await _run(cmd, timeout=30.0)
     if raw is None:
         return None

@@ -207,12 +207,29 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         return True
 
     if data == CB_DIR_CONFIRM:
-        default_path = str(Path.home())
+        # Stale-click guard: if the user's directory-browser state was
+        # wiped (bot restart between open and confirm, or they tapped
+        # Select on a long-scrolled-up old message), ``BROWSE_PATH_KEY``
+        # is missing and the old code silently fell back to
+        # ``Path.home()`` — creating a session in the wrong directory.
+        # Surface the click as expired and re-open a fresh browser at
+        # home instead of silently picking ``/root``.
         selected_path = (
-            context.user_data.get(BROWSE_PATH_KEY, default_path)
-            if context.user_data
-            else default_path
+            context.user_data.get(BROWSE_PATH_KEY) if context.user_data else None
         )
+        if not selected_path:
+            await query.answer(
+                "Directory selection expired — pick again", show_alert=True
+            )
+            start_path = str(Path.home())
+            msg_text, keyboard, subdirs = build_directory_browser(start_path)
+            if context.user_data is not None:
+                context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
+                context.user_data[BROWSE_PATH_KEY] = start_path
+                context.user_data[BROWSE_PAGE_KEY] = 0
+                context.user_data[BROWSE_DIRS_KEY] = subdirs
+            await safe_edit(query, msg_text, reply_markup=keyboard)
+            return True
 
         sessions = await session_manager.list_sessions_for_directory(selected_path)
         if sessions:
@@ -250,11 +267,16 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             return True
 
         session = cached_sessions[idx]
+        # Stale-click guard — see CB_DIR_CONFIRM for why.
         selected_path = (
-            context.user_data.get("_selected_path", str(Path.home()))
-            if context.user_data
-            else str(Path.home())
+            context.user_data.get("_selected_path") if context.user_data else None
         )
+        if not selected_path:
+            await query.answer(
+                "Session selection expired — pick again", show_alert=True
+            )
+            clear_session_picker_state(context.user_data)
+            return True
         clear_session_picker_state(context.user_data)
         if context.user_data is not None:
             context.user_data.pop("_selected_path", None)
@@ -265,11 +287,16 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         return True
 
     if data == CB_SESSION_NEW:
+        # Stale-click guard — see CB_DIR_CONFIRM for why.
         selected_path = (
-            context.user_data.get("_selected_path", str(Path.home()))
-            if context.user_data
-            else str(Path.home())
+            context.user_data.get("_selected_path") if context.user_data else None
         )
+        if not selected_path:
+            await query.answer(
+                "Session selection expired — pick again", show_alert=True
+            )
+            clear_session_picker_state(context.user_data)
+            return True
         clear_session_picker_state(context.user_data)
         if context.user_data is not None:
             context.user_data.pop("_selected_path", None)

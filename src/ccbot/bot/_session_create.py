@@ -36,6 +36,15 @@ async def create_and_activate_session(
     assert isinstance(query, CallbackQuery)
     assert isinstance(user, User)
 
+    # Acknowledge the callback up-front so Telegram's 15-second
+    # ``answer_callback_query`` deadline doesn't expire under slow
+    # claude startup (Android Doze can stretch it to 30s+). All the
+    # status feedback happens via ``safe_edit`` on the message itself.
+    try:
+        await query.answer()
+    except Exception as e:
+        logger.debug("Early query.answer failed: %s", e)
+
     success, message, created_wname, created_wid = await tmux_manager.create_window(
         selected_path, resume_session_id=resume_session_id
     )
@@ -43,7 +52,6 @@ async def create_and_activate_session(
         await safe_edit(query, f"❌ {message}")
         if context.user_data is not None:
             context.user_data.pop("_pending_text", None)
-        await query.answer("Failed")
         return
 
     logger.info(
@@ -125,4 +133,3 @@ async def create_and_activate_session(
                 user.id,
                 f"❌ Failed to send pending message: {send_msg}",
             )
-    await query.answer("Created")

@@ -22,6 +22,7 @@ from ...handlers.directory_browser import (
 )
 from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_send
+from ...handlers.notifications import transfer_card_to_carrier
 from ...session import session_manager
 from .._common import render_session_preview
 
@@ -41,6 +42,23 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         if sess is None or sess.state not in ("active", "idle"):
             await query.answer("Session not available", show_alert=True)
             return True
+
+        # Hand the carrier message off from the previously-active session
+        # to the newly-active one BEFORE flipping ``active_sessions``.
+        # Otherwise the old session's pending events would still edit the
+        # carrier (clobbering the preview we're about to paint), and the
+        # detach-only fix from #29 created stray chat messages instead.
+        # Pausing FROM + claiming TO keeps everything on the same carrier.
+        old_active = session_manager.get_active_session(user.id)
+        old_active_id = old_active.id if old_active is not None else None
+        if query.message is not None:
+            transfer_card_to_carrier(
+                user.id,
+                old_active_id,
+                target_id,
+                query.message.message_id,
+            )
+
         session_manager.set_active_session(user.id, target_id)
 
         # Switcher preview is a management surface, not real-time control.

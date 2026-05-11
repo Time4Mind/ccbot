@@ -296,6 +296,50 @@ def pause_card_view(user_id: int, session_id: str) -> None:
         state.in_menu_view = True
 
 
+def transfer_card_to_carrier(
+    user_id: int,
+    from_session_id: str | None,
+    to_session_id: str,
+    target_message_id: int,
+) -> None:
+    """Hand off ownership of ``target_message_id`` from one session's
+    live card to another's. Called when the switcher flips active.
+
+    Effect:
+      - FROM session is paused (``in_menu_view=True``) so its events
+        buffer silently in ``state.lines`` instead of editing the
+        carrier (which now belongs to the TO session). No new chat
+        message lands until the user switches back or types text.
+      - TO session claims the carrier (``msg_id=target_message_id``)
+        and its pause is released, so the next event for it renders
+        on the carrier — overlaying the preview that the callback
+        just painted.
+
+    No-op when ``from_session_id == to_session_id`` (user tapped the
+    already-active session). The previous live-card behaviour — where
+    A's lingering ``msg_id`` clobbered B's preview every time A emitted
+    a tool call — falls out naturally because A is now paused.
+    """
+    if from_session_id == to_session_id:
+        return
+    if from_session_id:
+        from_state = _cards.get((user_id, from_session_id))
+        if from_state is not None:
+            if (
+                from_state.pending_edit is not None
+                and not from_state.pending_edit.done()
+            ):
+                from_state.pending_edit.cancel()
+            from_state.pending_edit = None
+            from_state.in_menu_view = True
+    to_state = _cards.setdefault((user_id, to_session_id), CardState())
+    if to_state.pending_edit is not None and not to_state.pending_edit.done():
+        to_state.pending_edit.cancel()
+    to_state.pending_edit = None
+    to_state.msg_id = target_message_id
+    to_state.in_menu_view = False
+
+
 def detach_paused_cards_at_message(user_id: int, message_id: int) -> None:
     """Release card state bound to ``message_id`` when the carrier has
     been repurposed for a different flow.

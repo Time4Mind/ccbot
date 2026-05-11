@@ -626,8 +626,15 @@ async def _send_card(
     result instead of the busy-state Stop row.
     """
     if reply_markup is None:
+        # Default: a fresh card is being sent because a turn is in
+        # flight (update_session_card, repost_card, continuation
+        # overflow). ``_card_is_busy`` keys off ``state.msg_id`` which
+        # is still None at this point — the right signal here is
+        # "we're sending a card", which by definition means Stop is
+        # the user's intent. ``finalize_task`` overrides ``reply_markup``
+        # explicitly with the Kill keyboard when a turn completes.
         reply_markup = build_footer_keyboard(
-            user_id, screen="main", is_busy=_card_is_busy(state)
+            user_id, screen="main", is_busy=True
         )
     keyboard = reply_markup
     try:

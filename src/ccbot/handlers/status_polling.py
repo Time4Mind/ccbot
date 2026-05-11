@@ -20,6 +20,7 @@ import re
 import time
 
 from telegram import Bot
+from telegram.constants import ChatAction
 
 from ..config import config
 from ..session import session_manager
@@ -182,6 +183,16 @@ async def update_status_message(
     if skip_status:
         return
     status_line = parse_status_line(pane_text) or ""
+    # Telegram chat-action ("typing…") for the user when the active
+    # session is actually producing output. Telegram refreshes the
+    # indicator every ~5s, and our poll cadence is 1s, so a quiet pane
+    # stops showing "typing" automatically. Skipped for bg sessions —
+    # only the foreground session's busy state should bubble to chat.
+    if status_line and not is_bg_session and sess is not None:
+        try:
+            await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+        except Exception as e:
+            logger.debug("send_chat_action TYPING failed: %s", e)
     await touch_card_status(bot, user_id, window_id, status_line)
 
 

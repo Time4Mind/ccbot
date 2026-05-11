@@ -542,6 +542,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await safe_reply(update.message, "Please use the picker above, or tap Cancel.")
         return
 
+    # Typing a message exits any open Menu sub-screen — drop the markers
+    # so the next switcher tap / history paginate doesn't think the user
+    # is still on /list or /history.
+    from .callbacks.more_menu import clear_view_markers as _clear_view_markers
+
+    _clear_view_markers(context.user_data)
+
     # Reply-quote routing: if the user replied to a bot message that
     # belongs to a non-active session, send this single message there
     # without changing the active session pointer.

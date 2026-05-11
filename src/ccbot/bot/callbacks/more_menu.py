@@ -40,23 +40,20 @@ from ..commands.lifecycle import build_live_sessions_text
 logger = logging.getLogger(__name__)
 
 
-# user_data marker keys for view-context preservation across callbacks.
-# ``_in_list_view`` keeps the user on the /list view when they tap a
-# switcher button there (rather than transitioning to history, which is
-# the main-card switcher behaviour). ``_history_origin`` lets the
-# history pagination callback rebuild the same extra-row footer the
-# history was painted with originally so the buttons under the
-# pagination row don't vanish on a page click.
-IN_LIST_VIEW_KEY = "_in_list_view"
+# user_data marker key: ``_history_origin`` lets the history-pagination
+# callback rebuild the same extra-row footer the history was painted
+# with originally, so the buttons under the pagination row don't vanish
+# on a page click. Values: ``"switcher"`` (carrier was opened by a
+# session switcher tap) / ``"more"`` (Menu → History).
 HISTORY_ORIGIN_KEY = "_history_origin"
 
 
 def clear_view_markers(user_data: dict[str, Any] | None) -> None:
-    """Drop both sub-screen markers — call on any navigation that exits
-    the menu sub-screens (CB_MM_BACK, text typed, Menu re-opened)."""
+    """Drop the history-origin marker — call on any navigation that
+    leaves the history view (CB_MM_BACK, text typed, Menu re-opened,
+    a Menu sub-screen that isn't History)."""
     if user_data is None:
         return
-    user_data.pop(IN_LIST_VIEW_KEY, None)
     user_data.pop(HISTORY_ORIGIN_KEY, None)
 
 
@@ -138,8 +135,6 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         # the button would freeze on whichever state was true at the
         # moment the menu was opened.
         clear_view_markers(context.user_data)
-        if context.user_data is not None:
-            context.user_data[IN_LIST_VIEW_KEY] = True
         body, kb = build_list_view(user.id)
         try:
             await query.edit_message_text(text=body, reply_markup=kb)
@@ -149,6 +144,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
 
     if data == CB_MM_STATUS:
         await query.answer()
+        clear_view_markers(context.user_data)
         base = build_footer_keyboard(user.id, screen="more", exclude_more="status")
         base_rows = list(base.inline_keyboard) if base is not None else []
         refresh_row = [
@@ -202,16 +198,19 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
 
     if data == CB_MM_SHOT:
         await query.answer()
+        clear_view_markers(context.user_data)
         await emit_screenshot_compact(query, context.bot, user.id)
         return True
 
     if data == CB_MM_NEW:
         await query.answer()
+        clear_view_markers(context.user_data)
         await _emit_new_flow(query, context, user)
         return True
 
     if data == CB_MM_ARCHIVE:
         await query.answer()
+        clear_view_markers(context.user_data)
         if context.user_data is not None:
             context.user_data["_arc_show_all"] = False
         text, kb = build_archive_page(
@@ -225,6 +224,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         return True
 
     if data == CB_MM_SETTINGS:
+        clear_view_markers(context.user_data)
         text = render_settings_text(user.id)
         keyboard = build_footer_keyboard(user.id, screen="settings")
         try:

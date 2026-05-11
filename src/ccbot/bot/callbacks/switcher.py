@@ -86,13 +86,10 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
 
         session_manager.set_active_session(user.id, target_id)
 
-        # Earlier revision kept the user on /list view when they tapped a
-        # session there. Reverted — the user explicitly wants the full
-        # history transcript on every switcher tap, regardless of which
-        # view fired it. The Menu button anchored to the bottom row
+        # The switcher tap always lands the user on the session's
+        # history view, regardless of which view fired it (main card,
+        # /list, etc.). The Menu button anchored to the bottom row
         # keeps the layout visually stable across the transition.
-        # ``IN_LIST_VIEW_KEY`` is still cleared on text_handler /
-        # CB_FT_MORE in case other paths read it.
 
         # If this bg session has a stashed AskUserQuestion / ExitPlanMode /
         # permission prompt, paint that UI on the carrier instead of the

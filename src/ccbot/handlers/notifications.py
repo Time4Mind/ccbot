@@ -1,22 +1,32 @@
-"""Live-card notifications for every session (active or background).
+"""Live-card notifications for the active session.
 
 A "card" is a single Telegram message that the bot keeps editMessageText-
-updating as Claude emits tool calls, thinking blocks, and text chunks. New
-TG messages are sent **only** on the user-approved triggers:
+updating as Claude emits tool calls, thinking blocks, and text chunks.
+Only the **active** session paints its card to chat; background sessions
+go through ``handlers.bg_status`` and surface as a compact panel at the
+bottom of the active card.
 
-  - task completion (final assistant text turn)
-  - blocking error (subset of error events)
-  - AskUserQuestion / ExitPlanMode (interactive UI is handled elsewhere
-    and naturally creates a separate message)
-  - session lifecycle (created/restored/archived/done/killed)
-  - inbox file received
-  - quota warning (G6)
-  - long pause: card not updated for >= STALE_CARD_SECONDS — next event
-    starts a fresh card
+A fresh card opens (a new TG message is sent) on:
+
+  - long pause: previous card sat idle for >= STALE_CARD_SECONDS
   - card overflow: rendered text would exceed CARD_HARD_LIMIT chars
+  - the very first event of a new turn (after ``finalize_task``)
+  - ``repost_card`` (Settings → card_position = repost)
 
-Implementation. State per (user_id, session.id):
-  msg_id, lines (list of CardLine), last_event_ts, finalized
+A fresh card pre-seeds itself with up to ``config.card_prior_context``
+transcript entries from before the user's most recent message so the
+new card carries context instead of starting blank.
+
+The header line carries:
+
+  ``<emoji> *<name>* [<quota>] · <state> [· <status_text>] · HH:MM``
+
+— where HH:MM is the time of the last claude event so the user can
+tell at a glance whether the card is fresh or has been quiet.
+
+State per (user_id, session.id):
+  msg_id, lines (list of CardLine), status_text, last_event_ts,
+  last_edit_ts, pending_edit, in_menu_view, pending_complete_footer.
 
 When a tool_result arrives matching a previous tool_use_id, the existing
 line is replaced in place rather than appended, keeping the card compact.

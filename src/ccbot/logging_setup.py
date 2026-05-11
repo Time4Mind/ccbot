@@ -87,17 +87,25 @@ def _resolve_format() -> str:
 
 
 def configure_logging() -> None:
-    """Wire up the root logger. Safe to call multiple times — replaces handlers."""
+    """Wire up the root logger. Safe to call multiple times — replaces handlers.
+
+    Always installs a stderr handler. Additionally writes a rotating
+    untruncated log to ``$CCBOT_DIR/logs/bot.log`` (default
+    ``~/.ccbot/logs/bot.log``) so debugging the bot doesn't depend on
+    grepping ``tmux capture-pane`` output, which is wrapped to the
+    pane's column width and drops the rest of each line.
+    """
     level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
 
-    handler = logging.StreamHandler(sys.stderr)
-    if _resolve_format() == "json":
-        handler.setFormatter(JsonFormatter())
-    else:
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        )
+    fmt = (
+        JsonFormatter()
+        if _resolve_format() == "json"
+        else logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    )
+
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setFormatter(fmt)
 
     root = logging.getLogger()
     root.setLevel(level)
@@ -105,4 +113,27 @@ def configure_logging() -> None:
     # paths may have already attached — keep one consistent stream.
     for h in list(root.handlers):
         root.removeHandler(h)
-    root.addHandler(handler)
+    root.addHandler(stderr_handler)
+
+    # File handler: untruncated lines, rotated daily, last 7 days kept.
+    # Use ``ccbot_dir`` so the path follows ``CCBOT_DIR`` env var (and
+    # therefore matches wherever ``state.json`` lives).
+    try:
+        from logging.handlers import TimedRotatingFileHandler
+
+        from .utils import ccbot_dir
+
+        logs_dir = ccbot_dir() / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        file_handler = TimedRotatingFileHandler(
+            logs_dir / "bot.log",
+            when="midnight",
+            backupCount=7,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(fmt)
+        root.addHandler(file_handler)
+    except Exception as e:
+        # File logging is best-effort — never block the bot if the path
+        # is unwritable or the rotator can't lock.
+        root.warning("File logging unavailable: %s", e)

@@ -21,6 +21,7 @@ from ...handlers.directory_browser import (
     clear_session_picker_state,
     clear_window_picker_state,
 )
+from ...handlers.history import send_history
 from ...handlers.interactive_ui import (
     adopt_interactive_msg,
     render_interactive_keyboard,
@@ -114,27 +115,52 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                             logger.debug("pending UI edit_message_text failed: %s", e)
 
         if not showed_interactive_ui:
-            # Switcher preview is a management surface, not real-time control.
-            # Always render Kill — Stop lives on the live card where _card_is_busy
-            # tracks whether a task is actually running. Polling
-            # ``is_window_busy`` here gave false positives on completed
-            # sessions (parse_status_line flickers between tool calls).
-            try:
-                preview = await render_session_preview(sess)
-                await query.edit_message_text(text=preview)
-            except Exception as e:
-                logger.debug("preview edit_message_text failed: %s", e)
-            keyboard = build_footer_keyboard(user.id, screen="main", is_busy=False)
-            if keyboard is not None:
+            # Paint the session's full transcript history onto the carrier
+            # so the user lands on context immediately — no extra ⋯ Menu →
+            # History tap. The footer + switcher rows come along as
+            # ``extra_rows`` below the pagination row, so management
+            # controls stay reachable.
+            #
+            # On the next claude event, ``update_session_card`` will
+            # repaint the carrier with the live card; the history page is
+            # ephemeral by design.
+            footer_kb = build_footer_keyboard(user.id, screen="main", is_busy=False)
+            extra_rows = (
+                [list(r) for r in footer_kb.inline_keyboard]
+                if footer_kb is not None
+                else None
+            )
+            history_painted = False
+            if sess.window_id:
                 try:
-                    await query.edit_message_reply_markup(reply_markup=keyboard)
+                    await send_history(
+                        target=query,
+                        window_id=sess.window_id,
+                        edit=True,
+                        user_id=user.id,
+                        extra_rows=extra_rows,
+                    )
+                    history_painted = True
                 except Exception as e:
-                    logger.debug("preview reply markup failed: %s", e)
-                else:
-                    if query.message:
-                        session_manager.set_last_switcher_msg(
-                            user.id, query.message.message_id
-                        )
+                    logger.debug("switch history paint failed: %s", e)
+
+            if not history_painted:
+                # Fallback: session has no window yet (lost/archived
+                # restore in flight, etc.). Fall back to the legacy
+                # short preview so the user at least sees the header.
+                try:
+                    preview = await render_session_preview(sess)
+                    await query.edit_message_text(text=preview)
+                except Exception as e:
+                    logger.debug("preview edit_message_text failed: %s", e)
+                if footer_kb is not None:
+                    try:
+                        await query.edit_message_reply_markup(reply_markup=footer_kb)
+                    except Exception as e:
+                        logger.debug("preview reply markup failed: %s", e)
+
+            if query.message and footer_kb is not None:
+                session_manager.set_last_switcher_msg(user.id, query.message.message_id)
 
         # Panel housekeeping: the user has now "seen" this session, so any
         # finalised badge can leave the panel; the previously-active

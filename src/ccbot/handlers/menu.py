@@ -166,7 +166,10 @@ def can_offer_terminal(user_id: int) -> bool:
 def _footer_top_row(
     user_id: int, *, is_busy: bool = True
 ) -> list[InlineKeyboardButton]:
-    """Default top row. See module docstring for layout rules.
+    """Default top row — per-session controls. Menu lives in its own
+    bottom row (see ``_footer_bottom_row``) so its slot stays put
+    across view transitions (the same spot Back occupies in
+    /list / /archive / other sub-screens).
 
     Busy session shows *Stop* (sends Escape — interrupt the running
     task without terminating). Idle session shows *Kill* (archive the
@@ -196,8 +199,15 @@ def _footer_top_row(
             row.append(
                 InlineKeyboardButton(t(user_id, "btn.term"), callback_data=CB_FT_TERM)
             )
-    row.append(InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_FT_MORE))
     return row
+
+
+def _footer_bottom_row(user_id: int) -> list[InlineKeyboardButton]:
+    """Single-button bottom row carrying ⋯ Menu. Lives in the same slot
+    as the Back button on /list / /archive / settings sub-screens so the
+    user's eye lands on the same spot regardless of which view they're
+    looking at."""
+    return [InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_FT_MORE)]
 
 
 _MM_BUTTONS: tuple[tuple[str, str, str], ...] = (
@@ -535,6 +545,12 @@ def build_footer_keyboard(
                     ]
                 if row_list:
                     rows.append(row_list)
+
+    # Main / live-card view: anchor ⋯ Menu at the very bottom so its
+    # position matches Back / Close in the menu sub-screens. Sub-screens
+    # add their own Back row inside their grid builders.
+    if screen == "main":
+        rows.append(_footer_bottom_row(user_id))
 
     if not rows:
         return None

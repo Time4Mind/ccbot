@@ -230,11 +230,8 @@ async def unsupported_content_handler(
         sess = session_manager.find_session_by_window(wid)
         if sess is not None:
             session_manager.touch_session(sess.id)
-        source_note = prefix.rstrip("\n").lstrip("[").rstrip("]") if prefix else ""
-        if source_note:
-            await safe_reply(msg, f"📨 Caption sent to Claude Code ({source_note}).")
-        else:
-            await safe_reply(msg, "📨 Caption sent to Claude Code.")
+        # No success reply — the user just sent the message; they know
+        # they sent it. Errors above still surface.
         return
 
     logger.debug("Unsupported content from user %d", user.id)
@@ -323,7 +320,8 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
-    await safe_reply(update.message, "📷 Image sent to Claude Code.")
+    # No success reply — the user just sent the image, they don't need
+    # the bot to tell them it was received. Errors still surface above.
 
 
 async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -373,7 +371,7 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
-    await safe_reply(update.message, "📎 Document sent to Claude Code.")
+    # No success reply — see photo_handler for the same reasoning.
 
 
 # --- voice ---

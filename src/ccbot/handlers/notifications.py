@@ -1079,6 +1079,16 @@ async def push_event(
                 logger.debug("push_event switcher migrate failed: %s", e)
 
 
+def is_card_busy(user_id: int, session_id: str) -> bool:
+    """True when the user's live card for ``session_id`` is currently in
+    flight (msg_id set, finalize_task hasn't reset it). Used by the
+    polling-based typing-indicator path — TYPING should fire while a
+    turn is mid-stream even during the silent gaps between events.
+    """
+    state = _cards.get((user_id, session_id))
+    return state is not None and _card_is_busy(state)
+
+
 def is_active_for_user(user_id: int, sess: Session) -> bool:
     active = session_manager.get_active_session(user_id)
     return active is not None and active.id == sess.id

@@ -54,11 +54,17 @@ User sends text in DM
 
 ```
 SessionMonitor reads new event for claude session_id S
-  -> for each user with active_session whose Session.claude_session_id == S:
-       enqueue message to user
-  -> background sessions of the same user emit notifications via their own
-     "live cards" (edit-in-place) plus push messages on key events
+  -> for each user whose Session.claude_session_id == S:
+       active session  -> enqueue + paint the user's live card
+       background sess -> silent: only update handlers.bg_status
+                          (status enum + quota_level + needs_action snapshot)
 ```
+
+Background sessions emit **no** Telegram messages of their own — no
+live-card edits, no push, no AskUserQuestion prompt surfacing. Their
+state surfaces only as a panel at the bottom of the active session's
+card via ``handlers.bg_status.render_panel``. See "Background-session
+panel" below.
 
 ### One-shot reply-quote routing
 
@@ -92,17 +98,65 @@ Inline keyboard with one button per active session, plus a `+ new` button. The s
 
 State for "where the live switcher currently lives" is held in memory and persisted as `last_switcher_msg_id: dict[user_id, message_id]` in state.json.
 
-### Context preview
+### Footer button order
 
-When a session button is tapped, the same message is edited in place to show a preview of the selected session: header (name, state, usage), last user message (`PREVIEW_USER_LINES`), last assistant message (`PREVIEW_ASSISTANT_LINES`), and last tools (`PREVIEW_TOOLS`). After the click, if the previewed session emits new bot-side events, the preview message is `editMessageText`-updated, coalesced at most once per `PREVIEW_LIVE_LAG` seconds. `PREVIEW_LIVE_LAG=0` disables live updates.
+The main / live-card view's footer keyboard is built in `handlers.menu.build_footer_keyboard` with `screen="main"`:
 
-### Per-session live card (C7)
+```
+[Stop/Kill, Clear, (Open Terminal)]   ← top: per-session controls
+[switcher buttons row(s)]             ← middle
+[+ new]                               ← bottom switcher row
+[≡ Menu]                              ← anchored bottom row
+```
 
-Each session has one "live card" message in chat, which the bot keeps editing. The card carries the latest tool/event one-line summary plus the final result on completion or error. New card is opened on session completion or error.
+`≡ Menu` lives in its own bottom row so its slot stays put across views — `Back` occupies the same position in `/list`, `/archive`, and Settings sub-screens.
 
-### Push notifications (C5)
+### Switcher tap → history view
 
-Sent via `send_message` only on completion, error, and `AskUserQuestion`. Format: `<color-emoji> [<session-name>] <message>`. Color emoji is hashed from the session name.
+When the user taps a session button in the main switcher:
+
+1. `transfer_card_to_carrier` pauses the FROM session's card and claims the carrier message_id for the TO session.
+2. `set_active_session(user, target)` flips the routing pointer.
+3. If the TO session has a stashed `bg_status.pending_interactive_ui` *and* the live pane still shows the prompt, the carrier is repainted with the prompt + the regular CB_ASK_* keyboard (`adopt_interactive_msg`). Otherwise the carrier is painted with `send_history` — the full paginated transcript view, with the standard footer ridden along as `extra_rows` so management controls stay reachable.
+4. `bg_status.mark_seen` + `prune_seen` drop the just-viewed badge from the panel.
+
+Pagination (`CB_HISTORY_PREV/NEXT`) preserves the original `extra_rows` by stamping `context.user_data['_history_origin']` (`switcher` or `more`) when the history view is first painted; the pagination handler rebuilds the matching footer from this hint.
+
+Tapping a session in the `/list` view (Menu → List) instead re-renders the list view with the new active highlighted — the management surface is the more useful affordance in that context. Tracked via `context.user_data['_in_list_view']`, cleared on `CB_MM_BACK`, `CB_FT_MORE`, and any typed message.
+
+### Per-session live card
+
+Each active session has one "live card" message in chat, which the bot keeps editing. The card carries the latest tool/event one-line summary plus the final result on completion or error. A fresh card pre-seeds itself with up to `CARD_PRIOR_CONTEXT` transcript entries from before the user's most recent message (`_seed_prior_context_lines`). New card is opened on session completion, error, stale pause, or overflow.
+
+The active session's card body ends with the bg-status panel block (see below). Card edits coalesce within `CARD_EDIT_LAG`.
+
+### Background-session panel
+
+`handlers.bg_status` keeps a per-user, per-session map of:
+
+- `status`: `working` ⏳ / `finished` ✅ / `error` ❌ / `needs_action` ❓
+- `quota_level`: `none` / `green` / `yellow` / `red` — sticky upward, drives `⚠️🟢/🟡/🔴`
+- `seen`: True once the user tapped the session in the switcher post-finalisation
+- `pending_interactive_ui`: snapshot `(content, ui_name)` for bg sessions that have an AskUserQuestion / ExitPlanMode / permission prompt waiting
+
+`render_panel(user_id, active_session_id)` formats the block appended to the bottom of the active card. `BG_STATUS_MAX` caps visible badges; older rows collapse to `+N more`.
+
+Bg sessions never emit push notifications. Token-threshold crossings flip the quota glyph instead of pushing. The active session's header carries the same glyph when its own quota crosses.
+
+### Push notifications
+
+Reserved for events that genuinely cannot be deferred to a card edit:
+- task completion in an active session (now folded into the card body itself with a `(task complete)` footer; no separate push)
+- blocker errors
+- AskUserQuestion / ExitPlanMode for the **active** session (rendered as a dedicated message with arrow / Enter / Esc keyboard)
+- session lifecycle (`created` / `restored` / `archived` / `done` / `killed`)
+- inbox file received
+
+Bg sessions never push, period.
+
+### Typing indicator
+
+`bot.send_chat_action(TYPING)` is fired from `session_events.handle_new_message` once per inbound claude event for the **active** session. Telegram's ~5s indicator window means a steadily-emitting session keeps "typing…" alive; an idle session lets it fade. Bg sessions skip — only the foreground's busy state surfaces in the chat header.
 
 ## Slash commands (B7)
 
@@ -127,6 +181,14 @@ Published via `setMyCommands` on startup so they appear in the Telegram `/`-menu
 - `on_topic_closed`, `on_topic_edited`, `on_topic_deleted` - removed.
 - `group_chat_ids` - removed (DM is the only chat, `chat_id == user_id`).
 - `setMyCommands` is published once on startup, not per-topic.
+
+## User settings: card_position
+
+`Settings → Card position` (`context.user_data['card_position']`, persisted in `state.json` under `user_settings`) controls how the user's outgoing text relates to the live card. Applied at the end of `text_handler`:
+
+- `push` (default): leave the user's message; the live card scrolls up naturally.
+- `delete`: bot deletes the user's message after dispatch so the card stays the most recent message.
+- `repost`: bot re-sends the live card as a new message below the user's text and drops the previous card message (`notifications.repost_card`).
 
 ## What is unchanged
 

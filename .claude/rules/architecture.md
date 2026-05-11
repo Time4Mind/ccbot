@@ -112,21 +112,35 @@ Handler modules (handlers/):
   message_sender.py   ─ safe_reply/safe_edit/safe_send + send_with_fallback
   message_queue.py    ─ Per-user queue + worker (merge, status dedup)
   status_polling.py   ─ Background status line polling (1s interval) +
-                       auto-approve hook for interactive prompts
-  notifications.py    ─ Live card per session + push events + completion
+                       auto-approve hook for interactive prompts +
+                       bg-window interactive-UI detection (suppress + stash)
+  notifications.py    ─ Live card per session + push events + completion +
+                       bg-status panel injection + active-quota glyph in header +
+                       refresh_panel + repost_card (card_position=repost)
+  bg_status.py        ─ Per-user bg session status map (working/finished/error/
+                       needs_action), quota_level, seen, pending_interactive_ui;
+                       render_panel for the active card's tail block.
+                       Persisted in state.json (status/quota/seen/last_change;
+                       pending UI re-detected after restart by terminal_parser).
   archive.py          ─ /archive page rendering + restore + idle/purge sweeps
   history.py          ─ Paginated /history rendering (with optional extra rows)
+  quota_alerts.py     ─ Background /usage modal poll → 5h/weekly band crossings
   inbox.py            ─ photo/document inbox under <workdir>/.ccbot-inbox/
-  interactive_ui.py   ─ AskUserQuestion / ExitPlanMode / Permission UI
+  interactive_ui.py   ─ AskUserQuestion / ExitPlanMode / Permission UI +
+                       adopt_interactive_msg / render_interactive_keyboard
+                       (used by switcher tap to claim the carrier as the
+                       interactive UI for a bg session whose prompt was stashed)
   directory_browser.py─ Directory + session picker UI builders
   switcher.py         ─ Inline session-switcher keyboard
-  menu.py             ─ Footer / More / Settings keyboard composition
+  menu.py             ─ Footer / More / Settings keyboard composition;
+                       ⋯ Menu anchored to its own bottom row on screen="main"
   cleanup.py          ─ Per-window state cleanup on archive
   callback_data.py    ─ Callback data prefix constants
   tg_format.py        ─ Table/code overflow → file attachment
 
 State files (~/.ccbot/ or $CCBOT_DIR/):
-  state.json         ─ thread bindings + window states + display names + read offsets
+  state.json         ─ window states + display names + read offsets + user
+                      settings (incl. card_position) + bg_status snapshot
   session_map.json   ─ hook-generated window_id→session mapping
   monitor_state.json ─ poll progress (byte offset) per JSONL file
 ```

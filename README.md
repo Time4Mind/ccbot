@@ -105,7 +105,11 @@ Most-frequently-tweaked optionals:
 | `QUOTA_ALERT_POLL_INTERVAL` | `5m`         | how often the live `/usage` modal is sampled |
 | `VOICE_BACKEND`             | `auto`       | `auto` / `whisper` / `apple` / `off` |
 | `WHISPER_MODEL_PATH`        | `~/.ccbot/models/ggml-medium.bin` | whisper.cpp model |
-| `BG_NOTIFY_MODE`            | `separate`   | `separate` (one card per session) or `footer` |
+| `BG_NOTIFY_MODE`            | `separate`   | _(legacy)_ kept for compatibility; background sessions are now silent — see "Background sessions" |
+| `BG_STATUS_MAX`             | `4`          | max badges in the bg-status panel; older entries collapse to `+N more` |
+| `BG_STATUS_QUOTA_THRESHOLDS`| `100000,200000,400000` | per-session token thresholds that flip the ⚠️🟢/🟡/🔴 quota glyph |
+| `CARD_PRIOR_CONTEXT`        | `5`          | how many transcript entries to seed at the top of a fresh live card; `0` disables |
+| `CARD_EDIT_LAG`             | `2.0`        | coalescing window for live-card edits (seconds) |
 | `TG_PROXY_URL`              | _(unset)_    | outbound proxy for the Bot API (`socks5://…` or `http://…`) |
 
 The full list lives in `doc/dm-multisession-spec.md` § 14.
@@ -153,30 +157,76 @@ directory browser, you pick the project, and a tmux window with
 **active** session.
 
 The most recent bot message carries an inline session switcher (`▷
-session-A · session-B · + new`). Tapping a non-active session button
-switches the active session and shows a context preview; tapping the
-active button is a no-op. Reply-quoting a bot message belonging to a
-non-active session routes that single reply there without changing
-the active session.
+session-A · session-B · + new`) with `≡ Menu` anchored at the
+very bottom row so its slot stays put across views.
 
-### Token alerts
+Tapping a non-active session **paints the full transcript history**
+of that session onto the carrier message and switches the active
+session in one go — no extra `≡ Menu → History` tap needed.
+Pagination buttons (◀ Older / Newer ▶) keep the footer keyboard
+under them. Tapping the already-active button is a no-op.
 
-Two flows, both surfaced as a separate push:
+Reply-quoting a bot message belonging to a non-active session routes
+that single reply there without changing the active session.
 
-- **Per-session token alerts.** Three thresholds (defaults
-  100k/200k/400k, adjustable in 50k steps via Settings → Token alerts).
-  Fires once per session per threshold.
-- **5h / weekly / weekly-Sonnet quota alerts.** A background task
-  samples the live `/usage` modal every `QUOTA_ALERT_POLL_INTERVAL`
-  and pushes when the percentage crosses the same 50/75/90 % bands the
-  stoplight emoji uses.
+### Background sessions
+
+Background (non-active) sessions are **silent in chat** — they don't
+emit live-card edits, push notifications, or AskUserQuestion prompts.
+Their state surfaces only as a compact panel at the bottom of the
+active session's card:
+
+```
+[session-A] ⏳         ← working in background
+[scraper]   ✅         ← finished
+[chores]    ❌         ← errored
+[v frontend] ❓ ⚠️🟡    ← needs user action + crossed token threshold
+```
+
+The panel sticks across active-card edits so a finished bg session
+isn't lost above a long tool log. Tap the badge's session in the
+switcher to drop it from the panel (you've "seen" it). If the badge
+shows `❓`, the switcher tap paints the stashed AskUserQuestion /
+ExitPlanMode prompt with the same arrow/Enter/Esc keyboard you'd
+get on a foreground prompt.
+
+When a session crosses a `BG_STATUS_QUOTA_THRESHOLDS` band, its
+quota glyph flips to `⚠️🟢` / `🟡` / `🔴`. The active session
+shows the same glyph in its card header. **No push notifications
+are sent** — the visual indicator is the alert.
+
+### Live card UX knobs
+
+A fresh live card (after a turn completes / clear / overflow split)
+pre-seeds itself with up to `CARD_PRIOR_CONTEXT` (default 5)
+transcript entries from before your most recent message so context
+doesn't disappear between turns.
+
+`Settings → Card position` controls how your outgoing text relates
+to the live card:
+- `push` — leave it (your message scrolls the card up; default)
+- `delete` — bot deletes your message so the card stays the latest
+- `repost` — bot resends the card below your message and drops the
+  old one
+
+Telegram's chat-header **`typing…` indicator** is driven by real
+claude events. As long as the active session keeps emitting (tool
+calls, thinking, text), `typing…` stays on; an idle session lets it
+fade within Telegram's ~5s window.
 
 ### Voice and media
 
 - **Voice messages** are transcribed locally (whisper.cpp / Apple
   Speech) and routed to the active session as if you typed them.
+  The reply echoes the transcribed text so you can verify what
+  Claude received.
 - **Photos and documents** drop into `<workdir>/.ccbot-inbox/` and
   Claude is told via tmux. Files are auto-cleaned 24h after upload.
+- **Forwarded posts with media** (channel posts with video / GIF /
+  sticker that carry a caption) have the caption + any hidden
+  `text_link` URLs extracted and routed to the active session,
+  prefixed with `[forwarded from @channel]`. The media payload
+  itself is dropped — Claude can't consume it.
 
 ## Architecture
 

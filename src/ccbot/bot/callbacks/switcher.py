@@ -33,11 +33,7 @@ from ...session import session_manager
 from ...terminal_parser import extract_interactive_content, is_interactive_ui
 from ...tmux_manager import tmux_manager
 from .._common import render_session_preview
-from .more_menu import (
-    HISTORY_ORIGIN_KEY,
-    IN_LIST_VIEW_KEY,
-    build_list_view,
-)
+from .more_menu import HISTORY_ORIGIN_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -90,28 +86,13 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
 
         session_manager.set_active_session(user.id, target_id)
 
-        # If the user is currently looking at the /list management view
-        # (Menu → List), keep them there: re-render the list with the
-        # new session marked active. Painting history here would shift
-        # the keyboard layout (Back row drops, Stop/Clear/Menu row
-        # appears at the top) — the management surface is the more
-        # useful affordance in this context.
-        in_list_view = (
-            context.user_data is not None
-            and context.user_data.get(IN_LIST_VIEW_KEY) is True
-        )
-        if in_list_view and query.message is not None:
-            body, list_kb = build_list_view(user.id)
-            try:
-                await query.edit_message_text(text=body, reply_markup=list_kb)
-                session_manager.set_last_switcher_msg(user.id, query.message.message_id)
-            except Exception as e:
-                logger.debug("list-view re-render after switch failed: %s", e)
-            bg_status.mark_seen(user.id, target_id)
-            bg_status.prune_seen(user.id)
-            await refresh_panel(context.bot, user.id)
-            await query.answer(f"→ {sess.name or sess.id}")
-            return True
+        # Earlier revision kept the user on /list view when they tapped a
+        # session there. Reverted — the user explicitly wants the full
+        # history transcript on every switcher tap, regardless of which
+        # view fired it. The Menu button anchored to the bottom row
+        # keeps the layout visually stable across the transition.
+        # ``IN_LIST_VIEW_KEY`` is still cleared on text_handler /
+        # CB_FT_MORE in case other paths read it.
 
         # If this bg session has a stashed AskUserQuestion / ExitPlanMode /
         # permission prompt, paint that UI on the carrier instead of the

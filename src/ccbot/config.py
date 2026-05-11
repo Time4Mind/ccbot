@@ -209,6 +209,23 @@ class Config:
         # (e.g. RU-blocked IPs). Accepts http://host:port or socks5://host:port.
         self.tg_proxy_url: str = os.getenv("TG_PROXY_URL", "").strip()
 
+        # Identifying label for this deployment — surfaced to Claude via
+        # ``CCBOT_HOST`` so a session can tell which device it's running
+        # on (Mac vs. arm64 box etc.). Defaults to ``socket.gethostname()``
+        # so the env stays meaningful out of the box; override in .env
+        # when the hostname is opaque.
+        import socket
+
+        self.host_label: str = (
+            os.getenv("CCBOT_HOST", "").strip() or socket.gethostname()
+        )
+
+        # Filled at runtime in ``bot.app.post_init`` from
+        # ``Application.bot.username`` so we can surface ``@<botname>`` to
+        # Claude via ``CCBOT_BOT_USERNAME``. Empty until that runs — code
+        # that uses it must tolerate the empty case.
+        self.bot_username: str = ""
+
         # Scrub sensitive vars from os.environ so child processes never inherit them.
         # Values are already captured in Config attributes above.
         for var in SENSITIVE_ENV_VARS:

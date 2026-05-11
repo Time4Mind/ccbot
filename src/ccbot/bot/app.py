@@ -71,6 +71,15 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     """First task after Application is built. Publish menu, recover state, start monitors."""
     global session_monitor, _status_poll_task, _quota_alerts_task, _metrics_flush_task
 
+    # Cache bot username so ``tmux_manager.create_window`` can surface it
+    # to Claude via ``CCBOT_BOT_USERNAME``. ``application.bot.username``
+    # triggers a ``getMe`` if not already populated; with ``initialize()``
+    # already done by run_polling this is a cached property.
+    try:
+        config.bot_username = application.bot.username or ""
+    except Exception as e:
+        logger.debug("Could not resolve bot.username: %s", e)
+
     await application.bot.delete_my_commands()
 
     # Trimmed /-menu surface. New/List/Status/History/Shot/Settings/Archive

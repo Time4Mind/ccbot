@@ -20,6 +20,7 @@ import logging
 from pathlib import Path
 
 from telegram import Bot
+from telegram.constants import ChatAction
 
 from ..config import config
 from ..handlers import bg_status
@@ -92,6 +93,18 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             continue
         session_manager.touch_session(sess.id)
         is_active = is_active_for_user(user_id, sess)
+
+        # Drive Telegram's "typing…" indicator from real claude activity.
+        # Telegram refreshes the indicator every ~5s, so as long as the
+        # active session keeps emitting events, the user sees "typing"
+        # in the chat header; the indicator naturally fades within ~5s
+        # once events stop. Bg sessions skip — they don't surface in
+        # the chat header.
+        if is_active:
+            try:
+                await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+            except Exception as e:
+                logger.debug("send_chat_action TYPING failed: %s", e)
 
         if not config.show_tool_calls and msg.content_type in (
             "tool_use",

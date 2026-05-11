@@ -40,6 +40,26 @@ from ..commands.lifecycle import build_live_sessions_text
 logger = logging.getLogger(__name__)
 
 
+# user_data marker keys for view-context preservation across callbacks.
+# ``_in_list_view`` keeps the user on the /list view when they tap a
+# switcher button there (rather than transitioning to history, which is
+# the main-card switcher behaviour). ``_history_origin`` lets the
+# history pagination callback rebuild the same extra-row footer the
+# history was painted with originally so the buttons under the
+# pagination row don't vanish on a page click.
+IN_LIST_VIEW_KEY = "_in_list_view"
+HISTORY_ORIGIN_KEY = "_history_origin"
+
+
+def clear_view_markers(user_data: dict[str, Any] | None) -> None:
+    """Drop both sub-screen markers — call on any navigation that exits
+    the menu sub-screens (CB_MM_BACK, text typed, Menu re-opened)."""
+    if user_data is None:
+        return
+    user_data.pop(IN_LIST_VIEW_KEY, None)
+    user_data.pop(HISTORY_ORIGIN_KEY, None)
+
+
 def build_list_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     """Render the ``/list`` body + keyboard for ``user_id``.
 
@@ -103,6 +123,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
     data = query.data or ""
 
     if data == CB_MM_BACK:
+        clear_view_markers(context.user_data)
         text = render_more_text(user.id)
         keyboard = build_footer_keyboard(user.id, screen="more")
         await set_view(query, context.bot, user.id, text, keyboard)
@@ -116,6 +137,9 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         # the busy signal is fresh — here we always show Kill, otherwise
         # the button would freeze on whichever state was true at the
         # moment the menu was opened.
+        clear_view_markers(context.user_data)
+        if context.user_data is not None:
+            context.user_data[IN_LIST_VIEW_KEY] = True
         body, kb = build_list_view(user.id)
         try:
             await query.edit_message_text(text=body, reply_markup=kb)
@@ -150,6 +174,9 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
 
     if data == CB_MM_HISTORY:
         await query.answer()
+        clear_view_markers(context.user_data)
+        if context.user_data is not None:
+            context.user_data[HISTORY_ORIGIN_KEY] = "more"
         wid = active_window(user.id)
         if not wid:
             kb = build_footer_keyboard(user.id, screen="more", exclude_more="history")

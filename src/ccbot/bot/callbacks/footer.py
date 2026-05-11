@@ -98,6 +98,11 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         sess = session_manager.get_active_session(user.id)
         if sess is not None:
             pause_card_view(user.id, sess.id)
+        # Entering Menu top-level resets any sub-screen markers
+        # (`_in_list_view`, `_history_origin`).
+        from .more_menu import clear_view_markers as _clear_view_markers
+
+        _clear_view_markers(context.user_data)
         text = render_more_text(user.id)
         keyboard = build_footer_keyboard(user.id, screen="more")
         await set_view(query, context.bot, user.id, text, keyboard)

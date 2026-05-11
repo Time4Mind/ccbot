@@ -154,6 +154,62 @@ def _strip_for_card(text: str) -> str:
     return out
 
 
+async def _seed_prior_context_lines(sess: Session) -> list[CardLine]:
+    """Build up to ``config.card_prior_context`` CardLines from the
+    transcript entries that came *before* the user's most recent message.
+
+    Used to seed a freshly-opened live card so the user doesn't lose all
+    on-screen context every time the previous task finalises and the
+    next turn starts blank.
+
+    Returns an empty list when:
+      - ``CARD_PRIOR_CONTEXT == 0`` (feature disabled)
+      - the session has no window or no transcript yet
+      - no user message has been recorded yet (first turn)
+      - reading the transcript fails for any reason
+    """
+    n = config.card_prior_context
+    if n <= 0 or not sess.window_id:
+        return []
+    try:
+        messages, _total = await session_manager.get_recent_messages(sess.window_id)
+    except Exception as e:
+        logger.debug("seed_prior_context: get_recent_messages failed: %s", e)
+        return []
+    if not messages:
+        return []
+    # Walk backwards to find the last role=user entry — everything before
+    # that is "prior context" relative to the current turn. If no user
+    # entry exists yet (e.g. assistant first turn), there's nothing to
+    # contextualise; bail.
+    last_user_idx: int | None = None
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "user":
+            last_user_idx = i
+            break
+    if last_user_idx is None or last_user_idx == 0:
+        return []
+    head = messages[max(0, last_user_idx - n) : last_user_idx]
+    lines: list[CardLine] = []
+    for entry in head:
+        role = entry.get("role", "")
+        ctype = entry.get("content_type", "text")
+        text = _strip_for_card(entry.get("text", "") or "")
+        if not text.strip():
+            continue
+        if role == "user":
+            lines.append(CardLine(text=f"👤 {_trim(text, 200)}"))
+        elif ctype == "thinking":
+            lines.append(CardLine(text=f"∴ {_trim(text, 160)}"))
+        elif ctype == "tool_use":
+            lines.append(CardLine(text=f"▷ {_trim(text, 160)}", is_tool=True))
+        elif ctype == "tool_result":
+            lines.append(CardLine(text=f"✓ {_trim(text, 160)}", is_tool=True))
+        else:
+            lines.append(CardLine(text=_trim(text, 200)))
+    return lines
+
+
 def _line_for_event(msg: NewMessage) -> CardLine:
     """Build a single one-line summary of one Claude event.
 
@@ -687,6 +743,26 @@ async def update_session_card(
     state = get_card_state(user_id, sess)
     msg_id_in = state.msg_id
     in_menu_view_in = state.in_menu_view
+
+    # Fresh card opening (no msg_id yet, no buffered lines) → seed the
+    # head with a handful of transcript entries from before the user's
+    # most recent message so the new card carries prior-turn context
+    # instead of starting blank. One-shot: subsequent events for this
+    # card take the normal append-only path. Skipped when in menu view
+    # (resume_card_view handles its own catch-up rendering).
+    if (
+        state.msg_id is None
+        and not state.lines
+        and not state.in_menu_view
+        and config.card_prior_context > 0
+    ):
+        try:
+            seed = await _seed_prior_context_lines(sess)
+        except Exception as e:
+            logger.debug("seed_prior_context failed: %s", e)
+            seed = []
+        if seed:
+            state.lines.extend(seed)
 
     new_line = _line_for_event(msg)
     # tool_result: replace the matching tool_use line in place.

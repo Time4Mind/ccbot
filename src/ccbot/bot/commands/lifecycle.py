@@ -326,6 +326,9 @@ async def archive_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context.user_data["_arc_show_all"] = show_all
 
     text, keyboard = build_archive_page(
-        page=0, lookback_seconds=lookback, show_all=show_all
+        page=0,
+        lookback_seconds=lookback,
+        show_all=show_all,
+        user_id=user.id,
     )
     await safe_reply(update.message, text, reply_markup=keyboard)

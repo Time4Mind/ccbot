@@ -188,13 +188,13 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         if context.user_data is not None:
             context.user_data["_arc_show_all"] = False
         text, kb = build_archive_page(
-            page=0, lookback_seconds=DEFAULT_LOOKBACK_SECONDS, show_all=False
+            page=0,
+            lookback_seconds=DEFAULT_LOOKBACK_SECONDS,
+            show_all=False,
+            user_id=user.id,
+            back_callback=CB_MM_BACK,
         )
-        rows: list[list[InlineKeyboardButton]] = [list(r) for r in kb.inline_keyboard]
-        rows.append(
-            [InlineKeyboardButton(t(user.id, "btn.back"), callback_data=CB_MM_BACK)]
-        )
-        await set_view(query, context.bot, user.id, text, InlineKeyboardMarkup(rows))
+        await set_view(query, context.bot, user.id, text, kb)
         return True
 
     if data == CB_MM_SETTINGS:

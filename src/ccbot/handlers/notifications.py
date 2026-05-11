@@ -292,8 +292,34 @@ def pause_card_view(user_id: int, session_id: str) -> None:
     card's message — otherwise a stream of tool calls would overwrite
     whatever they're looking at."""
     state = _cards.get((user_id, session_id))
-    if state is not None:
-        state.in_menu_view = True
+    if state is None:
+        logger.info(
+            "card_pause skip user=%d sess=%s reason=no_state",
+            user_id,
+            session_id,
+            extra={
+                "event": "card_pause_skip",
+                "user_id": user_id,
+                "session_id": session_id,
+                "reason": "no_state",
+            },
+        )
+        return
+    state.in_menu_view = True
+    logger.info(
+        "card_pause user=%d sess=%s msg_id=%s lines=%d",
+        user_id,
+        session_id,
+        state.msg_id,
+        len(state.lines),
+        extra={
+            "event": "card_pause",
+            "user_id": user_id,
+            "session_id": session_id,
+            "msg_id": state.msg_id,
+            "lines": len(state.lines),
+        },
+    )
 
 
 def transfer_card_to_carrier(
@@ -321,10 +347,23 @@ def transfer_card_to_carrier(
     a tool call — falls out naturally because A is now paused.
     """
     if from_session_id == to_session_id:
+        logger.info(
+            "card_transfer skip user=%d sess=%s reason=same_session",
+            user_id,
+            to_session_id,
+            extra={
+                "event": "card_transfer_skip",
+                "user_id": user_id,
+                "session_id": to_session_id,
+                "reason": "same_session",
+            },
+        )
         return
+    from_msg_id_was: int | None = None
     if from_session_id:
         from_state = _cards.get((user_id, from_session_id))
         if from_state is not None:
+            from_msg_id_was = from_state.msg_id
             if (
                 from_state.pending_edit is not None
                 and not from_state.pending_edit.done()
@@ -333,11 +372,30 @@ def transfer_card_to_carrier(
             from_state.pending_edit = None
             from_state.in_menu_view = True
     to_state = _cards.setdefault((user_id, to_session_id), CardState())
+    to_msg_id_was = to_state.msg_id
     if to_state.pending_edit is not None and not to_state.pending_edit.done():
         to_state.pending_edit.cancel()
     to_state.pending_edit = None
     to_state.msg_id = target_message_id
     to_state.in_menu_view = False
+    logger.info(
+        "card_transfer user=%d from=%s (from_msg=%s) to=%s (was_msg=%s) carrier=%s",
+        user_id,
+        from_session_id or "-",
+        from_msg_id_was,
+        to_session_id,
+        to_msg_id_was,
+        target_message_id,
+        extra={
+            "event": "card_transfer",
+            "user_id": user_id,
+            "from_session_id": from_session_id,
+            "from_msg_id_was": from_msg_id_was,
+            "to_session_id": to_session_id,
+            "to_msg_id_was": to_msg_id_was,
+            "carrier_msg_id": target_message_id,
+        },
+    )
 
 
 def detach_paused_cards_at_message(user_id: int, message_id: int) -> None:
@@ -357,7 +415,8 @@ def detach_paused_cards_at_message(user_id: int, message_id: int) -> None:
     card) and clears the pause flags for every card on this user that
     happened to be paused on the now-stolen message.
     """
-    for (uid, _sid), state in list(_cards.items()):
+    detached: list[str] = []
+    for (uid, sid), state in list(_cards.items()):
         if uid != user_id or state.msg_id != message_id:
             continue
         if state.pending_edit is not None and not state.pending_edit.done():
@@ -369,6 +428,20 @@ def detach_paused_cards_at_message(user_id: int, message_id: int) -> None:
         # Mark continuation so the next card visually flags carry-over
         # (``…continued`` in the header).
         state.is_continuation = True
+        detached.append(sid)
+    if detached:
+        logger.info(
+            "card_detach user=%d msg=%s sessions=%s",
+            user_id,
+            message_id,
+            detached,
+            extra={
+                "event": "card_detach",
+                "user_id": user_id,
+                "msg_id": message_id,
+                "sessions": detached,
+            },
+        )
 
 
 async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
@@ -579,6 +652,8 @@ async def update_session_card(
     Triggers a fresh card on long pause and on hard-limit overflow.
     """
     state = get_card_state(user_id, sess)
+    msg_id_in = state.msg_id
+    in_menu_view_in = state.in_menu_view
 
     new_line = _line_for_event(msg)
     # tool_result: replace the matching tool_use line in place.
@@ -598,6 +673,22 @@ async def update_session_card(
         if not replaced:
             state.lines.append(new_line)
         state.last_event_ts = time.time()
+        logger.info(
+            "card_update buffered sess=%s msg_id=%s ctype=%s lines=%d",
+            sess.id,
+            msg_id_in,
+            msg.content_type,
+            len(state.lines),
+            extra={
+                "event": "card_update_buffered",
+                "user_id": user_id,
+                "session_id": sess.id,
+                "msg_id": msg_id_in,
+                "content_type": msg.content_type,
+                "lines": len(state.lines),
+                "in_menu_view": in_menu_view_in,
+            },
+        )
         return
 
     # Trigger: long pause → fresh card.
@@ -629,6 +720,21 @@ async def update_session_card(
     if state.msg_id is None:
         await _send_card(bot, user_id, sess, state, text=text)
         state.last_edit_ts = time.monotonic()
+        logger.info(
+            "card_update sent sess=%s msg_id=%s ctype=%s lines=%d",
+            sess.id,
+            state.msg_id,
+            msg.content_type,
+            len(state.lines),
+            extra={
+                "event": "card_update_sent",
+                "user_id": user_id,
+                "session_id": sess.id,
+                "msg_id": state.msg_id,
+                "content_type": msg.content_type,
+                "lines": len(state.lines),
+            },
+        )
         return
 
     # Coalesce edits — at most one editMessageText per live_lag seconds.
@@ -643,6 +749,21 @@ async def update_session_card(
         if edited:
             state.last_rendered = text
             state.last_edit_ts = time.monotonic()
+            logger.info(
+                "card_update edited sess=%s msg_id=%s ctype=%s lines=%d",
+                sess.id,
+                state.msg_id,
+                msg.content_type,
+                len(state.lines),
+                extra={
+                    "event": "card_update_edited",
+                    "user_id": user_id,
+                    "session_id": sess.id,
+                    "msg_id": state.msg_id,
+                    "content_type": msg.content_type,
+                    "lines": len(state.lines),
+                },
+            )
         else:
             state.msg_id = None
             await _send_card(bot, user_id, sess, state, text=text)

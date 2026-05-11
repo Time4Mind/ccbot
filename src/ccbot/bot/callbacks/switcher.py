@@ -42,6 +42,22 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         if sess is None or sess.state not in ("active", "idle"):
             await query.answer("Session not available", show_alert=True)
             return True
+        logger.info(
+            "sw_use user=%d target=%s name=%s state=%s carrier_msg=%s",
+            user.id,
+            target_id,
+            sess.name,
+            sess.state,
+            query.message.message_id if query.message else None,
+            extra={
+                "event": "sw_use",
+                "user_id": user.id,
+                "target_session_id": target_id,
+                "target_name": sess.name,
+                "target_state": sess.state,
+                "carrier_msg_id": query.message.message_id if query.message else None,
+            },
+        )
 
         # Hand the carrier message off from the previously-active session
         # to the newly-active one BEFORE flipping ``active_sessions``.

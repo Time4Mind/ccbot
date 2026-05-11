@@ -425,9 +425,29 @@ class SessionManager:
         """Make `session_id` the active session for `user_id`."""
         if session_id not in self.sessions:
             raise KeyError(f"Unknown session id: {session_id}")
+        prev = self.active_sessions.get(user_id)
         self.active_sessions[user_id] = session_id
         self.save_state()
-        logger.info("Active session for user %d: %s", user_id, session_id)
+        sess = self.sessions[session_id]
+        logger.info(
+            "active_session_change user=%d prev=%s next=%s next_name=%s "
+            "next_window=%s next_state=%s",
+            user_id,
+            prev or "-",
+            session_id,
+            sess.name,
+            sess.window_id,
+            sess.state,
+            extra={
+                "event": "active_session_change",
+                "user_id": user_id,
+                "prev_session_id": prev,
+                "next_session_id": session_id,
+                "next_session_name": sess.name,
+                "next_window_id": sess.window_id,
+                "next_session_state": sess.state,
+            },
+        )
 
     def clear_active_session(self, user_id: int) -> None:
         """Drop the active-session pointer for a user (e.g. all sessions archived)."""

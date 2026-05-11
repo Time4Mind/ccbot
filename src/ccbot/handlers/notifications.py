@@ -1081,12 +1081,18 @@ async def push_event(
 
 def is_card_busy(user_id: int, session_id: str) -> bool:
     """True when the user's live card for ``session_id`` is currently in
-    flight (msg_id set, finalize_task hasn't reset it). Used by the
-    polling-based typing-indicator path — TYPING should fire while a
-    turn is mid-stream even during the silent gaps between events.
+    flight AND visible (msg_id set, finalize_task hasn't run, and the
+    card is not paused for menu navigation). Used by the polling-based
+    typing-indicator path — TYPING should fire while a turn is mid-
+    stream during silent gaps between events, but NOT while the user
+    is browsing the inline ⋯ Menu / sub-screens. While ``in_menu_view``
+    the card buffers events without rendering to chat, so a "typing…"
+    indicator there is just noise.
     """
     state = _cards.get((user_id, session_id))
-    return state is not None and _card_is_busy(state)
+    if state is None or state.in_menu_view:
+        return False
+    return _card_is_busy(state)
 
 
 def is_active_for_user(user_id: int, sess: Session) -> bool:

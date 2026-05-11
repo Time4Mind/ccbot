@@ -42,11 +42,10 @@ restart_backoff="${CCBOT_RESTART_BACKOFF:-10}"
 uv_bin="${CCBOT_UV:-uv}"
 
 if ! command -v "$uv_bin" > /dev/null 2>&1; then
-    # Fall back to the typical Linux install path; helps when the
-    # supervisor is launched by runit / cron with a stripped PATH.
-    if [ -x "/root/.local/bin/uv" ]; then
-        uv_bin="/root/.local/bin/uv"
-    elif [ -x "$HOME/.local/bin/uv" ]; then
+    # Fall back to the typical install location for ``curl -LsSf ... | sh``.
+    # Helps when the supervisor is launched by a service manager with a
+    # stripped PATH that doesn't include ``$HOME/.local/bin``.
+    if [ -x "$HOME/.local/bin/uv" ]; then
         uv_bin="$HOME/.local/bin/uv"
     fi
 fi

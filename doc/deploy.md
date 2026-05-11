@@ -118,6 +118,55 @@ curl -s --max-time 8 -x "$TG_PROXY_URL" \
 - Archived Session records expire after `ARCHIVE_PURGE_AFTER` (default
   14d). Transcripts on disk are kept for audit.
 
+## Без systemd: supervisor с авто-рестартом
+
+Когда хост — это chroot, контейнер без init, или вообще что-то, где
+`systemctl` недоступен, у systemd-юнита нет шансов. Та же роль
+закрывается через `scripts/ccbot-supervisor.sh` — это foreground-цикл,
+который:
+
+1. ждёт reachable Telegram API (curl до `api.telegram.org`, либо
+   `CCBOT_NET_PROBE_URL`), отстреливая VPN-flap'ы по
+   `CCBOT_NET_RETRY_SEC` секунд между попытками;
+2. запускает `uv run ccbot`;
+3. на любом выходе (TimedOut, KeyboardInterrupt, crash) — спит
+   `CCBOT_RESTART_BACKOFF` секунд и возвращается к шагу 1.
+
+Скрипт — обычный bash, не привязан к OS. Подойдёт для любого хоста
+без systemd: chroot, докер-без-tini, ручной запуск из tmux на macOS,
+и т.п. Запуск:
+
+**Просто в tmux-пейне.** Самый прямой путь — стартануть супервайзер
+как foreground-команду в фиксированном tmux-окне:
+
+```bash
+tmux new-session -d -s ccbot -n __main__ -c "$HOME"
+tmux send-keys -t ccbot:__main__ '/path/to/ccbot/scripts/ccbot-supervisor.sh' Enter
+```
+
+**Через сервис-менеджер.** Если на хосте есть runit / s6 / supervisord,
+просто положи в их service-директорию `run`-скрипт со строкой
+`exec /path/to/ccbot/scripts/ccbot-supervisor.sh 2>&1`. Сервис-менеджер
+сам поднимет супервайзер после рестарта.
+
+**Авто-вход на shell-логин.** Резервный путь — повесить
+`/etc/profile.d/ccbot-autostart.sh` (или
+`/etc/profile.d/zz-ccbot.sh`), который идемпотентно поднимает супервайзер
+если он ещё не крутится:
+
+```sh
+#!/bin/sh
+if ! pgrep -f ccbot-supervisor.sh > /dev/null 2>&1; then
+    tmux has-session -t ccbot 2>/dev/null \
+        || tmux new-session -d -s ccbot -n __main__ -c "$HOME"
+    tmux send-keys -t ccbot:__main__ \
+        "$HOME/ccbot/scripts/ccbot-supervisor.sh" Enter
+fi
+```
+
+Тогда любой shell-вход в систему (включая SSH) идемпотентно поднимет
+бот, если он по какой-то причине упал.
+
 ## macOS as the bot host (LaunchAgent)
 
 If you'd rather run the bot on your Mac (e.g. for personal use) instead

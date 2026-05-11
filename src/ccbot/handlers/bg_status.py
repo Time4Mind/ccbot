@@ -50,10 +50,17 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..config import config
-from ..session import Session, session_manager
+
+# ``..session`` imports back into this module from
+# ``SessionManager._load_state`` to rehydrate the bg-status panel; a
+# top-level import here would cycle through a half-built session_manager
+# singleton during startup. All session lookups are done lazily inside
+# the functions that need them.
+if TYPE_CHECKING:
+    from ..session import Session
 
 logger = logging.getLogger(__name__)
 
@@ -254,7 +261,7 @@ def clear_for_session(session_id: str) -> bool:
     return dropped
 
 
-def _badge(sess: Session, entry: BgStatus) -> str:
+def _badge(sess: "Session", entry: BgStatus) -> str:
     """Render one panel row: [name] ⏳/✅/❌/❓ [⚠️🟢/🟡/🔴]."""
     name = sess.name or sess.id
     status_glyph = _STATUS_EMOJI.get(entry.status, "")
@@ -277,6 +284,10 @@ def render_panel(user_id: int, *, active_session_id: str = "") -> str:
     bucket = _bg.get(user_id)
     if not bucket:
         return ""
+
+    # Late import: top-level would cycle through SessionManager._load_state
+    # which calls back into this module before session_manager is bound.
+    from ..session import session_manager
 
     rows: list[tuple[float, str]] = []
     for sid, entry in bucket.items():

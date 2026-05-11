@@ -62,6 +62,12 @@ CARD_HARD_LIMIT = 3800
 CARD_MAX_LINES = 40
 # After this much idleness, the next event opens a fresh card.
 STALE_CARD_SECONDS = 5 * 60
+# A pane-status spinner (``Brewed for 45s`` / ``Honking… (12s)``) that
+# hasn't changed within this many seconds is considered stale — claude
+# left the line painted but isn't actually working. Used by
+# ``_card_is_busy`` so a frozen spinner doesn't keep "typing…" alive
+# forever after a turn ends.
+SPINNER_FRESH_SECONDS = 3.0
 
 
 _COLLAPSED_PREFIX = "… "
@@ -88,6 +94,13 @@ class CardState:
         ""  # last text we sent to TG; lets touch_card_status skip no-op edits
     )
     last_edit_ts: float = 0.0  # monotonic seconds; gate for CARD_EDIT_LAG coalescing
+    # Wall-clock time when ``status_text`` last *changed* (not just was set).
+    # A claude pane keeps the last spinner line painted even when the
+    # session is idle, so ``status_text != ""`` isn't enough to call
+    # the session "actively producing". A spinner that's been frozen on
+    # the same string for >SPINNER_FRESH_SECONDS is stale — ignore it
+    # for the typing-indicator gate.
+    last_status_change_ts: float = 0.0
     pending_edit: asyncio.Task[None] | None = None  # one deferred edit task at most
     is_continuation: bool = False  # True after a stale-pause or overflow split
     # User opened ≡ Menu / a sub-screen on the card's message. While set,
@@ -623,30 +636,31 @@ async def clear_card(bot: Bot, user_id: int, sess: Session) -> None:
 
 def _card_is_busy(state: CardState) -> bool:
     """Is this card actually producing output right now? Drives the
-    Stop ↔ Kill keyboard split.
+    Stop ↔ Kill keyboard split AND the polling-side TYPING indicator.
 
-    Naively keying off ``msg_id`` (card is alive) gave a false positive
-    on sessions the user switched into but hadn't started working in —
-    the carrier transfer leaves ``msg_id`` set even though no work is
-    in flight, so Stop hung around until the next finalize. Naively
-    keying off ``status_text`` (the tmux spinner) was the original
-    behaviour and flickered Stop ↔ Kill between tool_use and
-    tool_result.
+    Tries three signals in order:
 
-    Compromise: ``msg_id`` AND (spinner OR recent event). ``recent``
-    means within the last ``2 × CARD_EDIT_LAG`` seconds — long enough
-    to bridge the ~100-500 ms gap between a tool returning and the
-    next status update, short enough that an idle card flips to Kill
-    within a couple of seconds.
+      1. ``msg_id`` must be set (card alive — finalize hasn't reset).
+      2. A *fresh* status spinner: ``status_text`` non-empty AND
+         changed within the last ``SPINNER_FRESH_SECONDS``. A stale
+         spinner line (e.g. ``Brewed for 45s`` painted before the
+         session went idle and never repainted by claude) does not
+         count — otherwise the indicator would stick forever after a
+         turn ends.
+      3. A recent claude event within ``2 × CARD_EDIT_LAG``. Bridges
+         the 100-500 ms gap between ``tool_use`` and ``tool_result``
+         where the spinner briefly clears.
     """
     if state.msg_id is None:
         return False
-    if state.status_text:
-        return True
+    now = time.time()
+    if state.status_text and state.last_status_change_ts > 0:
+        if (now - state.last_status_change_ts) < SPINNER_FRESH_SECONDS:
+            return True
     if state.last_event_ts <= 0:
         return False
     grace = max(2.0, config.card_edit_lag * 2)
-    return (time.time() - state.last_event_ts) < grace
+    return (now - state.last_event_ts) < grace
 
 
 async def _send_card(
@@ -1210,6 +1224,9 @@ async def touch_card_status(
         return
     was_busy = bool(state.status_text)
     state.status_text = status_text
+    # Stamp the wall-clock change time so ``_card_is_busy`` can
+    # distinguish a freshly-ticking spinner from a stale leftover.
+    state.last_status_change_ts = time.time()
     is_busy = bool(state.status_text)
     rendered = _render_card(sess, state, user_id=user_id)
     if rendered == state.last_rendered and was_busy == is_busy:

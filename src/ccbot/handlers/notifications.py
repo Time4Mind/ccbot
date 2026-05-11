@@ -296,6 +296,37 @@ def pause_card_view(user_id: int, session_id: str) -> None:
         state.in_menu_view = True
 
 
+def detach_paused_cards_at_message(user_id: int, message_id: int) -> None:
+    """Release card state bound to ``message_id`` when the carrier has
+    been repurposed for a different flow.
+
+    The pause→resume design assumes the user eventually returns to the
+    live card via ``resume_card_view`` (typing text, etc.). But when
+    the carrier message gets hijacked for a different session — e.g.
+    user navigates ``Menu → ＋ new`` and confirms a directory, the new
+    session's "Created" status now owns the message — the OLD session's
+    pause never gets released and its events buffer forever. Worse,
+    ``state.msg_id`` still points at a message that's no longer its
+    card, so a later edit would clobber whatever's there.
+
+    This helper resets ``msg_id`` (so the next event opens a fresh
+    card) and clears the pause flags for every card on this user that
+    happened to be paused on the now-stolen message.
+    """
+    for (uid, _sid), state in list(_cards.items()):
+        if uid != user_id or state.msg_id != message_id:
+            continue
+        if state.pending_edit is not None and not state.pending_edit.done():
+            state.pending_edit.cancel()
+        state.pending_edit = None
+        state.msg_id = None
+        state.in_menu_view = False
+        state.pending_complete_footer = None
+        # Mark continuation so the next card visually flags carry-over
+        # (``…continued`` in the header).
+        state.is_continuation = True
+
+
 async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
     """Re-render the card with whatever events accumulated while paused,
     then drop the pause. If a finalize_task fired during the pause, the

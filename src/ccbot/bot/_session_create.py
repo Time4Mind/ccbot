@@ -16,6 +16,7 @@ import logging
 from telegram.ext import ContextTypes
 
 from ..handlers.message_sender import safe_edit, safe_send
+from ..handlers.notifications import detach_paused_cards_at_message
 from ..local_terminal import open_terminal_for_window
 from ..session import session_manager
 from ..tmux_manager import tmux_manager
@@ -44,6 +45,14 @@ async def create_and_activate_session(
         await query.answer()
     except Exception as e:
         logger.debug("Early query.answer failed: %s", e)
+
+    # The carrier message is about to host this new session's "Created"
+    # status — release any OLD card-state pause that was bound to the
+    # same message_id. Otherwise the previously-active session's pause
+    # never resumes and its events buffer forever, leaving the user
+    # with a frozen card when they switch back via the switcher.
+    if query.message is not None:
+        detach_paused_cards_at_message(user.id, query.message.message_id)
 
     success, message, created_wname, created_wid = await tmux_manager.create_window(
         selected_path, resume_session_id=resume_session_id

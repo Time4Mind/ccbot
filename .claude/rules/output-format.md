@@ -5,6 +5,17 @@ Telegram session**. ccbot sets `CCBOT_INTERFACE=telegram` in the
 session env so this guidance only applies when the user is reading
 through Telegram (not when working in a regular terminal).
 
+Two more env vars are also exported so the session can tell which
+deployment it's running under:
+
+| Var | Source | Use |
+| --- | --- | --- |
+| `CCBOT_HOST` | `CCBOT_HOST` env on the bot host, falling back to `socket.gethostname()` | Identifies the device (e.g. `mac-air`, `arm64-kali`). |
+| `CCBOT_BOT_USERNAME` | Telegram `getMe` at bot startup | Identifies the Telegram bot (`@Stefania_tg_bot`). Empty if `getMe` didn't run. |
+
+When the user references "the bot" or "this machine" inside a session,
+check these to disambiguate. Don't dump them unsolicited.
+
 ## When to give a file vs an inline answer
 
 The Telegram chat surface is narrow, monospace, and lossy on copy-

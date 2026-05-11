@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -486,15 +487,23 @@ class TmuxManager:
                             cmd = f"{cmd} {config.claude_flags}"
                         if resume_session_id:
                             cmd = f"{cmd} --resume {resume_session_id}"
-                        # CCBOT_INTERFACE=telegram lets Claude (via the
-                        # output-format guidance in CLAUDE.md) tailor its
-                        # response style to the Telegram surface — short
-                        # summaries + screenshot-friendly tables instead
-                        # of wide markdown.
+                        # Identify the runtime so Claude (via the
+                        # output-format guidance in CLAUDE.md) can
+                        # tailor its replies to the Telegram surface AND
+                        # know *which* bot / device hosts the session —
+                        # useful when the user runs multiple ccbot
+                        # deployments (e.g. Mac + arm64 box).
+                        env_prefix = "CCBOT_INTERFACE=telegram"
+                        if config.bot_username:
+                            env_prefix += f" CCBOT_BOT_USERNAME={shlex.quote(config.bot_username)}"
+                        if config.host_label:
+                            env_prefix += (
+                                f" CCBOT_HOST={shlex.quote(config.host_label)}"
+                            )
                         if config.is_sandbox:
-                            cmd = f"IS_SANDBOX=1 CCBOT_INTERFACE=telegram {cmd}"
+                            cmd = f"IS_SANDBOX=1 {env_prefix} {cmd}"
                         else:
-                            cmd = f"CCBOT_INTERFACE=telegram {cmd}"
+                            cmd = f"{env_prefix} {cmd}"
                         pane.send_keys(cmd, enter=True)
 
                 logger.info(

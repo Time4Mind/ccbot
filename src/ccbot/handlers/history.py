@@ -76,6 +76,15 @@ async def prewarm_pages_cache(window_id: str) -> bool:
 
     if not config.show_user_messages:
         messages = [m for m in messages if m["role"] == "assistant"]
+    # Drop ``tool_use`` entries — TranscriptParser emits them as soon
+    # as the streaming API sees the call, BEFORE the tool_result lands
+    # on disk. The matching ``tool_result`` entry that arrives later
+    # carries the same ``**Tool**(args)`` header AND the body/diff —
+    # rendering both shows each tool call twice (bare name first, then
+    # the same name with the body). Worse, in a fast-moving session
+    # the JSONL can flush tool_use rows with no matching tool_result
+    # yet, so the cache snapshots a long tail of empty tool names.
+    messages = [m for m in messages if m.get("content_type") != "tool_use"]
     total = len(messages)
     if total == 0:
         return False
@@ -284,6 +293,13 @@ async def send_history(
         else:
             # Filter to assistant messages only
             messages = [m for m in messages if m["role"] == "assistant"]
+        # Drop ``tool_use`` entries — see ``prewarm_pages_cache`` for the
+        # full rationale. Short version: the parser emits a separate
+        # ``tool_use`` entry the moment the streaming API sees the call,
+        # then emits another ``tool_result`` entry once the body lands;
+        # both carry the same ``**Tool**(args)`` header, so keeping the
+        # first one only adds a content-less row above its own result.
+        messages = [m for m in messages if m.get("content_type") != "tool_use"]
         total = len(messages)
         if total == 0:
             if is_unread:

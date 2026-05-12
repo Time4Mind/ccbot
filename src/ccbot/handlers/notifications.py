@@ -505,7 +505,17 @@ def transfer_card_to_carrier(
         to_state.pending_edit.cancel()
     to_state.pending_edit = None
     to_state.msg_id = target_message_id
-    to_state.in_menu_view = False
+    # Pause the TO card across the switch window. The caller (CB_SW_USE)
+    # will paint history on this message_id next, and then call
+    # ``release_card_message`` which clears both ``msg_id`` and
+    # ``in_menu_view``. If we left ``in_menu_view=False`` here, any bg
+    # event arriving in the ~150 ms parse + edit window would trigger
+    # ``refresh_panel`` (or ``touch_card_status``) — that path sees
+    # ``msg_id=carrier`` + ``in_menu_view=False`` and rerenders the
+    # live-card body over the carrier, clobbering the history paint
+    # we're racing to land. Symptom: user sees "header + bg panel"
+    # instead of transcript after a switch.
+    to_state.in_menu_view = True
     logger.info(
         "card_transfer user=%d from=%s (from_msg=%s) to=%s (was_msg=%s) carrier=%s",
         user_id,

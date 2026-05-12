@@ -501,7 +501,11 @@ def build_footer_keyboard(
     drop_active_from_switcher = is_more_view
     # Settings is a configuration surface; the switcher carries no useful
     # action there (active button is a no-op).
-    include_switcher = not is_settings
+    #
+    # Menu (``screen == "more"``) drops the switcher too — session-switch
+    # buttons live in Menu → List from now on (per user request). The Menu
+    # grid offers explicit access via the List entry.
+    include_switcher = not is_settings and screen != "more"
 
     if screen == "more":
         rows.extend(_more_grid(user_id, exclude=exclude_more))

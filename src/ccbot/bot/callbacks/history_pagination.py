@@ -29,6 +29,13 @@ def _build_extra_rows(user_id: int, origin: str) -> list[list[Any]] | None:
     have had, so a page click doesn't drop the footer."""
     if origin == "more":
         kb = build_footer_keyboard(user_id, screen="more", exclude_more="history")
+    elif origin == "menu_list":
+        # Menu → List paints history with the /list footer (Kill / Clear
+        # / switcher / + new / Back). Pagination has to rebuild the
+        # same layout — not the main-screen footer with ≡ Menu.
+        from .more_menu import build_list_view
+
+        _, kb = build_list_view(user_id)
     else:
         # "switcher" or unknown: fall back to the main footer + switcher.
         kb = build_footer_keyboard(user_id, screen="main", is_busy=False)

@@ -8,6 +8,7 @@ Supports both full history and unread message range views.
 """
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
@@ -20,6 +21,22 @@ from .callback_data import CB_HISTORY_NEXT, CB_HISTORY_PREV
 from .message_sender import safe_edit, safe_reply, safe_send
 
 logger = logging.getLogger(__name__)
+
+
+# In-memory cache for rendered history pages keyed by ``window_id``.
+# Switcher taps re-parse the entire JSONL on every tap — for a 1.5k-
+# message transcript that's ~800 ms wall-clock, and the user sees the
+# previously-painted content "stuck" for almost a second before the new
+# history lands. Cache the rendered pages so a repeat tap (or rapid
+# back-and-forth between sessions) only pays the Telegram API round-
+# trip (~150 ms).
+#
+# Cached entry holds (file_mtime, file_size, pages_list, total_count).
+# Invalidated automatically when the transcript file grows or its mtime
+# advances — i.e., on the next claude event for that session. The full
+# (un-byte-ranged) case is the only one cached; unread-range reads are
+# rare and parameterised, so they go through the slow path.
+_pages_cache: dict[str, tuple[float, int, list[str], int]] = {}
 
 
 def _build_history_keyboard(
@@ -104,6 +121,67 @@ async def send_history(
         start_byte,
         end_byte,
     )
+
+    # Cache fast-path: full-history reads (no byte range) come through
+    # the switcher-tap hot path. Try to serve the prebuilt pages instead
+    # of re-parsing the JSONL on every tap. Cache key is the transcript
+    # file's (mtime, size) — claude appends new entries strictly
+    # forward, so a single ``stat()`` is enough to invalidate.
+    #
+    # NB: the lookup uses ``build_session_file_path`` (pure path math)
+    # rather than ``resolve_session_for_window`` — the latter re-walks
+    # the entire JSONL to refresh summary/token stats, which would
+    # negate the cache's whole point.
+    if not is_unread:
+        cached_pages: list[str] | None = None
+        cached_total = 0
+        try:
+            from ..session_claude_io import build_session_file_path
+
+            state = session_manager.get_window_state(window_id)
+            fp: Path | None = None
+            if state.session_id and state.cwd:
+                fp = build_session_file_path(state.session_id, state.cwd)
+            if fp is not None and fp.exists():
+                st = fp.stat()
+                mtime = st.st_mtime
+                size = st.st_size
+                entry = _pages_cache.get(window_id)
+                if entry is not None and entry[0] == mtime and entry[1] == size:
+                    cached_pages = entry[2]
+                    cached_total = entry[3]
+                    logger.debug(
+                        "send_history cache HIT window=%s pages=%d total=%d",
+                        window_id,
+                        len(cached_pages),
+                        cached_total,
+                    )
+        except Exception as e:
+            logger.debug("history cache lookup failed: %s", e)
+
+        if cached_pages is not None:
+            if offset < 0:
+                page_index = len(cached_pages) - 1
+            else:
+                page_index = max(0, min(offset, len(cached_pages) - 1))
+            text = cached_pages[page_index]
+            keyboard = _build_history_keyboard(
+                window_id, page_index, len(cached_pages), start_byte, end_byte
+            )
+            if extra_rows:
+                existing_rows = (
+                    list(keyboard.inline_keyboard) if keyboard is not None else []
+                )
+                keyboard = InlineKeyboardMarkup(
+                    existing_rows + [list(r) for r in extra_rows]
+                )
+            if edit:
+                await safe_edit(target, text, reply_markup=keyboard)
+            elif bot is not None and user_id is not None:
+                await safe_send(bot, user_id, text, reply_markup=keyboard)
+            else:
+                await safe_reply(target, text, reply_markup=keyboard)
+            return
 
     messages, total = await session_manager.get_recent_messages(
         window_id,
@@ -211,6 +289,28 @@ async def send_history(
                 lines.append(msg_text)
         full_text = "\n\n".join(lines)
         pages = split_message(full_text, max_length=4096)
+
+        # Stash the freshly-built pages so the next tap on the same
+        # window skips the parse step. We only cache the full-history
+        # case — unread-range reads are parameterised and rare.
+        if not is_unread:
+            try:
+                from ..session_claude_io import build_session_file_path
+
+                state = session_manager.get_window_state(window_id)
+                fp_store: Path | None = None
+                if state.session_id and state.cwd:
+                    fp_store = build_session_file_path(state.session_id, state.cwd)
+                if fp_store is not None and fp_store.exists():
+                    st = fp_store.stat()
+                    _pages_cache[window_id] = (
+                        st.st_mtime,
+                        st.st_size,
+                        list(pages),
+                        total,
+                    )
+            except Exception as e:
+                logger.debug("history cache store failed: %s", e)
 
         # Default to last page (newest messages) for both history and unread
         if offset < 0:

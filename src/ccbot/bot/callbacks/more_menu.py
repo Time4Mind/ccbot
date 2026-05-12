@@ -28,7 +28,7 @@ from ...handlers.menu import (
     render_more_text,
     render_settings_text,
 )
-from ...handlers.message_sender import safe_send
+from ...handlers.message_sender import safe_edit, safe_send
 from ...handlers.switcher import build_switcher_keyboard
 from ...i18n import t
 from ...session import session_manager
@@ -111,7 +111,7 @@ async def _emit_new_flow(
         context.user_data[BROWSE_DIRS_KEY] = subdirs
         context.user_data["menu_origin"] = "menu"
     try:
-        await query.edit_message_text(text=msg_text, reply_markup=keyboard)
+        await safe_edit(query, msg_text, reply_markup=keyboard)
     except Exception:
         await safe_send(context.bot, user.id, msg_text, reply_markup=keyboard)
 
@@ -136,10 +136,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         # moment the menu was opened.
         clear_view_markers(context.user_data)
         body, kb = build_list_view(user.id)
-        try:
-            await query.edit_message_text(text=body, reply_markup=kb)
-        except Exception as e:
-            logger.debug("mm list edit failed: %s", e)
+        await safe_edit(query, body, reply_markup=kb)
         return True
 
     if data == CB_MM_STATUS:
@@ -151,21 +148,13 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             InlineKeyboardButton(t(user.id, "btn.refresh"), callback_data=CB_MM_STATUS)
         ]
         kb = InlineKeyboardMarkup([refresh_row] + [list(r) for r in base_rows])
-        try:
-            await query.edit_message_text(
-                text=t(user.id, "usage.fetching"), reply_markup=kb
-            )
-        except Exception as e:
-            logger.debug("mm status placeholder failed: %s", e)
+        await safe_edit(query, t(user.id, "usage.fetching"), reply_markup=kb)
         usage_info = await fetch_claude_usage()
         from ...usage import format_usage_breakdown_compact
 
         live_block = format_usage_breakdown_compact(user.id, usage_info)
         text = live_block or t(user.id, "usage.unavailable")
-        try:
-            await query.edit_message_text(text=text, reply_markup=kb)
-        except Exception as e:
-            logger.debug("mm status edit failed: %s", e)
+        await safe_edit(query, text, reply_markup=kb)
         return True
 
     if data == CB_MM_HISTORY:
@@ -176,12 +165,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         wid = active_window(user.id)
         if not wid:
             kb = build_footer_keyboard(user.id, screen="more", exclude_more="history")
-            try:
-                await query.edit_message_text(
-                    text=t(user.id, "toast.no_session"), reply_markup=kb
-                )
-            except Exception as e:
-                logger.debug("mm history empty edit failed: %s", e)
+            await safe_edit(query, t(user.id, "toast.no_session"), reply_markup=kb)
         else:
             extra_kb = build_footer_keyboard(
                 user.id, screen="more", exclude_more="history"
@@ -227,10 +211,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         clear_view_markers(context.user_data)
         text = render_settings_text(user.id)
         keyboard = build_footer_keyboard(user.id, screen="settings")
-        try:
-            await query.edit_message_text(text=text, reply_markup=keyboard)
-        except Exception as e:
-            logger.debug("settings open edit failed: %s", e)
+        await safe_edit(query, text, reply_markup=keyboard)
         if query.message and keyboard is not None:
             session_manager.set_last_switcher_msg(user.id, query.message.message_id)
         await query.answer()

@@ -23,7 +23,7 @@ from telegram.error import BadRequest
 
 from ..config import config
 from ..session import Session, session_manager
-from .callback_data import CB_ARC_RESTORE, CB_SW_NEW, CB_SW_NOOP, CB_SW_USE
+from .callback_data import CB_ARC_RESTORE, CB_SW_NEW, CB_SW_USE
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,15 @@ def build_switcher_keyboard(
             label = f"⤴ {name}"
             cb = f"{CB_ARC_RESTORE}{sess.id}"
         else:
-            cb = CB_SW_NOOP if is_active else f"{CB_SW_USE}{sess.id}"
+            # All session buttons (including the already-active one) go
+            # through CB_SW_USE so a tap always lands on the session's
+            # history. The switcher.CB_SW_USE handler's
+            # ``transfer_card_to_carrier`` short-circuits the same-session
+            # case to a no-op, then ``send_history`` paints. Without this,
+            # there was no way to view the active session's transcript
+            # from the switcher — the ``✓`` button just toasted
+            # "already active" and the user couldn't see the history.
+            cb = f"{CB_SW_USE}{sess.id}"
             label = _label(sess, is_active=is_active)
         row.append(
             InlineKeyboardButton(

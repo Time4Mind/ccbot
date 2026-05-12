@@ -572,6 +572,45 @@ def detach_paused_cards_at_message(user_id: int, message_id: int) -> None:
         )
 
 
+def release_card_message(user_id: int, session_id: str) -> None:
+    """Drop the live-card binding to its current Telegram message_id
+    without touching the message itself.
+
+    Called from the switcher-tap handler right after history is painted
+    on the carrier: the carrier now holds a frozen transcript view, and
+    the TO session's live card must NOT keep editing it. With ``msg_id``
+    cleared, the next claude event opens a fresh card below (carrying
+    the bg-status panel and prior-context seed); the history carrier
+    stays put and remains paginable.
+
+    Buffered ``lines`` are also wiped — they were destined for the
+    overwritten card; the fresh card will re-seed from transcript via
+    ``_seed_prior_context_lines`` on its next event.
+    """
+    state = _cards.get((user_id, session_id))
+    if state is None:
+        return
+    if state.pending_edit is not None and not state.pending_edit.done():
+        state.pending_edit.cancel()
+    state.pending_edit = None
+    state.msg_id = None
+    state.in_menu_view = False
+    state.lines = []
+    state.last_rendered = ""
+    state.pending_complete_footer = None
+    state.is_continuation = True
+    logger.info(
+        "card_release user=%d sess=%s",
+        user_id,
+        session_id,
+        extra={
+            "event": "card_release",
+            "user_id": user_id,
+            "session_id": session_id,
+        },
+    )
+
+
 async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
     """Re-render the card with whatever events accumulated while paused,
     then drop the pause. If a finalize_task fired during the pause, the

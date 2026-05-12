@@ -143,7 +143,14 @@ def update_status(
 ) -> bool:
     """Set status for one bg session. Returns True if the visible state
     changed (status emoji or seen flag flipped) so callers can decide
-    whether the active card needs a re-render."""
+    whether the active card needs a re-render.
+
+    A first-call for an unknown session is always reported as a change —
+    otherwise the very first ``working`` event after a switch-to-bg
+    silently no-ops (default dataclass value is also ``working``) and
+    the panel never gains the ⏳ badge until a status transition lands.
+    """
+    is_new_entry = session_id not in _bg.get(user_id, {})
     entry = _entry(user_id, session_id)
     old_status = entry.status
     old_seen = entry.seen
@@ -155,7 +162,7 @@ def update_status(
     elif status != "needs_action":
         entry.pending_interactive_ui = None
     _touch(entry)
-    return old_status != status or old_seen != entry.seen
+    return is_new_entry or old_status != status or old_seen != entry.seen
 
 
 def update_quota(user_id: int, session_id: str, level: QuotaLevel) -> bool:

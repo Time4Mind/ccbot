@@ -147,16 +147,41 @@ async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message:
             raise
 
 
+async def _do_edit(
+    target: Any, text: str, *, parse_mode: str | None, **kwargs: Any
+) -> Any:
+    """Direct ``bot.edit_message_text`` if we have a Message/CallbackQuery,
+    falling back to the shortcut method otherwise.
+
+    The shortcut ``CallbackQuery.edit_message_text`` was producing silent
+    no-ops in production (logs reported success, ``forwardMessage`` showed
+    no change) while a fresh ``Bot.edit_message_text`` from a script
+    against the same ``message_id`` did update the message. Pinning the
+    explicit chat/message ids removes whatever per-callback state was
+    interfering.
+    """
+    msg_obj = getattr(target, "message", target)
+    chat_id = getattr(getattr(msg_obj, "chat", None), "id", None)
+    msg_id = getattr(msg_obj, "message_id", None)
+    bot = getattr(target, "_bot", None) or getattr(msg_obj, "_bot", None)
+    if bot is None or chat_id is None or msg_id is None:
+        # Last-resort shortcut path for unusual targets.
+        return await target.edit_message_text(text, parse_mode=parse_mode, **kwargs)
+    return await bot.edit_message_text(
+        chat_id=chat_id,
+        message_id=msg_id,
+        text=text,
+        parse_mode=parse_mode,
+        **kwargs,
+    )
+
+
 async def safe_edit(target: Any, text: str, **kwargs: Any) -> None:
     """Edit message with formatting, falling back to plain text on failure."""
     kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)
     msg_id = getattr(getattr(target, "message", None), "message_id", None)
     try:
-        await target.edit_message_text(
-            _ensure_formatted(text),
-            parse_mode=PARSE_MODE,
-            **kwargs,
-        )
+        await _do_edit(target, _ensure_formatted(text), parse_mode=PARSE_MODE, **kwargs)
         logger.info(
             "safe_edit ok msg=%s len=%d mode=md",
             msg_id,
@@ -177,7 +202,7 @@ async def safe_edit(target: Any, text: str, **kwargs: Any) -> None:
         # to investigate ("история исчезла" reports).
         logger.warning("safe_edit MarkdownV2 failed msg=%s err=%s", msg_id, md_err)
         try:
-            await target.edit_message_text(strip_sentinels(text), **kwargs)
+            await _do_edit(target, strip_sentinels(text), parse_mode=None, **kwargs)
             logger.info(
                 "safe_edit ok msg=%s len=%d mode=plain",
                 msg_id,

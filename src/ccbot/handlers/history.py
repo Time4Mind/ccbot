@@ -179,12 +179,25 @@ async def send_history(
             # Strip expandable quote sentinels for history view
             msg_text = msg_text.replace(_start, "").replace(_end, "")
 
-            # Balance triple-backtick code fences inside this entry so an
-            # unclosed ``` (typical in tool_result diffs / Edit blocks)
-            # can't bleed into the next entry and turn the rest of the
-            # page into one giant <pre>. If the count is odd we append a
-            # closing fence; even counts pass through untouched.
-            if msg_text.count("```") % 2 == 1:
+            # Balance triple-backtick code fences inside this entry so
+            # an unclosed ``` can't bleed into the next entry and turn
+            # the rest of the page into one giant <pre>.
+            #
+            # We must use the SAME line-start check that ``split_message``
+            # uses to track ``in_code_block`` — otherwise the per-entry
+            # balance and the page-split balance disagree, and the disagreement
+            # leaks an open fence across the chunk boundary. The buggy
+            # naïve ``text.count("```")`` counted any occurrence of three
+            # backticks anywhere (incl. ``+```` in unified-diff hunks
+            # and ``"``​`"`` inside code that references markdown), so
+            # entries with diffs would be flagged "odd" and gain a stray
+            # closing fence — the next entry then started inside a code
+            # block from the parser's point of view, and the whole rest of
+            # the page rendered as ``<pre>``.
+            fence_lines = sum(
+                1 for ln in msg_text.split("\n") if ln.strip().startswith("```")
+            )
+            if fence_lines % 2 == 1:
                 msg_text = msg_text + "\n```"
 
             # Add prefix based on role/type

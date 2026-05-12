@@ -137,11 +137,22 @@ async def update_status_message(
     is_bg_session = sess is not None and active is not None and active.id != sess.id
 
     # Check for permission prompt (interactive UI not triggered via JSONL).
-    if (
-        should_check_new_ui
-        and interactive_window is None
-        and is_interactive_ui(pane_text)
-    ):
+    #
+    # ``should_check_new_ui`` is False only when an earlier branch above
+    # confirmed the user is currently engaged with THIS window's UI —
+    # in that case we already returned. From here on we're looking at a
+    # fresh prompt that polling, not the JSONL path, surfaced.
+    #
+    # The auto-approve check used to be gated on ``interactive_window is
+    # None`` — a stale entry from any prior tool surfacing (or worse, a
+    # stuck one that the cleanup path missed) would block auto-approve
+    # for EVERY other window. ``auto_approve=on`` is an explicit opt-in;
+    # respect it on every window, regardless of which prompt may also
+    # be (or have been) pending elsewhere. The TG-surface step
+    # (``handle_interactive_ui``) is the only place where stacking two
+    # interactive screens is genuinely confusing, so the
+    # ``interactive_window is None`` guard stays — but only there.
+    if should_check_new_ui and is_interactive_ui(pane_text):
         if is_bg_session and sess is not None:
             # Background session: never surface the prompt in chat. Stash
             # the snapshot in bg_status and flip ❓ on the panel. The
@@ -162,6 +173,18 @@ async def update_status_message(
         # User-configurable auto-approve takes precedence — bypass the TG
         # surface entirely when the setting matches.
         if await _maybe_auto_approve(user_id, window_id, pane_text):
+            return
+        if interactive_window is not None:
+            # User is already engaged with another window's UI; don't
+            # double-surface. The prompt stays pending in the pane and
+            # will get picked up on the next poll cycle after the user
+            # clears the current one.
+            logger.debug(
+                "Interactive UI on window=%s, but user busy on window=%s — "
+                "skipping TG surface for now",
+                window_id,
+                interactive_window,
+            )
             return
         logger.debug(
             "Interactive UI detected in polling (user=%d, window=%s)",

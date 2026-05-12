@@ -28,7 +28,7 @@ from ...handlers.menu import (
     render_more_text,
     render_settings_group_text,
 )
-from ...handlers.message_sender import safe_send
+from ...handlers.message_sender import safe_edit, safe_send
 from ...i18n import t
 from ...session import session_manager
 
@@ -113,10 +113,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
     if data == CB_ST_BACK:
         text = render_more_text(user.id)
         keyboard = build_footer_keyboard(user.id, screen="more")
-        try:
-            await query.edit_message_text(text=text, reply_markup=keyboard)
-        except Exception as e:
-            logger.debug("settings back edit failed: %s", e)
+        await safe_edit(query, text, reply_markup=keyboard)
         if query.message and keyboard is not None:
             session_manager.set_last_switcher_msg(user.id, query.message.message_id)
         await query.answer()
@@ -130,10 +127,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             return True
         text = render_settings_group_text(user.id, screen_name)  # type: ignore[arg-type]
         keyboard = build_footer_keyboard(user.id, screen=screen_name)  # type: ignore[arg-type]
-        try:
-            await query.edit_message_text(text=text, reply_markup=keyboard)
-        except Exception as e:
-            logger.debug("settings group open failed: %s", e)
+        await safe_edit(query, text, reply_markup=keyboard)
         if query.message and keyboard is not None:
             session_manager.set_last_switcher_msg(user.id, query.message.message_id)
         await query.answer()
@@ -228,9 +222,6 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
 
     text = render_settings_group_text(user.id, screen_name)  # type: ignore[arg-type]
     keyboard = build_footer_keyboard(user.id, screen=screen_name)  # type: ignore[arg-type]
-    try:
-        await query.edit_message_text(text=text, reply_markup=keyboard)
-    except Exception as e:
-        logger.debug("settings toggle edit failed: %s", e)
+    await safe_edit(query, text, reply_markup=keyboard)
     await query.answer(t(user.id, "toast.saved"))
     return True

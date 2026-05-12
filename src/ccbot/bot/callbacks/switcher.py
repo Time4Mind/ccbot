@@ -28,7 +28,7 @@ from ...handlers.interactive_ui import (
     render_interactive_keyboard,
 )
 from ...handlers.menu import build_footer_keyboard
-from ...handlers.message_sender import safe_send
+from ...handlers.message_sender import safe_edit, safe_send
 from ...handlers.notifications import (
     release_card_message,
     transfer_card_to_carrier,
@@ -112,9 +112,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                             sess.window_id, content_obj.name
                         )
                         try:
-                            await query.edit_message_text(
-                                text=content_obj.content, reply_markup=kb
-                            )
+                            await safe_edit(query, content_obj.content, reply_markup=kb)
                             adopt_interactive_msg(
                                 user.id,
                                 sess.window_id,
@@ -122,7 +120,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                             )
                             showed_interactive_ui = True
                         except Exception as e:
-                            logger.debug("pending UI edit_message_text failed: %s", e)
+                            logger.debug("pending UI safe_edit failed: %s", e)
 
         if not showed_interactive_ui:
             # Paint the session's full transcript history onto the carrier
@@ -199,14 +197,9 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                 # short preview so the user at least sees the header.
                 try:
                     preview = await render_session_preview(sess)
-                    await query.edit_message_text(text=preview)
+                    await safe_edit(query, preview, reply_markup=footer_kb)
                 except Exception as e:
-                    logger.debug("preview edit_message_text failed: %s", e)
-                if footer_kb is not None:
-                    try:
-                        await query.edit_message_reply_markup(reply_markup=footer_kb)
-                    except Exception as e:
-                        logger.debug("preview reply markup failed: %s", e)
+                    logger.debug("preview safe_edit failed: %s", e)
 
             if query.message and footer_kb is not None:
                 session_manager.set_last_switcher_msg(user.id, query.message.message_id)
@@ -241,7 +234,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             context.user_data[BROWSE_DIRS_KEY] = subdirs
             context.user_data["menu_origin"] = "main"
         try:
-            await query.edit_message_text(text=msg_text, reply_markup=keyboard)
+            await safe_edit(query, msg_text, reply_markup=keyboard)
         except Exception:
             await safe_send(context.bot, user.id, msg_text, reply_markup=keyboard)
         await query.answer()

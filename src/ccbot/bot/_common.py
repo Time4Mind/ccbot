@@ -16,7 +16,7 @@ from telegram import Bot
 
 from ..config import config
 from ..handlers.menu import build_footer_keyboard
-from ..handlers.message_sender import safe_send
+from ..handlers.message_sender import safe_edit, safe_send
 from ..handlers.switcher import build_session_preview
 from ..session import Session, session_manager
 
@@ -149,10 +149,12 @@ async def set_view(
         if sent and reply_markup is not None:
             session_manager.set_last_switcher_msg(user_id, sent.message_id)
         return
-    try:
-        await query.edit_message_text(text=text, reply_markup=reply_markup)
-    except Exception as e:
-        logger.debug("set_view: edit failed: %s", e)
+    # safe_edit routes through ``_do_edit`` which calls Bot.edit_message_text
+    # directly — bypassing the CallbackQuery shortcut chain that forwards
+    # ``business_connection_id`` and would otherwise let Telegram Business-
+    # enabled DMs silently drop the edit. It also applies MarkdownV2
+    # rendering so ``*bold*`` / `` `code` `` actually format.
+    await safe_edit(query, text, reply_markup=reply_markup)
     if query.message and reply_markup is not None:
         session_manager.set_last_switcher_msg(user_id, query.message.message_id)
 
@@ -163,10 +165,7 @@ async def open_more_in_place(query: Any, user_id: int) -> None:
 
     text = render_more_text(user_id)
     keyboard = build_footer_keyboard(user_id, screen="more")
-    try:
-        await query.edit_message_text(text=text, reply_markup=keyboard)
-    except Exception as e:
-        logger.debug("open more in place edit failed: %s", e)
+    await safe_edit(query, text, reply_markup=keyboard)
     if query.message and keyboard is not None:
         session_manager.set_last_switcher_msg(user_id, query.message.message_id)
 

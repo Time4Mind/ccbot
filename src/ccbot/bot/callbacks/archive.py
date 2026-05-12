@@ -29,6 +29,7 @@ from ...handlers.callback_data import (
     CB_MM_BACK,
 )
 from ...handlers.menu import build_footer_keyboard
+from ...handlers.message_sender import safe_edit
 from ...i18n import t
 from ...session import session_manager
 from .._common import render_session_preview
@@ -61,10 +62,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             user_id=user.id,
             back_callback=CB_MM_BACK,
         )
-        try:
-            await query.edit_message_text(text=text, reply_markup=keyboard)
-        except Exception as e:
-            logger.debug("archive page edit failed: %s", e)
+        await safe_edit(query, text, reply_markup=keyboard)
         await query.answer()
         return True
 
@@ -79,10 +77,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             user_id=user.id,
             back_callback=CB_MM_BACK,
         )
-        try:
-            await query.edit_message_text(text=text, reply_markup=keyboard)
-        except Exception as e:
-            logger.debug("archive toggle edit failed: %s", e)
+        await safe_edit(query, text, reply_markup=keyboard)
         await query.answer(t(user.id, "toast.range_14d" if new else "toast.range_72h"))
         return True
 
@@ -96,15 +91,9 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         if ok:
             preview = await render_session_preview(sess)
             keyboard = build_footer_keyboard(user.id, screen="main")
-            try:
-                await query.edit_message_text(text=preview, reply_markup=keyboard)
-            except Exception as e:
-                logger.debug("archive restore edit failed: %s", e)
-            else:
-                if query.message and keyboard is not None:
-                    session_manager.set_last_switcher_msg(
-                        user.id, query.message.message_id
-                    )
+            await safe_edit(query, preview, reply_markup=keyboard)
+            if query.message and keyboard is not None:
+                session_manager.set_last_switcher_msg(user.id, query.message.message_id)
             await query.answer(t(user.id, "toast.restored"))
         else:
             await query.answer(
@@ -136,10 +125,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                 ]
             ]
         )
-        try:
-            await query.edit_message_text(text=preview, reply_markup=kb)
-        except Exception as e:
-            logger.debug("archive inspect edit failed: %s", e)
+        await safe_edit(query, preview, reply_markup=kb)
         await query.answer()
         return True
 
@@ -152,10 +138,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             user_id=user.id,
             back_callback=CB_MM_BACK,
         )
-        try:
-            await query.edit_message_text(text=text, reply_markup=keyboard)
-        except Exception as e:
-            logger.debug("archive back edit failed: %s", e)
+        await safe_edit(query, text, reply_markup=keyboard)
         await query.answer()
         return True
 
@@ -178,12 +161,9 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                 ]
             ]
         )
-        try:
-            await query.edit_message_text(
-                text=t(user.id, "conf.delete", name=sess.name), reply_markup=kb
-            )
-        except Exception as e:
-            logger.debug("archive delete confirm failed: %s", e)
+        await safe_edit(
+            query, t(user.id, "conf.delete", name=sess.name), reply_markup=kb
+        )
         await query.answer()
         return True
 

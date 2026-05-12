@@ -158,13 +158,18 @@ async def safe_edit(target: Any, text: str, **kwargs: Any) -> None:
         )
     except RetryAfter:
         raise
-    except Exception:
+    except Exception as md_err:
+        # Log the MarkdownV2 failure too — used to be silent, but the
+        # plain-text fallback can land short/garbled when the converter
+        # mangled the text, and we need to see the original parse error
+        # to investigate ("история исчезла" reports).
+        logger.warning("safe_edit MarkdownV2 failed, falling back: %s", md_err)
         try:
             await target.edit_message_text(strip_sentinels(text), **kwargs)
         except RetryAfter:
             raise
         except Exception as e:
-            logger.error("Failed to edit message: %s", e)
+            logger.error("safe_edit fallback also failed: %s", e)
 
 
 async def safe_send(

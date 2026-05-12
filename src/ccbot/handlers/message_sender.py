@@ -150,11 +150,23 @@ async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message:
 async def safe_edit(target: Any, text: str, **kwargs: Any) -> None:
     """Edit message with formatting, falling back to plain text on failure."""
     kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)
+    msg_id = getattr(getattr(target, "message", None), "message_id", None)
     try:
         await target.edit_message_text(
             _ensure_formatted(text),
             parse_mode=PARSE_MODE,
             **kwargs,
+        )
+        logger.info(
+            "safe_edit ok msg=%s len=%d mode=md",
+            msg_id,
+            len(text),
+            extra={
+                "event": "safe_edit_ok",
+                "msg_id": msg_id,
+                "len": len(text),
+                "mode": "md",
+            },
         )
     except RetryAfter:
         raise
@@ -163,13 +175,24 @@ async def safe_edit(target: Any, text: str, **kwargs: Any) -> None:
         # plain-text fallback can land short/garbled when the converter
         # mangled the text, and we need to see the original parse error
         # to investigate ("история исчезла" reports).
-        logger.warning("safe_edit MarkdownV2 failed, falling back: %s", md_err)
+        logger.warning("safe_edit MarkdownV2 failed msg=%s err=%s", msg_id, md_err)
         try:
             await target.edit_message_text(strip_sentinels(text), **kwargs)
+            logger.info(
+                "safe_edit ok msg=%s len=%d mode=plain",
+                msg_id,
+                len(text),
+                extra={
+                    "event": "safe_edit_ok",
+                    "msg_id": msg_id,
+                    "len": len(text),
+                    "mode": "plain",
+                },
+            )
         except RetryAfter:
             raise
         except Exception as e:
-            logger.error("safe_edit fallback also failed: %s", e)
+            logger.error("safe_edit fallback also failed msg=%s err=%s", msg_id, e)
 
 
 async def safe_send(

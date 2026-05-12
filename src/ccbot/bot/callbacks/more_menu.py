@@ -129,14 +129,38 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
 
     if data == CB_MM_LIST:
         await query.answer()
-        # /list view is a management surface (kill / clear / open-terminal
-        # / switch). Real-time interrupt belongs on the live card where
-        # the busy signal is fresh — here we always show Kill, otherwise
-        # the button would freeze on whichever state was true at the
-        # moment the menu was opened.
+        # Menu → List paints the ACTIVE session's transcript on the
+        # carrier with the /list footer (Kill / Clear / switcher rows /
+        # ＋ new / Back). The session names + token usage already live
+        # in the switcher row labels — duplicating them in the body
+        # made this view feel useless ("just the same list again").
+        # Showing history makes List the natural "where am I" surface.
+        #
+        # Fallback to the legacy body-list view when there's no active
+        # session (e.g. user has only archived ones).
         clear_view_markers(context.user_data)
+        active_sess = session_manager.get_active_session(user.id)
         body, kb = build_list_view(user.id)
-        await safe_edit(query, body, reply_markup=kb)
+        if active_sess is None or not active_sess.window_id:
+            await safe_edit(query, body, reply_markup=kb)
+            return True
+        if context.user_data is not None:
+            # Mark origin so the history-pagination handler rebuilds
+            # THIS view's footer (Kill / Clear / switcher / + new /
+            # Back), not the main-screen one with ≡ Menu.
+            context.user_data[HISTORY_ORIGIN_KEY] = "menu_list"
+        extra_rows = [list(r) for r in kb.inline_keyboard]
+        try:
+            await send_history(
+                target=query,
+                window_id=active_sess.window_id,
+                edit=True,
+                user_id=user.id,
+                extra_rows=extra_rows,
+            )
+        except Exception as e:
+            logger.debug("mm list history paint failed: %s", e)
+            await safe_edit(query, body, reply_markup=kb)
         return True
 
     if data == CB_MM_STATUS:

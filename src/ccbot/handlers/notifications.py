@@ -848,6 +848,21 @@ async def update_session_card(
     Triggers a fresh card on long pause and on hard-limit overflow.
     """
     state = get_card_state(user_id, sess)
+
+    # Background-session silence guarantee. Per the DM architecture
+    # spec, sessions that aren't the user's active one must NEVER emit
+    # a card of their own — their status surfaces via the bg-status
+    # panel on the active card. The flag normally gets set by
+    # ``transfer_card_to_carrier`` / ``pause_card_view``, but some
+    # paths (``create_and_activate_session`` → ``detach_paused_cards_at_message``,
+    # restart with persisted state, races) had it cleared, letting bg
+    # events open new cards or edit the previous one. Forcing the pause
+    # here makes the silence invariant independent of which flow led to
+    # the session becoming bg.
+    active = session_manager.get_active_session(user_id)
+    if active is None or active.id != sess.id:
+        state.in_menu_view = True
+
     msg_id_in = state.msg_id
     in_menu_view_in = state.in_menu_view
 
@@ -1006,6 +1021,15 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     oldest tool lines if the divider+answer combo wouldn't fit.
     """
     state = get_card_state(user_id, sess)
+
+    # Bg-session silence guarantee — mirrors update_session_card. The
+    # in_menu_view branch below already handles the "buffer instead of
+    # render" case; we just force the flag so a stale-state bg session
+    # can't accidentally emit a fresh card or edit a stale msg_id.
+    active = session_manager.get_active_session(user_id)
+    if active is None or active.id != sess.id:
+        state.in_menu_view = True
+
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
     state.pending_edit = None

@@ -30,6 +30,7 @@ from ...handlers.interactive_ui import (
 from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_edit, safe_send
 from ...handlers.notifications import (
+    pause_card_view,
     release_card_message,
     transfer_card_to_carrier,
 )
@@ -222,6 +223,17 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         return True
 
     if data == CB_SW_NEW:
+        # Pause the active session before painting the directory browser
+        # on its live-card message. Otherwise events arriving in the
+        # ~seconds the user spends picking a directory would call
+        # update_session_card → ``_edit_card`` and revert the keyboard
+        # back to the live-card footer each turn ("кнопки слетают на
+        # каждой итерации"). The pause is auto-released either by
+        # ``resume_card_view`` (text typed) or by ``detach_paused_cards_at_message``
+        # in ``create_and_activate_session`` once the browser confirms.
+        active = session_manager.get_active_session(user.id)
+        if active is not None:
+            pause_card_view(user.id, active.id)
         clear_browse_state(context.user_data)
         clear_window_picker_state(context.user_data)
         clear_session_picker_state(context.user_data)

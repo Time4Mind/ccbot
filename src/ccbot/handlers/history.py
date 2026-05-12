@@ -39,6 +39,84 @@ logger = logging.getLogger(__name__)
 _pages_cache: dict[str, tuple[float, int, list[str], int]] = {}
 
 
+async def prewarm_pages_cache(window_id: str) -> bool:
+    """Build and store the rendered history pages for ``window_id`` so
+    the next ``send_history`` for this window hits the cache.
+
+    Runs the full parse-and-format pipeline silently — no Telegram
+    edit / send. Idempotent: a no-op when the cache entry is already
+    fresh (matches the current file mtime + size).
+
+    Returns ``True`` when fresh pages were stored, ``False`` otherwise.
+    """
+    from ..session_claude_io import build_session_file_path
+
+    try:
+        state = session_manager.get_window_state(window_id)
+        if not state.session_id or not state.cwd:
+            return False
+        fp = build_session_file_path(state.session_id, state.cwd)
+        if fp is None or not fp.exists():
+            return False
+        st = fp.stat()
+        entry = _pages_cache.get(window_id)
+        if entry is not None and entry[0] == st.st_mtime and entry[1] == st.st_size:
+            return False  # already fresh
+    except Exception as e:
+        logger.debug("prewarm: stat lookup failed for %s: %s", window_id, e)
+        return False
+
+    try:
+        messages, total = await session_manager.get_recent_messages(window_id)
+    except Exception as e:
+        logger.debug("prewarm: get_recent_messages failed for %s: %s", window_id, e)
+        return False
+    if total == 0:
+        return False
+
+    if not config.show_user_messages:
+        messages = [m for m in messages if m["role"] == "assistant"]
+    total = len(messages)
+    if total == 0:
+        return False
+
+    display_name = session_manager.get_display_name(window_id)
+    _start = TranscriptParser.EXPANDABLE_QUOTE_START
+    _end = TranscriptParser.EXPANDABLE_QUOTE_END
+    lines = [f"📋 [{display_name}] Messages ({total} total)"]
+    for msg in messages:
+        ts = msg.get("timestamp")
+        hh_mm = ""
+        if ts:
+            try:
+                time_part = ts.split("T")[1] if "T" in ts else ts
+                hh_mm = time_part[:5]
+            except (IndexError, TypeError):
+                hh_mm = ""
+        lines.append(f"───── {hh_mm} ─────" if hh_mm else "─────────────")
+        msg_text = msg["text"].replace(_start, "").replace(_end, "")
+        fence_lines = sum(
+            1 for ln in msg_text.split("\n") if ln.strip().startswith("```")
+        )
+        if fence_lines % 2 == 1:
+            msg_text = msg_text + "\n```"
+        role = msg.get("role", "assistant")
+        ctype = msg.get("content_type", "text")
+        if role == "user":
+            lines.append(f"👤 {msg_text}")
+        elif ctype == "thinking":
+            lines.append(f"∴ Thinking…\n{msg_text}")
+        else:
+            lines.append(msg_text)
+    full = "\n\n".join(lines)
+    pages = split_message(full, max_length=4096)
+    _pages_cache[window_id] = (st.st_mtime, st.st_size, list(pages), total)
+    logger.debug(
+        "prewarm: cached window=%s pages=%d total=%d", window_id, len(pages), total
+    )
+    return True
+
+
 def _build_history_keyboard(
     window_id: str,
     page_index: int,

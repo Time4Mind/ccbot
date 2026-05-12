@@ -130,6 +130,24 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     _metrics_flush_task = asyncio.create_task(metrics_flush_loop())
     logger.info("Metrics flush task started")
 
+    # Pre-warm the history-page cache for every active/idle session so
+    # the user's first switcher tap after a restart doesn't pay the
+    # ~1 s parse cost of walking a multi-thousand-message JSONL. Runs
+    # off the boot path so it can't delay the bot coming online.
+    async def _prewarm_history_caches() -> None:
+        from ..handlers.history import prewarm_pages_cache
+
+        for sess in list(session_manager.sessions.values()):
+            if sess.state not in ("active", "idle") or not sess.window_id:
+                continue
+            try:
+                await prewarm_pages_cache(sess.window_id)
+            except Exception as e:
+                logger.debug("prewarm failed for %s: %s", sess.window_id, e)
+
+    asyncio.create_task(_prewarm_history_caches())
+    logger.info("History cache pre-warm scheduled")
+
 
 async def post_shutdown(
     application: "Application[Any, Any, Any, Any, Any, Any]",

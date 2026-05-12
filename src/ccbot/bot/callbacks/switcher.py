@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ from ...handlers.directory_browser import (
     clear_session_picker_state,
     clear_window_picker_state,
 )
-from ...handlers.history import send_history
+from ...handlers.history import prewarm_pages_cache, send_history
 from ...handlers.interactive_ui import (
     adopt_interactive_msg,
     render_interactive_keyboard,
@@ -169,6 +170,28 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                 # claude event opens a fresh live card below; the history
                 # carrier stays put and the user can still paginate it.
                 release_card_message(user.id, target_id)
+
+                # Pre-warm the cache for the user's OTHER active
+                # sessions so a back-and-forth tap doesn't pay the cold
+                # parse cost (~1 s for a multi-thousand-message JSONL).
+                # Runs detached — the current edit is already in
+                # flight, this is purely speculative work.
+                async def _prewarm_others() -> None:
+                    for other in list(session_manager.sessions.values()):
+                        if other.id == target_id:
+                            continue
+                        if other.state not in ("active", "idle") or not other.window_id:
+                            continue
+                        try:
+                            await prewarm_pages_cache(other.window_id)
+                        except Exception as e:
+                            logger.debug(
+                                "switcher prewarm failed for %s: %s",
+                                other.window_id,
+                                e,
+                            )
+
+                asyncio.create_task(_prewarm_others())
 
             if not history_painted:
                 # Fallback: session has no window yet (lost/archived

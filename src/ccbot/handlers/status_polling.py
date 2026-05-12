@@ -153,11 +153,22 @@ async def update_status_message(
     # interactive screens is genuinely confusing, so the
     # ``interactive_window is None`` guard stays — but only there.
     if should_check_new_ui and is_interactive_ui(pane_text):
+        # User-configurable auto-approve takes precedence — bypass both
+        # the TG surface AND the bg-status badge when the user has
+        # explicitly opted in to "Yes on everything". This must run
+        # BEFORE the bg-session branch — otherwise a background prompt
+        # would sit pending forever with ❓ instead of getting the
+        # auto-Yes the user asked for. After approval the next poll
+        # sees no UI and clears the badge naturally.
+        if await _maybe_auto_approve(user_id, window_id, pane_text):
+            return
+
         if is_bg_session and sess is not None:
-            # Background session: never surface the prompt in chat. Stash
-            # the snapshot in bg_status and flip ❓ on the panel. The
-            # switcher-tap handler renders it when the user looks at the
-            # session.
+            # Background session: prompt didn't qualify for auto-approve
+            # (e.g. no "Yes" option, or feature off). Never surface in
+            # chat — stash the snapshot in bg_status and flip ❓ on the
+            # panel. The switcher-tap handler renders it when the user
+            # looks at the session.
             content_obj = extract_interactive_content(pane_text)
             ui_tuple = (
                 (content_obj.content, content_obj.name)
@@ -168,11 +179,6 @@ async def update_status_message(
                 user_id, sess.id, "needs_action", interactive_ui=ui_tuple
             ):
                 await refresh_panel(bot, user_id)
-            return
-
-        # User-configurable auto-approve takes precedence — bypass the TG
-        # surface entirely when the setting matches.
-        if await _maybe_auto_approve(user_id, window_id, pane_text):
             return
         if interactive_window is not None:
             # User is already engaged with another window's UI; don't

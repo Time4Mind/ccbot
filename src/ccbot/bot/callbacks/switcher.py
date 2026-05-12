@@ -28,7 +28,10 @@ from ...handlers.interactive_ui import (
 )
 from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_send
-from ...handlers.notifications import transfer_card_to_carrier
+from ...handlers.notifications import (
+    release_card_message,
+    transfer_card_to_carrier,
+)
 from ...session import session_manager
 from ...terminal_parser import extract_interactive_content, is_interactive_ui
 from ...tmux_manager import tmux_manager
@@ -155,6 +158,17 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                     history_painted = True
                 except Exception as e:
                     logger.debug("switch history paint failed: %s", e)
+
+            if history_painted:
+                # Detach the TO session's live-card from the carrier
+                # message — the carrier now holds a frozen history view,
+                # NOT a live card. Without this, the very next event for
+                # ``sess`` (or a refresh_panel triggered by a bg event)
+                # would call edit_message_text on the carrier and clobber
+                # the history we just painted. With msg_id=None, the next
+                # claude event opens a fresh live card below; the history
+                # carrier stays put and the user can still paginate it.
+                release_card_message(user.id, target_id)
 
             if not history_painted:
                 # Fallback: session has no window yet (lost/archived

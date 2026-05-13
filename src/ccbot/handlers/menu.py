@@ -36,6 +36,7 @@ from .callback_data import (
     CB_MM_LIST,
     CB_MM_NEW,
     CB_MM_SETTINGS,
+    CB_MM_SHOT,
     CB_MM_STATUS,
     CB_ST_APPROVE,
     CB_ST_BACK,
@@ -188,6 +189,14 @@ def _footer_top_row(
             )
         row.append(
             InlineKeyboardButton(t(user_id, "btn.clear"), callback_data=CB_FT_CLEAR)
+        )
+        # Shot belongs next to Kill / Clear — it's a per-session control
+        # too ("snapshot this session's terminal"). Keeping it in the
+        # top row means the screenshot button stays put across switcher
+        # taps, /list paints, and live-card edits (anywhere the main
+        # screen is rendered).
+        row.append(
+            InlineKeyboardButton(t(user_id, "mm.shot"), callback_data=CB_MM_SHOT)
         )
         # Open-terminal sits with the other per-session controls so the
         # button persists across switcher taps (which re-render the

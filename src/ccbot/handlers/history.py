@@ -3,18 +3,23 @@
 Provides history viewing functionality for Claude Code sessions:
   - _build_history_keyboard: Build inline keyboard for page navigation
   - send_history: Send or edit message history with pagination support
+  - render_archived_history_pages: Format an archived session's JSONL
+    transcript into Telegram-ready pages (read-only, no window needed).
 
 Supports both full history and unread message range views.
 """
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
 
+import aiofiles
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from ..config import config
-from ..session import session_manager
+from ..session import Session, session_manager
+from ..session_claude_io import build_session_file_path
 from ..telegram_sender import split_message
 from ..transcript_parser import TranscriptParser
 from .callback_data import CB_HISTORY_NEXT, CB_HISTORY_PREV
@@ -37,6 +42,119 @@ logger = logging.getLogger(__name__)
 # (un-byte-ranged) case is the only one cached; unread-range reads are
 # rare and parameterised, so they go through the slow path.
 _pages_cache: dict[str, tuple[float, int, list[str], int]] = {}
+
+
+# Same cache shape, but keyed by ``claude_session_id`` for archived
+# sessions (we render directly from the JSONL on disk — no window).
+# JSONLs of archived sessions don't grow (the tmux window is dead), so
+# (mtime, size) here is effectively a freeze-tag; we still verify it so
+# a manually-edited file would invalidate the cache.
+_archived_pages_cache: dict[str, tuple[float, int, list[str], int]] = {}
+
+
+async def render_archived_history_pages(
+    sess: Session,
+) -> tuple[list[str], int] | None:
+    """Read ``sess``'s on-disk JSONL transcript and return Telegram-ready
+    pages + total message count. Returns ``None`` when there's no
+    resolvable transcript (no claude_session_id, missing file, etc.).
+
+    Used by the Archive → Inspect view to surface what the session
+    actually did, without requiring a live tmux window.
+    """
+    sid = sess.claude_session_id
+    if not sid or not sess.workdir:
+        return None
+    fp = build_session_file_path(sid, sess.workdir)
+    if fp is None or not fp.exists():
+        # Glob fallback — the cwd column on the Session may have shifted
+        # since archival (rare, but cheap to handle).
+        pattern = f"*/{sid}.jsonl"
+        matches = list(config.claude_projects_path.glob(pattern))
+        if not matches:
+            return None
+        fp = matches[0]
+
+    try:
+        st = fp.stat()
+    except OSError:
+        return None
+
+    cached = _archived_pages_cache.get(sid)
+    if cached is not None and cached[0] == st.st_mtime and cached[1] == st.st_size:
+        return list(cached[2]), cached[3]
+
+    entries: list[dict[str, Any]] = []
+    try:
+        async with aiofiles.open(fp, "r", encoding="utf-8") as f:
+            async for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = TranscriptParser.parse_line(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if data:
+                    entries.append(data)
+    except OSError as e:
+        logger.debug("archived history read failed for %s: %s", fp, e)
+        return None
+
+    parsed_entries, _ = TranscriptParser.parse_entries(entries)
+    messages = [
+        {
+            "role": e.role,
+            "text": e.text,
+            "content_type": e.content_type,
+            "timestamp": e.timestamp,
+        }
+        for e in parsed_entries
+    ]
+    if not config.show_user_messages:
+        messages = [m for m in messages if m["role"] == "assistant"]
+    # Drop tool_use rows — same rationale as ``prewarm_pages_cache``:
+    # the parser emits both tool_use (header only) and tool_result
+    # (header + body) for each call, so the bare tool_use rows are pure
+    # duplicates in the rendered view.
+    messages = [m for m in messages if m.get("content_type") != "tool_use"]
+    total = len(messages)
+    if total == 0:
+        return None
+
+    _qstart = TranscriptParser.EXPANDABLE_QUOTE_START
+    _qend = TranscriptParser.EXPANDABLE_QUOTE_END
+    label = sess.name or sess.id
+    lines: list[str] = [f"📦 [{label}] Archived transcript ({total} msgs)"]
+    for msg in messages:
+        ts = msg.get("timestamp")
+        hh_mm = ""
+        if ts:
+            try:
+                time_part = ts.split("T")[1] if "T" in ts else ts
+                hh_mm = time_part[:5]
+            except (IndexError, TypeError):
+                hh_mm = ""
+        lines.append(f"───── {hh_mm} ─────" if hh_mm else "─────────────")
+        msg_text = (msg.get("text") or "").replace(_qstart, "").replace(_qend, "")
+        fence_lines = sum(
+            1 for ln in msg_text.split("\n") if ln.strip().startswith("```")
+        )
+        if fence_lines % 2 == 1:
+            msg_text = msg_text + "\n```"
+        role = msg.get("role", "assistant")
+        ctype = msg.get("content_type", "text")
+        if role == "user":
+            lines.append(f"👤 {msg_text}")
+        elif ctype == "thinking":
+            lines.append(f"∴ Thinking…\n{msg_text}")
+        else:
+            lines.append(msg_text)
+
+    full = "\n\n".join(lines)
+    pages = split_message(full, max_length=4096)
+    _archived_pages_cache[sid] = (st.st_mtime, st.st_size, list(pages), total)
+    return list(pages), total
 
 
 async def prewarm_pages_cache(window_id: str) -> bool:

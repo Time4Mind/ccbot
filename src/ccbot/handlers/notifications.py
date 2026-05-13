@@ -409,6 +409,30 @@ def get_card_state(user_id: int, sess: Session) -> CardState:
     return _cards.setdefault((user_id, sess.id), CardState())
 
 
+def _should_buffer(user_id: int, session_id: str, state: CardState) -> bool:
+    """Return True when the live card must buffer events instead of
+    rendering. Two reasons:
+
+    1. The user has the carrier on a Menu / sub-screen
+       (``state.in_menu_view`` — set by ``pause_card_view`` /
+       ``transfer_card_to_carrier``, cleared by ``resume_card_view`` /
+       ``release_card_message`` / ``detach_paused_cards_at_message``).
+    2. The session is currently a background one for this user
+       (``get_active_session(user_id).id != session_id``). Computed
+       live, NOT stored — a session that's briefly bg and then active
+       again recovers without help. (Earlier this was implemented as a
+       sticky ``state.in_menu_view = True`` inside update_session_card;
+       the flag never got cleared on becoming active again, so the card
+       stayed paused forever — silent until the next typed message
+       woke ``resume_card_view``. This helper makes the bg check live
+       so that class of bug can't reoccur.)
+    """
+    if state.in_menu_view:
+        return True
+    active = session_manager.get_active_session(user_id)
+    return active is None or active.id != session_id
+
+
 def reset_card(user_id: int, session_id: str) -> None:
     """Drop the cached card so the next event creates a fresh message."""
     _cards.pop((user_id, session_id), None)
@@ -849,19 +873,18 @@ async def update_session_card(
     """
     state = get_card_state(user_id, sess)
 
-    # Background-session silence guarantee. Per the DM architecture
-    # spec, sessions that aren't the user's active one must NEVER emit
-    # a card of their own — their status surfaces via the bg-status
-    # panel on the active card. The flag normally gets set by
-    # ``transfer_card_to_carrier`` / ``pause_card_view``, but some
-    # paths (``create_and_activate_session`` → ``detach_paused_cards_at_message``,
-    # restart with persisted state, races) had it cleared, letting bg
-    # events open new cards or edit the previous one. Forcing the pause
-    # here makes the silence invariant independent of which flow led to
-    # the session becoming bg.
-    active = session_manager.get_active_session(user_id)
-    if active is None or active.id != sess.id:
-        state.in_menu_view = True
+    # Should we buffer this event instead of rendering it now? Reasons:
+    # - the user is on a Menu / sub-screen (state.in_menu_view set by
+    #   pause_card_view or transfer_card_to_carrier);
+    # - the session isn't the user's currently-active one (live check —
+    #   bg sessions must stay silent in chat).
+    # The check is in ``_should_buffer`` so future buffering reasons
+    # converge on the same predicate. Previously the bg branch was
+    # implemented by force-setting ``state.in_menu_view = True`` here;
+    # the flag was sticky and outlived the bg phase, leaving the card
+    # permanently paused — until a typed message woke
+    # ``resume_card_view``. Computing the bg check live fixes that.
+    must_buffer = _should_buffer(user_id, sess.id, state)
 
     msg_id_in = state.msg_id
     in_menu_view_in = state.in_menu_view
@@ -874,7 +897,7 @@ async def update_session_card(
     # claimed the carrier — but ``state.lines`` is still empty for a
     # fresh session). Skipped during menu-view buffering —
     # resume_card_view handles its own catch-up rendering.
-    if not state.lines and not state.in_menu_view and config.card_prior_context > 0:
+    if not state.lines and not must_buffer and config.card_prior_context > 0:
         try:
             seed = await _seed_prior_context_lines(sess)
         except Exception as e:
@@ -893,11 +916,11 @@ async def update_session_card(
                 replaced = True
                 break
 
-    # User has the menu / a sub-screen open on this card's message.
-    # Buffer the event into ``state.lines`` so resume_card_view can catch
-    # up; do NOT trigger stale-card resets, overflow continuations, or
-    # any rendering — those would clobber the user's current view.
-    if state.in_menu_view:
+    # Buffer-only path: user is on a menu/sub-screen OR session is bg.
+    # Buffer the event into ``state.lines`` so resume / next switcher
+    # tap can catch up; do NOT trigger stale-card resets, overflow
+    # continuations, or any rendering.
+    if must_buffer:
         if not replaced:
             state.lines.append(new_line)
         state.last_event_ts = time.time()
@@ -1022,13 +1045,9 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     """
     state = get_card_state(user_id, sess)
 
-    # Bg-session silence guarantee — mirrors update_session_card. The
-    # in_menu_view branch below already handles the "buffer instead of
-    # render" case; we just force the flag so a stale-state bg session
-    # can't accidentally emit a fresh card or edit a stale msg_id.
-    active = session_manager.get_active_session(user_id)
-    if active is None or active.id != sess.id:
-        state.in_menu_view = True
+    # Bg-session silence + menu-pause buffering. Same predicate as
+    # update_session_card — see ``_should_buffer`` for the rationale.
+    must_buffer = _should_buffer(user_id, sess.id, state)
 
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
@@ -1039,7 +1058,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
         # No final text from Claude (e.g. /clear with nothing else).
         # Drop the card; no push — the previous "completion push"
         # behaviour was removed when the result moved into the card body.
-        if state.in_menu_view:
+        if must_buffer:
             state.pending_complete_footer = "(task complete)"
             return
         reset_card(user_id, sess.id)
@@ -1051,11 +1070,12 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
 
     has_history = bool(state.lines)
 
-    # User is on a Menu view — accumulate divider + answer into state and
-    # mark the card "completion-pending". resume_card_view will render
-    # the footer and reset. Attachments still go out (file delivery
-    # shouldn't wait on a UI navigation).
-    if state.in_menu_view:
+    # Buffer-only path: user is on a Menu view OR session is bg.
+    # Accumulate divider + answer into state and mark the card
+    # "completion-pending". resume_card_view (next typed message) /
+    # switcher tap will render the footer and reset. Attachments still
+    # go out (file delivery shouldn't wait on a UI navigation).
+    if must_buffer:
         if has_history:
             state.lines.append(CardLine(text=_RESULT_DIVIDER))
         state.lines.append(CardLine(text=cleaned))

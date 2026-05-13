@@ -17,10 +17,15 @@ from typing import Any
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from ...handlers.callback_data import CB_FT_MORE, CB_KEYS_PREFIX, CB_SCREENSHOT_REFRESH
+from ...handlers.callback_data import (
+    CB_KEYS_PREFIX,
+    CB_SCREENSHOT_REFRESH,
+    CB_SHOT_BACK,
+    CB_SHOT_SW,
+)
 from ...handlers.history import send_history
 from ...handlers.message_sender import safe_reply, safe_send
-from ...handlers.switcher import build_switcher_keyboard
+from ...handlers.switcher import build_switcher_keyboard, session_emoji
 from ...i18n import t
 from ...screenshot import text_to_image
 from ...session import session_manager
@@ -126,11 +131,68 @@ async def screenshot_command(
     )
 
 
-async def emit_screenshot_compact(query: Any, bot: Bot, user_id: int) -> None:
+def _shot_session_label(sess: Any, *, is_active: bool) -> str:
+    name = sess.name or sess.id
+    if len(name) > 14:
+        name = name[:13] + "…"
+    emoji = session_emoji(sess)
+    if is_active:
+        return f"✓ {emoji} {name}"
+    return f"{emoji} {name}"
+
+
+def build_screenshot_compact_keyboard(
+    user_id: int, origin: str
+) -> InlineKeyboardMarkup:
+    """Inline keyboard for the compact screenshot view.
+
+    Layout:
+      - 1+ switcher rows (3 buttons each) — no ``+ new``. A tap switches
+        active to that session and redraws the photo with its pane.
+      - Bottom row: a single Back button that returns to the surface the
+        screenshot was opened from. ``origin`` is ``"m"`` (main / live
+        card) or ``"l"`` (Menu→List view).
+
+    No Stop / Clear / Shot / + new / Menu buttons live here by design —
+    the screenshot is a quick "peek at any pane" surface, not a control
+    panel.
+    """
+    sessions = session_manager.list_user_sessions(user_id, states=("active", "idle"))
+    active_sess = session_manager.get_active_session(user_id)
+    active_id = active_sess.id if active_sess is not None else ""
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for sess in sessions:
+        label = _shot_session_label(sess, is_active=sess.id == active_id)
+        cb = f"{CB_SHOT_SW}{sess.id}"
+        row.append(InlineKeyboardButton(label, callback_data=cb[:64]))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=f"{CB_SHOT_BACK}{origin}",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+async def emit_screenshot_compact(
+    query: Any, bot: Bot, user_id: int, *, origin: str = "m"
+) -> None:
     """Delete the carrier message, reply with a compressed photo preview.
 
-    Visually replaces the source menu in the chat. The photo carries a
-    single ≡ Menu button; tapping it removes the photo and re-opens Menu.
+    Visually replaces the source surface in the chat. The photo carries
+    a session switcher (taps switch active and re-render this same
+    photo with the new session's pane) plus a Back button that returns
+    to the surface the screenshot was opened from. ``origin`` is
+    ``"m"`` for the main / live-card view, ``"l"`` for the Menu→List
+    view.
     """
     wid = active_window(user_id)
     if not wid:
@@ -152,9 +214,7 @@ async def emit_screenshot_compact(query: Any, bot: Bot, user_id: int) -> None:
         except Exception as e:
             logger.debug("emit_screenshot: delete carrier failed: %s", e)
 
-    keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_FT_MORE)]]
-    )
+    keyboard = build_screenshot_compact_keyboard(user_id, origin)
     try:
         await bot.send_photo(
             chat_id=user_id,

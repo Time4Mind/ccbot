@@ -1272,6 +1272,36 @@ async def repost_card(bot: Bot, user_id: int, sess: Session) -> None:
             logger.debug("repost_card delete old failed: %s", e)
 
 
+async def resend_card_view(bot: Bot, user_id: int, sess: Session) -> None:
+    """Send a fresh live card for ``sess`` as a brand-new message.
+
+    Used when an out-of-band flow (e.g. the compact screenshot view's
+    Back button) replaced the previous carrier and the user wants to
+    return to the live-card view. Unlike ``repost_card`` this does not
+    require a still-living previous carrier — the prior msg_id is just
+    discarded.
+    """
+    state = _cards.get((user_id, sess.id))
+    if state is None:
+        state = CardState()
+        _cards[(user_id, sess.id)] = state
+    if state.pending_edit is not None and not state.pending_edit.done():
+        state.pending_edit.cancel()
+    state.pending_edit = None
+    state.msg_id = None
+    state.in_menu_view = False
+    if not state.lines:
+        # Seed from transcript so the user doesn't land on an empty card.
+        try:
+            state.lines = await _seed_prior_context_lines(sess)
+        except Exception as e:
+            logger.debug("resend_card_view seed failed: %s", e)
+    text = _render_card(sess, state, user_id=user_id)
+    await _send_card(bot, user_id, sess, state, text=text)
+    state.last_rendered = text
+    state.last_edit_ts = time.monotonic()
+
+
 async def refresh_panel(bot: Bot, user_id: int) -> None:
     """Re-render the active session's live card so the bg-status panel
     (and active quota glyph) reflects the latest bg_status state.

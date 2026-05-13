@@ -220,8 +220,21 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
 
     if data == CB_MM_SHOT:
         await query.answer()
+        # Encode origin so the photo's Back button knows whether to
+        # return to /list ("l") or the main live-card view ("m"). The
+        # /list view paints with HISTORY_ORIGIN_KEY == "menu_list" via
+        # the CB_MM_LIST handler above; anywhere else (footer top row
+        # of the live card) we treat as "main".
+        origin = (
+            "l"
+            if (
+                context.user_data is not None
+                and context.user_data.get(HISTORY_ORIGIN_KEY) == "menu_list"
+            )
+            else "m"
+        )
         clear_view_markers(context.user_data)
-        await emit_screenshot_compact(query, context.bot, user.id)
+        await emit_screenshot_compact(query, context.bot, user.id, origin=origin)
         return True
 
     if data == CB_MM_NEW:

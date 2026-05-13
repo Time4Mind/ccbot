@@ -53,7 +53,7 @@ _EN: dict[str, str] = {
     "mm.list": "📋 List",
     "mm.status": "📊 Status",
     "mm.history": "📜 History",
-    "mm.shot": "📸 Shot",
+    "mm.shot": "🧑‍💻 Shot",
     "mm.new": "🆕 New",
     "mm.archive": "🗄 Archive",
     "mm.settings": "⚙ Settings",
@@ -272,7 +272,7 @@ _EN: dict[str, str] = {
         "*≡ Menu*\n\n"
         "Open via /menu or the ≡ Menu inline button. Items:\n"
         "• 📋 *List* — live transcript of the active session "
-        "(📸 Shot lives here)\n"
+        "(🧑‍💻 Shot lives here)\n"
         "• 📊 *Status* — Claude Code 5h / weekly / sonnet quotas\n"
         "• 📜 *History* — paginated transcript of the active session\n"
         "• 🆕 *New* — create a session from a directory browser\n"
@@ -357,7 +357,7 @@ _RU: dict[str, str] = {
     "mm.list": "📋 Список",
     "mm.status": "📊 Статус",
     "mm.history": "📜 История",
-    "mm.shot": "📸 Скрин",
+    "mm.shot": "🧑‍💻 Скрин",
     "mm.new": "🆕 Новая",
     "mm.archive": "🗄 Архив",
     "mm.settings": "⚙ Настройки",
@@ -562,7 +562,7 @@ _RU: dict[str, str] = {
         "*≡ Меню*\n\n"
         "Открывается через /menu или инлайн-кнопку ≡. Пункты:\n"
         "• 📋 *List* — transcript активной сессии "
-        "(📸 Shot живёт здесь)\n"
+        "(🧑‍💻 Shot живёт здесь)\n"
         "• 📊 *Status* — лимиты Claude Code (5ч / неделя / sonnet)\n"
         "• 📜 *History* — постраничный transcript активной\n"
         "• 🆕 *New* — создать сессию через выбор директории\n"
@@ -645,7 +645,7 @@ _ZH: dict[str, str] = {
     "mm.list": "📋 列表",
     "mm.status": "📊 状态",
     "mm.history": "📜 历史",
-    "mm.shot": "📸 截图",
+    "mm.shot": "🧑‍💻 截图",
     "mm.new": "🆕 新建",
     "mm.archive": "🗄 归档",
     "mm.settings": "⚙ 设置",
@@ -838,7 +838,7 @@ _ZH: dict[str, str] = {
     "help.body.menu": (
         "*≡ 菜单*\n\n"
         "通过 /menu 或 ≡ 菜单内联按钮打开:\n"
-        "• 📋 *List* — 当前会话的转录(📸 Shot 在这里)\n"
+        "• 📋 *List* — 当前会话的转录(🧑‍💻 Shot 在这里)\n"
         "• 📊 *Status* — 5h / 周 / sonnet 配额\n"
         "• 📜 *History* — 当前会话的分页转录\n"
         "• 🆕 *New* — 通过目录浏览器创建会话\n"

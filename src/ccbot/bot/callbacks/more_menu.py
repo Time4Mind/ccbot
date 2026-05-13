@@ -22,6 +22,11 @@ from ...handlers.callback_data import (
     CB_MM_SHOT,
     CB_MM_STATUS,
 )
+# CB_MM_SHOT is no longer surfaced from the Menu grid (per UX request: the
+# screenshot button now lives in the /list view next to Kill / Clear, since
+# /list shows the active session's transcript and that's the right surface
+# for "snapshot the terminal" too). The CB_MM_SHOT callback handler itself
+# is unchanged — taps from the new button hit the same code path.
 from ...handlers.history import send_history
 from ...handlers.menu import (
     build_footer_keyboard,
@@ -70,6 +75,7 @@ def build_list_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
         ctl_row: list[InlineKeyboardButton] = [
             InlineKeyboardButton(t(user_id, "btn.kill"), callback_data=CB_FT_KILL),
             InlineKeyboardButton(t(user_id, "btn.clear"), callback_data=CB_FT_CLEAR),
+            InlineKeyboardButton(t(user_id, "mm.shot"), callback_data=CB_MM_SHOT),
         ]
         rows.append(ctl_row)
     sw = build_switcher_keyboard(user_id, include_lost=True)

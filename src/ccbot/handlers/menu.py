@@ -36,7 +36,6 @@ from .callback_data import (
     CB_MM_LIST,
     CB_MM_NEW,
     CB_MM_SETTINGS,
-    CB_MM_SHOT,
     CB_MM_STATUS,
     CB_ST_APPROVE,
     CB_ST_BACK,
@@ -215,7 +214,6 @@ _MM_BUTTONS: tuple[tuple[str, str, str], ...] = (
     ("archive", "mm.archive", CB_MM_ARCHIVE),
     ("status", "mm.status", CB_MM_STATUS),
     ("history", "mm.history", CB_MM_HISTORY),
-    ("shot", "mm.shot", CB_MM_SHOT),
     ("new", "mm.new", CB_MM_NEW),
     ("settings", "mm.settings", CB_MM_SETTINGS),
 )

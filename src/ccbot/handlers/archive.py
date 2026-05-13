@@ -12,9 +12,11 @@ Interactive UI:
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 
+import aiofiles
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from pathlib import Path
@@ -22,13 +24,24 @@ from pathlib import Path
 from ..config import config
 from ..i18n import t
 from ..session import Session, session_manager
+from ..session_claude_io import build_session_file_path
 from ..tmux_manager import tmux_manager
+from ..transcript_parser import TranscriptParser
 from .callback_data import (
     CB_ARC_ALL,
     CB_ARC_INSPECT,
     CB_ARC_PAGE,
 )
 from .cleanup import clear_session_state
+
+# Per-session blurb cache — keyed by claude_session_id. The blurb is a
+# short "what was this session about" snippet pulled from the JSONL
+# (first ``type=summary`` row, else the first user message). Archived
+# JSONLs don't grow, so a single lookup is enough for the session's
+# lifetime in archive. The dict is bounded by the number of archived
+# sessions on this host — fine to keep in memory.
+_BLURB_CACHE: dict[str, str] = {}
+_BLURB_MAX_LEN = 64
 
 
 def _shorten_workdir(path: str) -> str:
@@ -43,6 +56,87 @@ def _shorten_workdir(path: str) -> str:
     if path.startswith(home + "/"):
         return "~" + path[len(home) :]
     return path
+
+
+def _trim_blurb(text: str) -> str:
+    """Compact a JSONL summary or first user message into one short line.
+
+    Strips markdown noise (backticks, leading bullets), collapses
+    whitespace, and clamps to ``_BLURB_MAX_LEN`` chars with an ellipsis.
+    """
+    if not text:
+        return ""
+    # Collapse newlines + runs of whitespace.
+    cleaned = " ".join(text.split())
+    # Drop a leading "/cmd " prefix so blurbs of /restore / /resume calls
+    # don't read as "/resume restart pls" — the user's actual ask is the
+    # rest of the line.
+    if cleaned.startswith("/"):
+        head, _, rest = cleaned.partition(" ")
+        cleaned = rest if rest else head
+    cleaned = cleaned.strip("` ")
+    if len(cleaned) <= _BLURB_MAX_LEN:
+        return cleaned
+    return cleaned[: _BLURB_MAX_LEN - 1].rstrip() + "…"
+
+
+async def _archive_blurb(sess: Session) -> str:
+    """Return a short "what was this session about" line for an archived
+    session. Reads at most the first few JSONL entries — bails out as
+    soon as it has a summary or a user message. Cached forever per
+    ``claude_session_id`` (archived JSONLs are append-frozen).
+    """
+    sid = sess.claude_session_id
+    if not sid or not sess.workdir:
+        return ""
+    cached = _BLURB_CACHE.get(sid)
+    if cached is not None:
+        return cached
+    fp = build_session_file_path(sid, sess.workdir)
+    if fp is None or not fp.exists():
+        pattern = f"*/{sid}.jsonl"
+        matches = list(config.claude_projects_path.glob(pattern))
+        if not matches:
+            _BLURB_CACHE[sid] = ""
+            return ""
+        fp = matches[0]
+
+    summary = ""
+    first_user_msg = ""
+    scanned = 0
+    try:
+        async with aiofiles.open(fp, "r", encoding="utf-8") as f:
+            async for line in f:
+                scanned += 1
+                # 40-line cap: a summary row, when present, is at the
+                # top; the first user message is also near the top.
+                # Bail out instead of walking the whole JSONL.
+                if scanned > 40:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if data.get("type") == "summary":
+                    s = data.get("summary", "")
+                    if s:
+                        summary = s
+                        break
+                if not first_user_msg and TranscriptParser.is_user_message(data):
+                    parsed = TranscriptParser.parse_message(data)
+                    if parsed and parsed.text.strip():
+                        first_user_msg = parsed.text.strip()
+    except OSError as e:
+        logger.debug("archive blurb read failed for %s: %s", fp, e)
+        _BLURB_CACHE[sid] = ""
+        return ""
+
+    blurb = _trim_blurb(summary or first_user_msg)
+    _BLURB_CACHE[sid] = blurb
+    return blurb
 
 
 logger = logging.getLogger(__name__)
@@ -70,7 +164,7 @@ def _format_age(user_id: int, ts: float, now: float | None = None) -> str:
     return t(user_id, "archive.age.d", n=int(delta / 86400))
 
 
-def build_archive_page(
+async def build_archive_page(
     *,
     page: int,
     lookback_seconds: float | None,
@@ -86,6 +180,10 @@ def build_archive_page(
     relying on Telegram's reply-thread depth. The ``/archive`` slash
     command passes ``None`` because its message is a fresh reply, not a
     Menu-rooted view.
+
+    Async because we read each session's JSONL once to extract a short
+    "what was this session about" blurb — cached by claude_session_id
+    so subsequent paints are instant.
     """
     sessions = session_manager.list_archived(max_age_seconds=lookback_seconds)
     total = len(sessions)
@@ -93,6 +191,17 @@ def build_archive_page(
     page = max(0, min(page, pages - 1))
     start = page * PAGE_SIZE
     chunk = sessions[start : start + PAGE_SIZE]
+
+    # Precompute blurbs for the chunk. Most calls hit the in-memory
+    # cache (archived JSONLs don't change); cold paths read at most
+    # ~40 lines per JSONL. Fan-out kept tiny by PAGE_SIZE=5.
+    blurbs: dict[str, str] = {}
+    for sess in chunk:
+        try:
+            blurbs[sess.id] = await _archive_blurb(sess)
+        except Exception as e:
+            logger.debug("archive blurb fetch failed for %s: %s", sess.id, e)
+            blurbs[sess.id] = ""
 
     title = t(user_id, "archive.title")
     range_suffix = t(user_id, "archive.range_14d" if show_all else "archive.range_72h")
@@ -103,11 +212,8 @@ def build_archive_page(
         body = [
             t(user_id, "archive.page_line", page=page + 1, pages=pages, total=total)
         ]
-        for sess in chunk:
+        for idx, sess in enumerate(chunk, start=start + 1):
             # ✓ marks /done-completed sessions; · is plain archive.
-            # We drop the explicit "archived" / "completed" word from
-            # the body — it's tautological inside the Archive view, and
-            # the prefix glyph already carries the distinction.
             label = "✓" if sess.state == "completed" else "·"
             ts = sess.archived_at or sess.last_event_at
             age = _format_age(user_id, ts) if ts else "?"
@@ -117,7 +223,10 @@ def build_archive_page(
                 else t(user_id, "archive.tokens_zero")
             )
             display_name = sess.name or sess.id
-            line = f"{label} *{display_name}* — {age} · {usage}"
+            line = f"{idx}. {label} *{display_name}* — {age} · {usage}"
+            blurb = blurbs.get(sess.id) or ""
+            if blurb:
+                line += f"\n  {blurb}"
             wd = _shorten_workdir(sess.workdir) if sess.workdir else ""
             if wd:
                 line += f"\n  `{wd}`"
@@ -125,20 +234,24 @@ def build_archive_page(
                 line += f"\n  _{sess.goal}_"
             body.append(line)
 
+    # One button per session, paired up two-per-row (PAGE_SIZE=5 gives
+    # 2+2+1). Each button's label carries the matching number so the
+    # body line and button line up visually.
     rows: list[list[InlineKeyboardButton]] = []
-    for sess in chunk:
-        # One button per session — opens the Inspect view, which renders
-        # the transcript history and surfaces Restore / Delete inline.
-        # Keeping just a single, full-width affordance per row keeps
-        # the list scannable when there are many archived sessions.
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    t(user_id, "btn.open_session", name=sess.name or sess.id),
-                    callback_data=f"{CB_ARC_INSPECT}{sess.id}"[:64],
-                ),
-            ]
+    row: list[InlineKeyboardButton] = []
+    for idx, sess in enumerate(chunk, start=start + 1):
+        name = sess.name or sess.id
+        row.append(
+            InlineKeyboardButton(
+                f"{idx}. {name}",
+                callback_data=f"{CB_ARC_INSPECT}{sess.id}"[:64],
+            )
         )
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
 
     nav_row: list[InlineKeyboardButton] = []
     if page > 0:

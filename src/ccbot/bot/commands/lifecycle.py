@@ -325,7 +325,7 @@ async def archive_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if context.user_data is not None:
         context.user_data["_arc_show_all"] = show_all
 
-    text, keyboard = build_archive_page(
+    text, keyboard = await build_archive_page(
         page=0,
         lookback_seconds=lookback,
         show_all=show_all,

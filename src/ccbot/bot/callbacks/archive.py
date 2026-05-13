@@ -81,7 +81,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             await query.answer(t(user.id, "toast.invalid_page"))
             return True
         show_all = _show_all(context)
-        text, keyboard = build_archive_page(
+        text, keyboard = await build_archive_page(
             page=page,
             lookback_seconds=_lookback(show_all),
             show_all=show_all,
@@ -96,7 +96,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         new = not _show_all(context)
         if context.user_data is not None:
             context.user_data["_arc_show_all"] = new
-        text, keyboard = build_archive_page(
+        text, keyboard = await build_archive_page(
             page=0,
             lookback_seconds=_lookback(new),
             show_all=new,
@@ -157,7 +157,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
 
     if data == CB_ARC_BACK:
         show_all = _show_all(context)
-        text, keyboard = build_archive_page(
+        text, keyboard = await build_archive_page(
             page=0,
             lookback_seconds=_lookback(show_all),
             show_all=show_all,

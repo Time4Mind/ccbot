@@ -311,8 +311,10 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Drop the user's photo into the active session's inbox + notify Claude."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
-        if update.message:
-            await safe_reply(update.message, "You are not authorized to use this bot.")
+        # Drop the message silently — no reply, no callback ack. The
+        # allowlist is private; unauthorized senders should see the bot
+        # as inert (no "not authorized" copy that signals "you found the
+        # right bot, just not the right user").
         return
 
     if not update.message or not update.message.photo:
@@ -363,8 +365,10 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Drop the user's document into the active session's inbox + notify Claude."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
-        if update.message:
-            await safe_reply(update.message, "You are not authorized to use this bot.")
+        # Drop the message silently — no reply, no callback ack. The
+        # allowlist is private; unauthorized senders should see the bot
+        # as inert (no "not authorized" copy that signals "you found the
+        # right bot, just not the right user").
         return
 
     if not update.message or not update.message.document:
@@ -416,8 +420,10 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Transcribe the voice and forward as text to the active session."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
-        if update.message:
-            await safe_reply(update.message, "You are not authorized to use this bot.")
+        # Drop the message silently — no reply, no callback ack. The
+        # allowlist is private; unauthorized senders should see the bot
+        # as inert (no "not authorized" copy that signals "you found the
+        # right bot, just not the right user").
         return
 
     if not update.message or not update.message.voice:
@@ -567,8 +573,10 @@ async def _capture_bash_output(
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
-        if update.message:
-            await safe_reply(update.message, "You are not authorized to use this bot.")
+        # Drop the message silently — no reply, no callback ack. The
+        # allowlist is private; unauthorized senders should see the bot
+        # as inert (no "not authorized" copy that signals "you found the
+        # right bot, just not the right user").
         return
 
     if not update.message or not update.message.text:

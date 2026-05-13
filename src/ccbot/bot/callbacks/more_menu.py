@@ -21,6 +21,7 @@ from ...handlers.callback_data import (
     CB_MM_SETTINGS,
     CB_MM_SHOT,
     CB_MM_STATUS,
+    CB_SW_NEW,
 )
 
 # CB_MM_SHOT is no longer surfaced from the Menu grid (per UX request: the
@@ -79,12 +80,18 @@ def build_list_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton(t(user_id, "mm.shot"), callback_data=CB_MM_SHOT),
         ]
         rows.append(ctl_row)
-    sw = build_switcher_keyboard(user_id, include_lost=True)
+    sw = build_switcher_keyboard(user_id, include_lost=True, include_new=False)
     if sw is not None:
         for sw_row in sw.inline_keyboard:
             rows.append(list(sw_row))
+    # `+ new` shares the bottom row with Back (the navigation slot in the
+    # /list view) so the two go-elsewhere affordances sit side-by-side,
+    # matching the main-screen `[+ new] [≡ Menu]` pair.
     rows.append(
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_BACK)]
+        [
+            InlineKeyboardButton("+ new", callback_data=CB_SW_NEW),
+            InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_BACK),
+        ]
     )
     return body, InlineKeyboardMarkup(rows)
 

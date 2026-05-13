@@ -133,7 +133,7 @@ Handler modules (handlers/):
   directory_browser.py─ Directory + session picker UI builders
   switcher.py         ─ Inline session-switcher keyboard
   menu.py             ─ Footer / More / Settings keyboard composition;
-                       ⋯ Menu anchored to its own bottom row on screen="main"
+                       [+ new] [≡ Menu] share the bottom row on screen="main"
   cleanup.py          ─ Per-window state cleanup on archive
   callback_data.py    ─ Callback data prefix constants
   tg_format.py        ─ Table/code overflow → file attachment

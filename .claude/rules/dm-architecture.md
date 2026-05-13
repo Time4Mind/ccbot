@@ -103,13 +103,12 @@ State for "where the live switcher currently lives" is held in memory and persis
 The main / live-card view's footer keyboard is built in `handlers.menu.build_footer_keyboard` with `screen="main"`:
 
 ```
-[Stop/Kill, Clear, (Open Terminal)]   ← top: per-session controls
-[switcher buttons row(s)]             ← middle
-[+ new]                               ← bottom switcher row
-[≡ Menu]                              ← anchored bottom row
+[Stop/Kill, Clear, 🧑‍💻 Shot, (Open Terminal)]   ← top: per-session controls
+[switcher buttons row(s)]                       ← middle
+[+ new] [≡ Menu]                                ← anchored bottom row
 ```
 
-`≡ Menu` lives in its own bottom row so its slot stays put across views — `Back` occupies the same position in `/list`, `/archive`, and Settings sub-screens.
+`+ new` and `≡ Menu` share a single row so the two "go-elsewhere" affordances sit side-by-side. The same slot pairs `[+ new] [Back]` in `/list`, and a single `Back` button in `/archive` / Settings sub-screens. `build_switcher_keyboard` takes an `include_new: bool = True` flag — passed `False` by `build_footer_keyboard(screen="main")` and by `build_list_view` so they can compose the bottom pair themselves.
 
 ### Switcher tap → history view
 

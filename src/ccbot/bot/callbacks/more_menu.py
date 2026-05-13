@@ -228,7 +228,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         clear_view_markers(context.user_data)
         if context.user_data is not None:
             context.user_data["_arc_show_all"] = False
-        text, kb = build_archive_page(
+        text, kb = await build_archive_page(
             page=0,
             lookback_seconds=DEFAULT_LOOKBACK_SECONDS,
             show_all=False,

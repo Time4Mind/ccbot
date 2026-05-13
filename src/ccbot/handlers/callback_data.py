@@ -35,6 +35,10 @@ CB_WIN_CANCEL = "wb:cancel"
 # Screenshot
 CB_SCREENSHOT_REFRESH = "ss:ref:"
 
+# Compact screenshot view (opened via the Shot button from main / /list)
+CB_SHOT_SW = "sh:sw:"  # sh:sw:<sid>  switch active session + redraw screenshot
+CB_SHOT_BACK = "sh:b:"  # sh:b:<m|l>   return to main / list view
+
 # Interactive UI (aq: prefix kept for backward compatibility)
 CB_ASK_UP = "aq:up:"  # aq:up:<window>
 CB_ASK_DOWN = "aq:down:"  # aq:down:<window>

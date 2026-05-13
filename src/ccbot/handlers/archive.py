@@ -17,18 +17,33 @@ import time
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
+from pathlib import Path
+
 from ..config import config
 from ..i18n import t
 from ..session import Session, session_manager
 from ..tmux_manager import tmux_manager
 from .callback_data import (
     CB_ARC_ALL,
-    CB_ARC_DELETE,
     CB_ARC_INSPECT,
     CB_ARC_PAGE,
-    CB_ARC_RESTORE,
 )
 from .cleanup import clear_session_state
+
+
+def _shorten_workdir(path: str) -> str:
+    """Replace the user's home prefix with ``~`` so paths fit on one row.
+    Mirrors ``bot._common.shorten_workdir`` — kept here to avoid a
+    handlers→bot import inversion."""
+    if not path:
+        return ""
+    home = str(Path.home())
+    if path == home:
+        return "~"
+    if path.startswith(home + "/"):
+        return "~" + path[len(home) :]
+    return path
+
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +104,10 @@ def build_archive_page(
             t(user_id, "archive.page_line", page=page + 1, pages=pages, total=total)
         ]
         for sess in chunk:
+            # ✓ marks /done-completed sessions; · is plain archive.
+            # We drop the explicit "archived" / "completed" word from
+            # the body — it's tautological inside the Archive view, and
+            # the prefix glyph already carries the distinction.
             label = "✓" if sess.state == "completed" else "·"
             ts = sess.archived_at or sess.last_event_at
             age = _format_age(user_id, ts) if ts else "?"
@@ -97,25 +116,26 @@ def build_archive_page(
                 if sess.token_usage_total
                 else t(user_id, "archive.tokens_zero")
             )
-            body.append(
-                f"{label} `{sess.id}` *{sess.name}* — {sess.state}, {age}, {usage}"
-            )
+            display_name = sess.name or sess.id
+            line = f"{label} *{display_name}* — {age} · {usage}"
+            wd = _shorten_workdir(sess.workdir) if sess.workdir else ""
+            if wd:
+                line += f"\n  `{wd}`"
+            if sess.goal:
+                line += f"\n  _{sess.goal}_"
+            body.append(line)
 
     rows: list[list[InlineKeyboardButton]] = []
     for sess in chunk:
+        # One button per session — opens the Inspect view, which renders
+        # the transcript history and surfaces Restore / Delete inline.
+        # Keeping just a single, full-width affordance per row keeps
+        # the list scannable when there are many archived sessions.
         rows.append(
             [
                 InlineKeyboardButton(
-                    t(user_id, "btn.restore_with_name", name=sess.name or sess.id),
-                    callback_data=f"{CB_ARC_RESTORE}{sess.id}"[:64],
-                ),
-                InlineKeyboardButton(
-                    t(user_id, "btn.inspect"),
+                    t(user_id, "btn.open_session", name=sess.name or sess.id),
                     callback_data=f"{CB_ARC_INSPECT}{sess.id}"[:64],
-                ),
-                InlineKeyboardButton(
-                    t(user_id, "btn.delete"),
-                    callback_data=f"{CB_ARC_DELETE}{sess.id}"[:64],
                 ),
             ]
         )

@@ -31,7 +31,8 @@ ccbot 让你可以:
 - **仅 DM。** 没有超级群组、没有论坛主题、没有 thread 路由。机器人
   只能看到与一个 allowlist 中 Telegram user-id 的私聊 1-1 DM。
 - **单用户。** `ALLOWED_USERS` 应该恰好包含一个 Telegram 数字 id。
-  多租户部署不在范围内。
+  多租户部署不在范围内。来自非 allowlist 发送者的任何消息都会被
+  静默丢弃(无回复、无 callback 提示)——在外人看来机器人是「死的」。
 - **仅 bypass 模式。** `claude` 启动时带 `--dangerously-skip-permissions`
   。Telegram 中没有 permission 提示中继 — 如果你不信任模型对主机的
   完全访问权限,请使用 upstream。
@@ -136,9 +137,11 @@ ccbot hook --install
 | `/health` | 运行时间、tmux 状态、队列、延迟、计数器 |
 | `/done`   | 关闭活动会话(标记为「完成」并归档) |
 
-其余动作藏在内联菜单后面:`List`、`Status`、`History`、`Shot`、
-`New`、`Archive`、`Settings`。多数用户一旦发现菜单,就再也不打 slash
-命令。
+其余动作藏在内联菜单后面:`List`、`Status`、`History`、`New`、
+`Archive`、`Settings`。🧑‍💻 *Shot*(终端截图)按钮现在住在主视图
+的控制行和 *菜单 → List* 中 —— 紧邻 *Kill* 和 *Clear*,
+所以它始终在 transcript 表面触手可及。多数用户一旦发现菜单,就再
+也不打 slash 命令。
 
 ### 会话与切换器
 
@@ -146,8 +149,10 @@ ccbot hook --install
 你选择项目,tmux 窗口中启动 `claude`。后续 DM 中的文本路由到**活动**
 会话。
 
-最新机器人消息携带内联会话切换器(`▷ session-A · session-B · + new`),
-`≡ 菜单` 按钮锚定在最底行,这样它的位置在不同视图之间始终保持稳定。
+最新机器人消息携带内联会话切换器(`▷ session-A · session-B`),
+最底行是一对 `[+ new] [≡ 菜单]`:两个「去别处」的按钮并排放置,
+此槽位在不同视图间保持稳定(在 *菜单 → List* / *Archive* 中,
+这个槽位换成 `[+ new] [Back]`)。
 
 点击非活动会话按钮会**把该会话的完整转录历史画到 carrier-消息上**
 并同时切换活动会话 — 不需要额外的 `≡ 菜单 → 历史` 一步。分页按钮
@@ -155,6 +160,12 @@ ccbot hook --install
 
 引用回复(Telegram quote)非活动会话的机器人消息,会把那一条回复
 路由到该会话,但不更改活动会话。
+
+*菜单 → Archive* 显示带编号的历史会话列表,每行两个按钮。每行
+携带一段简短描述(Claude 自己的 `type=summary` 条目,或第一条
+用户消息),这样一眼就能看出会话是关于什么的。点击会话,carrier
+会画出直接从磁盘 JSONL 读取的真实转录;*Restore* / *Delete*
+保留在底部。
 
 ### 后台会话
 

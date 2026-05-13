@@ -37,7 +37,9 @@ ways that are intentional and not negotiable:
   only chat the bot ever sees is a private 1-1 DM with one allowlisted
   Telegram user id.
 - **Single-user.** `ALLOWED_USERS` is expected to contain exactly one
-  numeric Telegram id. Multi-tenant deployments are out of scope.
+  numeric Telegram id. Multi-tenant deployments are out of scope. Any
+  message from a non-allowlisted sender is silently dropped (no reply,
+  no callback toast) — the bot looks inert to outsiders.
 - **Bypass-only.** `claude` is launched with
   `--dangerously-skip-permissions`. There is no permission relay UI in
   Telegram — if you don't trust the model with full host access, run
@@ -146,8 +148,11 @@ plus an inline `≡ Menu` button on the most recent bot message:
 | `/done`  | Mark active session as done and archive it |
 
 The remaining actions live behind the menu — `List`, `Status`,
-`History`, `Shot`, `New`, `Archive`, `Settings`. Most users never type
-slash commands at all once they discover the menu.
+`History`, `New`, `Archive`, `Settings`. The 🧑‍💻 *Shot* (terminal
+screenshot) button lives in the main view's control row and in
+*Menu → List* — next to *Kill* and *Clear* — so it's always reachable
+from the transcript surface itself. Most users never type slash
+commands at all once they discover the menu.
 
 ### Sessions and switcher
 
@@ -156,9 +161,11 @@ directory browser, you pick the project, and a tmux window with
 `claude` starts there. Subsequent text in the DM is routed to the
 **active** session.
 
-The most recent bot message carries an inline session switcher (`▷
-session-A · session-B · + new`) with `≡ Menu` anchored at the
-very bottom row so its slot stays put across views.
+The most recent bot message carries an inline session switcher
+(`▷ session-A · session-B`) with a paired `[+ new] [≡ Menu]` row
+anchored at the bottom — the two "go-elsewhere" affordances sit
+side-by-side so the slot stays put across views (`[+ new] [Back]`
+takes that spot in *Menu → List* / *Archive*).
 
 Tapping a non-active session **paints the full transcript history**
 of that session onto the carrier message and switches the active
@@ -168,6 +175,13 @@ under them. Tapping the already-active button is a no-op.
 
 Reply-quoting a bot message belonging to a non-active session routes
 that single reply there without changing the active session.
+
+*Menu → Archive* shows a numbered list of past sessions, two buttons
+per row. Each row carries a short blurb (Claude's own `type=summary`
+entry, or the first user message) so it's obvious at a glance what a
+session was about. Tap a session — the carrier paints the actual
+transcript read straight from the JSONL on disk; *Restore* / *Delete*
+stay in the footer.
 
 ### Background sessions
 

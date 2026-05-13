@@ -57,7 +57,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
-        await query.answer("Not authorized")
+        # Silently dismiss the spinner — no "Not authorized" toast. The
+        # allowlist is private; unauthorized users should see the bot as
+        # inert (a callback that just goes nowhere) instead of getting
+        # a "you found the bot, just not the user" signal.
+        try:
+            await query.answer()
+        except Exception:
+            pass
         return
 
     if query.data == "noop":

@@ -211,11 +211,16 @@ def _footer_top_row(
 
 
 def _footer_bottom_row(user_id: int) -> list[InlineKeyboardButton]:
-    """Single-button bottom row carrying ⋯ Menu. Lives in the same slot
-    as the Back button on /list / /archive / settings sub-screens so the
-    user's eye lands on the same spot regardless of which view they're
-    looking at."""
-    return [InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_FT_MORE)]
+    """Bottom row for the main screen: `[+ new] [≡ Menu]`. The pair sits
+    on a single row so the two most-used "go elsewhere" affordances land
+    side-by-side and the user's eye doesn't ping-pong between rows. Same
+    slot as Back on /list / /archive / settings sub-screens, just with
+    two buttons instead of one.
+    """
+    return [
+        InlineKeyboardButton("+ new", callback_data=CB_SW_NEW),
+        InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_FT_MORE),
+    ]
 
 
 _MM_BUTTONS: tuple[tuple[str, str, str], ...] = (
@@ -504,7 +509,6 @@ def build_footer_keyboard(
     # On Menu and its sub-screens we already show 🆕 New explicitly in the
     # grid — don't duplicate "+ new" inside the switcher row, and drop the
     # active-session no-op button (it does nothing on tap).
-    drop_new_from_switcher = is_more_view
     drop_active_from_switcher = is_more_view
     # Settings is a configuration surface; the switcher carries no useful
     # action there (active button is a no-op).
@@ -513,6 +517,12 @@ def build_footer_keyboard(
     # buttons live in Menu → List from now on (per user request). The Menu
     # grid offers explicit access via the List entry.
     include_switcher = not is_settings and screen != "more"
+    # The main screen now anchors `+ new` next to ≡ Menu in the bottom
+    # row instead of carrying it inside the switcher (so the two go-
+    # elsewhere affordances sit side-by-side). Sub-screens with
+    # ``exclude_more`` (e.g. history view) own their own Back row and
+    # don't want a stray `+ new` either.
+    include_new_in_switcher = not is_more_view and screen != "main"
 
     if screen == "more":
         rows.extend(_more_grid(user_id, exclude=exclude_more))
@@ -542,14 +552,14 @@ def build_footer_keyboard(
             rows.append(top)
 
     if include_switcher:
-        sw = build_switcher_keyboard(user_id, include_lost=include_lost_in_switcher)
+        sw = build_switcher_keyboard(
+            user_id,
+            include_lost=include_lost_in_switcher,
+            include_new=include_new_in_switcher,
+        )
         if sw is not None:
             for sw_row in sw.inline_keyboard:
                 row_list = list(sw_row)
-                if drop_new_from_switcher:
-                    row_list = [
-                        b for b in row_list if (b.callback_data or "") != CB_SW_NEW
-                    ]
                 if drop_active_from_switcher:
                     row_list = [
                         b for b in row_list if (b.callback_data or "") != CB_SW_NOOP

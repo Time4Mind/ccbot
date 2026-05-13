@@ -64,7 +64,7 @@ def _label(sess: Session, *, is_active: bool) -> str:
 
 
 def build_switcher_keyboard(
-    user_id: int, *, include_lost: bool = False
+    user_id: int, *, include_lost: bool = False, include_new: bool = True
 ) -> InlineKeyboardMarkup | None:
     """Build the inline switcher keyboard for a user.
 
@@ -73,8 +73,11 @@ def build_switcher_keyboard(
     spec §9 (F2). Default behavior (active+idle only) is unchanged for
     content-message attachments.
 
+    `include_new` controls whether the trailing "+ new" row is appended.
+    Callers that want to place "+ new" next to another bottom-row button
+    (≡ Menu / Back) pass `include_new=False` and add the pair themselves.
+
     Returns None if the user has no live (or lost, when included) sessions.
-    Otherwise always appends a "+ new" button as the final row.
     """
     states = ("active", "idle", "lost") if include_lost else ("active", "idle")
     sessions = session_manager.list_user_sessions(user_id, states=states)
@@ -118,7 +121,8 @@ def build_switcher_keyboard(
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton("+ new", callback_data=CB_SW_NEW)])
+    if include_new:
+        rows.append([InlineKeyboardButton("+ new", callback_data=CB_SW_NEW)])
     return InlineKeyboardMarkup(rows)
 
 

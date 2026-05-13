@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 
 import aiofiles
@@ -41,7 +42,19 @@ from .cleanup import clear_session_state
 # lifetime in archive. The dict is bounded by the number of archived
 # sessions on this host — fine to keep in memory.
 _BLURB_CACHE: dict[str, str] = {}
-_BLURB_MAX_LEN = 64
+# A "few words more" than a one-liner — leaves headroom for ~12-15
+# English / ~8-10 Cyrillic words before the ellipsis.
+_BLURB_MAX_LEN = 96
+
+# Claude Code injects its own "user" messages — local-command caveats,
+# system reminders, bash plumbing chrome — alongside the genuine user
+# prompt. Skipping these when sniffing the first real message keeps the
+# archive blurb on-topic. Pattern matches the opening tag (same list as
+# ``TranscriptParser._RE_SYSTEM_TAGS``, kept local to avoid a private-
+# attribute lint warning).
+_RE_INJECTED_USER_MSG = re.compile(
+    r"<(bash-input|bash-stdout|bash-stderr|local-command-caveat|system-reminder)"
+)
 
 
 def _shorten_workdir(path: str) -> str:
@@ -128,7 +141,15 @@ async def _archive_blurb(sess: Session) -> str:
                 if not first_user_msg and TranscriptParser.is_user_message(data):
                     parsed = TranscriptParser.parse_message(data)
                     if parsed and parsed.text.strip():
-                        first_user_msg = parsed.text.strip()
+                        # Skip Claude Code's wrapper user-messages — the
+                        # ``<local-command-caveat>``, ``<system-reminder>``,
+                        # bash-stdout chrome etc. These are injected by the
+                        # CLI itself, not actual user prompts, and would
+                        # otherwise leak into the archive blurb as a wall of
+                        # boilerplate.
+                        candidate = parsed.text.strip()
+                        if not _RE_INJECTED_USER_MSG.search(candidate):
+                            first_user_msg = candidate
     except OSError as e:
         logger.debug("archive blurb read failed for %s: %s", fp, e)
         _BLURB_CACHE[sid] = ""

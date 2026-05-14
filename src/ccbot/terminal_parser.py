@@ -442,35 +442,42 @@ def parse_usage_output(pane_text: str) -> UsageInfo | None:
     start_idx: int | None = None
     end_idx: int | None = None
 
-    # Pass 1: header-based detection. Stops once a "Esc to" dismiss
-    # line is encountered after the header so we don't leak the bot's
-    # chat above the modal into the parsed body.
+    # Pass 1: header-based detection. The modal can appear multiple
+    # times in a scrollback capture (each /usage attempt leaves its
+    # transcript behind), so walk backwards and pick the LAST header
+    # — that's the freshest modal, the one matching the data we want.
+    header_positions: list[int] = []
     for i, line in enumerate(lines):
         stripped = line.strip()
-        if start_idx is None:
-            is_modern = (
-                "Status" in stripped
-                and "Config" in stripped
-                and "Usage" in stripped
-                and "Stats" in stripped
-            )
-            is_legacy = "Settings:" in stripped and "Usage" in stripped
-            if is_modern or is_legacy:
-                start_idx = i + 1  # skip the header itself
-        else:
-            if stripped.startswith("Esc to"):
-                end_idx = i
+        is_modern = (
+            "Status" in stripped
+            and "Config" in stripped
+            and "Usage" in stripped
+            and "Stats" in stripped
+        )
+        is_legacy = "Settings:" in stripped and "Usage" in stripped
+        if is_modern or is_legacy:
+            header_positions.append(i)
+    if header_positions:
+        start_idx = header_positions[-1] + 1
+        for j in range(start_idx, len(lines)):
+            if lines[j].strip().startswith("Esc to"):
+                end_idx = j
                 break
 
-    # Pass 2: header escaped the captured viewport. Scan for the body
-    # signature — these phrases are unique to this modal.
+    # Pass 2: header escaped the captured viewport. Anchor on the LAST
+    # "Current session" line — that's the earliest body marker of the
+    # freshest modal, so we still pick up "Current week (all models)"
+    # below it. Falling back to the last "Current week" only when no
+    # session row was captured.
     if start_idx is None:
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if "Current session" in stripped or "Current week" in stripped:
-                start_idx = i
-                break
-        if start_idx is None:
+        session_positions = [i for i, ln in enumerate(lines) if "Current session" in ln]
+        week_positions = [i for i, ln in enumerate(lines) if "Current week" in ln]
+        if session_positions:
+            start_idx = session_positions[-1]
+        elif week_positions:
+            start_idx = week_positions[-1]
+        else:
             return None
         # Look for the dismiss sentinel in the remainder; if it's gone
         # too (long modal on a tiny pane) we keep everything.

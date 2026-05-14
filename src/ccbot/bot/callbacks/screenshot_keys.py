@@ -210,6 +210,29 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         key_id = rest[:colon_idx]
         window_id = rest[colon_idx + 1 :]
 
+        if key_id == "ty":
+            # ⌨ Type — surface a ForceReply prompt so the mobile OS
+            # keyboard pops up. The user's reply flows through the
+            # normal text_handler → active session route (it's not
+            # tagged for reply-quote routing because we don't register
+            # this prompt msg in ``_msg_to_session``).
+            from telegram import ForceReply
+
+            try:
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text="⌨ Type your input — it will be sent to the active session.",
+                    reply_markup=ForceReply(
+                        selective=True,
+                        input_field_placeholder="Send to active session…",
+                    ),
+                )
+                await query.answer()
+            except Exception as e:
+                logger.debug("ty: force-reply send failed: %s", e)
+                await query.answer("Failed to open keyboard", show_alert=True)
+            return True
+
         key_info = _KEYS_SEND_MAP.get(key_id)
         if not key_info:
             await query.answer("Unknown key")

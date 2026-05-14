@@ -124,6 +124,44 @@ _cards: dict[tuple[int, str], CardState] = {}
 _MSG_REGISTRY_LIMIT = 2000
 _msg_to_session: dict[tuple[int, int], str] = {}
 
+# Per-user set of message_ids that hold a finalised live-card body (the
+# task's final answer). Any callback-driven edit on such a message
+# would clobber an immutable chat artifact, so ``safe_edit`` redirects
+# to a fresh message and strips the keyboard from the finalised one.
+# In-memory only — resets across bot restarts (acceptable: the user
+# would re-establish a fresh carrier on the next event anyway).
+_finalized_msgs: dict[int, set[int]] = {}
+_FINALIZED_LIMIT_PER_USER = 200
+
+
+def mark_msg_finalized(user_id: int, message_id: int) -> None:
+    """Pin a Telegram message as a finalised live card so UI navigation
+    spawns a new carrier instead of overwriting the answer.
+
+    Capped per user to keep memory bounded — oldest ids drop first.
+    """
+    bucket = _finalized_msgs.setdefault(user_id, set())
+    if len(bucket) >= _FINALIZED_LIMIT_PER_USER and message_id not in bucket:
+        drop = max(1, _FINALIZED_LIMIT_PER_USER // 10)
+        for _ in range(drop):
+            try:
+                bucket.pop()
+            except KeyError:
+                break
+    bucket.add(message_id)
+
+
+def is_msg_finalized(user_id: int, message_id: int) -> bool:
+    return message_id in _finalized_msgs.get(user_id, ())
+
+
+def discard_finalized_msg(user_id: int, message_id: int) -> None:
+    bucket = _finalized_msgs.get(user_id)
+    if bucket:
+        bucket.discard(message_id)
+        if not bucket:
+            _finalized_msgs.pop(user_id, None)
+
 
 def _register_msg(user_id: int, message_id: int, session_id: str) -> None:
     """Remember which session a bot message belongs to for reply-quote routing."""
@@ -673,6 +711,10 @@ async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
     except Exception as e:
         logger.debug("resume_card_view edit failed: %s", e)
     if state.pending_complete_footer:
+        # The catch-up render IS the final answer rendering — same as
+        # ``finalize_task``. Pin the message so UI nav doesn't clobber it.
+        # ``state.msg_id`` is guaranteed non-None by the early return above.
+        mark_msg_finalized(user_id, state.msg_id)
         reset_card(user_id, sess.id)
 
 
@@ -1136,6 +1178,12 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     # not Stop, on a completed result.
     done_kb = build_footer_keyboard(user_id, screen="main", is_busy=False)
 
+    # Track every Telegram message this finalize fans out into so each
+    # gets pinned in ``_finalized_msgs`` below. Without that pinning, the
+    # next UI callback on the answer card would clobber the answer via
+    # ``safe_edit``. The pin reroutes any such edit to a fresh carrier.
+    finalised_ids: list[int] = []
+
     text = _render_card(sess, state, footer="(task complete)", user_id=user_id)
     if state.msg_id is None:
         await _send_card(bot, user_id, sess, state, text=text, reply_markup=done_kb)
@@ -1143,6 +1191,8 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
         if await _edit_card(bot, user_id, state, text=text, reply_markup=done_kb):
             state.last_rendered = text
     state.last_edit_ts = time.monotonic()
+    if state.msg_id is not None:
+        finalised_ids.append(state.msg_id)
 
     # Remaining chunks → fresh continuation cards (answer-only).
     for chunk in chunks[1:]:
@@ -1153,9 +1203,14 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
         text = _render_card(sess, state, footer="(task complete)", user_id=user_id)
         await _send_card(bot, user_id, sess, state, text=text, reply_markup=done_kb)
         state.last_edit_ts = time.monotonic()
+        if state.msg_id is not None:
+            finalised_ids.append(state.msg_id)
 
     if attachments:
         await _send_attachments(bot, user_id, attachments)
+
+    for mid in finalised_ids:
+        mark_msg_finalized(user_id, mid)
 
     # No separate "✓ done" push under the card — the result is already
     # rendered inside the card with a "(task complete)" footer, and an

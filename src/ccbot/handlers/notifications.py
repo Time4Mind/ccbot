@@ -871,6 +871,15 @@ async def update_session_card(
 
     Triggers a fresh card on long pause and on hard-limit overflow.
     """
+    # Fire a (throttled) background prewarm of the pages cache so the
+    # live-card's ◀ Older N/N counter has a value to render on the
+    # next event. The first event after session start may still paint
+    # without the counter — the background task lands within a second.
+    if sess.window_id:
+        from .history import kick_prewarm
+
+        kick_prewarm(sess.window_id)
+
     state = get_card_state(user_id, sess)
 
     # Should we buffer this event instead of rendering it now? Reasons:
@@ -1109,6 +1118,19 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
         )
         state.is_continuation = True
         state.last_rendered = ""
+
+    # Refresh the pages cache so the live-card's pagination counter
+    # reflects the final transcript length on the finalised message.
+    # This is the one place we await prewarm directly — finalize fires
+    # once per task, so ~1 s of parsing is OK to pay for a correct
+    # ◀ Older N/N counter on the artifact the user looks at most.
+    if sess.window_id:
+        try:
+            from .history import prewarm_pages_cache
+
+            await prewarm_pages_cache(sess.window_id)
+        except Exception as e:
+            logger.debug("finalize_task prewarm failed: %s", e)
 
     # Finalised card → ``is_busy=False`` keyboard so the user sees Kill,
     # not Stop, on a completed result.

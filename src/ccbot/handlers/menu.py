@@ -547,15 +547,29 @@ def build_footer_keyboard(
     elif screen == "settings_cardpos":
         rows.extend(_settings_cardpos_grid(user_id))
     else:
-        # ◀ Older row at the very top — pagination is the entry-point to
-        # scrolling back through transcript history, present on every
-        # live-card so the user never has to detour through another view
-        # to reach older messages. Suppressed in callers that compose
-        # this keyboard as extras BELOW a history-view's own pagination
-        # row (switcher tap / /screenshot Back / CB_HISTORY_PREV/NEXT)
-        # to avoid two stacked ◀ Older buttons.
+        # ◀ Older + N/N pagination row at the very top — same layout as
+        # the history view's pagination so the live-card and history
+        # surfaces look identical (no "blinking" keyboard between
+        # streaming events). When the page count isn't cached yet (very
+        # first render on a fresh session), the counter is dropped — it
+        # populates on the next render after a prewarm. Suppressed in
+        # callers that compose this keyboard as extras BELOW a history-
+        # view's own pagination row (switcher tap / /screenshot Back /
+        # CB_HISTORY_PREV/NEXT) to avoid two stacked ◀ Older buttons.
         if include_older_btn and _has_active_session(user_id):
-            rows.append([InlineKeyboardButton("◀ Older", callback_data=CB_FT_OLDER)])
+            pag_row: list[InlineKeyboardButton] = [
+                InlineKeyboardButton("◀ Older", callback_data=CB_FT_OLDER)
+            ]
+            active = session_manager.get_active_session(user_id)
+            if active is not None and active.window_id:
+                from .history import get_cached_total_pages
+
+                total = get_cached_total_pages(active.window_id)
+                if total is not None and total >= 1:
+                    pag_row.append(
+                        InlineKeyboardButton(f"{total}/{total}", callback_data="noop")
+                    )
+            rows.append(pag_row)
         top = _footer_top_row(user_id, is_busy=is_busy)
         if top:
             rows.append(top)

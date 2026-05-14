@@ -168,27 +168,6 @@ class Config:
         except ValueError:
             self.card_edit_lag = 2.0
 
-        # How many of the most-recent tool-call lines to keep visible in the
-        # session card. Older tool calls collapse to a single "… N earlier
-        # tool calls collapsed" placeholder. Recommended range 3..7.
-        try:
-            visible = int(os.getenv("CARD_VISIBLE_TOOLS", "3"))
-        except ValueError:
-            visible = 3
-        self.card_visible_tools: int = max(1, visible)
-
-        # When a *fresh* live card opens for a new turn (after the previous
-        # finalize_task / stale pause / overflow split), seed it with the
-        # last N transcript lines from before the user's most recent
-        # message — gives the new card immediate context instead of
-        # starting blank. ``0`` disables. The seed is one-shot per card;
-        # subsequent events append on top normally.
-        try:
-            prior = int(os.getenv("CARD_PRIOR_CONTEXT", "5"))
-        except ValueError:
-            prior = 5
-        self.card_prior_context: int = max(0, prior)
-
         # Notifications
         bg_mode = os.getenv("BG_NOTIFY_MODE", "separate").strip().lower()
         if bg_mode not in ("separate", "footer"):

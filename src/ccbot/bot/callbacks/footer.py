@@ -17,6 +17,9 @@ from ...handlers.callback_data import (
     CB_FT_OLDER,
     CB_FT_STOP,
     CB_FT_TERM,
+    CB_PG_JUMP,
+    CB_PG_NEXT,
+    CB_PG_PREV,
 )
 from ...handlers.history import (
     get_cached_total_pages,
@@ -24,7 +27,14 @@ from ...handlers.history import (
     send_history,
 )
 from ...handlers.menu import build_footer_keyboard, render_more_text
-from ...handlers.notifications import clear_card, pause_card_view, release_card_message
+from ...handlers.notifications import (
+    card_page_info,
+    clear_card,
+    get_card_state,
+    pause_card_view,
+    refresh_panel,
+    release_card_message,
+)
 from ...i18n import t
 from ...session import session_manager
 from ...tmux_manager import tmux_manager
@@ -112,6 +122,31 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         text = render_more_text(user.id)
         keyboard = build_footer_keyboard(user.id, screen="more")
         await set_view(query, context.bot, user.id, text, keyboard)
+        await query.answer()
+        return True
+
+    if data in (CB_PG_PREV, CB_PG_NEXT, CB_PG_JUMP):
+        sess = session_manager.get_active_session(user.id)
+        if sess is None:
+            await query.answer(t(user.id, "toast.no_session"), show_alert=False)
+            return True
+        state = get_card_state(user.id, sess)
+        idx, total = card_page_info(state)
+        if data == CB_PG_JUMP:
+            # Jump to default-focus (= latest page when no answer-anchor
+            # was set explicitly). ``None`` means "stick to latest".
+            state.current_page_idx = None
+        elif data == CB_PG_PREV:
+            new_idx = max(0, idx - 1)
+            state.current_page_idx = new_idx if new_idx < total - 1 else None
+        else:  # CB_PG_NEXT
+            new_idx = min(total - 1, idx + 1)
+            # Reaching the last page sticks the user to "auto-follow latest".
+            state.current_page_idx = new_idx if new_idx < total - 1 else None
+        try:
+            await refresh_panel(context.bot, user.id)
+        except Exception as e:
+            logger.debug("pagination refresh failed: %s", e)
         await query.answer()
         return True
 

@@ -3,41 +3,32 @@
 In DM mode background sessions don't emit any chat messages of their
 own (no live card edits, no push). Instead this module keeps a per-user
 map of their latest status, and ``render_panel`` formats a compact
-block that the active session's card appends at its tail. The user
-sees `[name] ⏳/✅/❌/❓` badges for every background session that has
-something to report, sticky across active-card edits.
+block that the active session's card appends at its tail.
 
-Status states (matches the user-approved emoji set):
+Status states (driven only by ``handle_new_message`` transitions):
   - "working"      ⏳  events arriving while session is bg
-  - "finished"     ✅  terminal text turn while bg
-  - "error"        ❌  error while bg (currently unused — events come
-                       through the same paths as completion; left in
-                       place for future hookups)
+  - "finished"     ✅  terminal text turn (end_turn) while bg
+  - "error"        ❌  error event while bg
   - "needs_action" ❓  AskUserQuestion / ExitPlanMode / permission
                        prompt detected on bg session
 
-Visibility:
-  - A session appears in the panel only when status ∈ those four.
-  - On user-driven switch INTO a session: ``mark_seen`` flips
-    ``seen=True`` if the status is a finalised one (✅/❌/❓).
-  - On user-driven switch AWAY (next ``mark_seen`` for another session):
-    sessions whose ``seen=True`` AND status hasn't reverted to "working"
-    are removed.
-  - New event for a bg session resets ``seen=False`` and bumps the
-    status accordingly (any event → "working", terminal → "finished",
-    interactive UI → "needs_action").
-  - ``clear_for_session`` is called from archive paths so a killed
-    session doesn't leave a stale badge behind.
-
 Quota indicator is a separate overlay (``quota_level``), updated by
 ``update_quota`` from the usage layer when a session crosses one of
-``config.bg_status_quota_thresholds``. Levels are sticky downward —
+``config.bg_status_quota_thresholds``. Levels are sticky upward —
 once a session hits red it stays red for the lifetime of the badge.
 
-The pending interactive UI itself is detected and remembered here too
-(``pending_interactive_ui``) so the switcher-tap handler can render the
-prompt+keyboard on the active carrier without re-running terminal
-parsing.
+The pending interactive UI itself is detected and remembered here
+(``pending_interactive_ui``) so the switcher-tap handler can render
+the prompt+keyboard on the active carrier without re-running
+terminal parsing.
+
+Visibility:
+  - A session appears in the panel only while it is bg (the active
+    session is filtered out of ``render_panel``).
+  - ``clear_for_user_session`` drops one user's entry — called when
+    the user taps the session in the switcher (= switch into).
+  - ``clear_for_session`` drops the entry across all users — called
+    from archive/kill/done paths.
 
 Persistence: ``serialize_per_user`` / ``load_per_user`` round-trip the
 status map into ``state.json`` via SessionManager. ``pending_interactive_ui``
@@ -99,11 +90,8 @@ class BgStatus:
     Attributes:
         status: latest status enum.
         quota_level: latest quota threshold crossed, sticky upward.
-        seen: True after the user tapped this session in the switcher
-            while status was finalised. Cleared by any new "working"
-            transition.
-        last_change: monotonic timestamp of the last status mutation.
-            Used for the ``BG_STATUS_MAX`` "newest first" trim.
+        last_change: wall-clock timestamp of the last status mutation,
+            used to sort newest-first in the panel.
         pending_interactive_ui: snapshot of the interactive UI body
             seen on this session's tmux pane (and its UI name). Set
             together with ``status="needs_action"`` so the switcher tap
@@ -112,7 +100,6 @@ class BgStatus:
 
     status: Status = "working"
     quota_level: QuotaLevel = "none"
-    seen: bool = False
     last_change: float = 0.0
     pending_interactive_ui: tuple[str, str] | None = None  # (content, ui_name)
 
@@ -142,27 +129,21 @@ def update_status(
     interactive_ui: tuple[str, str] | None = None,
 ) -> bool:
     """Set status for one bg session. Returns True if the visible state
-    changed (status emoji or seen flag flipped) so callers can decide
-    whether the active card needs a re-render.
+    changed (status emoji flipped) so callers can decide whether the
+    active card needs a re-render.
 
-    A first-call for an unknown session is always reported as a change —
-    otherwise the very first ``working`` event after a switch-to-bg
-    silently no-ops (default dataclass value is also ``working``) and
-    the panel never gains the ⏳ badge until a status transition lands.
+    A first-call for an unknown session is always reported as a change.
     """
     is_new_entry = session_id not in _bg.get(user_id, {})
     entry = _entry(user_id, session_id)
     old_status = entry.status
-    old_seen = entry.seen
     entry.status = status
-    # Any new event resets the "seen" flag — the user must look again.
-    entry.seen = False
     if status == "needs_action" and interactive_ui is not None:
         entry.pending_interactive_ui = interactive_ui
     elif status != "needs_action":
         entry.pending_interactive_ui = None
     _touch(entry)
-    return is_new_entry or old_status != status or old_seen != entry.seen
+    return is_new_entry or old_status != status
 
 
 def update_quota(user_id: int, session_id: str, level: QuotaLevel) -> bool:
@@ -187,35 +168,6 @@ def get_pending_interactive_ui(user_id: int, session_id: str) -> tuple[str, str]
     return entry.pending_interactive_ui
 
 
-def mark_seen(user_id: int, session_id: str) -> None:
-    """Flip ``seen=True`` if the status is finalised. Called when the user
-    taps a session in the switcher. Working-state sessions are unaffected
-    (they're still doing things — seen has no meaning yet)."""
-    entry = _bg.get(user_id, {}).get(session_id)
-    if entry is None:
-        return
-    if entry.status in ("finished", "error", "needs_action"):
-        entry.seen = True
-
-
-def prune_seen(user_id: int) -> bool:
-    """Drop any seen+finalised entries from the user's panel. Called on
-    switch-away. Returns True if anything was dropped."""
-    bucket = _bg.get(user_id)
-    if not bucket:
-        return False
-    dropped = [
-        sid
-        for sid, entry in bucket.items()
-        if entry.seen and entry.status in ("finished", "error", "needs_action")
-    ]
-    for sid in dropped:
-        bucket.pop(sid, None)
-    if not bucket:
-        _bg.pop(user_id, None)
-    return bool(dropped)
-
-
 def clear_pending_ui(user_id: int, session_id: str) -> bool:
     """Drop a stashed interactive-UI snapshot when the prompt is gone from
     the pane. Reverts ``status="needs_action"`` back to ``"working"`` so
@@ -233,8 +185,7 @@ def clear_pending_ui(user_id: int, session_id: str) -> bool:
 
 def quota_glyph_for(user_id: int, session_id: str) -> str:
     """Return ``⚠️🟢/🟡/🔴`` for a session whose quota crossed a threshold,
-    or empty string. Used by the active card header and by ``_badge`` for
-    bg panel rows."""
+    or empty string."""
     entry = _bg.get(user_id, {}).get(session_id)
     if entry is None:
         return ""
@@ -268,12 +219,28 @@ def clear_for_session(session_id: str) -> bool:
     return dropped
 
 
+def clear_for_user_session(user_id: int, session_id: str) -> bool:
+    """Drop the bg entry for one (user, session). Called when the user
+    switches INTO this session — it's no longer "background" relative
+    to them. Returns True if anything was dropped."""
+    bucket = _bg.get(user_id)
+    if not bucket or session_id not in bucket:
+        return False
+    bucket.pop(session_id, None)
+    if not bucket:
+        _bg.pop(user_id, None)
+    return True
+
+
 def _badge(sess: "Session", entry: BgStatus) -> str:
-    """Render one panel row: [name] ⏳/✅/❌/❓ [⚠️🟢/🟡/🔴]."""
+    """Render one panel row: ``<emoji> <name> <status_glyph> [<quota_glyph>]``."""
+    from .switcher import session_emoji
+
     name = sess.name or sess.id
+    sess_emoji = session_emoji(sess)
     status_glyph = _STATUS_EMOJI.get(entry.status, "")
     quota_glyph = _QUOTA_EMOJI.get(entry.quota_level, "")
-    parts = [f"[{name}]", status_glyph]
+    parts = [sess_emoji, name, status_glyph]
     if quota_glyph:
         parts.append(quota_glyph)
     return " ".join(p for p in parts if p)
@@ -339,7 +306,6 @@ def serialize_per_user() -> dict[str, dict[str, dict[str, Any]]]:
             row[sid] = {
                 "status": entry.status,
                 "quota_level": entry.quota_level,
-                "seen": entry.seen,
                 "last_change": entry.last_change,
             }
         if row:
@@ -350,7 +316,7 @@ def serialize_per_user() -> dict[str, dict[str, dict[str, Any]]]:
 def load_per_user(raw: dict[str, Any] | None) -> None:
     """Populate the in-memory map from a state.json blob. Skip malformed
     entries silently — restart should never be blocked by a corrupted
-    panel snapshot."""
+    panel snapshot. Tolerates legacy ``seen`` field by ignoring it."""
     _bg.clear()
     if not raw:
         return
@@ -378,6 +344,5 @@ def load_per_user(raw: dict[str, Any] | None) -> None:
             target[sid] = BgStatus(
                 status=status_val,
                 quota_level=quota_val,
-                seen=bool(data.get("seen", False)),
                 last_change=last_change,
             )

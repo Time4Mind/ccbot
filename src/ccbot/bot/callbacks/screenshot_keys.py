@@ -90,8 +90,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                         break
 
         session_manager.set_active_session(user.id, target_id)
-        bg_status.mark_seen(user.id, target_id)
-        bg_status.prune_seen(user.id)
+        bg_status.clear_for_user_session(user.id, target_id)
 
         w = await tmux_manager.find_window_by_id(sess.window_id)
         if not w:

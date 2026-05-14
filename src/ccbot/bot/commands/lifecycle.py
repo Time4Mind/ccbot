@@ -34,7 +34,6 @@ from ...handlers.directory_browser import (
 )
 from ...handlers.menu import build_footer_keyboard, render_more_text
 from ...handlers.message_sender import safe_reply
-from ...handlers.switcher import build_switcher_keyboard
 from ...i18n import t
 from ...session import Session, session_manager
 from ...tmux_manager import tmux_manager
@@ -149,25 +148,6 @@ def build_live_sessions_text(user_id: int) -> str | None:
         lines.append(t(user_id, "list.lost"))
         lines.extend(lost_block)
     return "\n".join(lines)
-
-
-async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """`/list` — show all live sessions with state and short usage."""
-    user = update.effective_user
-    if not user or not is_user_allowed(user.id):
-        return
-    if not update.message:
-        return
-
-    body = build_live_sessions_text(user.id)
-    if body is None:
-        await safe_reply(update.message, t(user.id, "list.empty"))
-        return
-
-    keyboard = build_switcher_keyboard(user.id, include_lost=True)
-    sent = await safe_reply(update.message, body, reply_markup=keyboard)
-    if sent and keyboard is not None:
-        session_manager.set_last_switcher_msg(user.id, sent.message_id)
 
 
 # --- /kill, /done — share archive_session ---

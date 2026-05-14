@@ -23,6 +23,7 @@ from telegram.ext import (
 from ..config import config
 from ..handlers.message_queue import shutdown_workers
 from ..handlers.quota_alerts import quota_alerts_loop
+from ..handlers.notifications import card_timer_loop
 from ..handlers.status_polling import status_poll_loop
 from ..metrics import metrics_flush_loop
 from ..session import session_manager
@@ -42,7 +43,6 @@ from .commands.lifecycle import (
     archive_command,
     done_command,
     kill_command,
-    list_command,
     menu_command,
     new_command,
     stop_command,
@@ -63,13 +63,19 @@ logger = logging.getLogger(__name__)
 # Module-globals owned by the lifecycle hooks.
 session_monitor: SessionMonitor | None = None
 _status_poll_task: asyncio.Task[None] | None = None
+_card_timer_task: asyncio.Task[None] | None = None
 _quota_alerts_task: asyncio.Task[None] | None = None
 _metrics_flush_task: asyncio.Task[None] | None = None
 
 
 async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") -> None:
     """First task after Application is built. Publish menu, recover state, start monitors."""
-    global session_monitor, _status_poll_task, _quota_alerts_task, _metrics_flush_task
+    global \
+        session_monitor, \
+        _status_poll_task, \
+        _card_timer_task, \
+        _quota_alerts_task, \
+        _metrics_flush_task
 
     # Cache bot username so ``tmux_manager.create_window`` can surface it
     # to Claude via ``CCBOT_BOT_USERNAME``. ``application.bot.username``
@@ -124,6 +130,9 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
     logger.info("Status polling task started")
 
+    _card_timer_task = asyncio.create_task(card_timer_loop(application.bot))
+    logger.info("Card timer task started")
+
     _quota_alerts_task = asyncio.create_task(quota_alerts_loop(application.bot))
     logger.info("Quota alerts task started")
 
@@ -153,7 +162,7 @@ async def post_shutdown(
     application: "Application[Any, Any, Any, Any, Any, Any]",
 ) -> None:
     """Stop background tasks, flush queues, close HTTP clients."""
-    global _status_poll_task, _quota_alerts_task, _metrics_flush_task
+    global _status_poll_task, _card_timer_task, _quota_alerts_task, _metrics_flush_task
 
     if _status_poll_task:
         _status_poll_task.cancel()
@@ -163,6 +172,15 @@ async def post_shutdown(
             pass
         _status_poll_task = None
         logger.info("Status polling stopped")
+
+    if _card_timer_task:
+        _card_timer_task.cancel()
+        try:
+            await _card_timer_task
+        except asyncio.CancelledError:
+            pass
+        _card_timer_task = None
+        logger.info("Card timer stopped")
 
     if _quota_alerts_task:
         _quota_alerts_task.cancel()
@@ -217,7 +235,6 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler("new", new_command))
-    application.add_handler(CommandHandler("list", list_command))
     application.add_handler(CommandHandler("kill", kill_command))
     application.add_handler(CommandHandler("done", done_command))
     application.add_handler(CommandHandler("stop", stop_command))

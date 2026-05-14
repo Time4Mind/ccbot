@@ -28,9 +28,11 @@ from .callback_data import (
     CB_FT_CLEAR,
     CB_FT_KILL,
     CB_FT_MORE,
-    CB_FT_OLDER,
     CB_FT_STOP,
     CB_FT_TERM,
+    CB_PG_JUMP,
+    CB_PG_NEXT,
+    CB_PG_PREV,
     CB_MM_ARCHIVE,
     CB_MM_BACK,
     CB_MM_LIST,
@@ -224,7 +226,7 @@ def _footer_bottom_row(user_id: int) -> list[InlineKeyboardButton]:
 
 
 _MM_BUTTONS: tuple[tuple[str, str, str], ...] = (
-    ("list", "mm.list", CB_MM_LIST),
+    ("sessions", "mm.sessions", CB_MM_LIST),
     ("archive", "mm.archive", CB_MM_ARCHIVE),
     ("status", "mm.status", CB_MM_STATUS),
     ("new", "mm.new", CB_MM_NEW),
@@ -547,28 +549,27 @@ def build_footer_keyboard(
     elif screen == "settings_cardpos":
         rows.extend(_settings_cardpos_grid(user_id))
     else:
-        # ◀ Older + N/N pagination row at the very top — same layout as
-        # the history view's pagination so the live-card and history
-        # surfaces look identical (no "blinking" keyboard between
-        # streaming events). When the page count isn't cached yet (very
-        # first render on a fresh session), the counter is dropped — it
-        # populates on the next render after a prewarm. Suppressed in
-        # callers that compose this keyboard as extras BELOW a history-
-        # view's own pagination row (switcher tap / /screenshot Back /
-        # CB_HISTORY_PREV/NEXT) to avoid two stacked ◀ Older buttons.
+        # In-card pagination row at the very top — [◀] [N/M] [▶].
+        # ``N/M`` taps jump to the default-focus page (latest answer).
+        # ◀ at page 0 falls back to opening the older-history view
+        # (the full transcript, beyond the card's CARD_MAX_EVENTS).
+        # Suppressed in callers that compose this keyboard as extras
+        # BELOW a history-view's own pagination row.
         if include_older_btn and _has_active_session(user_id):
-            pag_row: list[InlineKeyboardButton] = [
-                InlineKeyboardButton("◀ Older", callback_data=CB_FT_OLDER)
-            ]
             active = session_manager.get_active_session(user_id)
-            if active is not None and active.window_id:
-                from .history import get_cached_total_pages
+            page_idx = 0
+            total_pages = 1
+            if active is not None:
+                from .notifications import card_page_info, get_card_state
 
-                total = get_cached_total_pages(active.window_id)
-                if total is not None and total >= 1:
-                    pag_row.append(
-                        InlineKeyboardButton(f"{total}/{total}", callback_data="noop")
-                    )
+                page_idx, total_pages = card_page_info(get_card_state(user_id, active))
+            pag_row: list[InlineKeyboardButton] = [
+                InlineKeyboardButton("◀", callback_data=CB_PG_PREV),
+                InlineKeyboardButton(
+                    f"{page_idx + 1}/{total_pages}", callback_data=CB_PG_JUMP
+                ),
+                InlineKeyboardButton("▶", callback_data=CB_PG_NEXT),
+            ]
             rows.append(pag_row)
         top = _footer_top_row(user_id, is_busy=is_busy)
         if top:

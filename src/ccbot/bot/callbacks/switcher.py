@@ -207,11 +207,9 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             if query.message and footer_kb is not None:
                 session_manager.set_last_switcher_msg(user.id, query.message.message_id)
 
-        # Panel housekeeping: the user has now "seen" this session, so any
-        # finalised badge can leave the panel; the previously-active
-        # session keeps its working/finished status for the panel render.
-        bg_status.mark_seen(user.id, target_id)
-        bg_status.prune_seen(user.id)
+        # Panel housekeeping: the user switched INTO this session, so it
+        # is no longer "background" relative to them — drop its bg entry.
+        bg_status.clear_for_user_session(user.id, target_id)
         # NB: do NOT call refresh_panel here. The carrier message just
         # got painted with the history view (or the pending interactive
         # UI). refresh_panel re-renders the live card on the same

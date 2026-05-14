@@ -27,14 +27,13 @@ from ...handlers.callback_data import (
 )
 from ...handlers.history import send_history
 from ...handlers.message_sender import safe_reply, safe_send
-from ...handlers.switcher import build_switcher_keyboard, session_emoji
+from ...handlers.switcher import session_emoji
 from ...i18n import t
 from ...screenshot import text_to_image
 from ...session import session_manager
 from ...tmux_manager import tmux_manager
 from ...usage import format_usage_breakdown_compact
 from .._common import active_window, is_user_allowed
-from .lifecycle import build_live_sessions_text
 
 logger = logging.getLogger(__name__)
 
@@ -305,21 +304,6 @@ async def _format_live_usage(user_id: int) -> str:
     info = await fetch_claude_usage()
     block = format_usage_breakdown_compact(user_id, info)
     return block or t(user_id, "usage.unavailable")
-
-
-# --- /list emitter (text body lives in lifecycle.build_live_sessions_text) ---
-
-
-async def emit_list(bot: Bot, user_id: int) -> None:
-    """Render /list as a fresh bot message (used by the Menu→List callback)."""
-    body = build_live_sessions_text(user_id)
-    if body is None:
-        await safe_send(bot, user_id, "No live sessions. Use 🆕 New to create one.")
-        return
-    keyboard = build_switcher_keyboard(user_id, include_lost=True)
-    sent = await safe_send(bot, user_id, body, reply_markup=keyboard)
-    if sent and keyboard is not None:
-        session_manager.set_last_switcher_msg(user_id, sent.message_id)
 
 
 # --- /usage (interactive Claude TUI) ---

@@ -9,27 +9,25 @@ bottom of the active card.
 A fresh card opens (a new TG message is sent) on:
 
   - long pause: previous card sat idle for >= STALE_CARD_SECONDS
-  - card overflow: rendered text would exceed CARD_HARD_LIMIT chars
-  - the very first event of a new turn (after ``finalize_task``)
   - ``repost_card`` (Settings → card_position = repost)
+  - first event of a new session
 
-A fresh card pre-seeds itself with up to ``config.card_prior_context``
-transcript entries from before the user's most recent message so the
-new card carries context instead of starting blank.
+Within a single card, content is paginated. Each ``Event`` with
+``is_page_break=True`` (currently end_turn assistant text) becomes
+the top of a new page; everything preceding it goes on the previous
+page. Default focus = the page anchored to the latest answer.
 
 The header line carries:
 
-  ``<emoji> *<name>* [<quota>] · <state> [· <status_text>] · HH:MM``
+  ``<emoji> *<name>* [<quota>] · <state> · HH:MM``
 
 — where HH:MM is the time of the last claude event so the user can
 tell at a glance whether the card is fresh or has been quiet.
 
-State per (user_id, session.id):
-  msg_id, lines (list of CardLine), status_text, last_event_ts,
-  last_edit_ts, pending_edit, in_menu_view, pending_complete_footer.
-
-When a tool_result arrives matching a previous tool_use_id, the existing
-line is replaced in place rather than appended, keeping the card compact.
+When a tool_result arrives matching a previous tool_use, the existing
+tool_use Event is mutated in place (``completed_at`` set, body replaced
+with the result), so the ``▷`` line flips to ``✓`` (or ``✗`` on error)
+and the elapsed timer is replaced with the start-time HH:MM.
 """
 
 from __future__ import annotations
@@ -46,7 +44,7 @@ from telegram.error import BadRequest, RetryAfter
 from ..config import config
 from ..session import Session, session_manager
 from ..session_monitor import NewMessage
-from ..telegram_sender import split_message
+from ..transcript_format import format_expandable_quote
 from . import bg_status
 from .message_sender import safe_send
 from .menu import build_footer_keyboard
@@ -58,62 +56,87 @@ logger = logging.getLogger(__name__)
 
 # Hard cap for rendered card text — Telegram limit is 4096; leave headroom.
 CARD_HARD_LIMIT = 3800
-# Number of accumulated lines kept; older lines get summarised away.
-CARD_MAX_LINES = 40
+# Number of accumulated events kept; older events still live in state.events
+# but only the last N participate in pagination (FIFO eviction beyond this).
+CARD_MAX_EVENTS = 200
 # After this much idleness, the next event opens a fresh card.
 STALE_CARD_SECONDS = 5 * 60
-# A pane-status spinner (``Brewed for 45s`` / ``Honking… (12s)``) that
-# hasn't changed within this many seconds is considered stale — claude
-# left the line painted but isn't actually working. Used by
-# ``_card_is_busy`` so a frozen spinner doesn't keep "typing…" alive
-# forever after a turn ends.
-SPINNER_FRESH_SECONDS = 3.0
-
-
-_COLLAPSED_PREFIX = "… "
-_COLLAPSED_SUFFIX = " earlier tool calls collapsed"
+# Max lines of body shown inside each tool/thinking spoiler. Overflow is
+# truncated with a "… (+N more lines)" trailer. Env-tunable.
+SPOILER_MAX_LINES = 5
 
 
 @dataclass
-class CardLine:
-    text: str
-    tool_use_id: str | None = None  # so tool_result can edit-replace its tool_use line
-    is_tool: bool = False  # true for both tool_use and tool_result lines
-    collapsed_count: int = 0  # for the synthetic "… N earlier ..." placeholder
+class Event:
+    """One unit of conversation rendered on the card.
+
+    ``type`` discriminates render behaviour:
+
+      - ``user_msg``   — user's typed text echoed via ``👤``
+      - ``thinking``   — claude thinking block (``∴``)
+      - ``tool_use``   — tool invocation (``▷``); on tool_result the
+        same Event's ``completed_at`` flips and ``body`` becomes the
+        result text.  ``tool_use_id`` matches assistant→user pairing.
+      - ``text``       — mid-stream assistant text (stop_reason=tool_use)
+      - ``final_text`` — end-of-turn assistant answer; ``is_page_break``
+      - ``error``      — error-only event; ``is_page_break``
+      - ``interactive``— AskUserQuestion / ExitPlanMode / Permission;
+        rendered as a separate Telegram message, NOT in card body, but
+        recorded here for page-break anchoring.
+      - ``divider``    — historical "Результат" divider line; legacy
+    """
+
+    type: str
+    text: str  # one-line header content (args summary / first line)
+    started_at: float  # epoch seconds; HH:MM in header is derived from this
+    body: str = ""  # full content under expandable blockquote
+    completed_at: float | None = None  # set when event completes
+    tool_use_id: str | None = None
+    tool_name: str | None = None
+    is_page_break: bool = False  # this event starts a new page
+    is_error: bool = False
+    image_data: list[tuple[str, bytes]] | None = None  # tool_result images
+
+    @property
+    def is_tool(self) -> bool:
+        return self.type in ("tool_use", "tool_result")
+
+
+# Backwards-compat alias — pre-refactor code referred to ``CardLine``.
+# Kept so out-of-tree callers (currently none) don't break.
+CardLine = Event
 
 
 @dataclass
 class CardState:
     msg_id: int | None = None
-    lines: list[CardLine] = field(default_factory=list)
+    events: list[Event] = field(default_factory=list)
+    # Page the user is currently looking at. ``None`` = default focus
+    # (page with the latest answer-anchor). Set by pagination callbacks.
+    current_page_idx: int | None = None
     last_event_ts: float = 0.0
-    status_text: str = (
-        ""  # latest tmux status line ("…Esc to interrupt"), shown in header
-    )
-    last_rendered: str = (
-        ""  # last text we sent to TG; lets touch_card_status skip no-op edits
-    )
+    last_rendered: str = ""  # last text we sent to TG; skips no-op edits
     last_edit_ts: float = 0.0  # monotonic seconds; gate for CARD_EDIT_LAG coalescing
-    # Wall-clock time when ``status_text`` last *changed* (not just was set).
-    # A claude pane keeps the last spinner line painted even when the
-    # session is idle, so ``status_text != ""`` isn't enough to call
-    # the session "actively producing". A spinner that's been frozen on
-    # the same string for >SPINNER_FRESH_SECONDS is stale — ignore it
-    # for the typing-indicator gate.
-    last_status_change_ts: float = 0.0
     pending_edit: asyncio.Task[None] | None = None  # one deferred edit task at most
     is_continuation: bool = False  # True after a stale-pause or overflow split
     # User opened ≡ Menu / a sub-screen on the card's message. While set,
-    # session updates accumulate into ``lines`` but are NOT rendered to
+    # session updates accumulate into ``events`` but are NOT rendered to
     # Telegram — otherwise the next event would overwrite whatever menu
     # screen the user is looking at. Cleared by ``resume_card_view``
     # (called from text_handler when the user types) or implicitly
     # when the card is reset.
     in_menu_view: bool = False
-    # Set by ``finalize_task`` while ``in_menu_view`` is True so the
-    # delayed render on resume picks up the ``(task complete)`` footer
-    # and the cleanup that would normally happen at finalize time runs.
-    pending_complete_footer: str | None = None
+
+    # ----- legacy alias -----
+    @property
+    def lines(self) -> list[Event]:
+        """Legacy alias retained for the in-place edit callsites that
+        still treat ``state.lines`` as the event list."""
+        return self.events
+
+    @lines.setter
+    def lines(self, value: list[Event]) -> None:
+        self.events = value
 
 
 # Per-(user, session.id) card state.
@@ -215,144 +238,232 @@ def _strip_for_card(text: str) -> str:
     return out
 
 
-async def _seed_prior_context_lines(sess: Session) -> list[CardLine]:
-    """Build up to ``config.card_prior_context`` CardLines from the
-    transcript entries that came *before* the user's most recent message.
+def _parse_timestamp(ts: str) -> float:
+    """Parse ISO-8601 timestamp from a JSONL entry into epoch seconds.
 
-    Used to seed a freshly-opened live card so the user doesn't lose all
-    on-screen context every time the previous task finalises and the
-    next turn starts blank.
-
-    Returns an empty list when:
-      - ``CARD_PRIOR_CONTEXT == 0`` (feature disabled)
-      - the session has no window or no transcript yet
-      - no user message has been recorded yet (first turn)
-      - reading the transcript fails for any reason
+    Returns ``time.time()`` when the input is empty or unparseable so
+    callers can use the result unconditionally as an ``started_at``.
     """
-    n = config.card_prior_context
-    if n <= 0 or not sess.window_id:
-        return []
+    if not ts:
+        return time.time()
     try:
-        messages, _total = await session_manager.get_recent_messages(sess.window_id)
-    except Exception as e:
-        logger.debug("seed_prior_context: get_recent_messages failed: %s", e)
-        return []
-    if not messages:
-        return []
-    # Walk backwards to find the last role=user entry — everything before
-    # that is "prior context" relative to the current turn. If no user
-    # entry exists yet (e.g. assistant first turn), there's nothing to
-    # contextualise; bail.
-    last_user_idx: int | None = None
-    for i in range(len(messages) - 1, -1, -1):
-        if messages[i].get("role") == "user":
-            last_user_idx = i
-            break
-    if last_user_idx is None or last_user_idx == 0:
-        return []
-    head = messages[max(0, last_user_idx - n) : last_user_idx]
-    lines: list[CardLine] = []
-    for entry in head:
-        role = entry.get("role", "")
-        ctype = entry.get("content_type", "text")
-        text = _strip_for_card(entry.get("text", "") or "")
-        if not text.strip():
-            continue
-        if role == "user":
-            lines.append(CardLine(text=f"👤 {_trim(text, 200)}"))
-        elif ctype == "thinking":
-            lines.append(CardLine(text=f"∴ {_trim(text, 160)}"))
-        elif ctype == "tool_use":
-            lines.append(CardLine(text=f"▷ {_trim(text, 160)}", is_tool=True))
-        elif ctype == "tool_result":
-            lines.append(CardLine(text=f"✓ {_trim(text, 160)}", is_tool=True))
-        else:
-            lines.append(CardLine(text=_trim(text, 200)))
-    return lines
+        import datetime as _dt
+
+        # Tolerate trailing Z + offset forms; fromisoformat handles "+HH:MM"
+        # natively but historically chokes on "Z".
+        return _dt.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return time.time()
 
 
-def _line_for_event(msg: NewMessage) -> CardLine:
-    """Build a single one-line summary of one Claude event.
+def _build_event(msg: NewMessage) -> Event:
+    """Build an ``Event`` from one ``NewMessage``.
 
-    Glyph prefix conveys the event type without the verbose
-    ``[<tool> ✓]`` framing the body already implies via the bold
-    ``**Tool**(...)`` summary:
-
-      ∴  thinking
-      ▷  tool_use (in flight)
-      ✓  tool_result (completed; will replace the ▷ line in place)
-      👤 user-echoed text
-      (no prefix) assistant text
+    ``tool_result`` is the only special case: callers should NOT append
+    the returned Event to the card. Instead they look up the matching
+    ``tool_use`` Event by ``tool_use_id`` and fold the result in via
+    ``_apply_tool_result``. We still build a placeholder Event so
+    callers that find no match (race / restart) can fall back to
+    appending it.
     """
     text = _strip_for_card(msg.text or "")
+    raw_body = msg.text or ""
+    started = _parse_timestamp(msg.timestamp)
+
     if msg.content_type == "thinking":
-        return CardLine(text=f"∴ {_trim(text, 160)}")
+        return Event(
+            type="thinking",
+            text=_trim(text, 160),
+            body=raw_body,
+            started_at=started,
+        )
     if msg.content_type == "tool_use":
-        return CardLine(
-            text=f"▷ {_trim(text, 160)}",
+        return Event(
+            type="tool_use",
+            text=_trim(text, 160),
+            body=raw_body,
+            started_at=started,
             tool_use_id=msg.tool_use_id,
-            is_tool=True,
+            tool_name=msg.tool_name,
         )
     if msg.content_type == "tool_result":
-        return CardLine(
-            text=f"✓ {_trim(text, 160)}",
+        return Event(
+            type="tool_result",
+            text=_trim(text, 160),
+            body=raw_body,
+            started_at=started,
             tool_use_id=msg.tool_use_id,
-            is_tool=True,
+            image_data=msg.image_data,
         )
     if msg.role == "user":
-        return CardLine(text=f"👤 {_trim(text, 200)}")
-    return CardLine(text=_trim(text, 200))
+        return Event(
+            type="user_msg",
+            text=_trim(text, 200),
+            body=raw_body,
+            started_at=started,
+        )
+    is_final = msg.stop_reason in ("end_turn", "stop_sequence", "max_tokens")
+    return Event(
+        type="final_text" if is_final else "text",
+        text=_trim(text, 200),
+        body=raw_body,
+        started_at=started,
+        completed_at=started if is_final else None,
+        is_page_break=is_final,
+    )
 
 
-def _collapse_old_tools(state: CardState) -> None:
-    """Keep only the last `config.card_visible_tools` tool lines visible.
+def _apply_tool_result(state: CardState, result: Event) -> bool:
+    """Fold a ``tool_result`` Event into the matching ``tool_use``.
 
-    Older tool lines are removed and replaced by a single placeholder line
-    "… N earlier tool calls collapsed" inserted at the position of the
-    earliest dropped tool. Non-tool lines (thinking, text, user echoes)
-    are preserved in order.
+    Mutates the tool_use Event in place: ``completed_at``, ``body`` and
+    ``is_error`` are updated; image_data is carried over for the send
+    path. Returns True on success, False when no match found (caller
+    should append ``result`` as-is).
     """
-    cap = max(1, config.card_visible_tools)
-    tool_idxs = [i for i, ln in enumerate(state.lines) if ln.is_tool]
-    if len(tool_idxs) <= cap:
-        # Make sure no stale collapse-placeholder lingers from a previous prune.
-        state.lines = [ln for ln in state.lines if ln.collapsed_count == 0]
-        return
+    if not result.tool_use_id:
+        return False
+    for ev in reversed(state.events):
+        if ev.type == "tool_use" and ev.tool_use_id == result.tool_use_id:
+            ev.completed_at = result.started_at
+            ev.body = result.body or ev.body
+            ev.text = result.text or ev.text
+            ev.is_error = result.is_error
+            ev.image_data = result.image_data
+            return True
+    return False
 
-    keep_set = set(tool_idxs[-cap:])
-    new_lines: list[CardLine] = []
-    placeholder_inserted = False
-    dropped = 0
-    earliest_drop_pos: int | None = None
-    for i, ln in enumerate(state.lines):
-        # Drop existing placeholders — we'll add a fresh one if needed.
-        if ln.collapsed_count > 0:
-            continue
-        if ln.is_tool and i not in keep_set:
-            dropped += 1
-            if earliest_drop_pos is None:
-                earliest_drop_pos = len(new_lines)
-            continue
-        new_lines.append(ln)
 
-    if dropped > 0 and earliest_drop_pos is not None:
-        new_lines.insert(
-            earliest_drop_pos,
-            CardLine(
-                text=f"{_COLLAPSED_PREFIX}{dropped}{_COLLAPSED_SUFFIX}",
-                collapsed_count=dropped,
-            ),
-        )
-        placeholder_inserted = True
-    elif dropped > 0 and not placeholder_inserted:
-        new_lines.append(
-            CardLine(
-                text=f"{_COLLAPSED_PREFIX}{dropped}{_COLLAPSED_SUFFIX}",
-                collapsed_count=dropped,
-            )
-        )
+# ─── Render helpers ───────────────────────────────────────────────────
 
-    state.lines = new_lines
+
+def _format_elapsed(seconds: float) -> str:
+    """Format ``M:SS`` for an elapsed timer (negative → ``0:00``)."""
+    s = max(0, int(seconds))
+    return f"{s // 60}:{s % 60:02d}"
+
+
+def _format_hhmm(epoch: float) -> str:
+    import datetime as _dt
+
+    return _dt.datetime.fromtimestamp(epoch).strftime("%H:%M")
+
+
+def _is_in_flight(event: Event, events: list[Event], idx: int) -> bool:
+    """A tool_use is in-flight while ``completed_at`` is unset.
+    Thinking/text are in-flight only when they're the very last event."""
+    if event.type == "tool_use":
+        return event.completed_at is None
+    if event.type in ("thinking", "text"):
+        return idx == len(events) - 1 and event.completed_at is None
+    return False
+
+
+def _body_trim(body: str, max_lines: int = SPOILER_MAX_LINES) -> str:
+    """Trim body content to ``max_lines`` lines. Excess → ``… (+N more lines)``."""
+    if not body:
+        return ""
+    lines = body.split("\n")
+    if len(lines) <= max_lines:
+        return body
+    kept = lines[:max_lines]
+    extra = len(lines) - max_lines
+    kept.append(f"… (+{extra} more lines)")
+    return "\n".join(kept)
+
+
+def render_event(event: Event, *, in_flight: bool, now: float) -> str:
+    """Render one Event as a body block.
+
+    The result may contain ``EXPANDABLE_QUOTE_START/_END`` sentinels —
+    ``markdown_v2`` expands them into MarkdownV2 expandable blockquote
+    syntax (``**>line\\n>line||``) at send time.
+    """
+    # Build the trailing time-or-elapsed marker
+    if in_flight:
+        marker = f" · ⏳ {_format_elapsed(now - event.started_at)}"
+    elif event.type in ("tool_use", "thinking", "text"):
+        marker = f" · {_format_hhmm(event.started_at)}"
+    else:
+        marker = ""
+
+    if event.type == "user_msg":
+        return f"👤 {event.text}"
+
+    if event.type == "thinking":
+        head = f"∴ thinking{marker}"
+        if event.body:
+            quoted = format_expandable_quote(_body_trim(event.body))
+            return f"{head}\n{quoted}"
+        return head
+
+    if event.type == "tool_use":
+        if event.is_error:
+            glyph = "✗"
+        elif event.completed_at is not None:
+            glyph = "✓"
+        else:
+            glyph = "▷"
+        head = f"{glyph} {event.text}{marker}"
+        if event.body:
+            quoted = format_expandable_quote(_body_trim(event.body))
+            return f"{head}\n{quoted}"
+        return head
+
+    if event.type == "tool_result":
+        # Fallback when the matching tool_use Event isn't found (parser
+        # race / restart). Render as a standalone row.
+        head = f"✓ {event.text}{marker}"
+        if event.body:
+            quoted = format_expandable_quote(_body_trim(event.body))
+            return f"{head}\n{quoted}"
+        return head
+
+    if event.type in ("text", "final_text", "error"):
+        # Mid-stream / final / error — inline, no spoiler glyph.
+        return event.text
+
+    return event.text
+
+
+def paginate_events(events: list[Event]) -> list[list[Event]]:
+    """Split ``events`` into pages.
+
+    Page break: each Event with ``is_page_break=True`` becomes the TOP
+    of a new page (everything before it lives on the previous page).
+    Empty input → ``[[]]`` so callers can address page 0.
+    """
+    pages: list[list[Event]] = []
+    current: list[Event] = []
+    for ev in events:
+        if ev.is_page_break and current:
+            pages.append(current)
+            current = [ev]
+        else:
+            current.append(ev)
+    if current:
+        pages.append(current)
+    return pages if pages else [[]]
+
+
+def _resolved_page_idx(state: CardState, total_pages: int) -> int:
+    """``current_page_idx`` clamped, with ``None`` → last (default focus)."""
+    if total_pages <= 0:
+        return 0
+    if state.current_page_idx is None:
+        return total_pages - 1
+    return max(0, min(state.current_page_idx, total_pages - 1))
+
+
+def render_page(events: list[Event], now: float) -> str:
+    """Render the events of one page into a single body string."""
+    parts: list[str] = []
+    for i, ev in enumerate(events):
+        parts.append(render_event(ev, in_flight=_is_in_flight(ev, events, i), now=now))
+    return "\n".join(parts)
+
+
+# ─── Card composition ─────────────────────────────────────────────────
 
 
 def _render_card(
@@ -364,10 +475,6 @@ def _render_card(
 ) -> str:
     emoji = session_emoji(sess)
     state_label = sess.state
-    if state.status_text:
-        # Promote the running tmux status into the header so we don't need a
-        # separate ephemeral "Esc to interrupt" message.
-        state_label = f"{state_label} · {_trim(state.status_text, 60)}"
     cont_marker = " · …continued" if state.is_continuation else ""
     # Active-session quota glyph in the header — ⚠️🟢/🟡/🔴 when the
     # session has crossed a usage threshold. Same data source as the
@@ -375,19 +482,10 @@ def _render_card(
     quota_glyph = ""
     if user_id is not None:
         quota_glyph = bg_status.quota_glyph_for(user_id, sess.id)
-    # Last-event timestamp — HH:MM in the bot host's local time, included
-    # so the user can tell at a glance whether the card is fresh or has
-    # been static for a while. Updates naturally when an event bumps
-    # ``last_event_ts``; spinner-only ticks via ``touch_card_status``
-    # don't move it, so a 10-minute silent session shows a stale stamp
-    # and the user knows nothing has happened.
+    # Last-event timestamp — HH:MM of the most recent event of any kind.
     ts_suffix = ""
     if state.last_event_ts > 0:
-        import datetime as _dt
-
-        ts_suffix = " · " + _dt.datetime.fromtimestamp(state.last_event_ts).strftime(
-            "%H:%M"
-        )
+        ts_suffix = " · " + _format_hhmm(state.last_event_ts)
     name_part = sess.name or sess.id
     if quota_glyph:
         header = (
@@ -398,7 +496,11 @@ def _render_card(
         header = f"{emoji} *{name_part}* · {state_label}{cont_marker}{ts_suffix}"
     if sess.goal:
         header += f"\ngoal: {sess.goal}"
-    body = "\n".join(line.text for line in state.lines)
+
+    pages = paginate_events(state.events)
+    idx = _resolved_page_idx(state, len(pages))
+    body = render_page(pages[idx], now=time.time())
+
     parts = [header, "─────"]
     if body:
         parts.append(body)
@@ -416,25 +518,12 @@ def _render_card(
     return "\n".join(parts)
 
 
-def _ensure_room(
-    sess: Session, state: CardState, *, user_id: int | None = None
-) -> bool:
-    """Trim oldest lines while the rendered card exceeds CARD_HARD_LIMIT.
-
-    Returns True if a fresh card should be opened (we trimmed everything
-    and still don't fit, or we've crossed CARD_MAX_LINES).
-    """
-    while len(state.lines) > CARD_MAX_LINES:
-        state.lines.pop(0)
-    while (
-        state.lines
-        and len(_render_card(sess, state, user_id=user_id)) > CARD_HARD_LIMIT
-    ):
-        state.lines.pop(0)
-    return (
-        len(state.lines) <= 1
-        and len(_render_card(sess, state, user_id=user_id)) > CARD_HARD_LIMIT
-    )
+def card_page_info(state: CardState) -> tuple[int, int]:
+    """Return (current_page_idx, total_pages) for the keyboard counter."""
+    pages = paginate_events(state.events)
+    total = max(1, len(pages))
+    idx = _resolved_page_idx(state, total)
+    return idx, total
 
 
 def _is_stale(state: CardState) -> bool:
@@ -572,7 +661,7 @@ def transfer_card_to_carrier(
     # ``release_card_message`` which clears both ``msg_id`` and
     # ``in_menu_view``. If we left ``in_menu_view=False`` here, any bg
     # event arriving in the ~150 ms parse + edit window would trigger
-    # ``refresh_panel`` (or ``touch_card_status``) — that path sees
+    # ``refresh_panel`` — that path sees
     # ``msg_id=carrier`` + ``in_menu_view=False`` and rerenders the
     # live-card body over the carrier, clobbering the history paint
     # we're racing to land. Symptom: user sees "header + bg panel"
@@ -624,7 +713,6 @@ def detach_paused_cards_at_message(user_id: int, message_id: int) -> None:
         state.pending_edit = None
         state.msg_id = None
         state.in_menu_view = False
-        state.pending_complete_footer = None
         # Mark continuation so the next card visually flags carry-over
         # (``…continued`` in the header).
         state.is_continuation = True
@@ -656,8 +744,7 @@ def release_card_message(user_id: int, session_id: str) -> None:
     stays put and remains paginable.
 
     Buffered ``lines`` are also wiped — they were destined for the
-    overwritten card; the fresh card will re-seed from transcript via
-    ``_seed_prior_context_lines`` on its next event.
+    overwritten card; the fresh card starts empty on its next event.
     """
     state = _cards.get((user_id, session_id))
     if state is None:
@@ -669,7 +756,6 @@ def release_card_message(user_id: int, session_id: str) -> None:
     state.in_menu_view = False
     state.lines = []
     state.last_rendered = ""
-    state.pending_complete_footer = None
     state.is_continuation = True
     logger.info(
         "card_release user=%d sess=%s",
@@ -685,9 +771,7 @@ def release_card_message(user_id: int, session_id: str) -> None:
 
 async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
     """Re-render the card with whatever events accumulated while paused,
-    then drop the pause. If a finalize_task fired during the pause, the
-    catch-up render carries the ``(task complete)`` footer and resets
-    the card afterward exactly as the live path would have."""
+    then drop the pause."""
     state = _cards.get((user_id, sess.id))
     if state is None or state.msg_id is None:
         return
@@ -695,10 +779,8 @@ async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
     state.pending_edit = None
-    footer = state.pending_complete_footer or ""
-    text = _render_card(sess, state, footer=footer, user_id=user_id)
-    is_busy = footer == ""
-    keyboard = build_footer_keyboard(user_id, screen="main", is_busy=is_busy)
+    text = _render_card(sess, state, user_id=user_id)
+    keyboard = build_footer_keyboard(user_id, screen="main", is_busy=True)
     try:
         await bot.edit_message_text(
             chat_id=user_id,
@@ -710,12 +792,6 @@ async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
         state.last_edit_ts = time.monotonic()
     except Exception as e:
         logger.debug("resume_card_view edit failed: %s", e)
-    if state.pending_complete_footer:
-        # The catch-up render IS the final answer rendering — same as
-        # ``finalize_task``. Pin the message so UI nav doesn't clobber it.
-        # ``state.msg_id`` is guaranteed non-None by the early return above.
-        mark_msg_finalized(user_id, state.msg_id)
-        reset_card(user_id, sess.id)
 
 
 async def clear_card(bot: Bot, user_id: int, sess: Session) -> None:
@@ -753,27 +829,16 @@ def _card_is_busy(state: CardState) -> bool:
     """Is this card actually producing output right now? Drives the
     Stop ↔ Kill keyboard split AND the polling-side TYPING indicator.
 
-    Tries three signals in order:
-
       1. ``msg_id`` must be set (card alive — finalize hasn't reset).
-      2. A *fresh* status spinner: ``status_text`` non-empty AND
-         changed within the last ``SPINNER_FRESH_SECONDS``. A stale
-         spinner line (e.g. ``Brewed for 45s`` painted before the
-         session went idle and never repainted by claude) does not
-         count — otherwise the indicator would stick forever after a
-         turn ends.
-      3. A recent claude event within ``2 × CARD_EDIT_LAG``. Bridges
+      2. A recent claude event within ``2 × CARD_EDIT_LAG``. Bridges
          the 100-500 ms gap between ``tool_use`` and ``tool_result``
-         where the spinner briefly clears.
+         where the event stream briefly clears.
     """
     if state.msg_id is None:
         return False
-    now = time.time()
-    if state.status_text and state.last_status_change_ts > 0:
-        if (now - state.last_status_change_ts) < SPINNER_FRESH_SECONDS:
-            return True
     if state.last_event_ts <= 0:
         return False
+    now = time.time()
     grace = max(2.0, config.card_edit_lag * 2)
     return (now - state.last_event_ts) < grace
 
@@ -884,8 +949,8 @@ async def _deferred_edit(
 ) -> None:
     """Sleep `delay` then render the latest card state and edit once.
 
-    The deferred task always picks up the latest `state.lines` / `status_text`,
-    so multiple events arriving during the sleep collapse into a single edit.
+    The deferred task always picks up the latest `state.lines`, so multiple
+    events arriving during the sleep collapse into a single edit.
     """
     try:
         await asyncio.sleep(delay)
@@ -940,40 +1005,20 @@ async def update_session_card(
     msg_id_in = state.msg_id
     in_menu_view_in = state.in_menu_view
 
-    # Fresh-content card → seed the head with a handful of transcript
-    # entries from before the user's most recent message so the new
-    # card carries prior-turn context instead of starting blank.
-    # One-shot: triggers when ``state.lines`` is empty, regardless of
-    # whether ``msg_id`` is set (it is set after a switcher tap that
-    # claimed the carrier — but ``state.lines`` is still empty for a
-    # fresh session). Skipped during menu-view buffering —
-    # resume_card_view handles its own catch-up rendering.
-    if not state.lines and not must_buffer and config.card_prior_context > 0:
-        try:
-            seed = await _seed_prior_context_lines(sess)
-        except Exception as e:
-            logger.debug("seed_prior_context failed: %s", e)
-            seed = []
-        if seed:
-            state.lines.extend(seed)
-
-    new_line = _line_for_event(msg)
-    # tool_result: replace the matching tool_use line in place.
+    new_event = _build_event(msg)
+    # tool_result: fold into the matching tool_use Event in place.
+    # If no match (race / restart), append the placeholder as a row.
     replaced = False
-    if msg.content_type == "tool_result" and msg.tool_use_id:
-        for i, ln in enumerate(state.lines):
-            if ln.tool_use_id == msg.tool_use_id:
-                state.lines[i] = new_line
-                replaced = True
-                break
+    if msg.content_type == "tool_result":
+        replaced = _apply_tool_result(state, new_event)
 
     # Buffer-only path: user is on a menu/sub-screen OR session is bg.
-    # Buffer the event into ``state.lines`` so resume / next switcher
+    # Buffer the event into ``state.events`` so resume / next switcher
     # tap can catch up; do NOT trigger stale-card resets, overflow
     # continuations, or any rendering.
     if must_buffer:
         if not replaced:
-            state.lines.append(new_line)
+            state.events.append(new_event)
         state.last_event_ts = time.time()
         logger.info(
             "card_update buffered sess=%s msg_id=%s ctype=%s lines=%d",
@@ -996,26 +1041,27 @@ async def update_session_card(
     # Trigger: long pause → fresh card.
     if _is_stale(state):
         state.msg_id = None
-        state.lines = []
+        state.events = []
+        state.current_page_idx = None
         state.is_continuation = True
         state.last_rendered = ""
 
     if not replaced:
-        state.lines.append(new_line)
+        state.events.append(new_event)
+        # User-action-anchor: when on the latest page, every new event
+        # keeps the user there. Done as None (=stick-to-latest) so the
+        # render layer picks the latest page automatically.
+        # Page idx is recalibrated by paginate-aware callbacks.
+
+    # Cap event log to avoid unbounded memory; FIFO evicts oldest.
+    if len(state.events) > CARD_MAX_EVENTS:
+        del state.events[: len(state.events) - CARD_MAX_EVENTS]
 
     state.last_event_ts = time.time()
 
-    # Cap visible tool history per CARD_VISIBLE_TOOLS.
-    _collapse_old_tools(state)
-
-    # Trigger: card overflow → continuation card.
-    overflow = _ensure_room(sess, state, user_id=user_id)
-    if overflow:
-        # Couldn't fit even one line — start a fresh card holding only the new line.
-        state.msg_id = None
-        state.lines = [new_line]
-        state.is_continuation = True
-        state.last_rendered = ""
+    # Pagination handles size: the latest page is always within
+    # CARD_HARD_LIMIT chars (paginate splits before the boundary).
+    # No continuation-card path.
 
     text = _render_card(sess, state, user_id=user_id)
 
@@ -1080,19 +1126,15 @@ async def update_session_card(
         )
 
 
-_RESULT_DIVIDER = "\n────── Результат ──────"
-
-
 async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) -> None:
     """Append the final assistant answer to the current live card.
 
-    Earlier this method *replaced* the card body with the final answer
-    and dropped tool history. The new behaviour keeps the tool log
-    visible and appends the final text after a "Результат" divider so
-    the user sees the journey + result in a single message. Long
-    answers still spill into continuation cards via ``split_message``
-    to respect Telegram's 4096-char limit. ``_ensure_room`` trims
-    oldest tool lines if the divider+answer combo wouldn't fit.
+    Appends a ``final_text`` Event with ``is_page_break=True`` so the
+    new answer anchors the top of the latest page; everything before
+    it (tool log, thinking, mid-stream text) lives on the previous page.
+    The user lands on the new latest page by default. Long answers
+    that exceed Telegram's 4096-char limit are sub-paginated by
+    ``paginate_events``.
     """
     state = get_card_state(user_id, sess)
 
@@ -1110,7 +1152,6 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
         # Drop the card; no push — the previous "completion push"
         # behaviour was removed when the result moved into the card body.
         if must_buffer:
-            state.pending_complete_footer = "(task complete)"
             return
         reset_card(user_id, sess.id)
         return
@@ -1119,47 +1160,40 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     cleaned = formatted.text
     attachments = formatted.attachments
 
-    has_history = bool(state.lines)
+    # Final answer = a single is_page_break Event: it anchors the top of
+    # the latest page and pushes pre-answer events into the previous one.
+    now = time.time()
+    final_event = Event(
+        type="final_text",
+        text=_trim(cleaned, 200),
+        body=cleaned,
+        started_at=now,
+        completed_at=now,
+        is_page_break=True,
+    )
 
     # Buffer-only path: user is on a Menu view OR session is bg.
-    # Accumulate divider + answer into state and mark the card
-    # "completion-pending". resume_card_view (next typed message) /
-    # switcher tap will render the footer and reset. Attachments still
-    # go out (file delivery shouldn't wait on a UI navigation).
+    # Accumulate the answer Event into state. resume_card_view (next
+    # typed message) / switcher tap will render the catch-up.
+    # Attachments still go out (file delivery shouldn't wait on UI nav).
     if must_buffer:
-        if has_history:
-            state.lines.append(CardLine(text=_RESULT_DIVIDER))
-        state.lines.append(CardLine(text=cleaned))
-        state.last_event_ts = time.time()
-        state.pending_complete_footer = "(task complete)"
+        state.events.append(final_event)
+        state.last_event_ts = now
         if attachments:
             await _send_attachments(bot, user_id, attachments)
         return
 
-    if has_history:
-        state.lines.append(CardLine(text=_RESULT_DIVIDER))
-
-    # Body budget for the answer chunk after header + tool history + divider.
-    overhead = len(_render_card(sess, state, footer="(task complete)", user_id=user_id))
-    body_budget = max(200, CARD_HARD_LIMIT - overhead - 1)
-    chunks = split_message(cleaned, max_length=body_budget)
-
-    state.lines.append(CardLine(text=chunks[0]))
-    state.last_event_ts = time.time()
-
-    # If the combined card still overflows, _ensure_room trims old tool
-    # lines from the front; if even that fails, open a continuation card
-    # holding only divider + answer.
-    overflow = _ensure_room(sess, state, user_id=user_id)
-    if overflow:
-        state.msg_id = None
-        state.lines = (
-            [CardLine(text=_RESULT_DIVIDER), CardLine(text=chunks[0])]
-            if has_history
-            else [CardLine(text=chunks[0])]
-        )
-        state.is_continuation = True
-        state.last_rendered = ""
+    state.events.append(final_event)
+    if len(state.events) > CARD_MAX_EVENTS:
+        del state.events[: len(state.events) - CARD_MAX_EVENTS]
+    state.last_event_ts = now
+    # Default focus jumps to the new latest page (where final_event lives).
+    state.current_page_idx = None
+    # No continuation-card overflow path: pagination handles size by
+    # showing only the latest page; older content remains navigable via
+    # ◀ / ▶. ``chunks`` is computed here only to honour ``split_overflow``
+    # already done above.
+    chunks = [cleaned]
 
     # Refresh the pages cache so the live-card's pagination counter
     # reflects the final transcript length on the finalised message.
@@ -1184,7 +1218,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     # ``safe_edit``. The pin reroutes any such edit to a fresh carrier.
     finalised_ids: list[int] = []
 
-    text = _render_card(sess, state, footer="(task complete)", user_id=user_id)
+    text = _render_card(sess, state, user_id=user_id)
     if state.msg_id is None:
         await _send_card(bot, user_id, sess, state, text=text, reply_markup=done_kb)
     else:
@@ -1193,18 +1227,11 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     state.last_edit_ts = time.monotonic()
     if state.msg_id is not None:
         finalised_ids.append(state.msg_id)
-
-    # Remaining chunks → fresh continuation cards (answer-only).
-    for chunk in chunks[1:]:
-        state.msg_id = None
-        state.lines = [CardLine(text=chunk)]
-        state.is_continuation = True
-        state.last_rendered = ""
-        text = _render_card(sess, state, footer="(task complete)", user_id=user_id)
-        await _send_card(bot, user_id, sess, state, text=text, reply_markup=done_kb)
-        state.last_edit_ts = time.monotonic()
-        if state.msg_id is not None:
-            finalised_ids.append(state.msg_id)
+    # ``chunks`` retained for future overflow split if a single answer
+    # exceeds 4096 chars after pagination — pagination handles this by
+    # treating the spilled chunk as a sub-page. Today's path renders all
+    # of cleaned into the final_event.body and trusts pagination to split.
+    del chunks
 
     if attachments:
         await _send_attachments(bot, user_id, attachments)
@@ -1213,9 +1240,8 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
         mark_msg_finalized(user_id, mid)
 
     # No separate "✓ done" push under the card — the result is already
-    # rendered inside the card with a "(task complete)" footer, and an
-    # extra message just doubles the noise. Errors and AskUserQuestion
-    # still emit pushes (those need to ping the user).
+    # rendered inside the card body. Errors and AskUserQuestion still
+    # emit pushes (those need to ping the user).
     reset_card(user_id, sess.id)
 
 
@@ -1351,17 +1377,6 @@ async def repost_card(bot: Bot, user_id: int, sess: Session) -> None:
     old_msg_id = state.msg_id
     state.msg_id = None  # force _send_card to create a fresh message
 
-    # No accumulated body yet (post-finalize reset, or first turn). Seed
-    # with prior-context lines so the fresh card carries the most recent
-    # transcript entries instead of an empty header.
-    if not state.lines and config.card_prior_context > 0:
-        try:
-            seed = await _seed_prior_context_lines(sess)
-            if seed:
-                state.lines.extend(seed)
-        except Exception as e:
-            logger.debug("repost_card seed_prior_context failed: %s", e)
-
     text = _render_card(sess, state, user_id=user_id)
     await _send_card(bot, user_id, sess, state, text=text)
     state.last_rendered = text
@@ -1400,37 +1415,74 @@ async def refresh_panel(bot: Bot, user_id: int) -> None:
         state.last_edit_ts = time.monotonic()
 
 
-async def touch_card_status(
-    bot: Bot, user_id: int, window_id: str, status_text: str
-) -> None:
-    """Update the card header's status badge for the session that owns
-    `window_id`. No-op when there is no live card or the badge text is
-    unchanged. Does not create a card if none exists.
-    """
-    sess = session_manager.find_session_by_window(window_id)
-    if sess is None:
-        return
-    state = _cards.get((user_id, sess.id))
-    if state is None or state.msg_id is None:
-        # No live card to update — don't create one for a status tick.
-        return
-    if state.status_text == status_text:
-        return
-    was_busy = bool(state.status_text)
-    state.status_text = status_text
-    # Stamp the wall-clock change time so ``_card_is_busy`` can
-    # distinguish a freshly-ticking spinner from a stale leftover.
-    state.last_status_change_ts = time.time()
-    is_busy = bool(state.status_text)
-    rendered = _render_card(sess, state, user_id=user_id)
-    if rendered == state.last_rendered and was_busy == is_busy:
-        return
+# ─── Tool-timer tick ──────────────────────────────────────────────────
 
-    # When busy state flips, refresh the keyboard so Stop ↔ Kill swaps.
-    keyboard = (
-        build_footer_keyboard(user_id, screen="main", is_busy=is_busy)
-        if was_busy != is_busy
-        else None
-    )
-    if await _edit_card(bot, user_id, state, text=rendered, reply_markup=keyboard):
-        state.last_rendered = rendered
+# How often to re-render the active card to advance the ⏳ M:SS counter
+# on the latest in-flight tool/thinking entry. 3–4 s is the sweet spot:
+# fast enough to feel live, slow enough that we don't waste editMessageText
+# calls or hit the 30/s rate limiter.
+CARD_TIMER_TICK_SECONDS = 3.0
+
+
+def _latest_inflight_idx(page_events: list[Event]) -> int | None:
+    """Index of the last in-flight event on a page, or None if none."""
+    for i in range(len(page_events) - 1, -1, -1):
+        if _is_in_flight(page_events[i], page_events, i):
+            return i
+    return None
+
+
+async def card_timer_loop(bot: Bot) -> None:
+    """Background task that ticks the elapsed timer on the latest
+    in-flight tool/thinking entry of each user's active card.
+
+    Skips:
+      - cards with no msg_id
+      - paused cards (in_menu_view)
+      - users whose pagination puts them on a non-latest page (timer
+        only ticks on the page where the in-flight event lives, i.e.
+        the latest page)
+      - cards with a pending deferred edit (the deferred edit picks up
+        the updated timer when it fires)
+    """
+    logger.info("card_timer_loop started tick=%.1fs", CARD_TIMER_TICK_SECONDS)
+    while True:
+        try:
+            await asyncio.sleep(CARD_TIMER_TICK_SECONDS)
+            for (uid, sid), state in list(_cards.items()):
+                try:
+                    if state.msg_id is None or state.in_menu_view:
+                        continue
+                    sess = session_manager.get_session(sid)
+                    if sess is None:
+                        continue
+                    # Only the user's currently-active session ticks.
+                    active = session_manager.get_active_session(uid)
+                    if active is None or active.id != sid:
+                        continue
+                    pages = paginate_events(state.events)
+                    idx = _resolved_page_idx(state, len(pages))
+                    # Timer renders only on the latest page.
+                    if idx != len(pages) - 1:
+                        continue
+                    if _latest_inflight_idx(pages[idx]) is None:
+                        continue
+                    # Skip when an edit is already queued — it'll pick
+                    # up the fresh timer value when it fires.
+                    if state.pending_edit is not None and not state.pending_edit.done():
+                        continue
+                    text = _render_card(sess, state, user_id=uid)
+                    if text == state.last_rendered:
+                        continue
+                    if await _edit_card(bot, uid, state, text=text):
+                        state.last_rendered = text
+                        state.last_edit_ts = time.monotonic()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.debug("card_timer tick failed for sess=%s: %s", sid, e)
+        except asyncio.CancelledError:
+            logger.info("card_timer_loop cancelled")
+            break
+        except Exception as e:
+            logger.warning("card_timer_loop error: %s", e)

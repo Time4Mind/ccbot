@@ -40,7 +40,7 @@ from .interactive_ui import (
     handle_interactive_ui,
 )
 from .message_queue import get_message_queue
-from .notifications import is_card_busy, refresh_panel, touch_card_status
+from .notifications import is_card_busy, refresh_panel
 
 # Match option lines like "  1. Yes" / " ❯ 2. Yes, and don't ask again".
 _OPTION_LINE_RE = re.compile(r"^[\s❯>]*?(\d+)\.\s+(.+?)\s*$")
@@ -101,12 +101,11 @@ async def update_status_message(
     window_id: str,
     skip_status: bool = False,
 ) -> None:
-    """Poll terminal: detect interactive UIs and refresh the card's status badge.
+    """Poll terminal: detect interactive UIs and drive the typing indicator.
 
     There is no separate "status message" anymore — the live session card
-    already shows the session's state. The pane status line ("…Esc to
-    interrupt", "Working…") is folded into the card header via
-    notifications.touch_card_status when present.
+    carries its own header. The pane spinner ("…Esc to interrupt") is no
+    longer shown in chat; it drives ``send_chat_action(TYPING)`` instead.
     """
     w = await tmux_manager.find_window_by_id(window_id)
     if not w:
@@ -207,11 +206,6 @@ async def update_status_message(
         if bg_status.clear_pending_ui(user_id, sess.id):
             await refresh_panel(bot, user_id)
 
-    # Lift status into the card header. Skip when skip_status to avoid
-    # piling on top of an active enqueued event.
-    if skip_status:
-        return
-    status_line = parse_status_line(pane_text) or ""
     # Telegram chat-action "typing…" — fired every poll cycle while the
     # active session has an in-flight live card (msg_id set, finalize
     # hasn't run yet). The card-busy signal is the right gate: claude
@@ -220,6 +214,9 @@ async def update_status_message(
     # gaps. As soon as finalize_task runs reset_card, msg_id drops to
     # None and the indicator naturally fades inside Telegram's ~5s
     # window. Bg sessions skip — only the foreground bubbles up.
+    if skip_status:
+        return
+    status_line = parse_status_line(pane_text) or ""
     if not is_bg_session and sess is not None and is_card_busy(user_id, sess.id):
         try:
             await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
@@ -240,7 +237,6 @@ async def update_status_message(
             )
         except Exception as e:
             logger.debug("send_chat_action TYPING failed: %s", e)
-    await touch_card_status(bot, user_id, window_id, status_line)
 
 
 async def status_poll_loop(bot: Bot) -> None:

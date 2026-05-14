@@ -75,6 +75,11 @@ CB_FT_MORE = "ft:more"  # open the Menu screen (pauses live-card updates)
 CB_FT_TERM = "ft:term"  # open a native desktop terminal for the active session
 CB_FT_OLDER = "ft:old"  # ◀ Older — page back into history from the live-card
 
+# Live-card pagination (in-card page navigation)
+CB_PG_PREV = "pg:prev"  # ◀ — previous page within the card
+CB_PG_NEXT = "pg:next"  # ▶ — next page within the card
+CB_PG_JUMP = "pg:jump"  # N/M — jump to default-focus page
+
 # More menu
 CB_MM_LIST = "mm:list"
 CB_MM_STATUS = "mm:status"

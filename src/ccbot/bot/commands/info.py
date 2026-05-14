@@ -21,6 +21,8 @@ from ...handlers.callback_data import (
     CB_KEYS_PREFIX,
     CB_SCREENSHOT_REFRESH,
     CB_SHOT_BACK,
+    CB_SHOT_KEYS,
+    CB_SHOT_MODE,
     CB_SHOT_SW,
 )
 from ...handlers.history import send_history
@@ -62,7 +64,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 def build_screenshot_keyboard(window_id: str) -> InlineKeyboardMarkup:
-    """Inline keyboard for screenshot: control keys + refresh + type."""
+    """Inline keyboard for screenshot: control keys + refresh."""
 
     def btn(label: str, key_id: str) -> InlineKeyboardButton:
         return InlineKeyboardButton(
@@ -76,11 +78,10 @@ def build_screenshot_keyboard(window_id: str) -> InlineKeyboardMarkup:
             [btn("←", "lt"), btn("↓", "dn"), btn("→", "rt")],
             [btn("⎋ Esc", "esc"), btn("^C", "cc"), btn("⏎ Enter", "ent")],
             [
-                btn("⌨ Type", "ty"),
                 InlineKeyboardButton(
                     "🔄 Refresh",
                     callback_data=f"{CB_SCREENSHOT_REFRESH}{window_id}"[:64],
-                ),
+                )
             ],
         ]
     )
@@ -134,25 +135,62 @@ def _shot_session_label(sess: Any, *, is_active: bool) -> str:
 
 
 def build_screenshot_compact_keyboard(
-    user_id: int, origin: str
+    user_id: int, origin: str, *, mode: str = "s"
 ) -> InlineKeyboardMarkup:
     """Inline keyboard for the compact screenshot view.
 
-    Layout:
-      - 1+ switcher rows (3 buttons each) — no ``+ new``. A tap switches
-        active to that session and redraws the photo with its pane.
-      - Bottom row: a single Back button that returns to the surface the
-        screenshot was opened from. ``origin`` is ``"m"`` (main / live
-        card) or ``"l"`` (Menu→List view).
+    Two modes, toggled by the bottom-row button:
 
-    No Stop / Clear / Shot / + new / Menu buttons live here by design —
-    the screenshot is a quick "peek at any pane" surface, not a control
-    panel.
+    * ``mode="s"`` (switcher, default) — session-switcher rows + a
+      ``[⌨ Keys] [Back]`` pair. Tapping a session redraws the photo
+      with that session's pane.
+    * ``mode="k"`` (keyboard) — arrow / Enter / Esc / Tab / Space / ^C
+      key grid that send-keys into the **active** session's window
+      (same semantics as the ``/screenshot`` control keyboard), plus a
+      ``[← Switcher] [Back]`` pair. Lets the user navigate an
+      AskUserQuestion-style prompt without typing.
+
+    ``origin`` is ``"m"`` (main / live card) or ``"l"`` (Menu → List
+    view); the Back button routes back to that surface in both modes.
     """
-    sessions = session_manager.list_user_sessions(user_id, states=("active", "idle"))
     active_sess = session_manager.get_active_session(user_id)
+
+    if mode == "k":
+        active_window = active_sess.window_id if active_sess is not None else ""
+
+        def kb(label: str, key_id: str) -> InlineKeyboardButton:
+            return InlineKeyboardButton(
+                label,
+                callback_data=f"{CB_SHOT_KEYS}{key_id}:{origin}:{active_window}"[:64],
+            )
+
+        rows: list[list[InlineKeyboardButton]] = []
+        if active_window:
+            rows.extend(
+                [
+                    [kb("␣ Space", "spc"), kb("↑", "up"), kb("⇥ Tab", "tab")],
+                    [kb("←", "lt"), kb("↓", "dn"), kb("→", "rt")],
+                    [kb("⎋ Esc", "esc"), kb("^C", "cc"), kb("⏎ Enter", "ent")],
+                ]
+            )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "← Switcher",
+                    callback_data=f"{CB_SHOT_MODE}s:{origin}",
+                ),
+                InlineKeyboardButton(
+                    t(user_id, "btn.back"),
+                    callback_data=f"{CB_SHOT_BACK}{origin}",
+                ),
+            ]
+        )
+        return InlineKeyboardMarkup(rows)
+
+    # mode == "s" — switcher layout (default).
+    sessions = session_manager.list_user_sessions(user_id, states=("active", "idle"))
     active_id = active_sess.id if active_sess is not None else ""
-    rows: list[list[InlineKeyboardButton]] = []
+    rows = []
     row: list[InlineKeyboardButton] = []
     for sess in sessions:
         label = _shot_session_label(sess, is_active=sess.id == active_id)
@@ -163,26 +201,17 @@ def build_screenshot_compact_keyboard(
             row = []
     if row:
         rows.append(row)
-    # ⌨ Type — pop the OS keyboard via ForceReply so the user can answer
-    # an AskUserQuestion / type a command without leaving the photo
-    # surface. The window_id is the currently-active session's; the
-    # typed text routes there via the normal text_handler path.
-    type_window = active_sess.window_id if active_sess is not None else ""
-    type_row: list[InlineKeyboardButton] = []
-    if type_window:
-        type_row.append(
-            InlineKeyboardButton(
-                "⌨ Type",
-                callback_data=f"{CB_KEYS_PREFIX}ty:{type_window}"[:64],
-            )
-        )
-    type_row.append(
+    bottom: list[InlineKeyboardButton] = [
+        InlineKeyboardButton(
+            "⌨ Keys",
+            callback_data=f"{CB_SHOT_MODE}k:{origin}",
+        ),
         InlineKeyboardButton(
             t(user_id, "btn.back"),
             callback_data=f"{CB_SHOT_BACK}{origin}",
-        )
-    )
-    rows.append(type_row)
+        ),
+    ]
+    rows.append(bottom)
     return InlineKeyboardMarkup(rows)
 
 

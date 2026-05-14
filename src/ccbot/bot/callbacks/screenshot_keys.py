@@ -1,14 +1,16 @@
 """Screenshot-message callbacks (CB_SCREENSHOT_REFRESH / CB_KEYS_* /
-CB_SHOT_SW / CB_SHOT_BACK).
+CB_SHOT_SW / CB_SHOT_BACK / CB_SHOT_MODE / CB_SHOT_KEYS).
 
 Two flavours of screenshot live in the chat:
 
 * ``/screenshot`` slash → reply_document with the arrow-key control
   keyboard. Handled by ``CB_SCREENSHOT_REFRESH`` + ``CB_KEYS_*``.
 * Shot button (main footer / /list view) → ``emit_screenshot_compact``
-  sends a photo with a *switcher + Back* keyboard. Handled by
-  ``CB_SHOT_SW`` (switch active + redraw) and ``CB_SHOT_BACK`` (delete
-  photo + restore origin surface).
+  sends a photo with either a switcher-mode keyboard (default) or a
+  kb-mode key grid. Handled by ``CB_SHOT_SW`` (switch active +
+  redraw), ``CB_SHOT_BACK`` (delete photo + restore origin surface),
+  ``CB_SHOT_MODE`` (toggle switcher ↔ kb-mode + refresh photo), and
+  ``CB_SHOT_KEYS`` (kb-mode key press: send_keys + refresh photo).
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ from ...handlers.callback_data import (
     CB_KEYS_PREFIX,
     CB_SCREENSHOT_REFRESH,
     CB_SHOT_BACK,
+    CB_SHOT_KEYS,
+    CB_SHOT_MODE,
     CB_SHOT_SW,
 )
 from ...handlers import bg_status
@@ -201,6 +205,79 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             await query.answer("Failed to refresh", show_alert=True)
         return True
 
+    if data.startswith(CB_SHOT_MODE):
+        # sh:m:<k|s>:<m|l> — toggle the compact photo's keyboard between
+        # switcher rows and an arrow / Enter / Esc grid. Both modes also
+        # refresh the photo so the user sees the current pane state.
+        rest = data[len(CB_SHOT_MODE) :]
+        parts = rest.split(":", 1)
+        if len(parts) != 2 or parts[0] not in ("k", "s"):
+            await query.answer("Invalid data")
+            return True
+        mode, origin = parts
+        active = session_manager.get_active_session(user.id)
+        if active is None or not active.window_id:
+            await query.answer("No active session", show_alert=True)
+            return True
+        w = await tmux_manager.find_window_by_id(active.window_id)
+        if not w:
+            await query.answer("Window not found", show_alert=True)
+            return True
+        text = await tmux_manager.capture_pane(w.window_id, with_ansi=True)
+        if not text:
+            await query.answer("Failed to capture pane", show_alert=True)
+            return True
+        png_bytes = await text_to_image(text, with_ansi=True)
+        keyboard = build_screenshot_compact_keyboard(user.id, origin, mode=mode)
+        try:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=io.BytesIO(png_bytes)),
+                reply_markup=keyboard,
+            )
+            await query.answer("⌨" if mode == "k" else "switcher")
+        except Exception as e:
+            logger.debug("shot mode toggle failed: %s", e)
+            await query.answer("Refresh failed", show_alert=True)
+        return True
+
+    if data.startswith(CB_SHOT_KEYS):
+        # shk:<key_id>:<origin>:<window_id> — kb-mode key press in the
+        # compact photo view. Sends the key into the named window, then
+        # refreshes the photo and keeps the kb-mode keyboard attached.
+        rest = data[len(CB_SHOT_KEYS) :]
+        parts = rest.split(":", 2)
+        if len(parts) != 3:
+            await query.answer("Invalid data")
+            return True
+        key_id, origin, window_id = parts
+        key_info = _KEYS_SEND_MAP.get(key_id)
+        if not key_info:
+            await query.answer("Unknown key")
+            return True
+        w = await tmux_manager.find_window_by_id(window_id)
+        if not w:
+            await query.answer("Window not found", show_alert=True)
+            return True
+        tmux_key, enter, literal = key_info
+        await tmux_manager.send_keys(
+            w.window_id, tmux_key, enter=enter, literal=literal
+        )
+        await query.answer(_KEY_LABELS.get(key_id, key_id))
+        # Let the pane render its reaction before we capture.
+        await asyncio.sleep(0.5)
+        text = await tmux_manager.capture_pane(w.window_id, with_ansi=True)
+        if text:
+            png_bytes = await text_to_image(text, with_ansi=True)
+            keyboard = build_screenshot_compact_keyboard(user.id, origin, mode="k")
+            try:
+                await query.edit_message_media(
+                    media=InputMediaPhoto(media=io.BytesIO(png_bytes)),
+                    reply_markup=keyboard,
+                )
+            except Exception as e:
+                logger.debug("shot keys refresh failed: %s", e)
+        return True
+
     if data.startswith(CB_KEYS_PREFIX):
         rest = data[len(CB_KEYS_PREFIX) :]
         colon_idx = rest.find(":")
@@ -209,29 +286,6 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             return True
         key_id = rest[:colon_idx]
         window_id = rest[colon_idx + 1 :]
-
-        if key_id == "ty":
-            # ⌨ Type — surface a ForceReply prompt so the mobile OS
-            # keyboard pops up. The user's reply flows through the
-            # normal text_handler → active session route (it's not
-            # tagged for reply-quote routing because we don't register
-            # this prompt msg in ``_msg_to_session``).
-            from telegram import ForceReply
-
-            try:
-                await context.bot.send_message(
-                    chat_id=user.id,
-                    text="⌨ Type your input — it will be sent to the active session.",
-                    reply_markup=ForceReply(
-                        selective=True,
-                        input_field_placeholder="Send to active session…",
-                    ),
-                )
-                await query.answer()
-            except Exception as e:
-                logger.debug("ty: force-reply send failed: %s", e)
-                await query.answer("Failed to open keyboard", show_alert=True)
-            return True
 
         key_info = _KEYS_SEND_MAP.get(key_id)
         if not key_info:

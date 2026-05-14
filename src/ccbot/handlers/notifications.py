@@ -1324,25 +1324,49 @@ def is_active_for_user(user_id: int, sess: Session) -> bool:
 
 
 async def repost_card(bot: Bot, user_id: int, sess: Session) -> None:
-    """Resend the active live card as a fresh message and drop the old one.
+    """Send a fresh live-card below the user's latest message, and drop
+    the previous one if it exists.
 
-    Used to keep the card visually below the user's latest message when
-    ``card_position`` is set to ``repost``. No-op when the session has no
-    live card or the card is paused (menu / sub-screen open).
+    Called from text_handler when ``card_position == repost`` so the
+    user always sees a bot-side card immediately below the message they
+    just typed (instead of having to wait for claude's first event,
+    which may come seconds later — long enough that the user reports
+    "I don't see updates").
+
+    No-op only when the card is paused (Menu / sub-screen open). In all
+    other cases — including the post-finalize_task state where the
+    previous live card was already pinned + reset — we seed a fresh
+    card so it lands below the user's typed line. When claude's first
+    event arrives it will edit *this* card (state.msg_id is now set)
+    instead of spawning a separate one above the user msg.
     """
     state = _cards.get((user_id, sess.id))
-    if state is None or state.msg_id is None or state.in_menu_view:
+    if state is not None and state.in_menu_view:
         return
+    state = get_card_state(user_id, sess)
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
         state.pending_edit = None
+
     old_msg_id = state.msg_id
     state.msg_id = None  # force _send_card to create a fresh message
+
+    # No accumulated body yet (post-finalize reset, or first turn). Seed
+    # with prior-context lines so the fresh card carries the most recent
+    # transcript entries instead of an empty header.
+    if not state.lines and config.card_prior_context > 0:
+        try:
+            seed = await _seed_prior_context_lines(sess)
+            if seed:
+                state.lines.extend(seed)
+        except Exception as e:
+            logger.debug("repost_card seed_prior_context failed: %s", e)
+
     text = _render_card(sess, state, user_id=user_id)
     await _send_card(bot, user_id, sess, state, text=text)
     state.last_rendered = text
     state.last_edit_ts = time.monotonic()
-    if state.msg_id and state.msg_id != old_msg_id:
+    if old_msg_id and state.msg_id and state.msg_id != old_msg_id:
         try:
             await bot.delete_message(chat_id=user_id, message_id=old_msg_id)
         except Exception as e:

@@ -32,7 +32,7 @@ from ...i18n import t
 from ...screenshot import text_to_image
 from ...session import session_manager
 from ...tmux_manager import tmux_manager
-from ...usage import compute_user_usage, format_usage_status
+from ...usage import format_usage_breakdown_compact
 from .._common import active_window, is_user_allowed
 from .lifecycle import build_live_sessions_text
 
@@ -262,24 +262,49 @@ async def emit_screenshot_compact(
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """`/status` — usage breakdown (5h window, weekly, per-session)."""
+    """`/status` — live usage from Claude's own ``/usage`` modal.
+
+    Uses the same fetch path as Menu→Status: a dedicated ccbot-usage
+    tmux window pops ``/usage``, captures the rendered modal, and we
+    parse it. The locally-aggregated JSONL counter was misleading
+    (didn't reflect Claude's authoritative window/weekly counters), so
+    we now report only what Claude itself reports.
+    """
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         return
     if not update.message:
         return
 
-    usage = await compute_user_usage(user.id)
-    text = format_usage_status(user.id, usage)
-    await safe_reply(update.message, text)
+    from ...handlers.message_sender import safe_edit
+
+    placeholder = await safe_reply(update.message, t(user.id, "usage.fetching"))
+    text = await _format_live_usage(user.id)
+    await safe_edit(placeholder, text)
 
 
 async def emit_status(bot: Bot, user_id: int) -> None:
     """Send /status as a fresh message (Menu→Status callback uses a richer
     keyboard variant via callbacks/more_menu.py)."""
-    usage = await compute_user_usage(user_id)
-    text = format_usage_status(user_id, usage)
-    await safe_send(bot, user_id, text)
+    placeholder = await safe_send(bot, user_id, t(user_id, "usage.fetching"))
+    text = await _format_live_usage(user_id)
+    if placeholder is not None:
+        from ...handlers.message_sender import safe_edit
+
+        await safe_edit(placeholder, text)
+    else:
+        await safe_send(bot, user_id, text)
+
+
+async def _format_live_usage(user_id: int) -> str:
+    """Run Claude's /usage modal in the dedicated window and render its
+    parsed breakdown. Falls back to a short ``unavailable`` notice when
+    parsing fails — same surface as Menu→Status."""
+    from .._usage_window import fetch_claude_usage
+
+    info = await fetch_claude_usage()
+    block = format_usage_breakdown_compact(user_id, info)
+    return block or t(user_id, "usage.unavailable")
 
 
 # --- /list emitter (text body lives in lifecycle.build_live_sessions_text) ---

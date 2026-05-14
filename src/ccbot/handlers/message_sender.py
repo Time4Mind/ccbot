@@ -177,9 +177,65 @@ async def _do_edit(
 
 
 async def safe_edit(target: Any, text: str, **kwargs: Any) -> None:
-    """Edit message with formatting, falling back to plain text on failure."""
+    """Edit message with formatting, falling back to plain text on failure.
+
+    Carrier-protection: if the target message holds a finalised live-card
+    body (the task's final answer), don't overwrite it — strip its inline
+    keyboard and spawn the new view as a fresh chat message instead.
+    Without this guard a single tap on ≡ Menu / a switcher button after
+    a long task completes destroys the answer in chat (user-reported as
+    "ответ исчез"). See ``notifications.mark_msg_finalized``.
+    """
     kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)
-    msg_id = getattr(getattr(target, "message", None), "message_id", None)
+    msg_obj = getattr(target, "message", None)
+    msg_id = getattr(msg_obj, "message_id", None)
+    chat_id = getattr(getattr(msg_obj, "chat", None), "id", None)
+    bot = getattr(target, "_bot", None) or getattr(msg_obj, "_bot", None)
+
+    if msg_id is not None and chat_id is not None and bot is not None:
+        # Deferred import — notifications imports message_sender at the
+        # module level, so the reverse direction has to be lazy.
+        from .notifications import discard_finalized_msg, is_msg_finalized
+
+        if is_msg_finalized(chat_id, msg_id):
+            reply_markup = kwargs.pop("reply_markup", None)
+            try:
+                await bot.edit_message_reply_markup(
+                    chat_id=chat_id, message_id=msg_id, reply_markup=None
+                )
+            except Exception as e:
+                logger.debug(
+                    "safe_edit: strip kb from finalised msg=%s failed: %s",
+                    msg_id,
+                    e,
+                )
+            discard_finalized_msg(chat_id, msg_id)
+            sent = await send_with_fallback(
+                bot,
+                chat_id,
+                text,
+                reply_markup=reply_markup,
+                **kwargs,
+            )
+            logger.info(
+                "safe_edit redirected msg=%s -> new=%s len=%d reason=finalised",
+                msg_id,
+                getattr(sent, "message_id", None),
+                len(text),
+                extra={
+                    "event": "safe_edit_redirected",
+                    "msg_id": msg_id,
+                    "new_msg_id": getattr(sent, "message_id", None),
+                    "len": len(text),
+                    "reason": "finalised",
+                },
+            )
+            if sent is not None and reply_markup is not None:
+                from ..session import session_manager
+
+                session_manager.set_last_switcher_msg(chat_id, sent.message_id)
+            return
+
     try:
         await _do_edit(target, _ensure_formatted(text), parse_mode=PARSE_MODE, **kwargs)
         logger.info(

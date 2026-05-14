@@ -95,6 +95,8 @@ CB_ST_LOCAL = "st:local:"  # st:local:<off|on>  toggle native Terminal popup
 CB_ST_LTERM = "st:lterm:"  # st:lterm:<emulator-name>  pick Linux template
 CB_ST_LCLAUDE = "st:lcl:claude"  # send Linux Claude-fallback prompt to chat
 CB_ST_CPOS = "st:cpos:"  # st:cpos:<push|delete|repost>  user-msg disposition
+CB_ST_VOICE_INSTALL_GO = "st:vi:go"  # confirm whisper.cpp auto-install
+CB_ST_VOICE_INSTALL_NO = "st:vi:no"  # dismiss whisper.cpp install prompt
 CB_ST_BACK = "st:back"  # back to Menu
 
 # Confirmation dialogs (id-bearing variants take session.id)

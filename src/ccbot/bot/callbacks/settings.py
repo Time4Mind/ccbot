@@ -7,6 +7,9 @@ from typing import Any
 
 from telegram.ext import ContextTypes
 
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+from ... import voice_install
 from ...config import config
 from ...handlers.callback_data import (
     CB_ST_APPROVE,
@@ -21,6 +24,8 @@ from ...handlers.callback_data import (
     CB_ST_PREV,
     CB_ST_TOK,
     CB_ST_VOICE,
+    CB_ST_VOICE_INSTALL_GO,
+    CB_ST_VOICE_INSTALL_NO,
     CB_ST_WDAY,
 )
 from ...handlers.menu import (
@@ -73,6 +78,118 @@ async def _send_linux_claude_prompt(query: Any, user_id: int) -> None:
         await safe_send(query.get_bot(), user_id, _CLAUDE_LINUX_PROMPT)
     except Exception as e:
         logger.debug("send_linux_claude_prompt failed: %s", e)
+
+
+def _voice_value_needs_whisper(value: str) -> bool:
+    """True when the chosen voice backend will dispatch to whisper.cpp.
+
+    ``auto`` falls back to whisper.cpp on non-Darwin hosts, so the
+    install prompt fires there too.
+    """
+    import sys
+
+    if value == "whisper":
+        return True
+    if value == "auto" and sys.platform != "darwin":
+        return True
+    return False
+
+
+_VOICE_INSTALL_HEAD = "🎙 *whisper.cpp* — авто-установка"
+
+
+def _voice_install_prompt_text() -> str:
+    plan = voice_install.describe_plan() or "(всё уже на месте — это странно)"
+    return (
+        f"{_VOICE_INSTALL_HEAD}\n\n"
+        "На этом хосте не хватает компонентов для voice-backend "
+        "`whisper`. Бот может поставить их сам:\n\n"
+        f"{plan}\n\n"
+        "Прогресс будет приходить отдельными сообщениями. Шаги "
+        "выполняются под текущим пользователем (нужен root для "
+        "`apt-get` / `/usr/local/bin`). Запустить установку?"
+    )
+
+
+def _voice_install_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "✅ Поставить", callback_data=CB_ST_VOICE_INSTALL_GO
+                ),
+                InlineKeyboardButton("✖ Отмена", callback_data=CB_ST_VOICE_INSTALL_NO),
+            ]
+        ]
+    )
+
+
+async def _maybe_offer_voice_install(query: Any, user_id: int, value: str) -> None:
+    """Pop the OK/Cancel install prompt when the chosen backend will use
+    whisper.cpp and the binary or model is missing on this host. No-op
+    otherwise."""
+    if not _voice_value_needs_whisper(value):
+        return
+    if voice_install.is_ready():
+        return
+    try:
+        await safe_send(
+            query.get_bot(),
+            user_id,
+            _voice_install_prompt_text(),
+            reply_markup=_voice_install_keyboard(),
+        )
+    except Exception as e:
+        logger.debug("voice install prompt send failed: %s", e)
+
+
+# Module-level guard so a tap-spam on "Поставить" can't kick off
+# two concurrent installs (each would race apt/cmake and corrupt the
+# tree). One install at a time per user.
+_install_inflight: set[int] = set()
+
+
+async def _run_voice_install(query: Any, user_id: int) -> None:
+    """Drive the install steps, streaming progress as new chat messages."""
+    if user_id in _install_inflight:
+        try:
+            await safe_send(
+                query.get_bot(),
+                user_id,
+                "⏳ Установка уже идёт — жду текущую попытку.",
+            )
+        except Exception as e:
+            logger.debug("voice install busy notice failed: %s", e)
+        return
+    _install_inflight.add(user_id)
+    bot = query.get_bot()
+
+    async def progress(text: str) -> None:
+        try:
+            await safe_send(bot, user_id, text)
+        except Exception as e:
+            logger.debug("voice install progress send failed: %s", e)
+
+    try:
+        ok = await voice_install.install_async(progress)
+        logger.info(
+            "voice_install finished user=%d ok=%s",
+            user_id,
+            ok,
+            extra={
+                "event": "voice_install_done",
+                "user_id": user_id,
+                "ok": ok,
+            },
+        )
+    except Exception as e:
+        logger.exception("voice install crashed: %s", e)
+        try:
+            await safe_send(bot, user_id, f"❌ Установка упала с исключением: `{e}`")
+        except Exception:
+            pass
+    finally:
+        _install_inflight.discard(user_id)
 
 
 _GROUP_TO_SCREEN = {
@@ -138,6 +255,29 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         await query.answer()
         return True
 
+    if data == CB_ST_VOICE_INSTALL_NO:
+        # Strip the kb from the prompt so the chat is tidy; leave the
+        # body so the user can read what they declined.
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception as e:
+            logger.debug("voice install cancel: kb strip failed: %s", e)
+        await query.answer("Отменено")
+        return True
+
+    if data == CB_ST_VOICE_INSTALL_GO:
+        # Mark prompt as actioned (drop kb) and ack immediately — install
+        # runs in the background and reports through progress messages.
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception as e:
+            logger.debug("voice install go: kb strip failed: %s", e)
+        await query.answer("Запускаю установку…")
+        import asyncio as _asyncio
+
+        _asyncio.create_task(_run_voice_install(query, user.id))
+        return True
+
     setter_prefixes = (
         CB_ST_PREV,
         CB_ST_LAG,
@@ -171,6 +311,13 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         value = data[len(CB_ST_VOICE) :]
         if value in ("auto", "whisper", "apple", "off"):
             session_manager.update_user_setting(user.id, "voice", value)
+            # When the user picks a backend that needs whisper.cpp and
+            # the host doesn't have it, offer the auto-install. Fires
+            # only on transition into that state — re-tapping the same
+            # button re-offers, which is harmless and arguably useful
+            # ("retry the install"). The prompt is a separate message
+            # so it doesn't fight with the settings-screen carrier.
+            await _maybe_offer_voice_install(query, user.id, value)
         screen_name = "settings_voice"
     elif data.startswith(CB_ST_LANG):
         value = data[len(CB_ST_LANG) :]

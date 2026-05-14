@@ -44,6 +44,35 @@ async def _ensure_usage_window() -> str | None:
     return wid
 
 
+async def _capture_with_scrollback(wid: str) -> str | None:
+    """Capture pane with ~100 lines of scrollback.
+
+    The /usage modal body has grown past 24 rows ("What's contributing
+    to your limits" + subagent stats), so the Current session / Current
+    week rows scroll off the top of the viewport. ``capture_pane``
+    default reads viewport-only; here we read enough scrollback to keep
+    those rows visible to the parser.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tmux",
+            "capture-pane",
+            "-p",
+            "-S",
+            "-100",
+            "-t",
+            wid,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode == 0:
+            return stdout.decode("utf-8")
+    except Exception as e:
+        logger.debug("capture_with_scrollback failed: %s", e)
+    return None
+
+
 async def _poll_usage_modal(wid: str) -> object | None:
     """Send /usage, poll the pane for quota rows, dismiss with Escape."""
     from ..terminal_parser import extract_usage_breakdown, parse_usage_output
@@ -54,7 +83,7 @@ async def _poll_usage_modal(wid: str) -> object | None:
         await tmux_manager.send_keys(wid, "/usage")
         for _ in range(60):  # 60 × 200 ms = 12 s
             await asyncio.sleep(0.2)
-            pane_text = await tmux_manager.capture_pane(wid)
+            pane_text = await _capture_with_scrollback(wid)
             if not pane_text:
                 continue
             candidate = parse_usage_output(pane_text)

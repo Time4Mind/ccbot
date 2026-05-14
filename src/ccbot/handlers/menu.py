@@ -28,11 +28,11 @@ from .callback_data import (
     CB_FT_CLEAR,
     CB_FT_KILL,
     CB_FT_MORE,
+    CB_FT_OLDER,
     CB_FT_STOP,
     CB_FT_TERM,
     CB_MM_ARCHIVE,
     CB_MM_BACK,
-    CB_MM_HISTORY,
     CB_MM_LIST,
     CB_MM_NEW,
     CB_MM_SETTINGS,
@@ -227,7 +227,6 @@ _MM_BUTTONS: tuple[tuple[str, str, str], ...] = (
     ("list", "mm.list", CB_MM_LIST),
     ("archive", "mm.archive", CB_MM_ARCHIVE),
     ("status", "mm.status", CB_MM_STATUS),
-    ("history", "mm.history", CB_MM_HISTORY),
     ("new", "mm.new", CB_MM_NEW),
     ("settings", "mm.settings", CB_MM_SETTINGS),
 )
@@ -495,6 +494,7 @@ def build_footer_keyboard(
     include_lost_in_switcher: bool = False,
     is_busy: bool = True,
     exclude_more: str | None = None,
+    include_older_btn: bool = True,
 ) -> InlineKeyboardMarkup | None:
     """Compose footer rows + switcher row for the requested screen.
 
@@ -547,6 +547,29 @@ def build_footer_keyboard(
     elif screen == "settings_cardpos":
         rows.extend(_settings_cardpos_grid(user_id))
     else:
+        # ◀ Older + N/N pagination row at the very top — same layout as
+        # the history view's pagination so the live-card and history
+        # surfaces look identical (no "blinking" keyboard between
+        # streaming events). When the page count isn't cached yet (very
+        # first render on a fresh session), the counter is dropped — it
+        # populates on the next render after a prewarm. Suppressed in
+        # callers that compose this keyboard as extras BELOW a history-
+        # view's own pagination row (switcher tap / /screenshot Back /
+        # CB_HISTORY_PREV/NEXT) to avoid two stacked ◀ Older buttons.
+        if include_older_btn and _has_active_session(user_id):
+            pag_row: list[InlineKeyboardButton] = [
+                InlineKeyboardButton("◀ Older", callback_data=CB_FT_OLDER)
+            ]
+            active = session_manager.get_active_session(user_id)
+            if active is not None and active.window_id:
+                from .history import get_cached_total_pages
+
+                total = get_cached_total_pages(active.window_id)
+                if total is not None and total >= 1:
+                    pag_row.append(
+                        InlineKeyboardButton(f"{total}/{total}", callback_data="noop")
+                    )
+            rows.append(pag_row)
         top = _footer_top_row(user_id, is_busy=is_busy)
         if top:
             rows.append(top)

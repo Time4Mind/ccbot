@@ -298,6 +298,16 @@ async def status_poll_loop(bot: Bot) -> None:
                         )
                         continue
 
+                    # Keep the history-pages cache populated so the
+                    # live-card's pagination counter has a stable value
+                    # to render across streaming events (avoid the
+                    # "blinking" keyboard where the counter appears
+                    # and disappears). Throttled to once per 3s per
+                    # window so the parse cost is bounded.
+                    from .history import kick_prewarm
+
+                    kick_prewarm(wid)
+
                     # UI detection happens unconditionally inside update_status_message.
                     # Status enqueue is skipped when interactive UI is detected
                     # (returns early) or when the queue is non-empty.

@@ -169,9 +169,12 @@ takes that spot in *Menu → List* / *Archive*).
 
 Tapping a non-active session **paints the full transcript history**
 of that session onto the carrier message and switches the active
-session in one go — no extra `≡ Menu → History` tap needed.
-Pagination buttons (◀ Older / Newer ▶) keep the footer keyboard
-under them. Tapping the already-active button is a no-op.
+session in one go. Pagination buttons (◀ Older / Newer ▶) keep the
+footer keyboard under them — they're the navigation affordance, so
+there is no separate "History" entry in the Menu. Tapping the
+already-active button is a no-op. `Back` from `/screenshot` also
+lands the user on the paginated transcript (origin `m` returns to
+the main view, origin `l` to /list).
 
 Reply-quoting a bot message belonging to a non-active session routes
 that single reply there without changing the active session.

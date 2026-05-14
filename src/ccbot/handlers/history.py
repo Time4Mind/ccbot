@@ -157,6 +157,64 @@ async def render_archived_history_pages(
     return list(pages), total
 
 
+def get_cached_total_pages(window_id: str) -> int | None:
+    """Return the cached total-page count for ``window_id`` or None.
+
+    Used by callers that need to target a specific page (e.g. the
+    live-card's ◀ Older button → page-before-last) without paying the
+    parse cost. Returns ``None`` when no entry is cached — the caller
+    should ``prewarm_pages_cache`` first.
+
+    Note: returns the count from the cached entry regardless of whether
+    the JSONL has grown since (mtime/size mismatch). The count is then
+    "stale-but-stable" between prewarms — exactly what the live-card
+    pagination counter wants so the keyboard doesn't blink between
+    streaming events.
+    """
+    entry = _pages_cache.get(window_id)
+    if entry is None:
+        return None
+    return len(entry[2])
+
+
+_last_prewarm_attempt: dict[str, float] = {}
+
+
+def kick_prewarm(window_id: str, min_interval: float = 3.0) -> None:
+    """Schedule a background prewarm of the pages cache for ``window_id``.
+
+    Fire-and-forget: returns immediately; the actual JSONL parse runs
+    in a background task. Throttled to at most one attempt per
+    ``min_interval`` seconds per window so the streaming-rate keyboard
+    renders don't trigger a re-parse of the whole transcript on every
+    event.
+
+    Use before any keyboard build that needs the cached page count
+    (e.g. the live-card pagination counter): the counter shows up
+    once the background task lands, and stays stable across subsequent
+    renders even when the cache goes stale relative to the growing
+    JSONL (``get_cached_total_pages`` returns the cached value
+    regardless of mtime/size).
+    """
+    import asyncio
+    import time
+
+    if not window_id:
+        return
+    now = time.monotonic()
+    last = _last_prewarm_attempt.get(window_id, 0.0)
+    if now - last < min_interval:
+        return
+    _last_prewarm_attempt[window_id] = now
+    try:
+        asyncio.create_task(prewarm_pages_cache(window_id))
+    except RuntimeError:
+        # No running loop — caller is in sync context outside the bot.
+        # Skip; another path (status polling, the next callback) will
+        # populate the cache eventually.
+        pass
+
+
 async def prewarm_pages_cache(window_id: str) -> bool:
     """Build and store the rendered history pages for ``window_id`` so
     the next ``send_history`` for this window hits the cache.

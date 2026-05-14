@@ -58,15 +58,6 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await send_history(update.message, wid)
 
 
-async def emit_history(bot: Bot, user_id: int) -> None:
-    """Render history as a fresh message (used by the Menu→History callback)."""
-    wid = active_window(user_id)
-    if not wid:
-        await safe_send(bot, user_id, "❌ No active session.")
-        return
-    await send_history(target=None, window_id=wid, bot=bot, user_id=user_id)
-
-
 # --- /screenshot + helpers ---
 
 

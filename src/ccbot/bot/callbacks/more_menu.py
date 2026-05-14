@@ -15,7 +15,6 @@ from ...handlers.callback_data import (
     CB_FT_KILL,
     CB_MM_ARCHIVE,
     CB_MM_BACK,
-    CB_MM_HISTORY,
     CB_MM_LIST,
     CB_MM_NEW,
     CB_MM_SETTINGS,
@@ -39,7 +38,7 @@ from ...handlers.message_sender import safe_edit, safe_send
 from ...handlers.switcher import build_switcher_keyboard
 from ...i18n import t
 from ...session import session_manager
-from .._common import active_window, set_view
+from .._common import set_view
 from .._usage_window import fetch_claude_usage
 from ..commands.info import emit_screenshot_compact
 from ..commands.lifecycle import build_live_sessions_text
@@ -193,29 +192,6 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         live_block = format_usage_breakdown_compact(user.id, usage_info)
         text = live_block or t(user.id, "usage.unavailable")
         await safe_edit(query, text, reply_markup=kb)
-        return True
-
-    if data == CB_MM_HISTORY:
-        await query.answer()
-        clear_view_markers(context.user_data)
-        if context.user_data is not None:
-            context.user_data[HISTORY_ORIGIN_KEY] = "more"
-        wid = active_window(user.id)
-        if not wid:
-            kb = build_footer_keyboard(user.id, screen="more", exclude_more="history")
-            await safe_edit(query, t(user.id, "toast.no_session"), reply_markup=kb)
-        else:
-            extra_kb = build_footer_keyboard(
-                user.id, screen="more", exclude_more="history"
-            )
-            extra_rows = list(extra_kb.inline_keyboard) if extra_kb is not None else []
-            await send_history(
-                target=query,
-                window_id=wid,
-                edit=True,
-                user_id=user.id,
-                extra_rows=[list(r) for r in extra_rows],
-            )
         return True
 
     if data == CB_MM_SHOT:

@@ -4,8 +4,10 @@
 ┌─────────────────────────────────────────────────────────────────────┐
 │                       Telegram Bot (bot/ package)                   │
 │  - DM-based routing: 1 user = active_session -> tmux window        │
-│  - Inline ≡ Menu surface (List / Status / History / Shot / New /   │
-│    Archive / Settings) hosting most actions                        │
+│  - Inline ≡ Menu surface (List / Status / Shot / New / Archive /   │
+│    Settings) hosting most actions; History is reached via switcher │
+│    tap / Menu → List / /screenshot Back (pagination is the         │
+│    affordance, no explicit History button)                         │
 │  - Slash commands (bot/commands/):  lifecycle.py + info.py         │
 │  - Callback dispatch (bot/callbacks/): one file per CB_* prefix    │
 │  - Send text → Claude Code via tmux keystrokes                     │
@@ -88,6 +90,10 @@ bot/ package (was bot.py before A1, split per CLAUDE.md size budget):
                        render_session_preview, set_view, open_more_in_place,
                        is_window_busy, shorten_workdir, CC_COMMANDS
   _usage_window.py    ─ Dedicated ccbot-usage tmux window for /usage queries
+                        (captures pane with -S -100 scrollback so the
+                        Current session / week rows survive the longer
+                        modal body; parser picks the LAST modal header
+                        in the buffer to ignore stale prior attempts)
   _session_create.py  ─ create_and_activate_session (dir-browser → tmux flow)
   messages.py         ─ text/voice/photo/document handlers, forward_command_handler,
                        bash !cmd capture
@@ -101,7 +107,7 @@ bot/ package (was bot.py before A1, split per CLAUDE.md size budget):
   callbacks/switcher.py    ─ CB_SW_*
   callbacks/archive.py     ─ CB_ARC_*
   callbacks/footer.py      ─ CB_FT_STOP/KILL/CLEAR/MORE
-  callbacks/more_menu.py   ─ CB_MM_LIST/STATUS/HISTORY/SHOT/NEW/ARCHIVE/SETTINGS/BACK
+  callbacks/more_menu.py   ─ CB_MM_LIST/STATUS/SHOT/NEW/ARCHIVE/SETTINGS/BACK
   callbacks/settings.py    ─ CB_ST_GRP + CB_ST_PREV/LAG/VOICE/LANG/WDAY/APPROVE
   callbacks/confirm.py     ─ CB_CONF_KILL/DONE/DEL × YES/NO
   callbacks/history_pagination.py ─ CB_HISTORY_PREV/NEXT

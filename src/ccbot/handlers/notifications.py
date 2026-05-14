@@ -871,6 +871,15 @@ async def update_session_card(
 
     Triggers a fresh card on long pause and on hard-limit overflow.
     """
+    # Fire a (throttled) background prewarm of the pages cache so the
+    # live-card's ◀ Older N/N counter has a value to render on the
+    # next event. The first event after session start may still paint
+    # without the counter — the background task lands within a second.
+    if sess.window_id:
+        from .history import kick_prewarm
+
+        kick_prewarm(sess.window_id)
+
     state = get_card_state(user_id, sess)
 
     # Should we buffer this event instead of rendering it now? Reasons:
@@ -1110,6 +1119,19 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
         state.is_continuation = True
         state.last_rendered = ""
 
+    # Refresh the pages cache so the live-card's pagination counter
+    # reflects the final transcript length on the finalised message.
+    # This is the one place we await prewarm directly — finalize fires
+    # once per task, so ~1 s of parsing is OK to pay for a correct
+    # ◀ Older N/N counter on the artifact the user looks at most.
+    if sess.window_id:
+        try:
+            from .history import prewarm_pages_cache
+
+            await prewarm_pages_cache(sess.window_id)
+        except Exception as e:
+            logger.debug("finalize_task prewarm failed: %s", e)
+
     # Finalised card → ``is_busy=False`` keyboard so the user sees Kill,
     # not Stop, on a completed result.
     done_kb = build_footer_keyboard(user_id, screen="main", is_busy=False)
@@ -1270,36 +1292,6 @@ async def repost_card(bot: Bot, user_id: int, sess: Session) -> None:
             await bot.delete_message(chat_id=user_id, message_id=old_msg_id)
         except Exception as e:
             logger.debug("repost_card delete old failed: %s", e)
-
-
-async def resend_card_view(bot: Bot, user_id: int, sess: Session) -> None:
-    """Send a fresh live card for ``sess`` as a brand-new message.
-
-    Used when an out-of-band flow (e.g. the compact screenshot view's
-    Back button) replaced the previous carrier and the user wants to
-    return to the live-card view. Unlike ``repost_card`` this does not
-    require a still-living previous carrier — the prior msg_id is just
-    discarded.
-    """
-    state = _cards.get((user_id, sess.id))
-    if state is None:
-        state = CardState()
-        _cards[(user_id, sess.id)] = state
-    if state.pending_edit is not None and not state.pending_edit.done():
-        state.pending_edit.cancel()
-    state.pending_edit = None
-    state.msg_id = None
-    state.in_menu_view = False
-    if not state.lines:
-        # Seed from transcript so the user doesn't land on an empty card.
-        try:
-            state.lines = await _seed_prior_context_lines(sess)
-        except Exception as e:
-            logger.debug("resend_card_view seed failed: %s", e)
-    text = _render_card(sess, state, user_id=user_id)
-    await _send_card(bot, user_id, sess, state, text=text)
-    state.last_rendered = text
-    state.last_edit_ts = time.monotonic()
 
 
 async def refresh_panel(bot: Bot, user_id: int) -> None:

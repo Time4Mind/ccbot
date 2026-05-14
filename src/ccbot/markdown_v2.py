@@ -172,6 +172,60 @@ def _markdownify(text: str) -> str:
         return renderer.render(document)
 
 
+_TAG_TO_MD: dict[str, tuple[str, str]] = {
+    "b": ("**", "**"),
+    "strong": ("**", "**"),
+    "i": ("*", "*"),
+    "em": ("*", "*"),
+    "u": ("__", "__"),
+    "s": ("~", "~"),
+    "code": ("`", "`"),
+    "pre": ("```", "```"),
+}
+_HTML_TAG_RE = re.compile(
+    r"<(b|strong|i|em|u|s|code|pre)>(.*?)</\1>",
+    re.DOTALL | re.IGNORECASE,
+)
+_FENCE_SPLIT_RE = re.compile(r"(```.*?```)", re.DOTALL)
+
+
+def _html_inline_to_markdown(text: str) -> str:
+    """Rewrite the Telegram-HTML inline tags Claude sometimes emits
+    (``<b>``, ``<i>``, ``<code>``, ``<pre>``, friends) into Markdown
+    equivalents so the rest of the pipeline (telegramify-markdown →
+    MarkdownV2) can render them. Without this, claude sessions whose
+    instructions push HTML parse_mode land their literal ``<b>…</b>``
+    text in chat — the pets-session "formatting broken" symptom.
+
+    Contents inside triple-backtick fenced code blocks are left alone
+    so we don't corrupt a code example that's discussing the tags
+    themselves. Nested tags resolve via an iterative pass (capped to
+    avoid pathological loops).
+    """
+
+    def _repl(m: re.Match[str]) -> str:
+        tag = m.group(1).lower()
+        inner = m.group(2)
+        left, right = _TAG_TO_MD[tag]
+        return f"{left}{inner}{right}"
+
+    parts = _FENCE_SPLIT_RE.split(text)
+    out: list[str] = []
+    for i, part in enumerate(parts):
+        if i % 2 == 1:
+            # Inside a ``` fence — leave as is.
+            out.append(part)
+            continue
+        # Outside — convert HTML inline tags, looping for nested cases.
+        for _ in range(5):
+            new = _HTML_TAG_RE.sub(_repl, part)
+            if new == part:
+                break
+            part = new
+        out.append(part)
+    return "".join(out)
+
+
 def convert_markdown(text: str) -> str:
     """Convert standard Markdown to Telegram MarkdownV2 format.
 
@@ -179,6 +233,12 @@ def convert_markdown(text: str) -> str:
     TranscriptParser) are extracted, escaped, and formatted separately
     so that telegramify_markdown doesn't mangle the >...|| syntax.
     """
+    # Pre-convert Telegram-HTML inline tags (<b>/<i>/<code>/<pre>) that
+    # claude sometimes emits — see ``_html_inline_to_markdown``. Done
+    # before everything else so downstream tables / quote-block /
+    # markdown passes operate on uniform Markdown input.
+    text = _html_inline_to_markdown(text)
+
     # Convert markdown tables to card-style format before telegramify
     text = convert_markdown_tables(text)
 

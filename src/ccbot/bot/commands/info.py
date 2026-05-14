@@ -62,7 +62,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 def build_screenshot_keyboard(window_id: str) -> InlineKeyboardMarkup:
-    """Inline keyboard for screenshot: control keys + refresh."""
+    """Inline keyboard for screenshot: control keys + refresh + type."""
 
     def btn(label: str, key_id: str) -> InlineKeyboardButton:
         return InlineKeyboardButton(
@@ -76,10 +76,11 @@ def build_screenshot_keyboard(window_id: str) -> InlineKeyboardMarkup:
             [btn("←", "lt"), btn("↓", "dn"), btn("→", "rt")],
             [btn("⎋ Esc", "esc"), btn("^C", "cc"), btn("⏎ Enter", "ent")],
             [
+                btn("⌨ Type", "ty"),
                 InlineKeyboardButton(
                     "🔄 Refresh",
                     callback_data=f"{CB_SCREENSHOT_REFRESH}{window_id}"[:64],
-                )
+                ),
             ],
         ]
     )
@@ -162,14 +163,26 @@ def build_screenshot_compact_keyboard(
             row = []
     if row:
         rows.append(row)
-    rows.append(
-        [
+    # ⌨ Type — pop the OS keyboard via ForceReply so the user can answer
+    # an AskUserQuestion / type a command without leaving the photo
+    # surface. The window_id is the currently-active session's; the
+    # typed text routes there via the normal text_handler path.
+    type_window = active_sess.window_id if active_sess is not None else ""
+    type_row: list[InlineKeyboardButton] = []
+    if type_window:
+        type_row.append(
             InlineKeyboardButton(
-                t(user_id, "btn.back"),
-                callback_data=f"{CB_SHOT_BACK}{origin}",
+                "⌨ Type",
+                callback_data=f"{CB_KEYS_PREFIX}ty:{type_window}"[:64],
             )
-        ]
+        )
+    type_row.append(
+        InlineKeyboardButton(
+            t(user_id, "btn.back"),
+            callback_data=f"{CB_SHOT_BACK}{origin}",
+        )
     )
+    rows.append(type_row)
     return InlineKeyboardMarkup(rows)
 
 

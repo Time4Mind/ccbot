@@ -157,6 +157,20 @@ async def render_archived_history_pages(
     return list(pages), total
 
 
+def get_cached_total_pages(window_id: str) -> int | None:
+    """Return the cached total-page count for ``window_id`` or None.
+
+    Used by callers that need to target a specific page (e.g. the
+    live-card's ◀ Older button → page-before-last) without paying the
+    parse cost. Returns ``None`` when no entry is cached — the caller
+    should ``prewarm_pages_cache`` first.
+    """
+    entry = _pages_cache.get(window_id)
+    if entry is None:
+        return None
+    return len(entry[2])
+
+
 async def prewarm_pages_cache(window_id: str) -> bool:
     """Build and store the rendered history pages for ``window_id`` so
     the next ``send_history`` for this window hits the cache.

@@ -139,7 +139,9 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                 # row stack — otherwise pagination loses every button
                 # except Older/Newer.
                 context.user_data[HISTORY_ORIGIN_KEY] = "switcher"
-            footer_kb = build_footer_keyboard(user.id, screen="main", is_busy=False)
+            footer_kb = build_footer_keyboard(
+                user.id, screen="main", is_busy=False, include_older_btn=False
+            )
             extra_rows = (
                 [list(r) for r in footer_kb.inline_keyboard]
                 if footer_kb is not None

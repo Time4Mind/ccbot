@@ -119,7 +119,7 @@ When the user taps a session button in the main switcher:
 3. If the TO session has a stashed `bg_status.pending_interactive_ui` *and* the live pane still shows the prompt, the carrier is repainted with the prompt + the regular CB_ASK_* keyboard (`adopt_interactive_msg`). Otherwise the carrier is painted with `send_history` — the full paginated transcript view, with the standard footer ridden along as `extra_rows` so management controls stay reachable.
 4. `bg_status.mark_seen` + `prune_seen` drop the just-viewed badge from the panel.
 
-Pagination (`CB_HISTORY_PREV/NEXT`) preserves the original `extra_rows` by stamping `context.user_data['_history_origin']` (`switcher` or `more`) when the history view is first painted; the pagination handler rebuilds the matching footer from this hint.
+Pagination (`CB_HISTORY_PREV/NEXT`) preserves the original `extra_rows` by stamping `context.user_data['_history_origin']` (`switcher` or `menu_list`) when the history view is first painted; the pagination handler rebuilds the matching footer from this hint. There is no explicit "History" button in the footer — pagination buttons themselves are the navigation affordance, and the user lands on the paginated view via switcher tap, Menu → List, or `/screenshot Back` (both `m` and `l` origins now paint history).
 
 Tapping a session in the `/list` view (Menu → List) instead re-renders the list view with the new active highlighted — the management surface is the more useful affordance in that context. Tracked via `context.user_data['_in_list_view']`, cleared on `CB_MM_BACK`, `CB_FT_MORE`, and any typed message.
 

@@ -1,10 +1,9 @@
 """History pagination callbacks (CB_HISTORY_PREV / CB_HISTORY_NEXT).
 
 Reattaches the same extras-row stack that was painted under the
-history page originally — the originating callback (CB_SW_USE or
-CB_MM_HISTORY) writes a marker into ``context.user_data`` so we know
-whether the user opened history from the switcher tap or from
-Menu → History, and can rebuild a matching footer.
+history page originally — the originating callback (CB_SW_USE,
+CB_FT_HISTORY, CB_MM_LIST, or /screenshot Back) writes a marker into
+``context.user_data`` so we know which footer to rebuild for paging.
 """
 
 from __future__ import annotations
@@ -27,9 +26,7 @@ logger = logging.getLogger(__name__)
 def _build_extra_rows(user_id: int, origin: str) -> list[list[Any]] | None:
     """Rebuild the extras-row stack a freshly-painted history view would
     have had, so a page click doesn't drop the footer."""
-    if origin == "more":
-        kb = build_footer_keyboard(user_id, screen="more", exclude_more="history")
-    elif origin == "menu_list":
+    if origin == "menu_list":
         # Menu → List paints history with the /list footer (Kill / Clear
         # / switcher / + new / Back). Pagination has to rebuild the
         # same layout — not the main-screen footer with ≡ Menu.
@@ -38,7 +35,12 @@ def _build_extra_rows(user_id: int, origin: str) -> list[list[Any]] | None:
         _, kb = build_list_view(user_id)
     else:
         # "switcher" or unknown: fall back to the main footer + switcher.
-        kb = build_footer_keyboard(user_id, screen="main", is_busy=False)
+        # The pagination row is already on the message (from
+        # ``_build_history_keyboard``), so suppress the live-card's
+        # ◀ Older alias in the extras to avoid two stacked Older buttons.
+        kb = build_footer_keyboard(
+            user_id, screen="main", is_busy=False, include_older_btn=False
+        )
     if kb is None:
         return None
     return [list(r) for r in kb.inline_keyboard]

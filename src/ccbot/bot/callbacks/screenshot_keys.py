@@ -29,8 +29,8 @@ from ...handlers.callback_data import (
 )
 from ...handlers import bg_status
 from ...handlers.history import send_history
+from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_send
-from ...handlers.notifications import resend_card_view
 from ...screenshot import text_to_image
 from ...session import session_manager
 from ...tmux_manager import tmux_manager
@@ -118,11 +118,11 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             except Exception as e:
                 logger.debug("shot back: delete photo failed: %s", e)
         active_sess = session_manager.get_active_session(user.id)
+        from .more_menu import HISTORY_ORIGIN_KEY, build_list_view
+
         if origin == "l":
             # Re-emit the /list view as a fresh message: history of the
             # active session + the standard /list footer underneath.
-            from .more_menu import HISTORY_ORIGIN_KEY, build_list_view
-
             body, kb = build_list_view(user.id)
             if active_sess is None or not active_sess.window_id:
                 await safe_send(context.bot, user.id, body, reply_markup=kb)
@@ -143,9 +143,34 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                     logger.debug("shot back: fresh /list paint failed: %s", e)
                     await safe_send(context.bot, user.id, body, reply_markup=kb)
         else:
-            # origin == "m" — send a fresh live card.
-            if active_sess is not None:
-                await resend_card_view(context.bot, user.id, active_sess)
+            # origin == "m" — send the active session's history with the
+            # main-screen footer. Mirrors /list's Back path so the user
+            # lands on the paginated transcript instead of an empty card.
+            if active_sess is not None and active_sess.window_id:
+                if context.user_data is not None:
+                    context.user_data[HISTORY_ORIGIN_KEY] = "switcher"
+                footer_kb = build_footer_keyboard(
+                    user.id,
+                    screen="main",
+                    is_busy=False,
+                    include_older_btn=False,
+                )
+                extra_rows = (
+                    [list(r) for r in footer_kb.inline_keyboard]
+                    if footer_kb is not None
+                    else None
+                )
+                try:
+                    await send_history(
+                        target=None,
+                        window_id=active_sess.window_id,
+                        edit=False,
+                        user_id=user.id,
+                        bot=context.bot,
+                        extra_rows=extra_rows,
+                    )
+                except Exception as e:
+                    logger.debug("shot back: history paint failed: %s", e)
         await query.answer()
         return True
 

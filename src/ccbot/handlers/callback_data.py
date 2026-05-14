@@ -71,11 +71,11 @@ CB_FT_KILL = "ft:kill"  # confirm-archive active session (idle state)
 CB_FT_CLEAR = "ft:clear"  # forward /clear to active session
 CB_FT_MORE = "ft:more"  # open the Menu screen (pauses live-card updates)
 CB_FT_TERM = "ft:term"  # open a native desktop terminal for the active session
+CB_FT_OLDER = "ft:old"  # ◀ Older — page back into history from the live-card
 
 # More menu
 CB_MM_LIST = "mm:list"
 CB_MM_STATUS = "mm:status"
-CB_MM_HISTORY = "mm:hist"
 CB_MM_SHOT = "mm:shot"
 CB_MM_NEW = "mm:new"
 CB_MM_ARCHIVE = "mm:arch"

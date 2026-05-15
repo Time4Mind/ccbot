@@ -86,10 +86,12 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         session_manager.set_active_session(user.id, target_id)
 
         # The session we just LEFT is now bg. Seed its panel row from
-        # JSONL so the user sees an honest status (✅ finished / ⏳
-        # working) instead of either nothing or a stale "working"
-        # carried over from when it was last touched. Fire-and-forget
-        # — we don't block the switcher tap on the JSONL read.
+        # JSONL — but only for the "working" case. If the inferred
+        # status is "finished", the user was just looking at that
+        # session's live card and saw the answer themselves — surfacing
+        # a ✅ badge for it now would be a false notification (user
+        # explicitly reported: "I looked at the session result — after
+        # this it should disappear"). Clear the entry instead.
         if (
             old_active is not None
             and old_active.id != target_id
@@ -105,9 +107,14 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                 except Exception as e:
                     logger.debug("infer bg status failed: %s", e)
                     return
-                if inferred is None:
-                    return
-                if bg_status.update_status(user.id, old_sess.id, inferred):
+                changed = False
+                if inferred == "finished":
+                    # User just left an already-finished session — no
+                    # notification needed; clear any stale entry.
+                    changed = bg_status.clear_for_user_session(user.id, old_sess.id)
+                elif inferred == "working":
+                    changed = bg_status.update_status(user.id, old_sess.id, "working")
+                if changed:
                     try:
                         from ...handlers.notifications import refresh_panel
 

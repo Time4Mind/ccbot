@@ -172,10 +172,15 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     asyncio.create_task(_prewarm_history_caches())
     logger.info("History cache pre-warm scheduled")
 
-    # Seed bg_status for every bg session from JSONL so the panel
-    # shows honest badges right after restart (sessions that ended
-    # before the restart would otherwise sit as ⏳ "working" or be
-    # missing entirely until a fresh JSONL event lands).
+    # Seed bg_status for sessions that are still "working" so a
+    # restart-spanned in-progress session lands in the panel as soon
+    # as the bot comes up. ``finished`` sessions are NOT seeded —
+    # they're already-completed turns; if the user noticed them
+    # before the restart they don't need a repeat notification, and
+    # if they didn't they can switch into the session to see the
+    # answer. The fresh-end-of-turn notification path
+    # (session_events) still fires for sessions that actually
+    # finish AFTER the bot starts.
     async def _seed_bg_statuses() -> None:
         from ..handlers import bg_status
         from ..handlers.notifications import refresh_panel
@@ -194,9 +199,9 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
                 except Exception as e:
                     logger.debug("infer bg status failed for %s: %s", sess.id, e)
                     continue
-                if inferred is None:
+                if inferred != "working":
                     continue
-                if bg_status.update_status(user_id, sess.id, inferred):
+                if bg_status.update_status(user_id, sess.id, "working"):
                     changed = True
             if changed:
                 try:

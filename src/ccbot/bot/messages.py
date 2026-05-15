@@ -294,17 +294,24 @@ async def _forward_inbox_file(
 ) -> tuple[bool, str]:
     """Route an inbound file to the active session.
 
-    The file is already saved in ``<workdir>/.ccbot-inbox/`` by the
-    caller — claude can read it via the standard tools whenever the
-    user references it. We do NOT push a synthetic "received file"
-    line into the pane any more (per user feedback on pivot #32:
-    "если там сообщение о получении — не требуется"). When the user
-    attached a caption, that caption becomes the user message routed
-    to claude verbatim; otherwise the pane stays silent and the file
-    just sits in the inbox until the user mentions it.
+    Pane payload is shaped as ``<caption>\\n\\n.ccbot-inbox/<file>`` so
+    claude both (a) knows the file exists and where to read it and
+    (b) sees whatever instructions the user attached. With no caption
+    it's just the relative path on its own line. This is a minimal
+    successor to the old verbose ``(image attached: /full/path)``
+    synthetic line — short enough not to feel like "the bot speaking
+    for the user", complete enough that claude doesn't go blind on a
+    silent drop.
     """
-    if not caption.strip():
-        return True, ""
+    sess = session_manager.find_session_by_window(wid)
+    workdir = sess.workdir if sess else ""
+    if workdir:
+        rel_path = f".ccbot-inbox/{file_path.name}"
+    else:
+        rel_path = str(file_path)
+    text_to_send = (
+        f"{caption}\n\n{rel_path}" if caption.strip() else rel_path
+    )
     try:
         await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         logger.info(
@@ -322,7 +329,7 @@ async def _forward_inbox_file(
         )
     except Exception:
         pass
-    return await session_manager.send_to_window(wid, caption)
+    return await session_manager.send_to_window(wid, text_to_send)
 
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -269,8 +269,11 @@ def _parse_timestamp(ts: str) -> float:
         return time.time()
 
 
-def _split_tool_text(raw: str) -> tuple[str, str, str]:
-    """Split transcript_format's tool text into head / summary / content.
+_TOOL_HEAD_RE = re.compile(r"^\s*\**(?P<name>[A-Za-z][\w-]*)\**\s*\((?P<args>.*)\)\s*$", re.DOTALL)
+
+
+def _split_tool_text(raw: str) -> tuple[str, str, str, str]:
+    """Split transcript_format's tool text into name / args / summary / content.
 
     ``raw`` reaches us in the shape::
 
@@ -278,20 +281,32 @@ def _split_tool_text(raw: str) -> tuple[str, str, str]:
           ⎿  Output N lines
         \\x02EXPQUOTE_START\\x02<content>\\x02EXPQUOTE_END\\x02
 
-    Returns ``(head, summary, content)`` where:
+    Returns ``(name, args, summary, content)`` where:
 
-    * ``head``    = first line, markdown-stripped (e.g. ``Bash(args)``)
-    * ``summary`` = second line stripped of the ``⎿`` glyph and indent
-      (e.g. ``Output 5 lines``), or "" when absent
-    * ``content`` = everything inside the EXPQUOTE block, or "" when
-      there isn't one. The duplicate head/summary that transcript_parser
-      often re-embeds inside the quote is filtered out so the card
-      doesn't show ``Tool(args)`` twice.
+    * ``name``    = bare tool name (``Bash``, ``Read``, ``Edit``), shown
+      in the card head with the ▷ / ✓ / ✗ glyph and HH:MM marker.
+    * ``args``    = whatever was between the parens (the actual command
+      / file path) — pushed under the spoiler so long commands don't
+      blow up the head line.
+    * ``summary`` = ``⎿`` line content (``Output 5 lines``), inline in
+      the head after the name.
+    * ``content`` = inside the EXPQUOTE block, minus the duplicate
+      head/summary that transcript_parser sometimes re-embeds.
+
+    When the head doesn't parse as ``Name(args)`` (orphan tool_result
+    fallback or weird format), the full first line lands in ``name``
+    and ``args`` is empty.
     """
     if not raw:
-        return "", "", ""
+        return "", "", "", ""
     parts = raw.split("\n", 2)
-    head = _strip_for_card(parts[0]) if parts else ""
+    head_line = parts[0] if parts else ""
+    name = _strip_for_card(head_line)
+    args = ""
+    m = _TOOL_HEAD_RE.match(head_line)
+    if m:
+        name = m.group("name").strip()
+        args = m.group("args").strip()
     summary = ""
     rest = ""
     if len(parts) >= 2:
@@ -303,13 +318,12 @@ def _split_tool_text(raw: str) -> tuple[str, str, str]:
     # treat ``rest`` as plain content.
     inner = _extract_expquote_inner(rest) if rest else ""
     content = inner if inner else rest
-    # Drop the duplicate head row that transcript_parser sometimes
-    # re-embeds at the top of the EXPQUOTE block.
+    # Drop duplicate head/summary rows that transcript_parser may
+    # re-embed at the top of the EXPQUOTE block.
     if content:
         content_lines = content.split("\n")
-        # Strip if first content line matches head (with or without ✓/▷)
         first_norm = _strip_for_card(content_lines[0]).strip()
-        head_norm = head.strip()
+        head_norm = _strip_for_card(head_line).strip()
         if (
             first_norm == head_norm
             or first_norm.endswith(head_norm)
@@ -317,11 +331,10 @@ def _split_tool_text(raw: str) -> tuple[str, str, str]:
             and head_norm in first_norm
         ):
             content_lines = content_lines[1:]
-        # Drop the trailing/leading "⎿  summary" repeat too.
         if content_lines and content_lines[0].lstrip().startswith("⎿"):
             content_lines = content_lines[1:]
         content = "\n".join(content_lines).strip("\n")
-    return head, summary, content
+    return name, args, summary, content
 
 
 def _build_event(msg: NewMessage) -> Event:
@@ -356,29 +369,34 @@ def _build_event(msg: NewMessage) -> Event:
             started_at=started,
         )
     if msg.content_type == "tool_use":
-        head, _summary, content = _split_tool_text(raw_body)
+        name, args, _summary, content = _split_tool_text(raw_body)
+        # Card head shows ONLY the tool name (e.g. "Bash" / "Read") —
+        # args (the command / file path) go under the spoiler so they
+        # don't dominate the head line. body = args + content, args
+        # first so the user sees the command on first spoiler line.
+        spoiler_body = args
+        if content:
+            spoiler_body = f"{spoiler_body}\n{content}" if args else content
         return Event(
             type="tool_use",
-            text=_trim(head, 160),
-            body=content,
+            text=_trim(name, 80),
+            body=spoiler_body,
             started_at=started,
             tool_use_id=msg.tool_use_id,
             tool_name=msg.tool_name,
         )
     if msg.content_type == "tool_result":
-        head, summary, content = _split_tool_text(raw_body)
-        # On a tool_result, prefer head+summary in ``text`` so a missed
-        # fold (no matching tool_use Event) still displays a useful
-        # one-liner. ``_apply_tool_result`` reads these into the
-        # original Event.
-        if summary:
-            head_with_summary = f"{head} · {summary}" if head else summary
-        else:
-            head_with_summary = head
+        name, args, summary, content = _split_tool_text(raw_body)
+        # Head: just the tool name + summary inline (e.g. "Edit · Added
+        # 12 lines"). args goes under spoiler with content.
+        head_with_summary = f"{name} · {summary}" if (name and summary) else name or summary
+        spoiler_body = args
+        if content:
+            spoiler_body = f"{spoiler_body}\n{content}" if args else content
         return Event(
             type="tool_result",
-            text=_trim(head_with_summary, 200),
-            body=content,
+            text=_trim(head_with_summary, 120),
+            body=spoiler_body,
             started_at=started,
             tool_use_id=msg.tool_use_id,
             image_data=msg.image_data,
@@ -636,30 +654,33 @@ def _render_card(
 
     pages = paginate_events(state.events)
     idx = _resolved_page_idx(state, len(pages))
-    body = render_page(pages[idx], now=time.time())
 
     # Optional bg-panel always lives at the bottom.
     panel = ""
     if user_id is not None:
         panel = bg_status.render_panel(user_id, active_session_id=sess.id)
 
-    # Enforce the 4096-char Telegram limit at render time. Header +
-    # divider + footer + panel take a fixed prefix budget; whatever
-    # remains is for body. If body overflows, drop the OLDEST lines on
-    # the page (keep the freshest signal — the in-flight tool, the
-    # final-text chunk, the latest narration). Without this guard the
-    # ``Message_too_long`` BadRequest fires, ``_edit_card`` returns
-    # False, and the fallback path posts a NEW card → duplicate
-    # messages stack up in chat.
+    # 4096-char enforcement (Telegram limit). Header + divider + footer
+    # + panel take fixed prefix/suffix; body must fit in what's left
+    # AFTER MarkdownV2 conversion (expansion can add 10-20% via escapes).
+    # We trim by DROPPING OLDEST WHOLE EVENTS — never by cutting strings
+    # mid-content, since the body uses EXPQUOTE_START/END sentinels that
+    # MUST stay paired or the spoiler structure breaks ("text при
+    # пагинации - ломается"). Older events stay reachable on previous
+    # pages via ◀.
     prefix = header + "\n─────\n"
     suffix = ""
     if footer:
         suffix += "\n─────\n" + footer
     if panel:
         suffix += "\n" + panel
-    budget = 4096 - len(prefix) - len(suffix) - 32  # safety margin
-    if body and len(body) > budget:
-        body = _trim_body_from_top(body, budget)
+    # Reserve 25% headroom for MarkdownV2 escape expansion + safety.
+    budget = int((4096 - len(prefix) - len(suffix) - 32) * 0.80)
+    page_events = _trim_page_events(pages[idx], budget)
+    body = render_page(page_events, now=time.time())
+    if len(page_events) < len(pages[idx]):
+        dropped = len(pages[idx]) - len(page_events)
+        body = f"… (+{dropped} older events on previous pages)\n{body}"
 
     parts = [header, "─────"]
     if body:
@@ -672,31 +693,39 @@ def _render_card(
     return "\n".join(parts)
 
 
-def _trim_body_from_top(body: str, budget: int) -> str:
-    """Drop oldest lines from ``body`` until total length ≤ ``budget``.
+def _trim_page_events(events: list[Event], budget: int) -> list[Event]:
+    """Drop middle events from ``events`` until rendered size ≤ ``budget``.
 
-    The card's "latest signal" lives at the bottom (newest event), so we
-    preserve the tail and trim the head. A ``…`` marker indicates the
-    truncation point so the user knows there's hidden context above.
+    Always preserves:
+    * The FIRST event (page anchor — usually the ``is_page_break``
+      final_text answer; user needs the answer at the top of the page).
+    * The TAIL events that fit in remaining budget (latest signal —
+      in-flight tool, last narration).
+
+    Middle events drop first. Whole-event boundaries only so EXPQUOTE
+    sentinels stay paired.
     """
-    if len(body) <= budget:
-        return body
-    lines = body.split("\n")
-    # Walk from the end, accumulating until we hit budget.
-    kept: list[str] = []
+    if not events:
+        return events
+    now = time.time()
+    full = render_page(events, now=now)
+    if len(full) <= budget:
+        return events
+    anchor = events[0]
+    anchor_size = len(render_event(anchor, in_flight=False, now=now)) + 1
+    remaining_budget = max(0, budget - anchor_size)
+    # Walk from the end (excluding anchor), accumulating until budget.
+    kept_tail_rev: list[Event] = []
     total = 0
-    for line in reversed(lines):
-        line_len = len(line) + 1  # +1 for the joining newline
-        if total + line_len > budget:
+    for i in range(len(events) - 1, 0, -1):
+        rendered = render_event(events[i], in_flight=False, now=now)
+        size = len(rendered) + 1
+        if kept_tail_rev and total + size > remaining_budget:
             break
-        kept.append(line)
-        total += line_len
-    kept.reverse()
-    if not kept:
-        return body[-budget:]
-    if len(kept) < len(lines):
-        kept.insert(0, "… (older events on previous pages)")
-    return "\n".join(kept)
+        kept_tail_rev.append(events[i])
+        total += size
+    kept_tail = list(reversed(kept_tail_rev))
+    return [anchor, *kept_tail]
 
 
 def card_page_info(state: CardState) -> tuple[int, int]:
@@ -1642,13 +1671,13 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     if attachments:
         await _send_attachments(bot, user_id, attachments)
 
-    for mid in finalised_ids:
-        mark_msg_finalized(user_id, mid)
-
-    # No separate "✓ done" push under the card — the result is already
-    # rendered inside the card body. Errors and AskUserQuestion still
-    # emit pushes (those need to ping the user).
-    reset_card(user_id, sess.id)
+    # ROLLING CARD: don't pin the message as "finalised" and don't
+    # reset_card. The next turn's events keep editing the SAME live
+    # card; pagination handles the growing history. This kills the
+    # "2 messages back-to-back" UX where every turn boundary spawned
+    # a new card below the previous one. Errors and AskUserQuestion
+    # still emit their own pushes via push_event — those need to ping
+    # the user.
 
 
 async def _send_attachments(

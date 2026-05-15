@@ -1,48 +1,31 @@
-"""Context-size reader for live sessions.
+"""Per-user /usage modal renderer + back-compat JSONL parsers.
 
-Reads each Claude Code transcript JSONL on demand and computes the
-**latest** assistant turn's full input-token count (incl. cache reads).
-That number divided by ``CONTEXT_BUDGET`` (200 000 by default) is the
-"how full is the context window" percentage shown on the live card —
-both for the active session (above the bg panel) and per-row for bg
-sessions in the panel itself.
+Context-fill % per session is sourced from Claude's own ``/context``
+command via :mod:`ccbot.handlers.context_poll` (not from JSONL token
+math — extended-window models render the JSONL approach unreliable).
 
 Public API:
   parse_session_usage(file_path) -> list[Turn]
       back-compat parser used by tests; sums input + output, ignores
       cache fields.
-  context_pct_for_session(sess) -> int | None
-      latest-turn context size / 200k, in %, or None when no data.
   format_usage_breakdown_compact(user_id, info) -> str | None
-      renders the live /usage modal block (active session header
-      glyphs come from this).
+      renders the live /usage modal block (Menu→Status / Anthropic
+      quota glyphs).
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 import aiofiles
 
-from . import session_claude_io
-from .session import Session, session_manager
+from .session import session_manager
 
 logger = logging.getLogger(__name__)
-
-
-# Claude context window in tokens, used as the denominator for the
-# "context: N%" display on the live card. Claude Code on Claude 4.x
-# (Opus 4.7 / Sonnet 4.6) runs with the extended-window beta enabled
-# by default — observed cache_read alone routinely exceeds 200k, which
-# is impossible under the 200k limit. 1M is the right denominator for
-# Claude-Code-driven sessions today. Override via env if running
-# elsewhere.
-CONTEXT_BUDGET = int(os.getenv("CCBOT_CONTEXT_BUDGET", "1000000"))
 
 
 @dataclass
@@ -101,58 +84,6 @@ async def parse_session_usage(file_path: Path) -> list[Turn]:
     except OSError as e:
         logger.debug("usage: cannot read %s: %s", file_path, e)
     return turns
-
-
-async def _last_assistant_context_tokens(file_path: Path) -> int | None:
-    """Read JSONL and return the latest assistant turn's full context size
-    (input_tokens + cache_creation + cache_read). None if no data."""
-    if not file_path.exists():
-        return None
-    last: int | None = None
-    try:
-        async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
-            async for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if obj.get("type") != "assistant":
-                    continue
-                msg = obj.get("message", {})
-                usage = msg.get("usage") or {}
-                inp = int(usage.get("input_tokens", 0) or 0)
-                cc = int(usage.get("cache_creation_input_tokens", 0) or 0)
-                cr = int(usage.get("cache_read_input_tokens", 0) or 0)
-                total = inp + cc + cr
-                if total > 0:
-                    last = total
-    except OSError as e:
-        logger.debug("usage: cannot read %s: %s", file_path, e)
-    return last
-
-
-async def context_pct_for_session(sess: Session) -> int | None:
-    """Latest assistant turn's context size as % of ``CONTEXT_BUDGET``.
-
-    Returns None when no JSONL yet (fresh session, before first turn).
-    Bumps to 100 % on overflow rather than reporting absurd values —
-    the user just needs to know it's full.
-    """
-    if not sess.claude_session_id or not sess.workdir:
-        return None
-    file_path = session_claude_io.build_session_file_path(
-        sess.claude_session_id, sess.workdir
-    )
-    if file_path is None:
-        return None
-    tokens = await _last_assistant_context_tokens(file_path)
-    if tokens is None:
-        return None
-    pct = int(round(tokens * 100 / CONTEXT_BUDGET))
-    return max(0, min(100, pct))
 
 
 # --- /usage modal compact renderer (Menu→Status) ---

@@ -21,6 +21,7 @@ from telegram.ext import (
 )
 
 from ..config import config
+from ..handlers.context_poll import context_poll_loop
 from ..handlers.quota_alerts import quota_alerts_loop
 from ..handlers.notifications import card_timer_loop
 from ..handlers.status_polling import status_poll_loop
@@ -63,6 +64,7 @@ session_monitor: SessionMonitor | None = None
 _status_poll_task: asyncio.Task[None] | None = None
 _card_timer_task: asyncio.Task[None] | None = None
 _quota_alerts_task: asyncio.Task[None] | None = None
+_context_poll_task: asyncio.Task[None] | None = None
 _metrics_flush_task: asyncio.Task[None] | None = None
 
 
@@ -73,6 +75,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
         _status_poll_task, \
         _card_timer_task, \
         _quota_alerts_task, \
+        _context_poll_task, \
         _metrics_flush_task
 
     # Cache bot username so ``tmux_manager.create_window`` can surface it
@@ -139,6 +142,9 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     _quota_alerts_task = asyncio.create_task(quota_alerts_loop(application.bot))
     logger.info("Quota alerts task started")
 
+    _context_poll_task = asyncio.create_task(context_poll_loop(application.bot))
+    logger.info("Context poll task started")
+
     _metrics_flush_task = asyncio.create_task(metrics_flush_loop())
     logger.info("Metrics flush task started")
 
@@ -165,7 +171,12 @@ async def post_shutdown(
     application: "Application[Any, Any, Any, Any, Any, Any]",
 ) -> None:
     """Stop background tasks, flush queues, close HTTP clients."""
-    global _status_poll_task, _card_timer_task, _quota_alerts_task, _metrics_flush_task
+    global \
+        _status_poll_task, \
+        _card_timer_task, \
+        _quota_alerts_task, \
+        _context_poll_task, \
+        _metrics_flush_task
 
     if _status_poll_task:
         _status_poll_task.cancel()
@@ -193,6 +204,15 @@ async def post_shutdown(
             pass
         _quota_alerts_task = None
         logger.info("Quota alerts stopped")
+
+    if _context_poll_task:
+        _context_poll_task.cancel()
+        try:
+            await _context_poll_task
+        except asyncio.CancelledError:
+            pass
+        _context_poll_task = None
+        logger.info("Context poll stopped")
 
     if _metrics_flush_task:
         _metrics_flush_task.cancel()

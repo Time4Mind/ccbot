@@ -106,7 +106,13 @@ UI_PATTERNS: list[UIPattern] = [
         name="Settings",
         top=(
             re.compile(r"^\s*Settings:.*tab to cycle"),
-            re.compile(r"^\s*Select model"),
+            # ``Select <word>`` covers every Claude Code slash picker:
+            # /model → "Select model", /effort → "Select reasoning effort",
+            # /agents → "Select an agent", /style → "Select output style",
+            # etc. The bottom signature (Esc/Enter/filter) keeps this
+            # specific to picker modals — false positives in normal
+            # output would have to also match one of those terminators.
+            re.compile(r"^\s*Select \w"),
         ),
         bottom=(
             re.compile(r"Esc to cancel"),
@@ -195,46 +201,81 @@ def is_interactive_ui(pane_text: str) -> bool:
 
 # ── Status line parsing ─────────────────────────────────────────────────
 
-# Spinner characters Claude Code uses in its status line
-STATUS_SPINNERS = frozenset(["·", "✻", "✽", "✶", "✳", "✢"])
+# Two sets:
+#   * SPINNER_ONLY — chars Claude Code uses EXCLUSIVELY for the busy
+#     status line (``✻ Thinking…``). Any line starting with one of
+#     these is a status line.
+#   * SPINNER_AMBIGUOUS — chars that ALSO appear elsewhere (``●`` is
+#     used as a bullet in the feedback prompt / Tip line, ``·`` is a
+#     general-purpose bullet). For these, parse_status_line additionally
+#     requires the line to carry a time-stats parenthetical
+#     (``(1m 13s · …``) — that's the distinguishing signature of the
+#     real busy status (``● Gallivanting… (53s · ↑2.3k tokens)``).
+SPINNER_ONLY = frozenset(["✻", "✽", "✶", "✳", "✢"])
+SPINNER_AMBIGUOUS = frozenset(["●", "·"])
+STATUS_SPINNERS = SPINNER_ONLY | SPINNER_AMBIGUOUS
+
+
+_STATUS_TIME_STATS_RE = re.compile(r"\(\s*\d+(?:m\s*\d+)?\s*[smh]")
 
 
 def parse_status_line(pane_text: str) -> str | None:
-    """Extract the Claude Code status line from terminal output.
+    """Extract the Claude Code busy-state status line.
 
-    The status line (spinner + working text) appears immediately above
-    the chrome separator (a full line of ``─`` characters).  We locate
-    the separator first, then check the line just above it — this avoids
-    false positives from ``·`` bullets in Claude's regular output.
+    The busy line lives above the input-chrome separator and starts
+    with a spinner char (``●``, ``✻``, etc.). Between it and the
+    chrome there can be other lines that ALSO start with the same
+    char — Claude's tip / feedback prompt::
 
-    Returns the text after the spinner, or None if no status line found.
+        … content …
+        ● Gallivanting… (1m 13s · ↑2.3k tokens · thought for 8s)   ← STATUS
+        ● Tip: Use /btw to ask a quick side question…             ← tip
+        ● How is Claude doing this session? (optional)            ← feedback
+          1: Bad   2: Fine   3: Good   0: Dismiss
+        ────────────────────
+        ❯
+        ────────────────────
+          ⏵⏵ bypass permissions on …
+
+    Discriminator: the status line has a time-stats parenthetical
+    like ``(1m 13s ·`` / ``(53s)``. Tips and feedback prompts don't.
+    We scan up to 12 lines back from the first chrome separator and
+    pick the first spinner line with that signature. If none of the
+    spinner lines carry time-stats (older / shorter status formats
+    used by the test suite — ``✻ Reading file src/main.py``), fall
+    back to the spinner line nearest the chrome.
     """
     if not pane_text:
         return None
 
     lines = pane_text.split("\n")
 
-    # Find the chrome separator: topmost ──── line in the last 10 lines
+    # Anchor on the chrome separator (first ──── line in the tail).
     chrome_idx: int | None = None
-    search_start = max(0, len(lines) - 10)
+    search_start = max(0, len(lines) - 14)
     for i in range(search_start, len(lines)):
         stripped = lines[i].strip()
         if len(stripped) >= 20 and all(c == "─" for c in stripped):
             chrome_idx = i
             break
-
     if chrome_idx is None:
-        return None  # No chrome visible — can't determine status
+        return None
 
-    # Check lines just above the separator (skip blanks, up to 4 lines)
-    for i in range(chrome_idx - 1, max(chrome_idx - 5, -1), -1):
+    # Scan upward. For SPINNER_ONLY chars (``✻`` etc.) the line is
+    # always a status. For SPINNER_AMBIGUOUS chars (``●`` / ``·``) it
+    # only counts when the time-stats parenthetical is present.
+    upper_bound = max(chrome_idx - 12, -1)
+    for i in range(chrome_idx - 1, upper_bound, -1):
         line = lines[i].strip()
         if not line:
             continue
-        if line[0] in STATUS_SPINNERS:
+        first = line[0]
+        if first in SPINNER_ONLY:
             return line[1:].strip()
-        # First non-empty line above separator isn't a spinner → no status
-        return None
+        if first in SPINNER_AMBIGUOUS:
+            rest = line[1:].strip()
+            if _STATUS_TIME_STATS_RE.search(rest):
+                return rest
     return None
 
 

@@ -543,6 +543,12 @@ class SessionManager:
         sess = self.sessions.get(session_id)
         if not sess:
             return
+        if sess.state == "lost":
+            # Carry the lost-marker into archival so /archive can tag it
+            # explicitly (per user feedback on pivot #38). Without this
+            # the row reads identical to a clean archive and the fact
+            # that the tmux window died externally is lost forever.
+            sess.was_lost = True
         sess.state = "completed" if completed else "archived"
         sess.archived_at = time.time()
         sess.window_id = ""
@@ -657,10 +663,6 @@ class SessionManager:
         # permissions doesn't already bypass (e.g. WebFetch per-domain
         # trust). "off" = surface in TG, "on" = auto-Yes on every prompt.
         "auto_approve": "off",
-        # Three ascending per-session token thresholds (in tokens). Each
-        # triggers a one-shot push notification when the session crosses it.
-        # Adjustable in 50_000-token steps via Settings.
-        "session_token_alerts": [100_000, 200_000, 400_000],
         # Three states for the desktop terminal companion:
         #   off    — never spawn, never offer
         #   manual — don't auto-spawn, but show "Open terminal" in Menu
@@ -679,14 +681,32 @@ class SessionManager:
         # shell-quoted attach snippet.
         "local_terminal_cmd": "",
         # Disposition of the user's outgoing text relative to the live
-        # session card. Telegram appends new messages to the bottom, so
-        # a fresh user line pushes the card up out of sight:
-        #   push   — leave it (current behaviour; card scrolls up)
-        #   delete — delete the user's message after dispatch so the
-        #            card stays as the latest chat entry
-        #   repost — resend the live card as a new message below the
-        #            user line and drop the previous card message
-        "card_position": "push",
+        # How many trailing end_turn boundaries to pull from the JSONL
+        # transcript when seeding an empty live-card state (e.g. after
+        # a bot restart, after switcher-tap / Menu → Sessions on a fresh
+        # state). Higher = more in-card scrollback at the cost of memory
+        # (each turn ≈ several events × ~500 bytes). Deep history is
+        # always accessible via /history regardless of this setting.
+        "card_history": 20,
+        # Inline screenshots — photo of the pane is embedded in the
+        # active session card msg (photo+caption) instead of being a
+        # separate Shot photo accessed via Menu→Shot. Updates on every
+        # event but throttled to 1 photo-edit per 3 sec; skips refresh
+        # when pane unchanged. Note: TG caption limit is 1024 chars vs
+        # text 4096 — page size effectively shrinks ~4x when ON.
+        "card_inline_screenshots": False,
+        # Bg session push notifications (Task #42). Three independent
+        # toggles — user asked to make each granular. Default all-on
+        # so the user knows what bg sessions are doing.
+        "bg_notify_finished": True,
+        "bg_notify_error": True,
+        "bg_notify_needs_action": True,
+        # Max page size in logical \n-delimited LINES. Values 10/20/40/70.
+        # 20 keeps the card compact on phone; 70 is for power users who
+        # scroll long bodies. Anchor (page top) chunking handles overflow
+        # with smart sentence / paragraph boundaries — see
+        # ``_chunk_final_text`` for the exact preference order.
+        "card_page_lines": 20,
     }
 
     def get_user_settings(self, user_id: int) -> dict[str, Any]:

@@ -1,13 +1,12 @@
-"""Tests for usage.parse_session_usage, aggregate_session, and per-session
-token alerts."""
+"""Tests for usage.parse_session_usage and aggregate_session."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-from ccbot.session import Session, SessionManager
-from ccbot.usage import parse_session_usage, pop_session_token_alert
+from ccbot.session import SessionManager
+from ccbot.usage import parse_session_usage
 
 
 @pytest.fixture
@@ -89,51 +88,3 @@ class TestParseSessionUsage:
     async def test_missing_file_returns_empty(self, tmp_path: Path) -> None:
         turns = await parse_session_usage(tmp_path / "nope.jsonl")
         assert turns == []
-
-
-class TestSessionTokenAlert:
-    def _user_settings_returns(self, monkeypatch, settings: dict) -> None:
-        from ccbot.session import session_manager
-
-        monkeypatch.setattr(session_manager, "get_user_settings", lambda uid: settings)
-
-    def test_below_lowest_threshold_silent(self, monkeypatch) -> None:
-        self._user_settings_returns(
-            monkeypatch, {"session_token_alerts": [100_000, 200_000, 400_000]}
-        )
-        sess = Session(id="abc", name="x", token_usage_total=50_000)
-        assert pop_session_token_alert(sess, 1) is None
-        assert sess.alerted_token_thresholds == []
-
-    def test_crosses_first_threshold_then_suppressed(self, monkeypatch) -> None:
-        self._user_settings_returns(
-            monkeypatch, {"session_token_alerts": [100_000, 200_000, 400_000]}
-        )
-        sess = Session(id="abc", name="x", token_usage_total=120_000)
-        assert pop_session_token_alert(sess, 1) == 100_000
-        assert sess.alerted_token_thresholds == [100_000]
-        # Same session, same total — don't re-fire the same threshold.
-        assert pop_session_token_alert(sess, 1) is None
-
-    def test_crosses_two_thresholds_in_separate_calls(self, monkeypatch) -> None:
-        self._user_settings_returns(
-            monkeypatch, {"session_token_alerts": [100_000, 200_000, 400_000]}
-        )
-        sess = Session(id="abc", name="x", token_usage_total=120_000)
-        assert pop_session_token_alert(sess, 1) == 100_000
-        sess.token_usage_total = 250_000
-        assert pop_session_token_alert(sess, 1) == 200_000
-        assert sess.alerted_token_thresholds == [100_000, 200_000]
-
-    def test_uses_default_when_setting_missing(self, monkeypatch) -> None:
-        from ccbot.config import config
-
-        self._user_settings_returns(monkeypatch, {})
-        sess = Session(
-            id="abc",
-            name="x",
-            token_usage_total=config.session_token_alert_defaults[0],
-        )
-        assert (
-            pop_session_token_alert(sess, 1) == (config.session_token_alert_defaults[0])
-        )

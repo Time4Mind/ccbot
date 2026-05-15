@@ -74,11 +74,22 @@ async def _capture_with_scrollback(wid: str) -> str | None:
 
 
 async def _poll_usage_modal(wid: str) -> object | None:
-    """Send /usage, poll the pane for quota rows, dismiss with Escape."""
+    """Send /usage, poll the pane for quota rows, dismiss with Escape.
+
+    The modal body re-renders multiple times: a "Loading usage data…"
+    placeholder first, then partial reads as the API responses land,
+    then the final stable values. Earlier this function bailed on
+    the FIRST non-None pct, which meant we'd publish a transitional
+    value that later updated under us (observed: bot showed 43%
+    while the modal had since stabilised at 45%). Now we require
+    TWO consecutive captures with identical session / week / week-
+    Sonnet percentages before we trust the read.
+    """
     from ..terminal_parser import extract_usage_breakdown, parse_usage_output
 
     info = None
     resolved = False
+    last_triple: tuple[int | None, int | None, int | None] | None = None
     try:
         await tmux_manager.send_keys(wid, "/usage")
         for _ in range(60):  # 60 × 200 ms = 12 s
@@ -89,15 +100,20 @@ async def _poll_usage_modal(wid: str) -> object | None:
             candidate = parse_usage_output(pane_text)
             if not candidate or not candidate.parsed_lines:
                 continue
-            info = candidate
             breakdown = extract_usage_breakdown(candidate)
-            if (
-                breakdown.session_pct is not None
-                or breakdown.week_pct is not None
-                or breakdown.week_sonnet_pct is not None
-            ):
+            triple = (
+                breakdown.session_pct,
+                breakdown.week_pct,
+                breakdown.week_sonnet_pct,
+            )
+            if all(p is None for p in triple):
+                continue
+            info = candidate
+            if last_triple == triple:
+                # Two consecutive captures agree — modal has settled.
                 resolved = True
                 break
+            last_triple = triple
         try:
             await tmux_manager.send_keys(wid, "Escape", enter=False, literal=False)
         except Exception as e:
@@ -105,7 +121,11 @@ async def _poll_usage_modal(wid: str) -> object | None:
     except Exception as e:
         logger.debug("fetch_claude_usage: tmux failed: %s", e)
         return None
-    return info if resolved else None
+    # If we ran out of polls before two-agreement, still return the
+    # last seen result rather than nothing — better a 1-step-stale
+    # value than the "unavailable" empty state. The 12-s budget should
+    # normally be plenty for the modal to settle.
+    return info if (resolved or info is not None) else None
 
 
 async def fetch_claude_usage() -> object | None:

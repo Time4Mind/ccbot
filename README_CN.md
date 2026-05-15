@@ -95,10 +95,7 @@ ccbot                           # 前台;生产环境用 systemd 单元
 | `QUOTA_ALERT_POLL_INTERVAL` | `5m`         | 实时 `/usage` 弹窗的采样间隔 |
 | `VOICE_BACKEND`             | `auto`       | `auto` / `whisper` / `apple` / `off` |
 | `WHISPER_MODEL_PATH`        | `~/.ccbot/models/ggml-medium.bin` | whisper.cpp 模型 |
-| `BG_NOTIFY_MODE`            | `separate`   | _(legacy)_ 兼容性保留;后台会话现在静默 — 见「后台会话」 |
 | `BG_STATUS_MAX`             | `4`          | bg-status 面板最多显示的徽章数;多余的折叠为 `+N more` |
-| `BG_STATUS_QUOTA_THRESHOLDS`| `100000,200000,400000` | 每会话 token 阈值,翻转 ⚠️🟢/🟡/🔴 配额标志 |
-| `CARD_PRIOR_CONTEXT`        | `5`          | 全新 live-card 顶部预加载的转录条数;`0` 关闭 |
 | `CARD_EDIT_LAG`             | `2.0`        | live-card 编辑的合并窗口(秒) |
 | `TG_PROXY_URL`              | _(未设)_     | Bot API 出站代理(`socks5://…` 或 `http://…`) |
 
@@ -158,7 +155,7 @@ ccbot hook --install
 并同时切换活动会话。分页按钮 (◀ Older / Newer ▶) 本身就是「翻看
 历史」的入口,因此菜单中不再有独立的「历史」条目;它们下方仍
 保留底部键盘。点击已活动的按钮是 no-op。`/screenshot` 中的 `Back`
-也会落到分页转录视图(origin `m` 回到主视图,`l` 回到 /list)。
+重新发布实时卡片。
 
 引用回复(Telegram quote)非活动会话的机器人消息,会把那一条回复
 路由到该会话,但不更改活动会话。
@@ -176,10 +173,10 @@ ccbot hook --install
 紧凑面板形式呈现:
 
 ```
-[session-A] ⏳         ← 后台运行中
-[scraper]   ✅         ← 完成
-[chores]    ❌         ← 出错
-[v frontend] ❓ ⚠️🟡    ← 需要用户操作 + 跨越 token 阈值
+🟦 session-A ⏳        ← 后台运行中
+🟪 scraper   ✅        ← 完成
+🟧 chores    ❌        ← 出错
+🟨 frontend  ❓        ← 需要用户操作(AskUserQuestion / permission)
 ```
 
 面板在活动卡片的编辑之间「黏住」,这样已完成的后台会话不会丢失在
@@ -188,15 +185,11 @@ ccbot hook --install
 AskUserQuestion / ExitPlanMode 提示,带和前台提示相同的箭头 /
 Enter / Esc 键盘。
 
-当会话跨过 `BG_STATUS_QUOTA_THRESHOLDS` 的某档阈值时,其配额标志
-翻转为 `⚠️🟢` / `🟡` / `🔴`。活动会话的卡片头部也显示相同的标志。
-**不发送任何推送通知** — 视觉指示就是警报本身。
-
 ### Live-card 用户体验调整
 
-全新 live-card(回合结束 / clear / 溢出之后)会从转录中预加载多达
-`CARD_PRIOR_CONTEXT`(默认 5)条你最近消息之前的条目,这样上下文
-不会在回合之间消失。
+全新的 live-card 会从会话 JSONL 转录中预加载最多 `CARD_SEED_TURNS`
+(默认 20)个最近的 end-of-turn 边界,以便机器人重启后历史不会
+消失。
 
 `Settings → Card position` 控制你发出的文本与 live-card 的关系:
 - `push` — 保持不变(你的消息把卡片推上去;默认)

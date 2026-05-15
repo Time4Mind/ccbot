@@ -39,6 +39,7 @@ _EN: dict[str, str] = {
     "btn.no": "× No",
     "btn.yes_kill": "⚠ Yes, kill",
     "btn.yes_delete": "⚠ Yes, delete",
+    "btn.yes_clear": "⚠ Yes, clear",
     "btn.refresh": "🔄 Refresh",
     "btn.save": "Saved",
     "btn.cancelled": "Cancelled",
@@ -51,7 +52,7 @@ _EN: dict[str, str] = {
     "btn.to_14d": "→ 14d",
     "btn.to_72h": "→ 72h",
     # More menu
-    "mm.list": "📋 List",
+    "mm.sessions": "📋 Sessions",
     "mm.status": "📊 Status",
     "mm.history": "📜 History",
     "mm.shot": "🧑‍💻 Shot",
@@ -98,9 +99,9 @@ _EN: dict[str, str] = {
         "• `off` — drop voice messages"
     ),
     "settings.lang.body": "*Language*\n\nUI language. Switches everything\nbut Claude's own output.",
-    # /list
-    "list.active": "*Active*",
-    "list.lost": "*Lost*",
+    # Sessions list — only ``list.empty`` is still used (Menu → Sessions
+    # empty-state when there's no active session). ``list.active`` /
+    # ``list.lost`` are legacy.
     "list.empty": "No live sessions. Use 🆕 New to create one.",
     # Confirm dialogs
     "conf.kill": (
@@ -110,6 +111,10 @@ _EN: dict[str, str] = {
     "conf.done": "Mark *{name}* as done?\nGoal closed, session archived.",
     "conf.delete": (
         "Delete *{name}* from archive?\nState record gone. JSONL kept on disk."
+    ),
+    "conf.clear": (
+        "Clear *{name}*?\nSends Esc then /clear. Session context wiped — "
+        "cannot be undone (unlike Kill → Restore)."
     ),
     "conf.killed": "💀 Killed `{name}`",
     "conf.done_ok": "🎉 Marked `{name}` as done.",
@@ -150,8 +155,6 @@ _EN: dict[str, str] = {
     "archive.range_14d": " (0–14d)",
     "archive.empty": "No archived sessions in this window.",
     "archive.page_line": "page {page}/{pages} — {total} total",
-    "archive.tokens_k": "{k}k tok",
-    "archive.tokens_zero": "0 tok",
     "archive.age.s": "{n}s ago",
     "archive.age.m": "{n}m ago",
     "archive.age.h": "{n}h ago",
@@ -196,25 +199,88 @@ _EN: dict[str, str] = {
     "local.off": "off",
     "local.manual": "manual",
     "local.auto": "auto",
-    # Settings group: user-message disposition relative to the live card.
-    "settings.group.card_position": "Card position",
-    "settings.cardpos.body": (
-        "*Card position*\n\n"
-        "Where the live card sits after you type:\n"
-        "• `push` — leave it (your message pushes the card up)\n"
-        "• `delete` — delete your message so the card stays last\n"
-        "• `repost` — resend the card below your message"
+    # Settings group: how many recent end_turn boundaries to seed into a
+    # fresh live card from the JSONL transcript.
+    "settings.group.card_history": "Card history",
+    "settings.cardhist.body": (
+        "*Card history*\n\n"
+        "How many recent end-of-turn boundaries to load into the live "
+        "card on first access (after a bot restart, switcher tap, or "
+        "Menu → Sessions). Deep history beyond this stays accessible "
+        "via /history regardless of the chosen value.\n\n"
+        "Higher = more scrollback in the card, more memory per session."
     ),
-    "cardpos.push": "push",
-    "cardpos.delete": "delete",
-    "cardpos.repost": "repost",
-    # Settings group: per-session token alert thresholds
-    "settings.group.token_alerts": "Token alerts",
-    "settings.tokens.body": (
-        "*Per-session token alerts*\n\n"
-        "Three thresholds. The bot pushes one notification each time a "
-        "session's lifetime token usage crosses one of these — adjust in "
-        "50k-token steps."
+    "settings.group.card_page_lines": "Page size",
+    "settings.pagesize.body": (
+        "*Page size*\n\n"
+        "Max lines on one card page. Older events drop to previous "
+        "pages (◀); a long final answer is chunked across multiple "
+        "pages with smart paragraph / sentence boundaries — no breaks "
+        "mid-word. ±5 lines tolerance.\n\n"
+        "Smaller = compact phone view. Larger = more context per page "
+        "but heavier message edits."
+    ),
+    "settings.group.card_inline_screenshots": "Inline screenshots",
+    "settings.screens.body": (
+        "*Inline screenshots*\n\n"
+        "When *on*, the active session card is a photo + caption: the "
+        "photo is the live pane render, the caption holds the body "
+        "text. The photo refreshes only when the pane changes, with a "
+        "3 sec throttle. The Shot button disappears from the top row "
+        "(no need — it's already inline).\n\n"
+        "*Caveat:* Telegram caption is limited to 1024 chars vs 4096 "
+        "for text — page size effectively shrinks ~4×. Use Page size "
+        "setting to compensate.\n\n"
+        "When *off*, the card is a regular text msg and Shot lives "
+        "behind the 🧑‍💻 button in the top row."
+    ),
+    "screens.on": "on",
+    "screens.off": "off",
+    # Bg notifications (Task #42) — three independent toggles.
+    "settings.group.bg_notify_finished": "Bg: task complete",
+    "settings.group.bg_notify_error": "Bg: errors",
+    "settings.group.bg_notify_needs_action": "Bg: needs action",
+    "settings.bg_notify.finished.body": (
+        "*Bg session: task complete*\n\n"
+        "When a background session reaches end-of-turn, push a quiet "
+        "notification ✅ [<name>] task complete so you can switch in."
+    ),
+    "settings.bg_notify.error.body": (
+        "*Bg session: errors*\n\n"
+        "Push ❌ [<name>] error when a background session emits an "
+        "error event. (Currently fires only on explicit error events; "
+        "exception detection is being extended.)"
+    ),
+    "settings.bg_notify.needs_action.body": (
+        "*Bg session: needs action*\n\n"
+        "Push ❓ [<name>] needs your attention when a background session "
+        "shows an AskUserQuestion / ExitPlanMode / Permission prompt. "
+        "Otherwise only the ❓ badge in the bg-panel signals it — easy "
+        "to miss."
+    ),
+    # Settings categories (top-level Settings is now a category selector).
+    "settings.cat.card": "🃏 Card / view",
+    "settings.cat.notifications": "🔔 Notifications",
+    "settings.cat.voice": "🎙 Voice",
+    "settings.cat.terminal": "🖥 Local terminal",
+    "settings.cat.behavior": "⚙ Behavior & language",
+    "settings.cat.card.body": (
+        "*Card / view*\n\nLayout, density and refresh of the live session card."
+    ),
+    "settings.cat.notifications.body": (
+        "*Notifications*\n\n"
+        "Bg-session pushes (finished / errors / needs-action) and "
+        "the weekly-reset day for quota alerts."
+    ),
+    "settings.cat.voice.body": (
+        "*Voice*\n\nSpeech-to-text backend for incoming voice messages."
+    ),
+    "settings.cat.terminal.body": (
+        "*Local terminal*\n\n"
+        "Native Terminal / iTerm window attached to each new session."
+    ),
+    "settings.cat.behavior.body": (
+        "*Behavior & language*\n\nAuto-approve interactive prompts; UI language."
     ),
     # Settings group: pop a native Terminal/iTerm window per new session
     "settings.group.local_terminal": "Local terminal",
@@ -272,13 +338,13 @@ _EN: dict[str, str] = {
     "help.body.menu": (
         "*≡ Menu*\n\n"
         "Open via /menu or the ≡ Menu inline button. Items:\n"
-        "• 📋 *List* — live transcript of the active session "
-        "(🧑‍💻 Shot lives here)\n"
+        "• 📋 *Sessions* — jump to the active session's live card\n"
         "• 📊 *Status* — Claude Code 5h / weekly / sonnet quotas\n"
-        "• 📜 *History* — paginated transcript of the active session\n"
+        "• 🧑‍💻 *Shot* — terminal snapshot of the active session\n"
         "• 🆕 *New* — create a session from a directory browser\n"
         "• 📦 *Archive* — restore / inspect / delete archived sessions\n"
-        "• ⚙ *Settings* — language, voice, alerts, local terminal, …"
+        "• ⚙ *Settings* — grouped by Card / Notifications / Voice / "
+        "Terminal / Behavior."
     ),
     "help.body.commands": (
         "*Slash commands*\n\n"
@@ -295,19 +361,28 @@ _EN: dict[str, str] = {
         "*Voice & files*\n\n"
         "• *Voice.* Send a voice message — transcribed locally "
         "(whisper.cpp / Apple Speech) and routed to the active session "
-        "as if you typed it.\n"
+        "as if you typed it. A 👀 reaction marks the source msg.\n"
         "• *Photo / document.* Lands in `<workdir>/.ccbot-inbox/` and "
-        "Claude is told via tmux. Files auto-clean after 24h; the "
-        "Telegram `file_id` is retained for 30d for `/restore-file`."
+        "Claude is told via the relative path (with your caption prefix "
+        "if you attached one). Files auto-clean after 24h; the Telegram "
+        "`file_id` is retained for 30d for `/restore-file`."
     ),
     "help.body.alerts": (
         "*Alerts*\n\n"
-        "*Per-session token alerts.* Three thresholds (defaults "
-        "100k / 200k / 400k). Bot pushes once per session per crossing. "
-        "Adjust via Settings → Token alerts (50k step ±).\n\n"
         "*Quota alerts.* 5h / weekly / weekly-Sonnet quotas are sampled "
-        "from the live `/usage` modal every 5 min. Bot pushes when % "
-        "crosses 50, 75, or 90."
+        "from the live `/usage` modal every 10 min. Bot pushes when % "
+        "crosses 50, 75, or 90.\n\n"
+        "*Bg session pushes.* Settings → Notifications has three "
+        "toggles (all default on):\n"
+        "• ✅ task complete\n"
+        "• ❌ error\n"
+        "• ❓ needs your attention (interactive prompt)\n"
+        "Active session never pushes — it edits its live card instead.\n\n"
+        "*Context fill.* The card shows ``context: N%`` per session — "
+        "an approximation from JSONL math (latest assistant turn's "
+        "input + cache reads vs the model's published context window). "
+        "Within ±10% of what `/context` reports; not identical because "
+        "/context also counts system/tools/memory/autocompact buffer."
     ),
     "help.body.terminal": (
         "*Local terminal*\n\n"
@@ -345,6 +420,7 @@ _RU: dict[str, str] = {
     "btn.no": "× Нет",
     "btn.yes_kill": "⚠ Да, убить",
     "btn.yes_delete": "⚠ Да, удалить",
+    "btn.yes_clear": "⚠ Да, очистить",
     "btn.refresh": "🔄 Обновить",
     "btn.save": "Сохранено",
     "btn.cancelled": "Отменено",
@@ -356,7 +432,7 @@ _RU: dict[str, str] = {
     "btn.delete": "🗑 Удалить",
     "btn.to_14d": "→ 14д",
     "btn.to_72h": "→ 72ч",
-    "mm.list": "📋 Список",
+    "mm.sessions": "📋 Сессии",
     "mm.status": "📊 Статус",
     "mm.history": "📜 История",
     "mm.shot": "🧑‍💻 Скрин",
@@ -401,8 +477,6 @@ _RU: dict[str, str] = {
     "settings.lang.body": (
         "*Язык*\n\nЯзык интерфейса. Переключает всё,\nкроме самого вывода Claude."
     ),
-    "list.active": "*Активные*",
-    "list.lost": "*Потерянные*",
     "list.empty": "Активных сессий нет. Тапни 🆕 Новая, чтобы создать.",
     "conf.kill": (
         "Убить *{name}*?\nTmux-окно умрёт, claude session id сохранится.\n"
@@ -411,6 +485,10 @@ _RU: dict[str, str] = {
     "conf.done": "Закрыть *{name}*?\nЦель закрыта, сессия в архиве.",
     "conf.delete": (
         "Удалить *{name}* из архива?\nЗапись стирается. JSONL остаётся на диске."
+    ),
+    "conf.clear": (
+        "Очистить *{name}*?\nОтправит Esc, затем /clear. Контекст сессии "
+        "стирается без возможности восстановления (в отличие от Kill → Restore)."
     ),
     "conf.killed": "💀 Убита `{name}`",
     "conf.done_ok": "🎉 `{name}` закрыта.",
@@ -448,8 +526,6 @@ _RU: dict[str, str] = {
     "archive.range_14d": " (0–14д)",
     "archive.empty": "Архивных сессий в этом окне нет.",
     "archive.page_line": "стр. {page}/{pages} — всего {total}",
-    "archive.tokens_k": "{k}k токенов",
-    "archive.tokens_zero": "0 токенов",
     "archive.age.s": "{n}с назад",
     "archive.age.m": "{n}мин назад",
     "archive.age.h": "{n}ч назад",
@@ -491,22 +567,78 @@ _RU: dict[str, str] = {
     "local.off": "выкл",
     "local.manual": "по кнопке",
     "local.auto": "всегда",
-    "settings.group.card_position": "Положение карточки",
-    "settings.cardpos.body": (
-        "*Положение карточки*\n\n"
-        "Где остаётся живая карточка после твоего сообщения:\n"
-        "• `push` — оставить как есть (твоё сообщение сдвигает карточку вверх)\n"
-        "• `delete` — удалить твоё сообщение, чтобы карточка оставалась последней\n"
-        "• `repost` — переслать карточку под твоё сообщение"
+    "settings.group.card_history": "История в карточке",
+    "settings.cardhist.body": (
+        "*История в карточке*\n\n"
+        "Сколько последних end-of-turn границ подгружать в карточку\n"
+        "при первом доступе (после рестарта бота, тапа в свитчере или\n"
+        "Меню → Sessions). Глубокая история сверх этого всегда\n"
+        "доступна через /history независимо от значения.\n\n"
+        "Больше = больше истории в карточке, больше памяти на сессию."
     ),
-    "cardpos.push": "push",
-    "cardpos.delete": "удалить",
-    "cardpos.repost": "переслать",
-    "settings.group.token_alerts": "Алерты по токенам",
-    "settings.tokens.body": (
-        "*Алерты по токенам сессии*\n\n"
-        "Три порога. Бот один раз пришлёт уведомление, когда\n"
-        "суммарный расход сессии переходит каждый — шаг 50k."
+    "settings.group.card_page_lines": "Размер страницы",
+    "settings.pagesize.body": (
+        "*Размер страницы*\n\n"
+        "Максимум строк на одну страницу карточки. Старые события\n"
+        "уходят на предыдущие страницы (◀); длинный финальный ответ\n"
+        "режется на несколько страниц по умным границам (абзац /\n"
+        "строка / предложение / слово) — без обрывов посреди слова.\n"
+        "Допускается отклонение ±5 строк.\n\n"
+        "Меньше = компактнее для телефона. Больше = больше контекста\n"
+        "на странице, но тяжелее edits."
+    ),
+    "settings.group.card_inline_screenshots": "Скрины в карточке",
+    "settings.screens.body": (
+        "*Скрины в карточке*\n\n"
+        "Когда *on* — карточка активной сессии = photo+caption:\n"
+        "сверху рендер pane, под ним body. Фото обновляется только\n"
+        "когда pane меняется, с лимитером 3с между апдейтами.\n"
+        "Кнопка Shot исчезает из top-row (она уже встроена).\n\n"
+        "*Важно:* Telegram caption ограничен 1024 char vs 4096 для\n"
+        "text — размер страницы уменьшается ~в 4 раза. Регулируй\n"
+        "через настройку Размер страницы."
+    ),
+    "screens.on": "on",
+    "screens.off": "off",
+    "settings.group.bg_notify_finished": "Bg: задача готова",
+    "settings.group.bg_notify_error": "Bg: ошибки",
+    "settings.group.bg_notify_needs_action": "Bg: нужен ввод",
+    "settings.bg_notify.finished.body": (
+        "*Bg-сессия: задача готова*\n\n"
+        "Когда фоновая сессия достигает end-of-turn, шлём тихий\n"
+        "push ✅ [<name>] task complete, чтобы юзер мог переключиться."
+    ),
+    "settings.bg_notify.error.body": (
+        "*Bg-сессия: ошибки*\n\n"
+        "Push ❌ [<name>] error когда фоновая сессия эмитит\n"
+        "ошибочный ивент. (Сейчас срабатывает только на явные\n"
+        "error-ивенты; детект исключений будет расширен.)"
+    ),
+    "settings.bg_notify.needs_action.body": (
+        "*Bg-сессия: нужен ввод*\n\n"
+        "Push ❓ [<name>] needs your attention когда фоновая сессия\n"
+        "показывает AskUserQuestion / ExitPlanMode / Permission промпт.\n"
+        "Иначе только ❓ бейдж в bg-panel — легко пропустить."
+    ),
+    "settings.cat.card": "🃏 Карточка / вид",
+    "settings.cat.notifications": "🔔 Уведомления",
+    "settings.cat.voice": "🎙 Голос",
+    "settings.cat.terminal": "🖥 Локальный терминал",
+    "settings.cat.behavior": "⚙ Поведение и язык",
+    "settings.cat.card.body": (
+        "*Карточка / вид*\n\nРаскладка, плотность и refresh живой карточки."
+    ),
+    "settings.cat.notifications.body": (
+        "*Уведомления*\n\n"
+        "Bg-сессионные пуши (готово / ошибки / нужен ввод) и день\n"
+        "сброса для weekly-quota алертов."
+    ),
+    "settings.cat.voice.body": ("*Голос*\n\nДвижок speech-to-text для входящих voice."),
+    "settings.cat.terminal.body": (
+        "*Локальный терминал*\n\nНативное Terminal / iTerm окно к tmux."
+    ),
+    "settings.cat.behavior.body": (
+        "*Поведение и язык*\n\nАвто-Yes на промпты; язык интерфейса."
     ),
     "settings.group.local_terminal": "Локальный терминал",
     "settings.local.body": (
@@ -563,13 +695,13 @@ _RU: dict[str, str] = {
     "help.body.menu": (
         "*≡ Меню*\n\n"
         "Открывается через /menu или инлайн-кнопку ≡. Пункты:\n"
-        "• 📋 *List* — transcript активной сессии "
-        "(🧑‍💻 Shot живёт здесь)\n"
+        "• 📋 *Sessions* — переход на живую карточку активной\n"
         "• 📊 *Status* — лимиты Claude Code (5ч / неделя / sonnet)\n"
-        "• 📜 *History* — постраничный transcript активной\n"
+        "• 🧑‍💻 *Shot* — снимок терминала активной сессии\n"
         "• 🆕 *New* — создать сессию через выбор директории\n"
         "• 📦 *Archive* — восстановить / посмотреть / удалить\n"
-        "• ⚙ *Settings* — язык, голос, алерты, терминал, ..."
+        "• ⚙ *Settings* — сгруппированы по Карточка / Уведомления / "
+        "Голос / Терминал / Поведение."
     ),
     "help.body.commands": (
         "*Слэш-команды*\n\n"
@@ -586,18 +718,28 @@ _RU: dict[str, str] = {
         "*Голос и файлы*\n\n"
         "• *Голос.* Отправь голосовое — оно расшифровывается локально "
         "(whisper.cpp / Apple Speech) и уходит в активную сессию как "
-        "текст.\n"
+        "текст. Реакция 👀 ставится на исходное voice-сообщение.\n"
         "• *Фото / документ.* Кладётся в `<workdir>/.ccbot-inbox/`, "
-        "Claude получает синтетическое сообщение через tmux. TTL 24ч; "
-        "Telegram `file_id` хранится 30д для `/restore-file`."
+        "Claude получает относительный путь (с caption-префиксом, если "
+        "он был). TTL 24ч; Telegram `file_id` хранится 30д для "
+        "`/restore-file`."
     ),
     "help.body.alerts": (
         "*Алерты*\n\n"
-        "*Per-session по токенам.* Три порога (по умолчанию "
-        "100k / 200k / 400k). Бот шлёт push один раз на сессию на каждый "
-        "переход. Настройка: Settings → Token alerts (шаг 50k через ±).\n\n"
         "*Квоты Claude Code.* 5ч / неделя / неделя Sonnet — бот опрашивает "
-        "живой `/usage` каждые 5 мин и пушит при пересечении 50, 75, 90 %."
+        "живой `/usage` каждые 10 мин и пушит при пересечении 50, 75, 90 %.\n\n"
+        "*Пуши по фоновым сессиям.* Settings → Уведомления, три "
+        "независимых тумблера (все по умолчанию on):\n"
+        "• ✅ task complete\n"
+        "• ❌ error\n"
+        "• ❓ needs your attention (интерактивный prompt)\n"
+        "Активная сессия не пушит — она дописывает свою live-карточку.\n\n"
+        "*Заполнение контекста.* На карточке у каждой сессии есть "
+        "``context: N%`` — оценка из JSONL (последний assistant-turn: "
+        "input + cache_read относительно опубликованного окна модели). "
+        "В пределах ±10% от того, что показывает `/context`, но не "
+        "идентично — `/context` дополнительно считает system / tools / "
+        "memory / autocompact buffer."
     ),
     "help.body.terminal": (
         "*Локальный терминал*\n\n"
@@ -634,6 +776,7 @@ _ZH: dict[str, str] = {
     "btn.no": "× 否",
     "btn.yes_kill": "⚠ 是，终止",
     "btn.yes_delete": "⚠ 是，删除",
+    "btn.yes_clear": "⚠ 是，清空",
     "btn.refresh": "🔄 刷新",
     "btn.save": "已保存",
     "btn.cancelled": "已取消",
@@ -645,7 +788,7 @@ _ZH: dict[str, str] = {
     "btn.delete": "🗑 删除",
     "btn.to_14d": "→ 14天",
     "btn.to_72h": "→ 72时",
-    "mm.list": "📋 列表",
+    "mm.sessions": "📋 会话",
     "mm.status": "📊 状态",
     "mm.history": "📜 历史",
     "mm.shot": "🧑‍💻 截图",
@@ -688,14 +831,16 @@ _ZH: dict[str, str] = {
         "• `off` — 忽略语音"
     ),
     "settings.lang.body": "*语言*\n\n界面语言。切换除 Claude 自身输出外的一切文本。",
-    "list.active": "*活动*",
-    "list.lost": "*丢失*",
     "list.empty": "没有活动会话。点 🆕 新建以创建。",
     "conf.kill": (
         "终止 *{name}*?\nTmux 窗口结束,claude session id 已保存。\n可通过归档列表恢复。"
     ),
     "conf.done": "标记 *{name}* 为完成?\n目标已关闭,会话已归档。",
     "conf.delete": "从归档中删除 *{name}*?\n状态记录消失。JSONL 保留在磁盘。",
+    "conf.clear": (
+        "清空 *{name}*?\n先发送 Esc,然后 /clear。会话上下文将被擦除,"
+        "无法恢复(不同于 Kill → Restore)。"
+    ),
     "conf.killed": "💀 已终止 `{name}`",
     "conf.done_ok": "🎉 `{name}` 已标记完成。",
     "conf.deleted": "🗑 归档记录已删除。",
@@ -732,8 +877,6 @@ _ZH: dict[str, str] = {
     "archive.range_14d": "(0–14天)",
     "archive.empty": "此范围内没有已归档会话。",
     "archive.page_line": "第 {page}/{pages} 页 — 共 {total}",
-    "archive.tokens_k": "{k}k 词元",
-    "archive.tokens_zero": "0 词元",
     "archive.age.s": "{n}秒前",
     "archive.age.m": "{n}分前",
     "archive.age.h": "{n}时前",
@@ -775,23 +918,61 @@ _ZH: dict[str, str] = {
     "local.off": "关",
     "local.manual": "按钮",
     "local.auto": "总是",
-    "settings.group.card_position": "卡片位置",
-    "settings.cardpos.body": (
-        "*卡片位置*\n\n"
-        "你输入后,实时卡片的位置:\n"
-        "• `push` — 保持原样(你的消息把卡片推上去)\n"
-        "• `delete` — 删除你的消息,卡片留在最下方\n"
-        "• `repost` — 在你消息下方重新发送卡片"
+    "settings.group.card_history": "卡片历史",
+    "settings.cardhist.body": (
+        "*卡片历史*\n\n"
+        "首次访问时(机器人重启 / 切换器点击 / 菜单→Sessions)\n"
+        "从 JSONL 转录加载多少最近的 end-of-turn 边界。\n"
+        "更深的历史始终通过 /history 访问,与该值无关。\n\n"
+        "更多 = 卡片内更多历史,每会话占用更多内存。"
     ),
-    "cardpos.push": "push",
-    "cardpos.delete": "删除",
-    "cardpos.repost": "重发",
-    "settings.group.token_alerts": "Token 提醒",
-    "settings.tokens.body": (
-        "*会话 Token 提醒*\n\n"
-        "三个阈值。每当会话累计 token 跨过一个阈值时,\n"
-        "机器人发送一次推送通知,步长 50k。"
+    "settings.group.card_page_lines": "页面大小",
+    "settings.pagesize.body": (
+        "*页面大小*\n\n"
+        "卡片单页最大行数。较旧事件落到前面的页面(◀);\n"
+        "较长的最终回答按智能边界(段落 / 行 / 句子 / 单词)\n"
+        "拆分多页 — 不会在单词中间断开。允许 ±5 行偏差。\n\n"
+        "更小 = 手机视图更紧凑。更大 = 单页更多上下文,\n"
+        "但 edit 消息更重。"
     ),
+    "settings.group.card_inline_screenshots": "卡片内嵌截图",
+    "settings.screens.body": (
+        "*卡片内嵌截图*\n\n"
+        "*开启* 时,活动会话卡片 = photo+caption:照片为 pane\n"
+        "渲染,标题为正文。仅当 pane 变化时刷新照片,3 秒节流。\n"
+        "Shot 按钮从顶部消失(已内嵌)。\n\n"
+        "*注意:* Telegram caption 限制 1024 字符 vs text 4096 —\n"
+        "页面大小有效缩小 ~4 倍。可用「页面大小」设置补偿。"
+    ),
+    "screens.on": "开",
+    "screens.off": "关",
+    "settings.group.bg_notify_finished": "Bg:任务完成",
+    "settings.group.bg_notify_error": "Bg:错误",
+    "settings.group.bg_notify_needs_action": "Bg:需要操作",
+    "settings.bg_notify.finished.body": (
+        "*Bg 会话:任务完成*\n\n"
+        "后台会话进入 end-of-turn 时,推送 ✅ [<name>] task complete。"
+    ),
+    "settings.bg_notify.error.body": (
+        "*Bg 会话:错误*\n\n后台会话发出错误事件时,推送 ❌ [<name>] error。"
+    ),
+    "settings.bg_notify.needs_action.body": (
+        "*Bg 会话:需要操作*\n\n"
+        "后台会话显示 AskUserQuestion / ExitPlanMode / Permission\n"
+        "提示时,推送 ❓ [<name>] needs your attention。"
+    ),
+    "settings.cat.card": "🃏 卡片 / 视图",
+    "settings.cat.notifications": "🔔 通知",
+    "settings.cat.voice": "🎙 语音",
+    "settings.cat.terminal": "🖥 本地终端",
+    "settings.cat.behavior": "⚙ 行为和语言",
+    "settings.cat.card.body": "*卡片 / 视图*\n\n实时会话卡片的布局、密度和刷新。",
+    "settings.cat.notifications.body": (
+        "*通知*\n\nBg 会话推送(完成 / 错误 / 需要操作)和\nweekly quota 提醒的重置日。"
+    ),
+    "settings.cat.voice.body": "*语音*\n\n语音消息的 STT 后端。",
+    "settings.cat.terminal.body": "*本地终端*\n\n附加到每个新会话的本地终端窗口。",
+    "settings.cat.behavior.body": ("*行为和语言*\n\n自动同意交互提示;界面语言。"),
     "settings.group.local_terminal": "本地终端",
     "settings.local.body": (
         "*本地终端*\n\n"
@@ -841,12 +1022,12 @@ _ZH: dict[str, str] = {
     "help.body.menu": (
         "*≡ 菜单*\n\n"
         "通过 /menu 或 ≡ 菜单内联按钮打开:\n"
-        "• 📋 *List* — 当前会话的转录(🧑‍💻 Shot 在这里)\n"
+        "• 📋 *Sessions* — 跳转到当前会话的实时卡片\n"
         "• 📊 *Status* — 5h / 周 / sonnet 配额\n"
-        "• 📜 *History* — 当前会话的分页转录\n"
+        "• 🧑‍💻 *Shot* — 当前会话的终端快照\n"
         "• 🆕 *New* — 通过目录浏览器创建会话\n"
         "• 📦 *Archive* — 恢复 / 查看 / 删除\n"
-        "• ⚙ *Settings* — 语言 / 语音 / 提醒 / 终端 …"
+        "• ⚙ *Settings* — 按 卡片 / 通知 / 语音 / 终端 / 行为 分组。"
     ),
     "help.body.commands": (
         "*斜杠命令*\n\n"
@@ -863,16 +1044,24 @@ _ZH: dict[str, str] = {
         "*语音和文件*\n\n"
         "• *语音。* 发送语音消息 — 在本地转写\n"
         "(whisper.cpp / Apple Speech)然后作为文本发送给活动会话。\n"
-        "• *照片 / 文档。* 落到 `<workdir>/.ccbot-inbox/`,Claude 通过\n"
-        "tmux 收到合成消息。TTL 24 小时;Telegram `file_id` 保留 30 天\n"
-        "用于 `/restore-file`。"
+        "原始语音消息会被打上 👀 反应标记。\n"
+        "• *照片 / 文档。* 落到 `<workdir>/.ccbot-inbox/`,Claude 收到\n"
+        "相对路径(如果你附带 caption,会作为前缀)。TTL 24 小时;\n"
+        "Telegram `file_id` 保留 30 天用于 `/restore-file`。"
     ),
     "help.body.alerts": (
         "*提醒*\n\n"
-        "*Per-session token 提醒。* 三个阈值(默认 100k / 200k / 400k)。\n"
-        "每个会话每个阈值推送一次。Settings → Token alerts(50k 步长)。\n\n"
-        "*配额提醒。* 5h / 周 / 周-Sonnet 配额 — 机器人每 5 分钟轮询\n"
-        "实时 `/usage` 弹窗,百分比跨过 50 / 75 / 90 时推送。"
+        "*配额提醒。* 5h / 周 / 周-Sonnet 配额 — 机器人每 10 分钟轮询\n"
+        "实时 `/usage` 弹窗,百分比跨过 50 / 75 / 90 时推送。\n\n"
+        "*后台会话推送。* Settings → 通知 三个独立开关(默认全部 on):\n"
+        "• ✅ task complete\n"
+        "• ❌ error\n"
+        "• ❓ needs your attention (交互式提示)\n"
+        "活动会话不推送 — 直接更新它的实时卡片。\n\n"
+        "*上下文占用。* 卡片每个会话显示 ``context: N%`` — 来自 JSONL\n"
+        "估算(最近一次 assistant turn 的 input + cache_read 除以\n"
+        "模型公布的窗口)。与 `/context` 显示相差 ±10%,不完全一致 —\n"
+        "/context 还会计算 system / tools / memory / autocompact buffer。"
     ),
     "help.body.terminal": (
         "*本地终端*\n\n"

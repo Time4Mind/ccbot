@@ -37,7 +37,6 @@ from ..handlers.interactive_ui import (
     get_interactive_window,
     handle_interactive_ui,
 )
-from ..handlers.message_queue import clear_status_msg_info
 from ..handlers.message_sender import (
     NO_LINK_PREVIEW,
     safe_reply,
@@ -244,7 +243,6 @@ async def unsupported_content_handler(
                 "window_id": wid,
             },
         )
-        clear_status_msg_info(user.id, wid)
         success, message = await session_manager.send_to_window(wid, text_to_send)
         if not success:
             await safe_reply(msg, f"❌ {message}")
@@ -264,6 +262,24 @@ async def unsupported_content_handler(
     )
 
 
+async def _react_input(bot: Bot, chat_id: int, message_id: int) -> None:
+    """👀 reaction on the user's incoming msg (text / voice / photo /
+    document) so the routing leaves a traceable mark in chat history.
+    One consistent emoji across input types — Telegram's free reaction
+    set is narrow (no 📎, no 🎤), so 👀 carries "received + routed"
+    universally."""
+    try:
+        from telegram import ReactionTypeEmoji
+
+        await bot.set_message_reaction(
+            chat_id=chat_id,
+            message_id=message_id,
+            reaction=[ReactionTypeEmoji(emoji="👀")],
+        )
+    except Exception as e:
+        logger.debug("input reaction failed: %s", e)
+
+
 # --- inbox file plumbing (photo + document share this) ---
 
 
@@ -276,16 +292,24 @@ async def _forward_inbox_file(
     label: str,
     bot: Bot,
 ) -> tuple[bool, str]:
-    """Send a synthetic 'received file' notice to the active session."""
-    rel = file_path.name
+    """Route an inbound file to the active session.
+
+    Pane payload is shaped as ``<caption>\\n\\n.ccbot-inbox/<file>`` so
+    claude both (a) knows the file exists and where to read it and
+    (b) sees whatever instructions the user attached. With no caption
+    it's just the relative path on its own line. This is a minimal
+    successor to the old verbose ``(image attached: /full/path)``
+    synthetic line — short enough not to feel like "the bot speaking
+    for the user", complete enough that claude doesn't go blind on a
+    silent drop.
+    """
     sess = session_manager.find_session_by_window(wid)
     workdir = sess.workdir if sess else ""
-    location = f"{workdir}/.ccbot-inbox/{rel}" if workdir else str(file_path)
-    text_to_send = (
-        f"{caption}\n\n({label} attached: {location})"
-        if caption
-        else f"({label} attached: {location})"
-    )
+    if workdir:
+        rel_path = f".ccbot-inbox/{file_path.name}"
+    else:
+        rel_path = str(file_path)
+    text_to_send = f"{caption}\n\n{rel_path}" if caption.strip() else rel_path
     try:
         await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         logger.info(
@@ -303,7 +327,6 @@ async def _forward_inbox_file(
         )
     except Exception:
         pass
-    clear_status_msg_info(user_id, wid)
     return await session_manager.send_to_window(wid, text_to_send)
 
 
@@ -357,8 +380,10 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
-    # No success reply — the user just sent the image, they don't need
-    # the bot to tell them it was received. Errors still surface above.
+    # 📎 reaction on the user's incoming photo so the routing leaves a
+    # traceable mark in chat history (same intent as the 👀 reaction on
+    # text messages — Task #30).
+    await _react_input(context.bot, user.id, update.message.message_id)
 
 
 async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -410,7 +435,7 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
-    # No success reply — see photo_handler for the same reasoning.
+    await _react_input(context.bot, user.id, update.message.message_id)
 
 
 # --- voice ---
@@ -483,14 +508,19 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "window_id": wid,
         },
     )
-    clear_status_msg_info(user.id, wid)
 
     success, message = await session_manager.send_to_window(wid, text)
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
 
-    await safe_reply(update.message, f'🎤 "{text}"')
+    # 🎤 reply removed (chat-clutter on every PTT). The transcription
+    # is now traceable via the 👀 reaction on the user's voice msg
+    # itself + whatever the live card shows next. Telegram's free
+    # reaction set doesn't include 🎤, so we fall back to 👀 (same as
+    # text / attachment handlers) for one consistent "received +
+    # routed" marker across all input types.
+    await _react_input(context.bot, user.id, update.message.message_id)
 
 
 # --- text + bash !cmd capture ---
@@ -594,13 +624,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await safe_reply(update.message, "Please use the picker above, or tap Cancel.")
         return
 
-    # Typing a message exits any open Menu sub-screen — drop the markers
-    # so the next switcher tap / history paginate doesn't think the user
-    # is still on /list or /history.
-    from .callbacks.more_menu import clear_view_markers as _clear_view_markers
-
-    _clear_view_markers(context.user_data)
-
     # Reply-quote routing: if the user replied to a bot message that
     # belongs to a non-active session, send this single message there
     # without changing the active session pointer.
@@ -624,13 +647,34 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     )
                     if ok:
                         session_manager.touch_session(target.id)
+                        # Explicit feedback so the user can see which
+                        # session received the reply-quote — bg session
+                        # would otherwise stay silent until the next
+                        # carrier interaction.
                         await safe_reply(
                             update.message,
-                            f"→ \\[{target.name or target.id}\\]",
+                            f"↩ \\[{target.name or target.id}\\]",
+                        )
+                        # Match the 👀 marker that every other input
+                        # type leaves on the user's msg (Task #30 / #32
+                        # consistency — the success path returned early
+                        # before the reaction at the bottom of text_handler).
+                        await _react_input(
+                            context.bot, user.id, update.message.message_id
                         )
                         return
                     await safe_reply(update.message, f"❌ {sm}")
                     return
+            elif target is not None and target.state not in ("active", "idle"):
+                # User aimed at a dead session (archived/lost/completed).
+                # Silent fallback would route to active with no signal —
+                # tell them so the routing surprise is visible. Falls
+                # through to the active-session dispatch below.
+                await safe_reply(
+                    update.message,
+                    f"⚠ \\[{target.name or target.id}\\] is {target.state} — "
+                    "routing to the active session instead.",
+                )
 
     wid = active_window(user.id)
     if wid is None:
@@ -710,6 +754,27 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await safe_reply(update.message, f"❌ {message}")
         return
 
+    # Immediate typing-indicator so the user sees feedback within ~500 ms
+    # of sending — claude can take 5-30 s before emitting its first event
+    # (long tool prelude / thinking) and ``status_polling`` won't fire
+    # typing until the pane enters the busy-spinner state. Without this
+    # early fire the chat looks frozen.
+    try:
+        await context.bot.send_chat_action(chat_id=user.id, action=ChatAction.TYPING)
+        logger.info(
+            "typing_fired source=text_handler.post_send user=%d wid=%s",
+            user.id,
+            wid,
+            extra={
+                "event": "typing_fired",
+                "source": "text_handler.post_send",
+                "user_id": user.id,
+                "window_id": wid,
+            },
+        )
+    except Exception:
+        pass
+
     sess = session_manager.find_session_by_window(wid)
     if sess is not None:
         session_manager.touch_session(sess.id)
@@ -729,23 +794,19 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await asyncio.sleep(0.2)
         await handle_interactive_ui(context.bot, user.id, wid)
 
-    # User-message disposition: keep the live card visually below the
-    # user's latest line per the active card_position setting.
-    pos_mode = session_manager.get_user_settings(user.id).get("card_position", "push")
-    if pos_mode == "delete":
-        try:
-            await context.bot.delete_message(
-                chat_id=user.id, message_id=update.message.message_id
-            )
-        except Exception as e:
-            logger.debug("card_position=delete user msg delete failed: %s", e)
-    elif pos_mode == "repost" and sess is not None:
+    # Always repost the live card below the user's message (the
+    # card_position setting was ripped out — repost is the single
+    # canonical behaviour). The user's message stays in chat with a
+    # reaction emoji so the conversation chain is traceable. The
+    # reaction also marks reply-quote dispatches (same path).
+    if sess is not None:
         from ..handlers.notifications import repost_card
 
         try:
             await repost_card(context.bot, user.id, sess)
         except Exception as e:
-            logger.debug("card_position=repost failed: %s", e)
+            logger.debug("repost_card failed: %s", e)
+    await _react_input(context.bot, user.id, update.message.message_id)
 
 
 # Re-export so existing callers (callbacks/dir_browser.py) keep working.

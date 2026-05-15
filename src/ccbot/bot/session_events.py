@@ -26,17 +26,12 @@ from ..config import config
 from ..handlers import bg_status
 from ..handlers.interactive_ui import (
     INTERACTIVE_TOOL_NAMES,
-    clear_interactive_mode,
     clear_interactive_msg,
     get_interactive_msg_id,
-    handle_interactive_ui,
-    set_interactive_mode,
 )
-from ..handlers.message_queue import get_message_queue
 from ..handlers.notifications import (
     finalize_task,
     is_active_for_user,
-    push_event,
     refresh_panel,
     update_session_card,
 )
@@ -44,7 +39,7 @@ from ..session import session_manager
 from ..session_monitor import NewMessage
 from ..terminal_parser import extract_interactive_content
 from ..tmux_manager import tmux_manager
-from ..usage import aggregate_session, pop_session_token_alert
+from ..usage import context_pct_for_session
 
 logger = logging.getLogger(__name__)
 
@@ -145,33 +140,58 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                     user_id, sess.id, "needs_action", interactive_ui=ui_tuple
                 ):
                     await refresh_panel(bot, user_id)
+                    # Bg push notification (Task #42): only on TRANSITION
+                    # into needs_action (update_status returned True). The
+                    # user-setting toggles this — default on.
+                    if session_manager.get_user_settings(user_id).get(
+                        "bg_notify_needs_action", True
+                    ):
+                        from ..handlers.notifications import push_event
+
+                        try:
+                            await push_event(
+                                bot, user_id, sess, text="needs your attention"
+                            )
+                        except Exception as e:
+                            logger.debug("bg needs_action push failed: %s", e)
                 continue
 
-            set_interactive_mode(user_id, wid)
-            queue = get_message_queue(user_id)
-            if queue:
-                await queue.join()
+            # Active session needs_action: card msg edits to kb-mode
+            # view (no separate push). Task #41 / Pivot kb-mode v2.
+            from ..handlers.notifications import enter_kb_mode
+
             await asyncio.sleep(0.3)
-            handled = await handle_interactive_ui(bot, user_id, wid)
-            if handled:
-                await push_event(
-                    bot, user_id, sess, text=f"interactive prompt: {msg.tool_name}"
-                )
-                claude_sess = await session_manager.resolve_session_for_window(wid)
-                if claude_sess and claude_sess.file_path:
-                    try:
-                        file_size = Path(claude_sess.file_path).stat().st_size
-                        session_manager.update_user_window_offset(
-                            user_id, wid, file_size
+            w = await tmux_manager.find_window_by_id(wid)
+            if w:
+                pane_text = await tmux_manager.capture_pane(w.window_id)
+                if pane_text:
+                    ui = extract_interactive_content(pane_text)
+                    if ui is not None:
+                        await enter_kb_mode(bot, user_id, sess, ui.content, ui.name)
+                        claude_sess = await session_manager.resolve_session_for_window(
+                            wid
                         )
-                    except OSError:
-                        pass
-                continue
-            clear_interactive_mode(user_id)
+                        if claude_sess and claude_sess.file_path:
+                            try:
+                                file_size = Path(claude_sess.file_path).stat().st_size
+                                session_manager.update_user_window_offset(
+                                    user_id, wid, file_size
+                                )
+                            except OSError:
+                                pass
+                        continue
+            # Pane parse failed — fall through to regular card update.
 
         # Any non-interactive event invalidates a previously-shown interactive UI.
         if get_interactive_msg_id(user_id, wid):
             await clear_interactive_msg(user_id, bot, wid)
+        # Same for the kb-mode card view — claude has moved past the
+        # prompt, so flip the card back to its regular layout.
+        from ..handlers.notifications import exit_kb_mode, has_pending_kb
+
+        has_prompt, in_kb = has_pending_kb(user_id, sess.id)
+        if has_prompt or in_kb:
+            await exit_kb_mode(bot, user_id, sess, clear_pending=True)
 
         if msg.is_complete:
             # Real end-of-turn assistant text → "task complete".  Mid-stream
@@ -197,6 +217,18 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 )
                 if bg_status.update_status(user_id, sess.id, new_status):
                     await refresh_panel(bot, user_id)
+                    # Bg push (Task #42): only on TRANSITION into finished.
+                    # ``update_status`` returns True only on actual change
+                    # — natural dedup, won't spam if same state re-affirms.
+                    if new_status == "finished" and session_manager.get_user_settings(
+                        user_id
+                    ).get("bg_notify_finished", True):
+                        from ..handlers.notifications import push_event
+
+                        try:
+                            await push_event(bot, user_id, sess, text="task complete")
+                        except Exception as e:
+                            logger.debug("bg finished push failed: %s", e)
 
             claude_sess = await session_manager.resolve_session_for_window(wid)
             if claude_sess and claude_sess.file_path:
@@ -206,26 +238,24 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 except OSError:
                     pass
 
-            # Per-session token alerts — push is gone in bg-molchit mode;
-            # the threshold crossing now flips the ⚠️🟢/🟡/🔴 glyph on
-            # the bg panel row (or active card header).
+            # Context-pct refresh from JSONL on every end-of-turn
+            # assistant text. The /context-command-based poller was
+            # disabled because it pollutes the session's JSONL (modal
+            # output gets written back as a fake user turn). JSONL math
+            # is non-invasive — see ``usage.context_pct_for_session``.
             if msg.role == "assistant" and msg.content_type == "text":
                 try:
-                    su = await aggregate_session(sess)
-                    sess.token_usage_total = su.tokens_total
-                    threshold = pop_session_token_alert(sess, user_id)
-                    if threshold is not None:
-                        from .. import metrics
-
-                        session_manager.save_state()
-                        metrics.inc("session_token_alerts_emitted")
-                        level = bg_status.threshold_to_quota_level(threshold)
-                        if level != "none" and bg_status.update_quota(
-                            user_id, sess.id, level
-                        ):
-                            await refresh_panel(bot, user_id)
+                    pct = await context_pct_for_session(sess)
                 except Exception as e:
-                    logger.debug("token-alert check failed: %s", e)
+                    logger.debug("context pct fetch failed: %s", e)
+                    pct = None
+                if pct is not None:
+                    from ..handlers.bg_status import set_context_pct
+                    from ..handlers.notifications import set_card_context_pct
+
+                    set_card_context_pct(user_id, sess.id, pct)
+                    set_context_pct(user_id, sess.id, pct)
+                    await refresh_panel(bot, user_id)
         else:
             # Streaming chunk — best-effort card update.
             await update_session_card(bot, user_id, sess, msg)

@@ -1,5 +1,10 @@
-"""Menu screen actions (CB_MM_*) — List / Status / History / Shot / New /
-Archive / Settings / Back."""
+"""Menu screen actions (CB_MM_*) — Sessions / Status / Shot / New /
+Archive / Settings / Back.
+
+Sessions is not a separate rendering — it lands on the active session's
+live card. The card already has the switcher row in its footer, so it
+doubles as a session-list surface.
+"""
 
 from __future__ import annotations
 
@@ -11,8 +16,6 @@ from telegram.ext import ContextTypes
 
 from ...handlers.archive import DEFAULT_LOOKBACK_SECONDS, build_archive_page
 from ...handlers.callback_data import (
-    CB_FT_CLEAR,
-    CB_FT_KILL,
     CB_MM_ARCHIVE,
     CB_MM_BACK,
     CB_MM_LIST,
@@ -22,77 +25,20 @@ from ...handlers.callback_data import (
     CB_MM_STATUS,
     CB_SW_NEW,
 )
-
-# CB_MM_SHOT is no longer surfaced from the Menu grid (per UX request: the
-# screenshot button now lives in the /list view next to Kill / Clear, since
-# /list shows the active session's transcript and that's the right surface
-# for "snapshot the terminal" too). The CB_MM_SHOT callback handler itself
-# is unchanged — taps from the new button hit the same code path.
-from ...handlers.history import send_history
 from ...handlers.menu import (
     build_footer_keyboard,
     render_more_text,
     render_settings_text,
 )
 from ...handlers.message_sender import safe_edit, safe_send
-from ...handlers.switcher import build_switcher_keyboard
+from ...handlers.notifications import paint_card_on_carrier
 from ...i18n import t
 from ...session import session_manager
 from .._common import set_view
 from .._usage_window import fetch_claude_usage
 from ..commands.info import emit_screenshot_compact
-from ..commands.lifecycle import build_live_sessions_text
 
 logger = logging.getLogger(__name__)
-
-
-# user_data marker key: ``_history_origin`` lets the history-pagination
-# callback rebuild the same extra-row footer the history was painted
-# with originally, so the buttons under the pagination row don't vanish
-# on a page click. Values: ``"switcher"`` (carrier was opened by a
-# session switcher tap) / ``"more"`` (Menu → History).
-HISTORY_ORIGIN_KEY = "_history_origin"
-
-
-def clear_view_markers(user_data: dict[str, Any] | None) -> None:
-    """Drop the history-origin marker — call on any navigation that
-    leaves the history view (CB_MM_BACK, text typed, Menu re-opened,
-    a Menu sub-screen that isn't History)."""
-    if user_data is None:
-        return
-    user_data.pop(HISTORY_ORIGIN_KEY, None)
-
-
-def build_list_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
-    """Render the ``/list`` body + keyboard for ``user_id``.
-
-    Factored out so callers that re-render the same screen (e.g. after
-    a session-level action) don't duplicate the keyboard layout.
-    """
-    body = build_live_sessions_text(user_id) or t(user_id, "list.empty")
-    rows: list[list[InlineKeyboardButton]] = []
-    active_sess = session_manager.get_active_session(user_id)
-    if active_sess is not None and active_sess.window_id:
-        ctl_row: list[InlineKeyboardButton] = [
-            InlineKeyboardButton(t(user_id, "btn.kill"), callback_data=CB_FT_KILL),
-            InlineKeyboardButton(t(user_id, "btn.clear"), callback_data=CB_FT_CLEAR),
-            InlineKeyboardButton(t(user_id, "mm.shot"), callback_data=CB_MM_SHOT),
-        ]
-        rows.append(ctl_row)
-    sw = build_switcher_keyboard(user_id, include_lost=True, include_new=False)
-    if sw is not None:
-        for sw_row in sw.inline_keyboard:
-            rows.append(list(sw_row))
-    # `+ new` shares the bottom row with Back (the navigation slot in the
-    # /list view) so the two go-elsewhere affordances sit side-by-side,
-    # matching the main-screen `[+ new] [≡ Menu]` pair.
-    rows.append(
-        [
-            InlineKeyboardButton("+ new", callback_data=CB_SW_NEW),
-            InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_BACK),
-        ]
-    )
-    return body, InlineKeyboardMarkup(rows)
 
 
 async def _emit_new_flow(
@@ -133,7 +79,6 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
     data = query.data or ""
 
     if data == CB_MM_BACK:
-        clear_view_markers(context.user_data)
         text = render_more_text(user.id)
         keyboard = build_footer_keyboard(user.id, screen="more")
         await set_view(query, context.bot, user.id, text, keyboard)
@@ -142,43 +87,40 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
 
     if data == CB_MM_LIST:
         await query.answer()
-        # Menu → List paints the ACTIVE session's transcript on the
-        # carrier with the /list footer (Kill / Clear / switcher rows /
-        # ＋ new / Back). The session names + token usage already live
-        # in the switcher row labels — duplicating them in the body
-        # made this view feel useless ("just the same list again").
-        # Showing history makes List the natural "where am I" surface.
-        #
-        # Fallback to the legacy body-list view when there's no active
-        # session (e.g. user has only archived ones).
-        clear_view_markers(context.user_data)
+        # Menu → Sessions is not a separate screen — it lands on the
+        # active session's live card (which already carries the switcher
+        # row + in-card pagination). Single rendering, one surface.
+
         active_sess = session_manager.get_active_session(user.id)
-        body, kb = build_list_view(user.id)
         if active_sess is None or not active_sess.window_id:
-            await safe_edit(query, body, reply_markup=kb)
+            # No active session — thin empty-state with [+ new][Back].
+            empty_kb = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton("+ new", callback_data=CB_SW_NEW),
+                        InlineKeyboardButton(
+                            t(user.id, "btn.back"), callback_data=CB_MM_BACK
+                        ),
+                    ]
+                ]
+            )
+            await safe_edit(query, t(user.id, "list.empty"), reply_markup=empty_kb)
             return True
-        if context.user_data is not None:
-            # Mark origin so the history-pagination handler rebuilds
-            # THIS view's footer (Kill / Clear / switcher / + new /
-            # Back), not the main-screen one with ≡ Menu.
-            context.user_data[HISTORY_ORIGIN_KEY] = "menu_list"
-        extra_rows = [list(r) for r in kb.inline_keyboard]
+        carrier_msg_id = query.message.message_id if query.message else None
+        if carrier_msg_id is None:
+            return True
         try:
-            await send_history(
-                target=query,
-                window_id=active_sess.window_id,
-                edit=True,
-                user_id=user.id,
-                extra_rows=extra_rows,
+            await paint_card_on_carrier(
+                context.bot, user.id, active_sess, carrier_msg_id
             )
         except Exception as e:
-            logger.debug("mm list history paint failed: %s", e)
-            await safe_edit(query, body, reply_markup=kb)
+            logger.debug("mm sessions paint failed: %s", e)
+            await safe_edit(query, t(user.id, "list.empty"))
         return True
 
     if data == CB_MM_STATUS:
         await query.answer()
-        clear_view_markers(context.user_data)
+
         base = build_footer_keyboard(user.id, screen="more", exclude_more="status")
         base_rows = list(base.inline_keyboard) if base is not None else []
         refresh_row = [
@@ -196,32 +138,22 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
 
     if data == CB_MM_SHOT:
         await query.answer()
-        # Encode origin so the photo's Back button knows whether to
-        # return to /list ("l") or the main live-card view ("m"). The
-        # /list view paints with HISTORY_ORIGIN_KEY == "menu_list" via
-        # the CB_MM_LIST handler above; anywhere else (footer top row
-        # of the live card) we treat as "main".
-        origin = (
-            "l"
-            if (
-                context.user_data is not None
-                and context.user_data.get(HISTORY_ORIGIN_KEY) == "menu_list"
-            )
-            else "m"
-        )
-        clear_view_markers(context.user_data)
-        await emit_screenshot_compact(query, context.bot, user.id, origin=origin)
+        # Screenshot's Back button always returns to the main live-card
+        # view now — the legacy "l" origin (Menu→List) doesn't exist
+        # anymore since Menu→Sessions IS the live card.
+
+        await emit_screenshot_compact(query, context.bot, user.id, origin="m")
         return True
 
     if data == CB_MM_NEW:
         await query.answer()
-        clear_view_markers(context.user_data)
+
         await _emit_new_flow(query, context, user)
         return True
 
     if data == CB_MM_ARCHIVE:
         await query.answer()
-        clear_view_markers(context.user_data)
+
         if context.user_data is not None:
             context.user_data["_arc_show_all"] = False
         text, kb = await build_archive_page(
@@ -235,7 +167,6 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         return True
 
     if data == CB_MM_SETTINGS:
-        clear_view_markers(context.user_data)
         text = render_settings_text(user.id)
         keyboard = build_footer_keyboard(user.id, screen="settings")
         await safe_edit(query, text, reply_markup=keyboard)

@@ -1,4 +1,4 @@
-"""Read-only info commands: /status, /history, /screenshot, /usage, /health, /help.
+"""Read-only info commands: /history, /screenshot, /usage, /health, /help.
 
 These also expose ``emit_*`` / ``render_help`` helpers used by the
 inline Menu and Help callbacks when the user opens the same view from
@@ -21,20 +21,16 @@ from ...handlers.callback_data import (
     CB_KEYS_PREFIX,
     CB_SCREENSHOT_REFRESH,
     CB_SHOT_BACK,
-    CB_SHOT_KEYS,
-    CB_SHOT_MODE,
     CB_SHOT_SW,
 )
 from ...handlers.history import send_history
 from ...handlers.message_sender import safe_reply, safe_send
-from ...handlers.switcher import build_switcher_keyboard, session_emoji
+from ...handlers.switcher import session_emoji
 from ...i18n import t
 from ...screenshot import text_to_image
 from ...session import session_manager
 from ...tmux_manager import tmux_manager
-from ...usage import format_usage_breakdown_compact
 from .._common import active_window, is_user_allowed
-from .lifecycle import build_live_sessions_text
 
 logger = logging.getLogger(__name__)
 
@@ -153,41 +149,12 @@ def build_screenshot_compact_keyboard(
     ``origin`` is ``"m"`` (main / live card) or ``"l"`` (Menu → List
     view); the Back button routes back to that surface in both modes.
     """
+    # Manual ⌨ kb-mode toggle removed (Task #41) — kb-mode comes up
+    # automatically on the live card when claude shows a prompt, no
+    # need for a button in the shot photo. The photo keyboard is just
+    # session-switcher + Back now.
+    del mode  # legacy param, ignored
     active_sess = session_manager.get_active_session(user_id)
-
-    if mode == "k":
-        active_window = active_sess.window_id if active_sess is not None else ""
-
-        def kb(label: str, key_id: str) -> InlineKeyboardButton:
-            return InlineKeyboardButton(
-                label,
-                callback_data=f"{CB_SHOT_KEYS}{key_id}:{origin}:{active_window}"[:64],
-            )
-
-        rows: list[list[InlineKeyboardButton]] = []
-        if active_window:
-            rows.extend(
-                [
-                    [kb("␣ Space", "spc"), kb("↑", "up"), kb("⇥ Tab", "tab")],
-                    [kb("←", "lt"), kb("↓", "dn"), kb("→", "rt")],
-                    [kb("⎋ Esc", "esc"), kb("^C", "cc"), kb("⏎ Enter", "ent")],
-                ]
-            )
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    "← Switcher",
-                    callback_data=f"{CB_SHOT_MODE}s:{origin}",
-                ),
-                InlineKeyboardButton(
-                    t(user_id, "btn.back"),
-                    callback_data=f"{CB_SHOT_BACK}{origin}",
-                ),
-            ]
-        )
-        return InlineKeyboardMarkup(rows)
-
-    # mode == "s" — switcher layout (default).
     sessions = session_manager.list_user_sessions(user_id, states=("active", "idle"))
     active_id = active_sess.id if active_sess is not None else ""
     rows = []
@@ -201,32 +168,34 @@ def build_screenshot_compact_keyboard(
             row = []
     if row:
         rows.append(row)
-    bottom: list[InlineKeyboardButton] = [
-        InlineKeyboardButton(
-            "⌨ Keys",
-            callback_data=f"{CB_SHOT_MODE}k:{origin}",
-        ),
-        InlineKeyboardButton(
-            t(user_id, "btn.back"),
-            callback_data=f"{CB_SHOT_BACK}{origin}",
-        ),
-    ]
-    rows.append(bottom)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=f"{CB_SHOT_BACK}{origin}",
+            ),
+        ]
+    )
     return InlineKeyboardMarkup(rows)
 
 
 async def emit_screenshot_compact(
     query: Any, bot: Bot, user_id: int, *, origin: str = "m"
 ) -> None:
-    """Delete the carrier message, reply with a compressed photo preview.
+    """Send a compressed photo of the active session's pane as a NEW
+    chat message, and CLOSE the live card so claude events spawn a
+    fresh message instead of editing the now-orphaned carrier.
 
-    Visually replaces the source surface in the chat. The photo carries
-    a session switcher (taps switch active and re-render this same
-    photo with the new session's pane) plus a Back button that returns
-    to the surface the screenshot was opened from. ``origin`` is
-    ``"m"`` for the main / live-card view, ``"l"`` for the Menu→List
-    view.
+    Task #51: switched from ``pause_card_view`` (kept msg_id, edited
+    in place on resume) to ``close_card_view`` (drops msg_id, strips
+    reply markup on the old carrier). When the user taps Back, a NEW
+    card lands below the screenshot — replacement of one message by
+    another — instead of the resume-edit hitting a stale far-up
+    message that Telegram might refuse to edit anyway.
     """
+    from ...handlers.notifications import close_card_view
+    from ...session import session_manager
+
     wid = active_window(user_id)
     if not wid:
         await safe_send(bot, user_id, t(user_id, "toast.no_session"))
@@ -241,11 +210,13 @@ async def emit_screenshot_compact(
         return
     png_bytes = await text_to_image(text, with_ansi=True)
 
-    if query and query.message:
-        try:
-            await query.message.delete()
-        except Exception as e:
-            logger.debug("emit_screenshot: delete carrier failed: %s", e)
+    # Close the active card so claude events don't try to edit it
+    # underneath while the user is looking at the screenshot. The next
+    # event after Back creates a fresh card (replacement of one
+    # message by another). See ``close_card_view``.
+    active = session_manager.get_active_session(user_id)
+    if active is not None:
+        await close_card_view(bot, user_id, active.id)
 
     keyboard = build_screenshot_compact_keyboard(user_id, origin)
     try:
@@ -256,70 +227,6 @@ async def emit_screenshot_compact(
         )
     except Exception as e:
         logger.debug("emit_screenshot send failed: %s", e)
-
-
-# --- /status + emitter ---
-
-
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """`/status` — live usage from Claude's own ``/usage`` modal.
-
-    Uses the same fetch path as Menu→Status: a dedicated ccbot-usage
-    tmux window pops ``/usage``, captures the rendered modal, and we
-    parse it. The locally-aggregated JSONL counter was misleading
-    (didn't reflect Claude's authoritative window/weekly counters), so
-    we now report only what Claude itself reports.
-    """
-    user = update.effective_user
-    if not user or not is_user_allowed(user.id):
-        return
-    if not update.message:
-        return
-
-    from ...handlers.message_sender import safe_edit
-
-    placeholder = await safe_reply(update.message, t(user.id, "usage.fetching"))
-    text = await _format_live_usage(user.id)
-    await safe_edit(placeholder, text)
-
-
-async def emit_status(bot: Bot, user_id: int) -> None:
-    """Send /status as a fresh message (Menu→Status callback uses a richer
-    keyboard variant via callbacks/more_menu.py)."""
-    placeholder = await safe_send(bot, user_id, t(user_id, "usage.fetching"))
-    text = await _format_live_usage(user_id)
-    if placeholder is not None:
-        from ...handlers.message_sender import safe_edit
-
-        await safe_edit(placeholder, text)
-    else:
-        await safe_send(bot, user_id, text)
-
-
-async def _format_live_usage(user_id: int) -> str:
-    """Run Claude's /usage modal in the dedicated window and render its
-    parsed breakdown. Falls back to a short ``unavailable`` notice when
-    parsing fails — same surface as Menu→Status."""
-    from .._usage_window import fetch_claude_usage
-
-    info = await fetch_claude_usage()
-    block = format_usage_breakdown_compact(user_id, info)
-    return block or t(user_id, "usage.unavailable")
-
-
-# --- /list emitter (text body lives in lifecycle.build_live_sessions_text) ---
-
-
-async def emit_list(bot: Bot, user_id: int) -> None:
-    """Render /list as a fresh bot message (used by the Menu→List callback)."""
-    body = build_live_sessions_text(user_id)
-    if body is None:
-        await safe_send(bot, user_id, "No live sessions. Use 🆕 New to create one.")
-        return
-    keyboard = build_switcher_keyboard(user_id, include_lost=True)
-    sent = await safe_send(bot, user_id, body, reply_markup=keyboard)
-    if sent and keyboard is not None:
-        session_manager.set_last_switcher_msg(user_id, sent.message_id)
 
 
 # --- /usage (interactive Claude TUI) ---
@@ -393,7 +300,6 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not update.message:
         return
 
-    from ...handlers.message_queue import get_message_queue
     from ...metrics import snapshot
 
     snap = snapshot()
@@ -408,9 +314,6 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     archived = sum(1 for s in sessions if s.state in ("archived", "completed"))
     lost = sum(1 for s in sessions if s.state == "lost")
 
-    queue = get_message_queue(user.id)
-    queue_size = queue.qsize() if queue is not None else 0
-
     lines = [
         "*Health*",
         f"uptime: {_format_duration(snap.get('uptime_seconds', 0))}",
@@ -420,9 +323,6 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "",
         "*sessions*",
         f"active: {active} · idle: {idle} · archived: {archived} · lost: {lost}",
-        "",
-        "*queue*",
-        f"depth (you): {queue_size}",
     ]
 
     interesting = (
@@ -431,7 +331,6 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "sessions_created",
         "sessions_archived",
         "sessions_completed",
-        "session_token_alerts_emitted",
         "quota_alerts_emitted",
     )
     counter_lines = [f"{k}: {counters[k]}" for k in interesting if k in counters]

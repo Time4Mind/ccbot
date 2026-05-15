@@ -170,8 +170,10 @@ Published via `setMyCommands` on startup so they appear in the Telegram `/`-menu
 /stop     Send Esc to interrupt current task in active session
 /done     Mark goal as achieved and archive
 /archive  Browse archived sessions (paginated)
-/status   Detailed usage breakdown
 ```
+
+The legacy ``/status`` command was retired — Menu → Status fetches
+the same /usage modal data via the dedicated ``ccbot-usage`` window.
 
 ## What does not exist in DM mode
 
@@ -181,13 +183,36 @@ Published via `setMyCommands` on startup so they appear in the Telegram `/`-menu
 - `group_chat_ids` - removed (DM is the only chat, `chat_id == user_id`).
 - `setMyCommands` is published once on startup, not per-topic.
 
-## User settings: card_position
+## User-msg disposition
 
-`Settings → Card position` (`context.user_data['card_position']`, persisted in `state.json` under `user_settings`) controls how the user's outgoing text relates to the live card. Applied at the end of `text_handler`:
+The `card_position` setting was retired. There is now one canonical
+behaviour: every inbound user message (text / voice / photo / document)
+triggers ``notifications.repost_card`` — the live card is re-sent as a
+new message below the user's text and the previous card msg is dropped.
+A ``👀`` reaction is set on the user's source message via
+``set_message_reaction`` so the routing chain stays traceable when the
+user scrolls history (including for reply-quote dispatches).
 
-- `push` (default): leave the user's message; the live card scrolls up naturally.
-- `delete`: bot deletes the user's message after dispatch so the card stays the most recent message.
-- `repost`: bot re-sends the live card as a new message below the user's text and drops the previous card message (`notifications.repost_card`).
+## Per-session context fill
+
+The live card and bg-status panel display ``context: N%`` per session.
+The value is computed in ``usage.context_pct_for_session`` from the
+session's JSONL — latest assistant turn's
+``input_tokens + cache_creation_input_tokens + cache_read_input_tokens``
+divided by the model's published context window
+(``_budget_for_model``: 1 M for opus-4-7 / opus-4-6 / sonnet-4-6,
+200 k for everything else). The number is refreshed in
+``session_events.handle_new_message`` on every assistant end-of-turn
+text turn and stashed on ``CardState.context_pct`` /
+``bg_status.BgStatus.context_pct``.
+
+The result is an *approximation* of what Claude Code's own
+``/context`` modal reports — typically within ±10 % relative. The two
+diverge because /context additionally counts system prompt / tools /
+memory files / autocompact buffer that are not always reflected in the
+last assistant turn's ``cache_read``. Sending /context into a live
+pane was tried but rejected: Claude Code records the modal output as a
+fake user turn in JSONL, polluting the live card and eating tokens.
 
 ## What is unchanged
 

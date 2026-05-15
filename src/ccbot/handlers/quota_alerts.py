@@ -1,6 +1,6 @@
 """Background poll of the live /usage modal — push on threshold crossings.
 
-A single shared task runs every ``QUOTA_ALERT_POLL_INTERVAL`` (default 5
+A single shared task runs every ``QUOTA_ALERT_POLL_INTERVAL`` (default 10
 minutes), reuses the dedicated ccbot-usage tmux window via
 ``fetch_claude_usage``, and emits one push per (quota, threshold)
 transition. The thresholds match the at-a-glance emoji bands in

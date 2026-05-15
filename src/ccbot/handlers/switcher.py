@@ -1,4 +1,4 @@
-"""Inline session switcher (A8) — keyboard, attach/strip, context preview.
+"""Inline session switcher (A8) — keyboard, strip, context preview.
 
 Builds the inline-keyboard row of session buttons that appears under the most
 recent bot message. When a new bot message arrives, the previous switcher's
@@ -6,7 +6,6 @@ reply markup is stripped so only the latest message carries the switcher.
 
 Public API:
   build_switcher_keyboard(user_id) -> InlineKeyboardMarkup | None
-  attach_switcher(bot, user_id, message_id) -> None
   strip_active_switcher(bot, user_id) -> None
   build_session_preview(sess) -> str
 
@@ -69,9 +68,9 @@ def build_switcher_keyboard(
     """Build the inline switcher keyboard for a user.
 
     With `include_lost=True`, lost sessions also appear as buttons whose
-    callback restores the session (CB_ARC_RESTORE) — used by /list per
-    spec §9 (F2). Default behavior (active+idle only) is unchanged for
-    content-message attachments.
+    callback restores the session (CB_ARC_RESTORE) per spec §9 (F2).
+    Default behavior (active+idle only) is unchanged for content-message
+    attachments.
 
     `include_new` controls whether the trailing "+ new" row is appended.
     Callers that want to place "+ new" next to another bottom-row button
@@ -146,42 +145,6 @@ async def strip_active_switcher(bot: Bot, user_id: int) -> None:
         session_manager.clear_last_switcher_msg(user_id)
 
 
-async def attach_switcher(bot: Bot, user_id: int, message_id: int) -> None:
-    """Attach the default footer (Stop + ⋯ More + switcher) to `message_id`
-    and strip the previous one. No-op only when there's truly nothing to show.
-    """
-    # Local import to avoid an import cycle (menu.py imports from switcher.py).
-    from .menu import build_footer_keyboard
-
-    keyboard = build_footer_keyboard(user_id, screen="main")
-    if keyboard is None:
-        return
-
-    prev_id = session_manager.get_last_switcher_msg(user_id)
-    if prev_id and prev_id != message_id:
-        try:
-            await bot.edit_message_reply_markup(
-                chat_id=user_id, message_id=prev_id, reply_markup=None
-            )
-        except Exception as e:
-            logger.debug("attach_switcher: prev strip failed: %s", e)
-
-    try:
-        await bot.edit_message_reply_markup(
-            chat_id=user_id, message_id=message_id, reply_markup=keyboard
-        )
-        session_manager.set_last_switcher_msg(user_id, message_id)
-    except BadRequest as e:
-        # Telegram returns "Message is not modified" if keyboard didn't change.
-        # That's still success from our perspective — the keyboard is on it.
-        if "Message is not modified" in str(e):
-            session_manager.set_last_switcher_msg(user_id, message_id)
-            return
-        logger.debug("attach_switcher: edit failed: %s", e)
-    except Exception as e:
-        logger.debug("attach_switcher: unexpected: %s", e)
-
-
 def build_session_preview(
     sess: Session,
     *,
@@ -197,10 +160,7 @@ def build_session_preview(
     parts: list[str] = []
     emoji = session_emoji(sess)
     state_label = sess.state if sess.state else "?"
-    usage = (
-        f"{sess.token_usage_total // 1000}k tok" if sess.token_usage_total else "0 tok"
-    )
-    header = f"{emoji} {sess.name or sess.id} · {state_label} · {usage}"
+    header = f"{emoji} {sess.name or sess.id} · {state_label}"
     if sess.goal:
         header += f"\ngoal: {sess.goal}"
     parts.append(header)

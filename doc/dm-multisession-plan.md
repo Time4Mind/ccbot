@@ -127,7 +127,6 @@ After Phase 1 the bot routes correctly in DM but has no UI for switching — the
 |---|---|---|---|---|
 | 6.1 | `feat(notif): per-session live card with last tool/event` | `handlers/message_queue.py`, `bot.py` | ~120 | Card edited in place on each event. New card on completion or error. |
 | 6.2 | `feat(notif): push messages on completion / error / AskUserQuestion` | `bot.py`, `handlers/message_queue.py` | ~60 | Format `<emoji> [name] message`. Color emoji per session, hashed from name. |
-| 6.3 | `feat(notif): BG_NOTIFY_MODE switch — separate vs footer` | `handlers/message_queue.py` | ~50 | `separate` is default. `footer` appends background events to active session's last bot message with separator. Try `footer` in week 2. |
 
 ### Phase 7 — Media (J4 + I)
 
@@ -196,15 +195,14 @@ Phase 1 is a hard prerequisite for everything. Phase 2 is hard prerequisite for 
 
 ---
 
-## 4. v0.1 done = acceptance from spec section 15
+## 4. Done = acceptance from spec
 
-The plan is complete when all 12 acceptance criteria from `dm-multisession-spec.md §15` pass on a fresh Linux arm64 install.
+The plan is complete when the acceptance criteria from
+`dm-multisession-spec.md §13` pass on a fresh Linux arm64 install.
 
 ---
 
 ## 5. Decisions parked for execution time
 
 - **Calibration of `MAX_5H_TOKENS` / `MAX_WEEKLY_TOKENS`** — start with public estimates, tighten after week 1 of real usage.
-- **`BG_NOTIFY_MODE=footer` empirical default** — try in week 2.
-- **F5 hot-resume** — investigate after v0.1 ships and we have data on `claude --resume` reliability under bypass mode.
 - **Table/code overflow thresholds** — calibrate per real failures (3 cols / 60 chars / 120 lines / 3000 chars are starting points).

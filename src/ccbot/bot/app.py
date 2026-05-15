@@ -21,8 +21,8 @@ from telegram.ext import (
 )
 
 from ..config import config
-from ..handlers.message_queue import shutdown_workers
 from ..handlers.quota_alerts import quota_alerts_loop
+from ..handlers.notifications import card_timer_loop
 from ..handlers.status_polling import status_poll_loop
 from ..metrics import metrics_flush_loop
 from ..session import session_manager
@@ -35,14 +35,12 @@ from .commands.info import (
     help_command,
     history_command,
     screenshot_command,
-    status_command,
     usage_command,
 )
 from .commands.lifecycle import (
     archive_command,
     done_command,
     kill_command,
-    list_command,
     menu_command,
     new_command,
     stop_command,
@@ -63,13 +61,21 @@ logger = logging.getLogger(__name__)
 # Module-globals owned by the lifecycle hooks.
 session_monitor: SessionMonitor | None = None
 _status_poll_task: asyncio.Task[None] | None = None
+_card_timer_task: asyncio.Task[None] | None = None
 _quota_alerts_task: asyncio.Task[None] | None = None
+_context_poll_task: asyncio.Task[None] | None = None
 _metrics_flush_task: asyncio.Task[None] | None = None
 
 
 async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") -> None:
     """First task after Application is built. Publish menu, recover state, start monitors."""
-    global session_monitor, _status_poll_task, _quota_alerts_task, _metrics_flush_task
+    global \
+        session_monitor, \
+        _status_poll_task, \
+        _card_timer_task, \
+        _quota_alerts_task, \
+        _context_poll_task, \
+        _metrics_flush_task
 
     # Cache bot username so ``tmux_manager.create_window`` can surface it
     # to Claude via ``CCBOT_BOT_USERNAME``. ``application.bot.username``
@@ -82,12 +88,16 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
 
     await application.bot.delete_my_commands()
 
-    # Trimmed /-menu surface. New/List/Status/History/Shot/Settings/Archive
-    # all live behind the inline ≡ Menu; Stop/Kill/Clear in the live-card
-    # footer. Hidden commands still work when typed.
+    # Trimmed /-menu surface. New/Status/Shot/Settings/Archive all live
+    # behind the inline ≡ Menu; Stop/Kill/Clear in the live-card footer.
+    # ``/history`` is published — it's the canonical entry to the FULL
+    # JSONL transcript view (deep history); the live card itself only
+    # seeds the last CARD_SEED_TURNS end-of-turn boundaries.
+    # Hidden commands still work when typed.
     bot_commands = [
         BotCommand("menu", "Open menu"),
         BotCommand("help", "Quick guide / inline doc"),
+        BotCommand("history", "Full transcript of the active session"),
         BotCommand("done", "Mark a session as done"),
     ]
     for cmd_name in ("model", "effort", "compact", "memory"):
@@ -99,7 +109,8 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     # Re-resolve stale window IDs from persisted state against live tmux windows.
     await session_manager.resolve_stale_ids()
     # DM mode: cross-check Session records against live tmux. Sessions whose
-    # window vanished get state=lost and surface in /list with a Restore button.
+    # window vanished get state=lost and surface in the switcher with a
+    # Restore button.
     await session_manager.reconcile_sessions_with_tmux()
 
     # Pre-fill global rate limiter bucket on restart. AsyncLimiter starts at
@@ -124,8 +135,21 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
     logger.info("Status polling task started")
 
+    _card_timer_task = asyncio.create_task(card_timer_loop(application.bot))
+    logger.info("Card timer task started")
+
     _quota_alerts_task = asyncio.create_task(quota_alerts_loop(application.bot))
     logger.info("Quota alerts task started")
+
+    # Context-poll loop disabled — sending /context to live panes
+    # writes the modal's markdown output INTO the session's JSONL as
+    # a user-turn, which then renders on the live card as a fake
+    # ``[Request interrupted by user] ## Context Usage…`` block AND
+    # eats real tokens from claude's own context window every cycle.
+    # Context % is now computed from JSONL math (input + cache reads
+    # vs. 1M default for Claude 4.x models). See ``usage.context_pct_for_session``.
+    # _context_poll_task = asyncio.create_task(context_poll_loop(application.bot))
+    # logger.info("Context poll task started")
 
     _metrics_flush_task = asyncio.create_task(metrics_flush_loop())
     logger.info("Metrics flush task started")
@@ -148,12 +172,57 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     asyncio.create_task(_prewarm_history_caches())
     logger.info("History cache pre-warm scheduled")
 
+    # Seed bg_status for sessions that are still "working" so a
+    # restart-spanned in-progress session lands in the panel as soon
+    # as the bot comes up. ``finished`` sessions are NOT seeded —
+    # they're already-completed turns; if the user noticed them
+    # before the restart they don't need a repeat notification, and
+    # if they didn't they can switch into the session to see the
+    # answer. The fresh-end-of-turn notification path
+    # (session_events) still fires for sessions that actually
+    # finish AFTER the bot starts.
+    async def _seed_bg_statuses() -> None:
+        from ..handlers import bg_status
+        from ..handlers.notifications import refresh_panel
+
+        for user_id in config.allowed_users:
+            active = session_manager.get_active_session(user_id)
+            active_id = active.id if active is not None else None
+            changed = False
+            for sess in list(session_manager.sessions.values()):
+                if sess.state not in ("active", "idle"):
+                    continue
+                if sess.id == active_id:
+                    continue
+                try:
+                    inferred = await bg_status.infer_status_from_jsonl(sess)
+                except Exception as e:
+                    logger.debug("infer bg status failed for %s: %s", sess.id, e)
+                    continue
+                if inferred != "working":
+                    continue
+                if bg_status.update_status(user_id, sess.id, "working"):
+                    changed = True
+            if changed:
+                try:
+                    await refresh_panel(application.bot, user_id)
+                except Exception as e:
+                    logger.debug("refresh_panel after seed failed: %s", e)
+
+    asyncio.create_task(_seed_bg_statuses())
+    logger.info("Bg-status seed scheduled")
+
 
 async def post_shutdown(
     application: "Application[Any, Any, Any, Any, Any, Any]",
 ) -> None:
     """Stop background tasks, flush queues, close HTTP clients."""
-    global _status_poll_task, _quota_alerts_task, _metrics_flush_task
+    global \
+        _status_poll_task, \
+        _card_timer_task, \
+        _quota_alerts_task, \
+        _context_poll_task, \
+        _metrics_flush_task
 
     if _status_poll_task:
         _status_poll_task.cancel()
@@ -164,6 +233,15 @@ async def post_shutdown(
         _status_poll_task = None
         logger.info("Status polling stopped")
 
+    if _card_timer_task:
+        _card_timer_task.cancel()
+        try:
+            await _card_timer_task
+        except asyncio.CancelledError:
+            pass
+        _card_timer_task = None
+        logger.info("Card timer stopped")
+
     if _quota_alerts_task:
         _quota_alerts_task.cancel()
         try:
@@ -173,6 +251,15 @@ async def post_shutdown(
         _quota_alerts_task = None
         logger.info("Quota alerts stopped")
 
+    if _context_poll_task:
+        _context_poll_task.cancel()
+        try:
+            await _context_poll_task
+        except asyncio.CancelledError:
+            pass
+        _context_poll_task = None
+        logger.info("Context poll stopped")
+
     if _metrics_flush_task:
         _metrics_flush_task.cancel()
         try:
@@ -181,8 +268,6 @@ async def post_shutdown(
             pass
         _metrics_flush_task = None
         logger.info("Metrics flush stopped")
-
-    await shutdown_workers()
 
     if session_monitor:
         session_monitor.stop()
@@ -217,12 +302,10 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler("new", new_command))
-    application.add_handler(CommandHandler("list", list_command))
     application.add_handler(CommandHandler("kill", kill_command))
     application.add_handler(CommandHandler("done", done_command))
     application.add_handler(CommandHandler("stop", stop_command))
     application.add_handler(CommandHandler("archive", archive_command))
-    application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("health", health_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CallbackQueryHandler(callback_handler))

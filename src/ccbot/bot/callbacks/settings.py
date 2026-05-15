@@ -10,11 +10,14 @@ from telegram.ext import ContextTypes
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from ... import voice_install
-from ...config import config
 from ...handlers.callback_data import (
     CB_ST_APPROVE,
     CB_ST_BACK,
-    CB_ST_CPOS,
+    CB_ST_BGNOTIFY,
+    CB_ST_CAT,
+    CB_ST_CHIST,
+    CB_ST_PAGESIZE,
+    CB_ST_SCREENS,
     CB_ST_GRP,
     CB_ST_LAG,
     CB_ST_LANG,
@@ -22,7 +25,6 @@ from ...handlers.callback_data import (
     CB_ST_LOCAL,
     CB_ST_LTERM,
     CB_ST_PREV,
-    CB_ST_TOK,
     CB_ST_VOICE,
     CB_ST_VOICE_INSTALL_GO,
     CB_ST_VOICE_INSTALL_NO,
@@ -32,6 +34,7 @@ from ...handlers.menu import (
     build_footer_keyboard,
     render_more_text,
     render_settings_group_text,
+    render_settings_text,
 )
 from ...handlers.message_sender import safe_edit, safe_send
 from ...i18n import t
@@ -199,29 +202,11 @@ _GROUP_TO_SCREEN = {
     "voice": "settings_voice",
     "weekly_reset_day": "settings_weeklyday",
     "auto_approve": "settings_approve",
-    "session_token_alerts": "settings_tokens",
     "local_terminal": "settings_local",
-    "card_position": "settings_cardpos",
+    "card_history": "settings_cardhist",
+    "card_page_lines": "settings_pagesize",
+    "card_inline_screenshots": "settings_screens",
 }
-
-
-def _bump_token_threshold(user_id: int, slot: int, delta_sign: int) -> None:
-    """Adjust slot ``slot`` of session_token_alerts by ±step, keep ascending."""
-    if slot not in (0, 1, 2):
-        return
-    settings = session_manager.get_user_settings(user_id)
-    raw = settings.get("session_token_alerts") or list(
-        config.session_token_alert_defaults
-    )
-    if not isinstance(raw, list) or len(raw) != 3:
-        raw = list(config.session_token_alert_defaults)
-    values = [int(v) for v in raw]
-    step = config.session_token_alert_step
-    new_value = max(step, values[slot] + delta_sign * step)
-    values[slot] = new_value
-    # Re-sort to keep ascending order so adjacent slots stay valid.
-    values.sort()
-    session_manager.update_user_setting(user_id, "session_token_alerts", values)
 
 
 async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> bool:
@@ -243,6 +228,19 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             await query.answer("Unknown group")
             return True
         text = render_settings_group_text(user.id, screen_name)  # type: ignore[arg-type]
+        keyboard = build_footer_keyboard(user.id, screen=screen_name)  # type: ignore[arg-type]
+        await safe_edit(query, text, reply_markup=keyboard)
+        if query.message and keyboard is not None:
+            session_manager.set_last_switcher_msg(user.id, query.message.message_id)
+        await query.answer()
+        return True
+
+    if data.startswith(CB_ST_CAT):
+        screen_name = data[len(CB_ST_CAT) :]
+        if screen_name == "settings":
+            text = render_settings_text(user.id)
+        else:
+            text = render_settings_group_text(user.id, screen_name)  # type: ignore[arg-type]
         keyboard = build_footer_keyboard(user.id, screen=screen_name)  # type: ignore[arg-type]
         await safe_edit(query, text, reply_markup=keyboard)
         if query.message and keyboard is not None:
@@ -285,10 +283,12 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         CB_ST_LANG,
         CB_ST_WDAY,
         CB_ST_APPROVE,
-        CB_ST_TOK,
         CB_ST_LOCAL,
         CB_ST_LTERM,
-        CB_ST_CPOS,
+        CB_ST_CHIST,
+        CB_ST_PAGESIZE,
+        CB_ST_SCREENS,
+        CB_ST_BGNOTIFY,
     )
     if not any(data.startswith(p) for p in setter_prefixes):
         return False
@@ -348,24 +348,52 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                 user.id, "local_terminal_cmd", LINUX_TEMPLATES[emu]
             )
         screen_name = "settings_local"
-    elif data.startswith(CB_ST_TOK):
-        # Format: st:tok:<slot>:<+|->
-        payload = data[len(CB_ST_TOK) :]
+    elif data.startswith(CB_ST_CHIST):
         try:
-            slot_str, sign_str = payload.split(":", 1)
-            slot = int(slot_str)
-        except (ValueError, IndexError):
-            await query.answer("Invalid")
-            return True
-        delta = 1 if sign_str == "+" else -1 if sign_str == "-" else 0
-        if delta:
-            _bump_token_threshold(user.id, slot, delta)
-        screen_name = "settings_tokens"
-    elif data.startswith(CB_ST_CPOS):
-        value = data[len(CB_ST_CPOS) :]
-        if value in ("push", "delete", "repost"):
-            session_manager.update_user_setting(user.id, "card_position", value)
-        screen_name = "settings_cardpos"
+            v = int(data[len(CB_ST_CHIST) :])
+        except ValueError:
+            v = 20
+        if v in (10, 20, 50, 100):
+            session_manager.update_user_setting(user.id, "card_history", v)
+        screen_name = "settings_cardhist"
+    elif data.startswith(CB_ST_PAGESIZE):
+        try:
+            v = int(data[len(CB_ST_PAGESIZE) :])
+        except ValueError:
+            v = 20
+        if v in (10, 20, 40, 70):
+            session_manager.update_user_setting(user.id, "card_page_lines", v)
+        screen_name = "settings_pagesize"
+    elif data.startswith(CB_ST_SCREENS):
+        sval = data[len(CB_ST_SCREENS) :]
+        if sval in ("on", "off"):
+            new_val = sval == "on"
+            session_manager.update_user_setting(
+                user.id, "card_inline_screenshots", new_val
+            )
+            # Soft reset: nuke msg_id for all user's cards so the next
+            # event creates a fresh msg of the correct type (photo+caption
+            # vs text). Old artefacts stay in chat as frozen.
+            from ...handlers.notifications import (
+                reset_card_msg_id_for_user,
+            )
+
+            reset_card_msg_id_for_user(user.id)
+        screen_name = "settings_screens"
+    elif data.startswith(CB_ST_BGNOTIFY):
+        payload = data[len(CB_ST_BGNOTIFY) :]
+        try:
+            key, sval = payload.split(":", 1)
+        except ValueError:
+            key, sval = "", ""
+        if key in (
+            "bg_notify_finished",
+            "bg_notify_error",
+            "bg_notify_needs_action",
+        ) and sval in ("on", "off"):
+            session_manager.update_user_setting(user.id, key, sval == "on")
+        short = key.removeprefix("bg_notify_")
+        screen_name = f"settings_bg_notify_{short}"
 
     text = render_settings_group_text(user.id, screen_name)  # type: ignore[arg-type]
     keyboard = build_footer_keyboard(user.id, screen=screen_name)  # type: ignore[arg-type]

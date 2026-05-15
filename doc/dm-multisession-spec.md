@@ -17,12 +17,10 @@ Status: draft v0.1. Authoritative until superseded.
 - Authentication via Claude Code subscription (CLI auth, Max x20). No Anthropic API key required.
 - Run on macOS (Apple Silicon) and Linux arm64.
 
-### Non-goals (v0.1)
+### Non-goals
 
 - Multi-user. The bot is personal; allowlist is a single Telegram user id.
 - Webhooks / external event triggers (CI, GitHub, monitoring).
-- Telegram Mini App. Listed as a v1.5+ extension; v0.1 must work fully via DM commands and inline buttons.
-- Permission relay through Telegram. We always run with `--dangerously-skip-permissions`.
 - Replacing the markdown→TG converter (we keep `telegramify-markdown` and tune around it).
 
 ---
@@ -144,20 +142,35 @@ This covers the "drop a quick note into a background session" case without break
 
 ### 4.3 Slash commands (B7 — published via `setMyCommands`)
 
-Commands appear in the Telegram `/`-menu for discoverability:
+Only the truly user-needed commands are published in the Telegram `/`-menu;
+everything else lives behind the inline ≡ Menu. Hidden commands still
+work when typed.
+
+Published:
 
 | Command | Effect |
 |---|---|
-| `/new [name] [path]` | Create a new session. Without args, opens an inline form. |
-| `/list` | Show all active sessions with state and token usage. |
-| `/use <name-or-id>` | Make the given session active. Same as tapping a switcher button. |
-| `/rename <old> <new>` | Rename a session. |
-| `/kill <name-or-id>` | Stop tmux window and archive immediately. |
+| `/menu` | Open the inline Menu surface (Sessions / Status / Shot / Archive / Settings). |
+| `/help` | Inline mini-doc with section buttons. |
+| `/done [name]` | Mark goal achieved. Archives with a "completed" tag. |
+
+Hidden (typed only):
+
+| Command | Effect |
+|---|---|
+| `/new [name] [path]` | Create a new session. Without args, opens the directory browser. |
+| `/kill [name]` | Stop tmux window and archive after confirmation. |
 | `/stop` | Send Esc to the active session's tmux window (interrupt current task). |
-| `/done <session>` | Mark goal achieved. Archives with a "completed" tag. |
 | `/archive` | Show archived sessions, paginated, last 0–72h. |
-| `/archive --all` | Include 72h–14d range. |
-| `/status` | Detailed status: per-session usage, 5h/weekly budget, host stats. |
+| `/screenshot` | Snapshot the active session's tmux pane as a PNG. |
+| `/history` | Paginated transcript of the active session from the JSONL. |
+| `/usage` | Live `/usage` modal sample (5h / weekly / Sonnet). |
+| `/health` | Uptime, queue stats, latency, counters. |
+| `/restore-file <msg_id>` | Re-fetch a previously-uploaded inbox file from Telegram. |
+
+The legacy ``/status`` command was retired — Menu → Status surfaces
+the same Anthropic-quota numbers via the dedicated `ccbot-usage` tmux
+window.
 
 `/stop` is also exposed as an inline button at the bottom of the active session's most recent bot message.
 
@@ -188,48 +201,63 @@ Format (C5: prefix + emoji):
 
 Example: `🟦 [scraper] done in 4m. Wrote 3 files.`
 
-**Background work footer experiment** (open question, not v0.1 default).
+Background sessions don't emit their own chat messages. Their state
+shows up as a per-row badge in the bg-panel at the bottom of the
+active session's live card (see `handlers.bg_status.render_panel`).
 
-`BG_NOTIFY_MODE` env var with two values:
+### 4.5 Status (Menu → Status)
 
-- `separate` (v0.1 default): non-active sessions emit their own card edits and push notifications as above.
-- `footer`: non-active session events are appended to the active session's most recent bot message as a footer block, with a separator and per-session lines. We try this in week 2 of real usage and decide.
-
-### 4.5 Status (`/status`)
-
-Output structure:
+Menu → 📊 Status fetches a fresh snapshot of Claude Code's own
+`/usage` modal via the dedicated `ccbot-usage` tmux window and edits
+the carrier into a compact block:
 
 ```
-Usage (Max x20)
----
-5-hour window: ~62% (32k / ~50k est)
-Weekly:        ~28% (180k / ~640k est)
-
-Active sessions
----
-v frontend   running   14k tokens   8% of 5h budget
-  last: Edit src/auth.tsx
-  goal: implement google-oauth login
-  context: 41% used (~80k of subscription default 200k)
-
-  scraper    idle 12m  11k tokens   7% of 5h
-  last: Bash curl https://...
-  goal: fix linkedin scraper at page 50
-
-  chores     working    7k tokens   4% of 5h
-  last: Read package.json
-  goal: bump deps
----
-Host: linux-arm64  -  tmux: 3 windows  -  RAM: 1.2G / 8G
+Claude Code
+🟡 5h: 62% · 12.4%/h · 17:00
+🟢 week: 28% · 4.0%/d · Mon 17:00
+🟢 week (Sonnet): 12% · Mon 17:00
+Extra: off
 ```
 
-Limits for Max x20 are starting estimates. They are calibrated empirically over the first week and overridable via env: `MAX_5H_TOKENS`, `MAX_WEEKLY_TOKENS`.
+The locally-aggregated 5h/weekly token counter was retired — the
+authoritative numbers come from Anthropic's own quota modal, so we
+report exactly what it says (with our own burn-rate / reset suffix).
 
-### 4.6 Per-session token quota (G6, soft)
+### 4.6 Per-session context fill (display only)
 
-- `SESSION_TOKEN_BUDGET_5H` defaults to `15k`. Calibrated.
-- At 75% the bot posts `warning: <session> burned 75% of its 5h quota` to that session's card.
-- No hard block. The user decides whether to continue.
+The live card and the bg-status panel show `context: N%` per session.
+The number is computed from the session's JSONL transcript:
+
+```
+pct = round(
+    (latest_assistant_turn.usage.input_tokens
+     + latest_assistant_turn.usage.cache_creation_input_tokens
+     + latest_assistant_turn.usage.cache_read_input_tokens)
+    * 100
+    / budget_for_model(latest_assistant_turn.model)
+)
+```
+
+`budget_for_model` (in `usage.py`):
+
+| Model | Budget |
+|---|---|
+| `claude-opus-4-7` / `claude-opus-4-6` / `claude-sonnet-4-6` | 1 000 000 |
+| Everything else (Opus 4.5 / 4.1, Sonnet 4.5, Haiku 4.5, 3.x, …) | 200 000 |
+
+Refresh fires in `session_events.handle_new_message` on every
+assistant end-of-turn text turn and stashes the value on
+`CardState.context_pct` / `BgStatus.context_pct`.
+
+**Methodology note** — the value is an *approximation* of Claude
+Code's own `/context` modal, typically within ±10 % relative. The two
+diverge because `/context` additionally counts system prompt /
+system tools / memory files / autocompact buffer that are not always
+reflected in the last assistant turn's `cache_read`. We tried sending
+`/context` into each pane periodically, but Claude Code writes the
+modal output back into the JSONL as a fake user turn → pollutes the
+live card AND eats real tokens from the session's context. JSONL
+math is non-invasive and good enough for an at-a-glance signal.
 
 ---
 
@@ -309,17 +337,13 @@ Install footprint:
 - Read `state.json`.
 - For each session marked active or idle: check if its tmux window still exists.
   - If yes: re-attach. Re-bind monitor offsets.
-  - If no: mark as `lost`. Show in `/list` with a `Restore` button.
+  - If no: mark as `lost`. Surfaces in the switcher with a `Restore` button.
 - For each archived session: nothing to do at startup.
 
 ### Manual restore (F3)
 
 - Inline `Restore` button on archived and lost sessions.
 - On restore: create tmux window, run `claude --resume <session-id> --dangerously-skip-permissions` in the original workdir, attach monitor.
-
-### Investigation (research, not v0.1 commitment)
-
-- Evaluate F5 (claude `--resume` as the persistence mechanism, dropping reliance on long-lived tmux). If viable, simplifies restart semantics. Decision deferred until after v0.1 ships and we have empirical data on `--resume` reliability.
 
 ---
 
@@ -359,18 +383,7 @@ Install footprint:
 
 ---
 
-## 13. Future (vNext, out of scope for v0.1)
-
-Kept for context only. Not committed.
-
-- **Telegram Mini App**: dashboard with session grid, transcript viewer, token charts. Bot publishes state on a local HTTP endpoint; Mini App consumes it. Auth via Telegram `initData`.
-- **F5 hot resume** as the canonical persistence (see section 9).
-- **Permission relay** (give up `--dangerously-skip-permissions` and approve via inline buttons).
-- **Hard quotas / billing-aware throttling** if soft G6 proves insufficient.
-
----
-
-## 14. Configuration cheatsheet (env vars)
+## 12. Configuration cheatsheet (env vars)
 
 ```
 # Auth
@@ -384,18 +397,19 @@ CCBOT_DIR=/var/lib/ccbot
 MAX_SESSIONS=10                # soft cap, warning only
 SESSION_IDLE_TTL=4h            # active -> archived
 ARCHIVE_PURGE_AFTER=14d
-SESSION_TOKEN_BUDGET_5H=15000  # per-session soft warning
+
+# Quota alerts
+QUOTA_ALERT_POLL_INTERVAL=10m  # background poll of /usage modal
 
 # UI
 PREVIEW_USER_LINES=4
 PREVIEW_ASSISTANT_LINES=8
 PREVIEW_TOOLS=2
 PREVIEW_LIVE_LAG=4             # seconds; 0 disables live updates
-BG_NOTIFY_MODE=separate        # separate | footer
 
-# Budgets (calibrated empirically)
-MAX_5H_TOKENS=50000
-MAX_WEEKLY_TOKENS=640000
+# Context-fill display (per-session %)
+# Override if the host runs a non-Claude-Code model with a different
+# context window; usage._budget_for_model handles the published list.
 
 # Voice
 VOICE_BACKEND=auto             # auto | whisper | apple | off
@@ -409,7 +423,7 @@ IS_SANDBOX=1                   # quiets non-interactive warnings
 
 ---
 
-## 15. v0.1 acceptance criteria
+## 13. Acceptance criteria
 
 The fork ships when all of the following are true on a fresh Linux arm64 VPS install:
 
@@ -420,17 +434,19 @@ The fork ships when all of the following are true on a fresh Linux arm64 VPS ins
 5. Three concurrent sessions can run long-running tasks in parallel; switching between them does not pause any of them.
 6. After 4h with no input, a session auto-archives. `/archive` shows it. `Restore` brings it back via `claude --resume`.
 7. Voice message is transcribed locally via whisper.cpp; no OpenAI key configured.
-8. Photo / document upload lands in `.ccbot-inbox` and the active session sees a synthetic notice.
-9. `/status` shows correct per-session token usage, 5h window aggregate, and weekly aggregate within ~5% of manually-counted ground truth.
+8. Photo / document upload lands in `.ccbot-inbox` and the active session receives the relative path (optionally prefixed by the user's caption).
+9. Menu → Status reflects Claude's live `/usage` modal (5h / weekly / Sonnet) — JSONL-derived counters were retired. Per-session ``context: N%`` is rendered on the card (JSONL approximation, ±10 % from `/context`).
 10. `/done <name>` archives the session and `/archive` reflects it.
 11. After VPS reboot, `systemctl restart ccbot` recovers all sessions whose tmux windows still exist; lost ones are listed with `Restore`.
 12. No `--dangerously-load-development-channels`, no Anthropic API key, no OpenAI API key required for any of the above.
 
 ---
 
-## 16. Open questions parked for later
+## 14. Open questions parked for later
 
-- Calibration of `MAX_5H_TOKENS` / `MAX_WEEKLY_TOKENS` — measured during week 1.
-- `BG_NOTIFY_MODE=footer` — try in week 2, decide default.
-- F5 hot resume vs current tmux+state.json — investigate after v0.1 stable.
 - Table/code formatting heuristics — tune as edge cases appear.
+- ``context: N%`` vs `/context` parity. Current JSONL math diverges
+  from the modal by ±10 %; an exact match would need either a
+  pollution-free way to invoke `/context` per session or a richer
+  parse of the JSONL (system / tools / memory aren't always in
+  `cache_read`). Acceptable as-is for the at-a-glance signal.

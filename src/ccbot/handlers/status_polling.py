@@ -2,16 +2,16 @@
 
 Provides background polling of terminal status lines for all the bot's
 single user's live sessions:
-  - Detects Claude Code status (working, waiting, etc.)
+  - Detects Claude Code status (working, waiting, etc.) and drives the
+    Telegram ``typing…`` indicator
   - Detects interactive UIs (permission prompts) not triggered via JSONL
-  - Updates per-session status messages in Telegram
   - Reaps tmux windows that vanished externally — marks Session as `lost`
     and cleans up in-memory state
 
 Key components:
   - STATUS_POLL_INTERVAL: polling frequency (1 s)
   - status_poll_loop: background polling task
-  - update_status_message: poll a single window and enqueue updates
+  - update_status_message: poll a single window for UI + typing signal
 """
 
 import asyncio
@@ -39,8 +39,12 @@ from .interactive_ui import (
     get_interactive_window,
     handle_interactive_ui,
 )
-from .message_queue import get_message_queue
-from .notifications import is_card_busy, refresh_panel, touch_card_status
+from .notifications import (
+    is_card_busy,
+    is_card_finalized,
+    is_card_in_menu_view,
+    refresh_panel,
+)
 
 # Match option lines like "  1. Yes" / " ❯ 2. Yes, and don't ask again".
 _OPTION_LINE_RE = re.compile(r"^[\s❯>]*?(\d+)\.\s+(.+?)\s*$")
@@ -99,14 +103,12 @@ async def update_status_message(
     bot: Bot,
     user_id: int,
     window_id: str,
-    skip_status: bool = False,
 ) -> None:
-    """Poll terminal: detect interactive UIs and refresh the card's status badge.
+    """Poll terminal: detect interactive UIs and drive the typing indicator.
 
     There is no separate "status message" anymore — the live session card
-    already shows the session's state. The pane status line ("…Esc to
-    interrupt", "Working…") is folded into the card header via
-    notifications.touch_card_status when present.
+    carries its own header. The pane spinner ("…Esc to interrupt") is no
+    longer shown in chat; it drives ``send_chat_action(TYPING)`` instead.
     """
     w = await tmux_manager.find_window_by_id(window_id)
     if not w:
@@ -197,6 +199,18 @@ async def update_status_message(
             user_id,
             window_id,
         )
+        # Active session: route via kb-mode on the live card. Falls
+        # back to the floating-msg path only when there's no Session
+        # record (orphan window — no card to host kb-mode).
+        if sess is not None and not is_bg_session:
+            from .notifications import enter_kb_mode
+
+            content_obj = extract_interactive_content(pane_text)
+            if content_obj is not None:
+                await enter_kb_mode(
+                    bot, user_id, sess, content_obj.content, content_obj.name
+                )
+                return
         await handle_interactive_ui(bot, user_id, window_id)
         return
 
@@ -207,40 +221,68 @@ async def update_status_message(
         if bg_status.clear_pending_ui(user_id, sess.id):
             await refresh_panel(bot, user_id)
 
-    # Lift status into the card header. Skip when skip_status to avoid
-    # piling on top of an active enqueued event.
-    if skip_status:
-        return
+    # Active session was in kb-mode for a slash-command picker that
+    # has just dismissed (no JSONL event fires for /model | /effort |
+    # etc., so this is the only place the card-mode flip can happen).
+    if sess is not None and not is_bg_session:
+        from .notifications import exit_kb_mode, has_pending_kb
+
+        has_prompt, in_kb = has_pending_kb(user_id, sess.id)
+        if has_prompt or in_kb:
+            await exit_kb_mode(bot, user_id, sess, clear_pending=True)
+
+    # Telegram chat-action "typing…" — fired every poll cycle for the
+    # active session while it's busy. Two signals combine:
+    #
+    #   * ``is_card_busy``: a recent claude event arrived (within
+    #     ``2 × CARD_EDIT_LAG``) AND the tail event isn't a terminal
+    #     one. Bridges intra-turn gaps and prevents post-completion
+    #     stickiness.
+    #   * pane spinner (``parse_status_line``): claude TUI is showing
+    #     ``⠋ Working…``. Picks up the long-thinking case where no
+    #     JSONL events arrive for 20+ s — without this the indicator
+    #     would go dark even though claude is genuinely working.
+    #
+    # Both gated on ``not is_bg_session`` (bg sessions don't surface
+    # the chat-header typing badge) and not in_menu_view (user is
+    # browsing menu screens; typing there is noise).
     status_line = parse_status_line(pane_text) or ""
-    # Telegram chat-action "typing…" — fired every poll cycle while the
-    # active session has an in-flight live card (msg_id set, finalize
-    # hasn't run yet). The card-busy signal is the right gate: claude
-    # can be silently thinking between events for 20+ s, and event-only
-    # firing in session_events leaves the indicator dark during those
-    # gaps. As soon as finalize_task runs reset_card, msg_id drops to
-    # None and the indicator naturally fades inside Telegram's ~5s
-    # window. Bg sessions skip — only the foreground bubbles up.
-    if not is_bg_session and sess is not None and is_card_busy(user_id, sess.id):
+    pane_busy = bool(status_line)
+    in_menu = sess is not None and is_card_in_menu_view(user_id, sess.id)
+    card_busy = sess is not None and is_card_busy(user_id, sess.id)
+    # When the card is finalized (last event = ``final_text`` /
+    # ``error``), pane_busy is a lie — the spinner line is just
+    # scrollback that hasn't scrolled off yet (observed: ``Sautéed
+    # for 11m 16s · 1 shell still running`` sticks around after the
+    # turn ends because a background shell is still attached). Trust
+    # the JSONL signal in that case.
+    if pane_busy and sess is not None and is_card_finalized(user_id, sess.id):
+        pane_busy = False
+    if not is_bg_session and not in_menu and (card_busy or pane_busy):
         try:
             await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
             logger.info(
-                "typing_fired source=status_polling user=%d sess=%s wid=%s status=%r",
+                "typing_fired source=status_polling user=%d sess=%s wid=%s "
+                "card_busy=%s pane_busy=%s status=%r",
                 user_id,
-                sess.id,
+                sess.id if sess else "-",
                 window_id,
+                card_busy,
+                pane_busy,
                 status_line[:40] if status_line else "",
                 extra={
                     "event": "typing_fired",
                     "source": "status_polling",
                     "user_id": user_id,
-                    "session_id": sess.id,
+                    "session_id": sess.id if sess else None,
                     "window_id": window_id,
+                    "card_busy": card_busy,
+                    "pane_busy": pane_busy,
                     "status_line": status_line[:80] if status_line else "",
                 },
             )
         except Exception as e:
             logger.debug("send_chat_action TYPING failed: %s", e)
-    await touch_card_status(bot, user_id, window_id, status_line)
 
 
 async def status_poll_loop(bot: Bot) -> None:
@@ -308,18 +350,7 @@ async def status_poll_loop(bot: Bot) -> None:
 
                     kick_prewarm(wid)
 
-                    # UI detection happens unconditionally inside update_status_message.
-                    # Status enqueue is skipped when interactive UI is detected
-                    # (returns early) or when the queue is non-empty.
-                    queue = get_message_queue(user_id)
-                    skip_status = queue is not None and not queue.empty()
-
-                    await update_status_message(
-                        bot,
-                        user_id,
-                        wid,
-                        skip_status=skip_status,
-                    )
+                    await update_status_message(bot, user_id, wid)
                 except Exception as e:
                     logger.debug(
                         "Status update error for user %d window %s: %s",

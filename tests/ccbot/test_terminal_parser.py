@@ -19,17 +19,33 @@ class TestParseStatusLine:
     @pytest.mark.parametrize(
         ("spinner", "rest", "expected"),
         [
-            ("·", "Working on task", "Working on task"),
+            # SPINNER_ONLY chars — always treated as status, no time-stats needed.
             ("✻", "  Reading file  ", "Reading file"),
             ("✽", "Thinking deeply", "Thinking deeply"),
             ("✶", "Analyzing code", "Analyzing code"),
             ("✳", "Processing input", "Processing input"),
             ("✢", "Building project", "Building project"),
+            # SPINNER_AMBIGUOUS char ``●`` — only treated as status when
+            # the time-stats parenthetical is present (Claude's actual
+            # busy line format).
+            (
+                "●",
+                "Gallivanting (1m 13s · ↑2.3k tokens)",
+                "Gallivanting (1m 13s · ↑2.3k tokens)",
+            ),
+            ("·", "Searching (5s)", "Searching (5s)"),
         ],
     )
     def test_spinner_chars(self, spinner: str, rest: str, expected: str, chrome: str):
-        pane = f"some output\n{spinner}{rest}\n{chrome}"
+        pane = f"some output\n{spinner} {rest}\n{chrome}"
         assert parse_status_line(pane) == expected
+
+    def test_ambiguous_no_stats_returns_none(self, chrome: str):
+        """``●`` / ``·`` without the time-stats marker are bullets / tool
+        results, not status — must NOT match."""
+        for ch in ("●", "·"):
+            pane = f"some output\n{ch} Tool result\n{chrome}"
+            assert parse_status_line(pane) is None, f"{ch} matched without stats"
 
     @pytest.mark.parametrize(
         "pane",

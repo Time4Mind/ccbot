@@ -35,10 +35,9 @@ CB_WIN_CANCEL = "wb:cancel"
 # Screenshot
 CB_SCREENSHOT_REFRESH = "ss:ref:"
 
-# Compact screenshot view (opened via the Shot button from main / /list)
+# Compact screenshot view (opened via the Shot button on the live card)
 CB_SHOT_SW = "sh:sw:"  # sh:sw:<sid>  switch active session + redraw screenshot
 CB_SHOT_BACK = "sh:b:"  # sh:b:<m|l>   return to main / list view
-CB_SHOT_MODE = "sh:m:"  # sh:m:<k|s>:<m|l>  toggle keyboard ↔ switcher mode
 CB_SHOT_KEYS = "shk:"  # shk:<key_id>:<origin>:<window_id>  send key in kb-mode
 
 # Interactive UI (aq: prefix kept for backward compatibility)
@@ -73,7 +72,13 @@ CB_FT_KILL = "ft:kill"  # confirm-archive active session (idle state)
 CB_FT_CLEAR = "ft:clear"  # forward /clear to active session
 CB_FT_MORE = "ft:more"  # open the Menu screen (pauses live-card updates)
 CB_FT_TERM = "ft:term"  # open a native desktop terminal for the active session
-CB_FT_OLDER = "ft:old"  # ◀ Older — page back into history from the live-card
+CB_KB_BACK = "kb:back"  # exit kb-mode view → regular card; Resume button stays
+CB_KB_RESUME = "kb:resume"  # re-enter kb-mode (when pending still active)
+
+# Live-card pagination (in-card page navigation)
+CB_PG_PREV = "pg:prev"  # ◀ — previous page within the card
+CB_PG_NEXT = "pg:next"  # ▶ — next page within the card
+CB_PG_JUMP = "pg:jump"  # N/M — jump to default-focus page
 
 # More menu
 CB_MM_LIST = "mm:list"
@@ -92,11 +97,14 @@ CB_ST_LAG = "st:lag:"  # st:lag:<value>
 CB_ST_VOICE = "st:voice:"  # st:voice:<value>
 CB_ST_WDAY = "st:wday:"  # st:wday:<mon|tue|...|sun>
 CB_ST_APPROVE = "st:apr:"  # st:apr:<off|webfetch|all>
-CB_ST_TOK = "st:tok:"  # st:tok:<slot>:<+|->  bump session-token threshold
 CB_ST_LOCAL = "st:local:"  # st:local:<off|on>  toggle native Terminal popup
 CB_ST_LTERM = "st:lterm:"  # st:lterm:<emulator-name>  pick Linux template
 CB_ST_LCLAUDE = "st:lcl:claude"  # send Linux Claude-fallback prompt to chat
-CB_ST_CPOS = "st:cpos:"  # st:cpos:<push|delete|repost>  user-msg disposition
+CB_ST_CHIST = "st:chist:"  # st:chist:<10|20|50|100>  end_turn boundaries to seed
+CB_ST_PAGESIZE = "st:psz:"  # st:psz:<15|30|50|100>  max page size in lines
+CB_ST_SCREENS = "st:scr:"  # st:scr:<on|off>  inline screenshots toggle
+CB_ST_CAT = "st:cat:"  # st:cat:<screen_name>  open settings category sub-screen
+CB_ST_BGNOTIFY = "st:bgn:"  # st:bgn:<key>:<on|off>  bg-notification toggles
 CB_ST_VOICE_INSTALL_GO = "st:vi:go"  # confirm whisper.cpp auto-install
 CB_ST_VOICE_INSTALL_NO = "st:vi:no"  # dismiss whisper.cpp install prompt
 CB_ST_BACK = "st:back"  # back to Menu
@@ -108,6 +116,11 @@ CB_CONF_DEL_YES = "cn:del:y:"  # cn:del:y:<sid>
 CB_CONF_DEL_NO = "cn:del:n"
 CB_CONF_DONE_YES = "cn:done:y:"  # cn:done:y:<sid>
 CB_CONF_DONE_NO = "cn:done:n"
+# Clear has no rollback path (unlike Kill → Restore), so it's behind a
+# confirm step that also chains Stop (Esc) before /clear so the latter
+# lands on a clean prompt regardless of whatever was in flight.
+CB_CONF_CLEAR_YES = "cn:clr:y:"  # cn:clr:y:<sid>
+CB_CONF_CLEAR_NO = "cn:clr:n"
 
 # Archive
 CB_ARC_PAGE = "ar:p:"  # ar:p:<page>

@@ -5,7 +5,7 @@ Two flavours of screenshot live in the chat:
 
 * ``/screenshot`` slash → reply_document with the arrow-key control
   keyboard. Handled by ``CB_SCREENSHOT_REFRESH`` + ``CB_KEYS_*``.
-* Shot button (main footer / /list view) → ``emit_screenshot_compact``
+* Shot button (main footer top row) → ``emit_screenshot_compact``
   sends a photo with either a switcher-mode keyboard (default) or a
   kb-mode key grid. Handled by ``CB_SHOT_SW`` (switch active +
   redraw), ``CB_SHOT_BACK`` (delete photo + restore origin surface),
@@ -28,13 +28,9 @@ from ...handlers.callback_data import (
     CB_SCREENSHOT_REFRESH,
     CB_SHOT_BACK,
     CB_SHOT_KEYS,
-    CB_SHOT_MODE,
     CB_SHOT_SW,
 )
 from ...handlers import bg_status
-from ...handlers.history import send_history
-from ...handlers.menu import build_footer_keyboard
-from ...handlers.message_sender import safe_send
 from ...screenshot import text_to_image
 from ...session import session_manager
 from ...tmux_manager import tmux_manager
@@ -90,8 +86,16 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                         break
 
         session_manager.set_active_session(user.id, target_id)
-        bg_status.mark_seen(user.id, target_id)
-        bg_status.prune_seen(user.id)
+        bg_status.clear_for_user_session(user.id, target_id)
+        # Hold the new active session's card in menu-mode so claude
+        # events buffer silently while the user is still on the photo.
+        # The Back handler's ``resume_card_view`` clears this flag and
+        # spawns / repaints the card afterwards. Without this, events
+        # for the newly-active session would race the photo view
+        # because ``_should_buffer`` no longer treats it as bg.
+        from ...handlers.notifications import mark_card_paused
+
+        mark_card_paused(user.id, target_id)
 
         w = await tmux_manager.find_window_by_id(sess.window_id)
         if not w:
@@ -115,66 +119,26 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         return True
 
     if data.startswith(CB_SHOT_BACK):
-        origin = data[len(CB_SHOT_BACK) :] or "m"
+        # Delete the photo, resume the paused live card. Events that
+        # arrived during the screenshot view buffered into state.events;
+        # resume_card_view renders them into the existing carrier so the
+        # user lands back on the same card slot with the updated body.
+        # If the carrier was lost (5-min stale window, archived), the
+        # next claude event spawns a fresh one — but we don't repost
+        # here proactively to avoid a stray new card sitting in chat.
         if query.message:
             try:
                 await query.message.delete()
             except Exception as e:
                 logger.debug("shot back: delete photo failed: %s", e)
         active_sess = session_manager.get_active_session(user.id)
-        from .more_menu import HISTORY_ORIGIN_KEY, build_list_view
+        if active_sess is not None and active_sess.window_id:
+            from ...handlers.notifications import resume_card_view
 
-        if origin == "l":
-            # Re-emit the /list view as a fresh message: history of the
-            # active session + the standard /list footer underneath.
-            body, kb = build_list_view(user.id)
-            if active_sess is None or not active_sess.window_id:
-                await safe_send(context.bot, user.id, body, reply_markup=kb)
-            else:
-                if context.user_data is not None:
-                    context.user_data[HISTORY_ORIGIN_KEY] = "menu_list"
-                extra_rows = [list(r) for r in kb.inline_keyboard]
-                try:
-                    await send_history(
-                        target=None,
-                        window_id=active_sess.window_id,
-                        edit=False,
-                        user_id=user.id,
-                        bot=context.bot,
-                        extra_rows=extra_rows,
-                    )
-                except Exception as e:
-                    logger.debug("shot back: fresh /list paint failed: %s", e)
-                    await safe_send(context.bot, user.id, body, reply_markup=kb)
-        else:
-            # origin == "m" — send the active session's history with the
-            # main-screen footer. Mirrors /list's Back path so the user
-            # lands on the paginated transcript instead of an empty card.
-            if active_sess is not None and active_sess.window_id:
-                if context.user_data is not None:
-                    context.user_data[HISTORY_ORIGIN_KEY] = "switcher"
-                footer_kb = build_footer_keyboard(
-                    user.id,
-                    screen="main",
-                    is_busy=False,
-                    include_older_btn=False,
-                )
-                extra_rows = (
-                    [list(r) for r in footer_kb.inline_keyboard]
-                    if footer_kb is not None
-                    else None
-                )
-                try:
-                    await send_history(
-                        target=None,
-                        window_id=active_sess.window_id,
-                        edit=False,
-                        user_id=user.id,
-                        bot=context.bot,
-                        extra_rows=extra_rows,
-                    )
-                except Exception as e:
-                    logger.debug("shot back: history paint failed: %s", e)
+            try:
+                await resume_card_view(context.bot, user.id, active_sess)
+            except Exception as e:
+                logger.debug("shot back: resume_card_view failed: %s", e)
         await query.answer()
         return True
 
@@ -203,41 +167,6 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         except Exception as e:
             logger.error("Failed to refresh screenshot: %s", e)
             await query.answer("Failed to refresh", show_alert=True)
-        return True
-
-    if data.startswith(CB_SHOT_MODE):
-        # sh:m:<k|s>:<m|l> — toggle the compact photo's keyboard between
-        # switcher rows and an arrow / Enter / Esc grid. Both modes also
-        # refresh the photo so the user sees the current pane state.
-        rest = data[len(CB_SHOT_MODE) :]
-        parts = rest.split(":", 1)
-        if len(parts) != 2 or parts[0] not in ("k", "s"):
-            await query.answer("Invalid data")
-            return True
-        mode, origin = parts
-        active = session_manager.get_active_session(user.id)
-        if active is None or not active.window_id:
-            await query.answer("No active session", show_alert=True)
-            return True
-        w = await tmux_manager.find_window_by_id(active.window_id)
-        if not w:
-            await query.answer("Window not found", show_alert=True)
-            return True
-        text = await tmux_manager.capture_pane(w.window_id, with_ansi=True)
-        if not text:
-            await query.answer("Failed to capture pane", show_alert=True)
-            return True
-        png_bytes = await text_to_image(text, with_ansi=True)
-        keyboard = build_screenshot_compact_keyboard(user.id, origin, mode=mode)
-        try:
-            await query.edit_message_media(
-                media=InputMediaPhoto(media=io.BytesIO(png_bytes)),
-                reply_markup=keyboard,
-            )
-            await query.answer("⌨" if mode == "k" else "switcher")
-        except Exception as e:
-            logger.debug("shot mode toggle failed: %s", e)
-            await query.answer("Refresh failed", show_alert=True)
         return True
 
     if data.startswith(CB_SHOT_KEYS):

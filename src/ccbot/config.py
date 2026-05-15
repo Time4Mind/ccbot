@@ -137,19 +137,10 @@ class Config:
         self.archive_purge_after: float = _parse_duration(
             os.getenv("ARCHIVE_PURGE_AFTER", "14d"), 14 * 86400
         )
-        # Per-session token alert defaults — three thresholds the user can
-        # adjust in Settings. Each must be a positive multiple of 50_000.
-        self.session_token_alert_defaults: tuple[int, int, int] = (
-            100_000,
-            200_000,
-            400_000,
-        )
-        self.session_token_alert_step: int = 50_000
-
         # Background-poll interval for the live /usage modal (used by the
         # quota-crossing alarms in handlers/quota_alerts.py).
         self.quota_alert_poll_interval: float = _parse_duration(
-            os.getenv("QUOTA_ALERT_POLL_INTERVAL", "5m"), 5 * 60
+            os.getenv("QUOTA_ALERT_POLL_INTERVAL", "10m"), 10 * 60
         )
 
         # Preview
@@ -167,27 +158,6 @@ class Config:
             self.card_edit_lag: float = float(os.getenv("CARD_EDIT_LAG", "2.0"))
         except ValueError:
             self.card_edit_lag = 2.0
-
-        # How many of the most-recent tool-call lines to keep visible in the
-        # session card. Older tool calls collapse to a single "… N earlier
-        # tool calls collapsed" placeholder. Recommended range 3..7.
-        try:
-            visible = int(os.getenv("CARD_VISIBLE_TOOLS", "3"))
-        except ValueError:
-            visible = 3
-        self.card_visible_tools: int = max(1, visible)
-
-        # When a *fresh* live card opens for a new turn (after the previous
-        # finalize_task / stale pause / overflow split), seed it with the
-        # last N transcript lines from before the user's most recent
-        # message — gives the new card immediate context instead of
-        # starting blank. ``0`` disables. The seed is one-shot per card;
-        # subsequent events append on top normally.
-        try:
-            prior = int(os.getenv("CARD_PRIOR_CONTEXT", "5"))
-        except ValueError:
-            prior = 5
-        self.card_prior_context: int = max(0, prior)
 
         # Notifications
         bg_mode = os.getenv("BG_NOTIFY_MODE", "separate").strip().lower()

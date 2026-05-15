@@ -25,6 +25,12 @@ from ...handlers.callback_data import (
     CB_ASK_UP,
 )
 from ...handlers.interactive_ui import clear_interactive_msg, handle_interactive_ui
+from ...handlers.notifications import enter_kb_mode, exit_kb_mode, has_pending_kb
+from ...session import session_manager
+from ...terminal_parser import (
+    extract_interactive_content,
+    is_interactive_ui,
+)
 from ...tmux_manager import tmux_manager
 
 logger = logging.getLogger(__name__)
@@ -53,7 +59,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                     w.window_id, tmux_key, enter=False, literal=False
                 )
                 await asyncio.sleep(0.5)
-                await handle_interactive_ui(context.bot, user.id, window_id)
+                await _refresh_after_key(context.bot, user.id, window_id)
             await query.answer(
                 toast if prefix in (CB_ASK_ENTER, CB_ASK_SPACE, CB_ASK_TAB) else ""
             )
@@ -66,14 +72,54 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             await tmux_manager.send_keys(
                 w.window_id, "Escape", enter=False, literal=False
             )
+            # Floating-msg flow tracks an explicit msg-per-window;
+            # card-based kb-mode is cleared by exit_kb_mode. Cover both.
             await clear_interactive_msg(user.id, context.bot, window_id)
+            sess = session_manager.find_session_by_window(window_id)
+            if sess is not None:
+                has_prompt, in_kb = has_pending_kb(user.id, sess.id)
+                if has_prompt or in_kb:
+                    await exit_kb_mode(context.bot, user.id, sess, clear_pending=True)
         await query.answer("⎋ Esc")
         return True
 
     if data.startswith(CB_ASK_REFRESH):
         window_id = data[len(CB_ASK_REFRESH) :]
-        await handle_interactive_ui(context.bot, user.id, window_id)
+        await _refresh_after_key(context.bot, user.id, window_id)
         await query.answer("🔄")
         return True
 
     return False
+
+
+async def _refresh_after_key(bot: Any, user_id: int, window_id: str) -> None:
+    """Re-paint the interactive surface after a key press.
+
+    Active session in kb-mode → re-enter kb-mode on the card with the
+    new pane snapshot (1s status_polling lag would otherwise leave the
+    keyboard stale). Otherwise fall back to the floating-msg flow.
+    """
+    sess = session_manager.find_session_by_window(window_id)
+    if sess is None:
+        await handle_interactive_ui(bot, user_id, window_id)
+        return
+    active = session_manager.get_active_session(user_id)
+    if active is not None and active.id == sess.id:
+        # Card-based kb-mode for the active session: capture pane, if
+        # the UI is still up re-enter; if it cleared, drop kb-mode.
+        w = await tmux_manager.find_window_by_id(window_id)
+        if w is None:
+            return
+        pane = await tmux_manager.capture_pane(w.window_id)
+        if pane and is_interactive_ui(pane):
+            content_obj = extract_interactive_content(pane)
+            if content_obj is not None:
+                await enter_kb_mode(
+                    bot, user_id, sess, content_obj.content, content_obj.name
+                )
+                return
+        has_prompt, in_kb = has_pending_kb(user_id, sess.id)
+        if has_prompt or in_kb:
+            await exit_kb_mode(bot, user_id, sess, clear_pending=True)
+        return
+    await handle_interactive_ui(bot, user_id, window_id)

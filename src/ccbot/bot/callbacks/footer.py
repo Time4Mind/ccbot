@@ -9,22 +9,30 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from ...handlers.callback_data import (
+    CB_CONF_CLEAR_NO,
+    CB_CONF_CLEAR_YES,
     CB_CONF_KILL_NO,
     CB_CONF_KILL_YES,
     CB_FT_CLEAR,
     CB_FT_KILL,
     CB_FT_MORE,
-    CB_FT_OLDER,
     CB_FT_STOP,
     CB_FT_TERM,
-)
-from ...handlers.history import (
-    get_cached_total_pages,
-    prewarm_pages_cache,
-    send_history,
+    CB_KB_BACK,
+    CB_KB_RESUME,
+    CB_PG_JUMP,
+    CB_PG_NEXT,
+    CB_PG_PREV,
 )
 from ...handlers.menu import build_footer_keyboard, render_more_text
-from ...handlers.notifications import clear_card, pause_card_view, release_card_message
+from ...handlers.notifications import (
+    card_page_info,
+    enter_kb_mode,
+    exit_kb_mode,
+    get_card_state,
+    pause_card_view,
+    refresh_panel,
+)
 from ...i18n import t
 from ...session import session_manager
 from ...tmux_manager import tmux_manager
@@ -54,6 +62,10 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         if sess is None or sess.state not in ("active", "idle", "lost"):
             await query.answer(t(user.id, "toast.nothing_to_kill"), show_alert=False)
             return True
+        # Pause the card so live updates don't repaint over the
+        # confirmation prompt. Resumed on Yes (archive resets card) or
+        # No (CB_CONF_KILL_NO handler clears the pause + re-renders).
+        pause_card_view(user.id, sess.id)
         kb = InlineKeyboardMarkup(
             [
                 [
@@ -74,25 +86,35 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         return True
 
     if data == CB_FT_CLEAR:
-        wid = active_window(user.id)
-        if not wid:
+        # Clear has no rollback (unlike Kill → Restore the archived
+        # window). Surface a confirmation dialog like /kill so a stray
+        # tap on a phone doesn't nuke session context. The Yes branch
+        # also chains Stop (Esc) before /clear so the latter lands on
+        # a clean prompt — previously /clear-while-busy silently
+        # failed inside claude.
+        sess = session_manager.get_active_session(user.id)
+        if sess is None or sess.state not in ("active", "idle"):
             await query.answer(t(user.id, "toast.no_session"), show_alert=False)
             return True
-        w = await tmux_manager.find_window_by_id(wid)
-        if not w:
-            await query.answer(t(user.id, "toast.window_gone"), show_alert=False)
-            return True
-        success, message = await session_manager.send_to_window(wid, "/clear")
-        if not success:
-            await query.answer(f"Clear failed: {message}", show_alert=True)
-            return True
-        session_manager.clear_window_session(wid)
-        # Wipe the live card body so the previous turn's tool log
-        # doesn't sit there pretending to be the current state.
-        sess = session_manager.get_active_session(user.id)
-        if sess is not None:
-            await clear_card(context.bot, user.id, sess)
-        await query.answer(t(user.id, "toast.cleared"))
+        # Pause so live updates don't repaint over the prompt.
+        pause_card_view(user.id, sess.id)
+        kb = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        t(user.id, "btn.yes_clear"),
+                        callback_data=f"{CB_CONF_CLEAR_YES}{sess.id}"[:64],
+                    ),
+                    InlineKeyboardButton(
+                        t(user.id, "btn.no"), callback_data=CB_CONF_CLEAR_NO
+                    ),
+                ]
+            ]
+        )
+        await set_view(
+            query, context.bot, user.id, t(user.id, "conf.clear", name=sess.name), kb
+        )
+        await query.answer()
         return True
 
     if data == CB_FT_MORE:
@@ -104,70 +126,63 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         sess = session_manager.get_active_session(user.id)
         if sess is not None:
             pause_card_view(user.id, sess.id)
-        # Entering Menu top-level resets any sub-screen markers
-        # (`_in_list_view`, `_history_origin`).
-        from .more_menu import clear_view_markers as _clear_view_markers
-
-        _clear_view_markers(context.user_data)
         text = render_more_text(user.id)
         keyboard = build_footer_keyboard(user.id, screen="more")
         await set_view(query, context.bot, user.id, text, keyboard)
         await query.answer()
         return True
 
-    if data == CB_FT_OLDER:
+    if data in (CB_PG_PREV, CB_PG_NEXT, CB_PG_JUMP):
         sess = session_manager.get_active_session(user.id)
-        if sess is None or not sess.window_id:
+        if sess is None:
             await query.answer(t(user.id, "toast.no_session"), show_alert=False)
             return True
-        # Make sure the pages cache is fresh so we can target page-1
-        # below; this is a no-op when the cache already matches the
-        # JSONL (mtime+size).
+        state = get_card_state(user.id, sess)
+        idx, total = card_page_info(state, user.id)
+        if data == CB_PG_JUMP:
+            # Jump to default-focus (= latest page when no answer-anchor
+            # was set explicitly). ``None`` means "stick to latest".
+            state.current_page_idx = None
+        elif data == CB_PG_PREV:
+            new_idx = max(0, idx - 1)
+            state.current_page_idx = new_idx if new_idx < total - 1 else None
+        else:  # CB_PG_NEXT
+            new_idx = min(total - 1, idx + 1)
+            # Reaching the last page sticks the user to "auto-follow latest".
+            state.current_page_idx = new_idx if new_idx < total - 1 else None
         try:
-            await prewarm_pages_cache(sess.window_id)
+            await refresh_panel(context.bot, user.id)
         except Exception as e:
-            logger.debug("ft older prewarm failed: %s", e)
-        total = get_cached_total_pages(sess.window_id)
-        if total is None:
-            await query.answer("No history yet", show_alert=False)
-            return True
-        # Target the page BEFORE the current latest — that's what "Older"
-        # means relative to the live-card view. When there's only one
-        # page, fall back to it so the user still lands on the
-        # paginated history surface (the pagination row will simply not
-        # show ◀/▶).
-        offset = max(0, total - 2)
+            logger.debug("pagination refresh failed: %s", e)
+        await query.answer()
+        return True
 
-        from .more_menu import HISTORY_ORIGIN_KEY
-
-        if context.user_data is not None:
-            context.user_data[HISTORY_ORIGIN_KEY] = "switcher"
-        footer_kb = build_footer_keyboard(
-            user.id, screen="main", is_busy=False, include_older_btn=False
-        )
-        extra_rows = (
-            [list(r) for r in footer_kb.inline_keyboard]
-            if footer_kb is not None
-            else None
-        )
-        try:
-            await send_history(
-                target=query,
-                window_id=sess.window_id,
-                offset=offset,
-                edit=True,
-                user_id=user.id,
-                extra_rows=extra_rows,
-            )
-        except Exception as e:
-            logger.debug("ft older paint failed: %s", e)
-            await query.answer("History paint failed", show_alert=True)
+    if data == CB_KB_BACK:
+        # User taps Back from kb-mode → flip card back to regular view.
+        # Pending kept (kb_prompt stays); Resume button shows in footer
+        # to allow re-entry. Auto-clear happens later if claude moves
+        # past the prompt (handled by session_events).
+        sess = session_manager.get_active_session(user.id)
+        if sess is None:
+            await query.answer(t(user.id, "toast.no_session"), show_alert=False)
             return True
-        # Detach the carrier from the live-card so subsequent claude
-        # events don't clobber the freshly-painted history view.
-        release_card_message(user.id, sess.id)
-        if query.message:
-            session_manager.set_last_switcher_msg(user.id, query.message.message_id)
+        await exit_kb_mode(context.bot, user.id, sess, clear_pending=False)
+        await query.answer()
+        return True
+
+    if data == CB_KB_RESUME:
+        # User taps Resume → flip back into kb-mode using stored prompt.
+        sess = session_manager.get_active_session(user.id)
+        if sess is None:
+            await query.answer(t(user.id, "toast.no_session"), show_alert=False)
+            return True
+        state = get_card_state(user.id, sess)
+        if not state.kb_prompt:
+            await query.answer("No pending action", show_alert=False)
+            return True
+        await enter_kb_mode(
+            context.bot, user.id, sess, state.kb_prompt, state.kb_ui_name
+        )
         await query.answer()
         return True
 

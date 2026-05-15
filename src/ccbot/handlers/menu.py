@@ -28,9 +28,11 @@ from .callback_data import (
     CB_FT_CLEAR,
     CB_FT_KILL,
     CB_FT_MORE,
-    CB_FT_OLDER,
     CB_FT_STOP,
     CB_FT_TERM,
+    CB_PG_JUMP,
+    CB_PG_NEXT,
+    CB_PG_PREV,
     CB_MM_ARCHIVE,
     CB_MM_BACK,
     CB_MM_LIST,
@@ -40,7 +42,11 @@ from .callback_data import (
     CB_MM_STATUS,
     CB_ST_APPROVE,
     CB_ST_BACK,
-    CB_ST_CPOS,
+    CB_ST_BGNOTIFY,
+    CB_ST_CAT,
+    CB_ST_CHIST,
+    CB_ST_PAGESIZE,
+    CB_ST_SCREENS,
     CB_ST_GRP,
     CB_ST_LAG,
     CB_ST_LANG,
@@ -48,7 +54,6 @@ from .callback_data import (
     CB_ST_LOCAL,
     CB_ST_LTERM,
     CB_ST_PREV,
-    CB_ST_TOK,
     CB_ST_VOICE,
     CB_ST_WDAY,
     CB_SW_NEW,
@@ -60,15 +65,26 @@ Screen = Literal[
     "main",
     "more",
     "settings",
+    # Category sub-screens (group selector → category contents).
+    "settings_cat_card",
+    "settings_cat_notifications",
+    "settings_cat_voice",
+    "settings_cat_terminal",
+    "settings_cat_behavior",
+    # Individual setting sub-screens.
     "settings_previews",
     "settings_lag",
     "settings_voice",
     "settings_language",
     "settings_weeklyday",
     "settings_approve",
-    "settings_tokens",
     "settings_local",
-    "settings_cardpos",
+    "settings_cardhist",
+    "settings_pagesize",
+    "settings_screens",
+    "settings_bg_notify_finished",
+    "settings_bg_notify_error",
+    "settings_bg_notify_needs_action",
 ]
 
 # Group key -> (label translation key, sub-screen name, settings-dict key)
@@ -90,22 +106,91 @@ _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
         "auto_approve",
     ),
     (
-        "session_token_alerts",
-        "settings.group.token_alerts",
-        "settings_tokens",
-        "session_token_alerts",
-    ),
-    (
         "local_terminal",
         "settings.group.local_terminal",
         "settings_local",
         "local_terminal",
     ),
     (
-        "card_position",
-        "settings.group.card_position",
-        "settings_cardpos",
-        "card_position",
+        "card_history",
+        "settings.group.card_history",
+        "settings_cardhist",
+        "card_history",
+    ),
+    (
+        "card_page_lines",
+        "settings.group.card_page_lines",
+        "settings_pagesize",
+        "card_page_lines",
+    ),
+    (
+        "card_inline_screenshots",
+        "settings.group.card_inline_screenshots",
+        "settings_screens",
+        "card_inline_screenshots",
+    ),
+    (
+        "bg_notify_finished",
+        "settings.group.bg_notify_finished",
+        "settings_bg_notify_finished",
+        "bg_notify_finished",
+    ),
+    (
+        "bg_notify_error",
+        "settings.group.bg_notify_error",
+        "settings_bg_notify_error",
+        "bg_notify_error",
+    ),
+    (
+        "bg_notify_needs_action",
+        "settings.group.bg_notify_needs_action",
+        "settings_bg_notify_needs_action",
+        "bg_notify_needs_action",
+    ),
+)
+
+
+# Category taxonomy — main Settings screen renders categories; tapping
+# a category shows its members. Settings became too many for a flat
+# list (user feedback). The first entry in each tuple is the i18n
+# label key; the second is the category sub-screen name; the third is
+# the ordered tuple of setting keys (must match ``_SETTINGS_GROUPS``).
+SETTINGS_CATEGORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    (
+        "settings.cat.card",
+        "settings_cat_card",
+        (
+            "previews",
+            "live_lag",
+            "card_history",
+            "card_page_lines",
+            "card_inline_screenshots",
+        ),
+    ),
+    (
+        "settings.cat.notifications",
+        "settings_cat_notifications",
+        (
+            "bg_notify_finished",
+            "bg_notify_error",
+            "bg_notify_needs_action",
+            "weekly_reset_day",
+        ),
+    ),
+    (
+        "settings.cat.voice",
+        "settings_cat_voice",
+        ("voice",),
+    ),
+    (
+        "settings.cat.terminal",
+        "settings_cat_terminal",
+        ("local_terminal",),
+    ),
+    (
+        "settings.cat.behavior",
+        "settings_cat_behavior",
+        ("auto_approve", "language"),
     ),
 )
 
@@ -117,7 +202,7 @@ def _has_active_session(user_id: int) -> bool:
 
 
 def can_offer_terminal(user_id: int) -> bool:
-    """Show the "Open terminal" button (in /list) for this user?
+    """Show the "Open terminal" button on the live card for this user?
 
     Visible iff:
       * the user has an active session with a live window_id,
@@ -163,20 +248,40 @@ def can_offer_terminal(user_id: int) -> bool:
     return True
 
 
+def _has_pending_kb_action(user_id: int) -> bool:
+    """True when the user's active session has an unresolved kb-mode
+    prompt — needs_action detected but user hasn't acted on it. Shows
+    the [🔙 Resume action] button in place of Shot in the footer.
+    """
+    from .notifications import has_pending_kb
+
+    active = session_manager.get_active_session(user_id)
+    if active is None:
+        return False
+    has_prompt, in_kb = has_pending_kb(user_id, active.id)
+    return has_prompt and not in_kb
+
+
 def _footer_top_row(
     user_id: int, *, is_busy: bool = True
 ) -> list[InlineKeyboardButton]:
     """Default top row — per-session controls. Menu lives in its own
     bottom row (see ``_footer_bottom_row``) so its slot stays put
     across view transitions (the same spot Back occupies in
-    /list / /archive / other sub-screens).
+    /archive / settings sub-screens).
 
     Busy session shows *Stop* (sends Escape — interrupt the running
     task without terminating). Idle session shows *Kill* (archive the
     whole session). The is_busy signal comes from
     ``notifications._card_is_busy`` which keys off "card is alive" so
     the button doesn't flicker between tool calls.
+
+    When the active session has an unresolved kb-mode prompt (user
+    pressed Back from kb-mode but pending still active), Shot is
+    replaced with [🔙 Resume action] so the user can re-enter kb-mode.
     """
+    from .callback_data import CB_KB_RESUME
+
     row: list[InlineKeyboardButton] = []
     if _has_active_session(user_id):
         if is_busy:
@@ -190,14 +295,15 @@ def _footer_top_row(
         row.append(
             InlineKeyboardButton(t(user_id, "btn.clear"), callback_data=CB_FT_CLEAR)
         )
-        # Shot belongs next to Kill / Clear — it's a per-session control
-        # too ("snapshot this session's terminal"). Keeping it in the
-        # top row means the screenshot button stays put across switcher
-        # taps, /list paints, and live-card edits (anywhere the main
-        # screen is rendered).
-        row.append(
-            InlineKeyboardButton(t(user_id, "mm.shot"), callback_data=CB_MM_SHOT)
-        )
+        # Pending kb action → Resume on Shot slot. Otherwise Shot as usual.
+        if _has_pending_kb_action(user_id):
+            row.append(
+                InlineKeyboardButton("🔙 Resume action", callback_data=CB_KB_RESUME)
+            )
+        else:
+            row.append(
+                InlineKeyboardButton(t(user_id, "mm.shot"), callback_data=CB_MM_SHOT)
+            )
         # Open-terminal sits with the other per-session controls so the
         # button persists across switcher taps (which re-render the
         # footer top row for the newly-active session). Visible only
@@ -214,7 +320,7 @@ def _footer_bottom_row(user_id: int) -> list[InlineKeyboardButton]:
     """Bottom row for the main screen: `[+ new] [≡ Menu]`. The pair sits
     on a single row so the two most-used "go elsewhere" affordances land
     side-by-side and the user's eye doesn't ping-pong between rows. Same
-    slot as Back on /list / /archive / settings sub-screens, just with
+    slot as Back on /archive / settings sub-screens, just with
     two buttons instead of one.
     """
     return [
@@ -224,7 +330,7 @@ def _footer_bottom_row(user_id: int) -> list[InlineKeyboardButton]:
 
 
 _MM_BUTTONS: tuple[tuple[str, str, str], ...] = (
-    ("list", "mm.list", CB_MM_LIST),
+    ("sessions", "mm.sessions", CB_MM_LIST),
     ("archive", "mm.archive", CB_MM_ARCHIVE),
     ("status", "mm.status", CB_MM_STATUS),
     ("new", "mm.new", CB_MM_NEW),
@@ -266,38 +372,96 @@ def _highlight(label: str, active: bool) -> str:
     return f"• {label}" if active else label
 
 
+def _parent_cat_cb(group_key: str) -> str:
+    """Callback the Back row of an individual setting points at — the
+    CATEGORY sub-screen that contains ``group_key`` (per pivot #53
+    feedback: tapping Back was dumping users at the top-level Settings
+    instead of the relevant category).
+    """
+    for _label, cat_screen, members in SETTINGS_CATEGORIES:
+        if group_key in members:
+            return f"{CB_ST_CAT}{cat_screen}"
+    return CB_MM_SETTINGS
+
+
+def _format_setting_value(user_id: int, value_key: str, cur: object) -> str:
+    """Format a single setting's current value for display in buttons."""
+    if value_key == "live_lag":
+        return f"{int(cur)}s" if cur is not None else "?"  # type: ignore[arg-type]
+    if value_key == "weekly_reset_day":
+        return t(user_id, f"day.{cur}") if cur else "?"
+    if value_key == "auto_approve":
+        return t(user_id, f"approve.{cur}") if cur else "?"
+    if value_key == "local_terminal":
+        return t(user_id, f"local.{cur}") if cur else "?"
+    if value_key == "card_history":
+        return f"{int(cur)} turns" if cur else "?"  # type: ignore[arg-type]
+    if value_key == "card_page_lines":
+        return f"{int(cur)} lines" if cur else "?"  # type: ignore[arg-type]
+    if value_key == "card_inline_screenshots":
+        return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
+    if value_key in ("bg_notify_finished", "bg_notify_error", "bg_notify_needs_action"):
+        return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
+    return str(cur) if cur is not None else "?"
+
+
 def _settings_main_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
-    """Top-level Settings screen: one button per group + Back-to-Menu."""
-    s = session_manager.get_user_settings(user_id)
+    """Top-level Settings screen — category selector.
+
+    Settings became too many for a flat list (user feedback). Each
+    category opens a sub-screen listing its members. Languages /
+    auto-approve land in the 'Behavior' category for now.
+    """
     rows: list[list[InlineKeyboardButton]] = []
-    for key, label_key, _screen, value_key in _SETTINGS_GROUPS:
-        cur = s.get(value_key, "")
+    for label_key, screen_name, _members in SETTINGS_CATEGORIES:
         label = t(user_id, label_key)
-        if value_key == "live_lag":
-            value_str = f"{int(cur)}s"
-        elif value_key == "weekly_reset_day":
-            value_str = t(user_id, f"day.{cur}") if cur else "?"
-        elif value_key == "auto_approve":
-            value_str = t(user_id, f"approve.{cur}") if cur else "?"
-        elif value_key == "local_terminal":
-            value_str = t(user_id, f"local.{cur}") if cur else "?"
-        elif value_key == "card_position":
-            value_str = t(user_id, f"cardpos.{cur}") if cur else "?"
-        elif value_key == "session_token_alerts":
-            arr = cur if isinstance(cur, list) else []
-            value_str = " / ".join(f"{int(v) // 1000}k" for v in arr)
-        else:
-            value_str = str(cur)
         rows.append(
             [
                 InlineKeyboardButton(
-                    f"{label}: {value_str}",
-                    callback_data=f"{CB_ST_GRP}{key}",
+                    label,
+                    callback_data=f"{CB_ST_CAT}{screen_name}",
                 )
             ]
         )
     rows.append(
         [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_ST_BACK)]
+    )
+    return rows
+
+
+def _settings_category_grid(
+    user_id: int, screen_name: str
+) -> list[list[InlineKeyboardButton]]:
+    """Sub-screen for one category: its member settings as buttons."""
+    members: tuple[str, ...] = ()
+    for _label_key, sname, m in SETTINGS_CATEGORIES:
+        if sname == screen_name:
+            members = m
+            break
+    s = session_manager.get_user_settings(user_id)
+    groups_by_key = {key: (lk, sc, vk) for key, lk, sc, vk in _SETTINGS_GROUPS}
+    rows: list[list[InlineKeyboardButton]] = []
+    for member_key in members:
+        if member_key not in groups_by_key:
+            continue
+        label_key, _sub_screen, value_key = groups_by_key[member_key]
+        cur = s.get(value_key, "")
+        label = t(user_id, label_key)
+        value_str = _format_setting_value(user_id, value_key, cur)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"{label}: {value_str}",
+                    callback_data=f"{CB_ST_GRP}{member_key}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"), callback_data=f"{CB_ST_CAT}settings"
+            )
+        ]
     )
     return rows
 
@@ -315,7 +479,11 @@ def _settings_previews_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
                 callback_data=f"{CB_ST_PREV}readable",
             ),
         ],
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"), callback_data=_parent_cat_cb("previews")
+            )
+        ],
     ]
 
 
@@ -329,7 +497,11 @@ def _settings_lag_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             )
             for v in (0, 2, 4, 8)
         ],
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"), callback_data=_parent_cat_cb("live_lag")
+            )
+        ],
     ]
 
 
@@ -343,7 +515,11 @@ def _settings_voice_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             )
             for v in ("auto", "whisper", "apple", "off")
         ],
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"), callback_data=_parent_cat_cb("voice")
+            )
+        ],
     ]
 
 
@@ -357,7 +533,11 @@ def _settings_language_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             )
             for code, label in LANGUAGES
         ],
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"), callback_data=_parent_cat_cb("language")
+            )
+        ],
     ]
 
 
@@ -371,7 +551,11 @@ def _settings_approve_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             )
             for v in ("off", "on")
         ],
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"), callback_data=_parent_cat_cb("auto_approve")
+            )
+        ],
     ]
 
 
@@ -421,47 +605,125 @@ def _settings_local_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
         )
 
     rows.append(
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)]
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("local_terminal"),
+            )
+        ]
     )
     return rows
 
 
-def _settings_tokens_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
-    """Per-session token alert thresholds: 3 rows of `[label] [-] [+]`."""
-    s = session_manager.get_user_settings(user_id)
-    raw = s.get("session_token_alerts") or [100_000, 200_000, 400_000]
-    if not isinstance(raw, list) or len(raw) != 3:
-        raw = [100_000, 200_000, 400_000]
-    rows: list[list[InlineKeyboardButton]] = []
-    for slot, value in enumerate(raw):
-        try:
-            kk = int(value) // 1000
-        except (TypeError, ValueError):
-            kk = 0
-        rows.append(
-            [
-                InlineKeyboardButton(f"{kk}k", callback_data=CB_SW_NOOP),
-                InlineKeyboardButton("−50k", callback_data=f"{CB_ST_TOK}{slot}:-"),
-                InlineKeyboardButton("+50k", callback_data=f"{CB_ST_TOK}{slot}:+"),
-            ]
-        )
-    rows.append(
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)]
-    )
-    return rows
+def _settings_cardhist_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
+    """How many end_turn boundaries to seed into a fresh live card.
 
-
-def _settings_cardpos_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
-    cur = session_manager.get_user_settings(user_id).get("card_position", "push")
+    Fixed row of values 10 / 20 / 50 / 100. Deep history beyond this is
+    always reachable via ``/history`` regardless of the chosen value.
+    """
+    raw = session_manager.get_user_settings(user_id).get("card_history", 20)
+    try:
+        cur = int(raw)
+    except (TypeError, ValueError):
+        cur = 20
     return [
         [
             InlineKeyboardButton(
-                _highlight(t(user_id, f"cardpos.{v}"), cur == v),
-                callback_data=f"{CB_ST_CPOS}{v}",
+                _highlight(str(v), cur == v),
+                callback_data=f"{CB_ST_CHIST}{v}",
             )
-            for v in ("push", "delete", "repost")
+            for v in (10, 20, 50, 100)
         ],
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("card_history"),
+            )
+        ],
+    ]
+
+
+def _settings_screens_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
+    """Inline-screenshots on/off toggle. Settings body explains the
+    ~4x page-size shrinkage when ON (caption limit 1024 vs text 4096).
+    """
+    cur = bool(
+        session_manager.get_user_settings(user_id).get("card_inline_screenshots", False)
+    )
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(t(user_id, "screens.on"), cur),
+                callback_data=f"{CB_ST_SCREENS}on",
+            ),
+            InlineKeyboardButton(
+                _highlight(t(user_id, "screens.off"), not cur),
+                callback_data=f"{CB_ST_SCREENS}off",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("card_inline_screenshots"),
+            )
+        ],
+    ]
+
+
+def _settings_bg_notify_grid(
+    user_id: int, key: str, back_to: str
+) -> list[list[InlineKeyboardButton]]:
+    """Simple on/off toggle for one bg_notify_* setting.
+
+    ``key`` is one of bg_notify_finished / _error / _needs_action.
+    ``back_to`` is the screen name to return to (the parent category).
+    """
+    cur = bool(session_manager.get_user_settings(user_id).get(key, True))
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(t(user_id, "screens.on"), cur),
+                callback_data=f"{CB_ST_BGNOTIFY}{key}:on",
+            ),
+            InlineKeyboardButton(
+                _highlight(t(user_id, "screens.off"), not cur),
+                callback_data=f"{CB_ST_BGNOTIFY}{key}:off",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"), callback_data=f"{CB_ST_CAT}{back_to}"
+            )
+        ],
+    ]
+
+
+def _settings_pagesize_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
+    """Max page size in logical \\n-delimited lines.
+
+    Fixed row 10 / 20 / 40 / 70. Smart anchor chunking with ±5 lines
+    overshoot handles single events that exceed the budget without
+    breaking mid-sentence / mid-word.
+    """
+    raw = session_manager.get_user_settings(user_id).get("card_page_lines", 20)
+    try:
+        cur = int(raw)
+    except (TypeError, ValueError):
+        cur = 20
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(str(v), cur == v),
+                callback_data=f"{CB_ST_PAGESIZE}{v}",
+            )
+            for v in (10, 20, 40, 70)
+        ],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("card_page_lines"),
+            )
+        ],
     ]
 
 
@@ -482,7 +744,12 @@ def _settings_weeklyday_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             ]
         )
     rows.append(
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)]
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("weekly_reset_day"),
+            )
+        ]
     )
     return rows
 
@@ -540,35 +807,64 @@ def build_footer_keyboard(
         rows.extend(_settings_weeklyday_grid(user_id))
     elif screen == "settings_approve":
         rows.extend(_settings_approve_grid(user_id))
-    elif screen == "settings_tokens":
-        rows.extend(_settings_tokens_grid(user_id))
     elif screen == "settings_local":
         rows.extend(_settings_local_grid(user_id))
-    elif screen == "settings_cardpos":
-        rows.extend(_settings_cardpos_grid(user_id))
+    elif screen == "settings_cardhist":
+        rows.extend(_settings_cardhist_grid(user_id))
+    elif screen == "settings_pagesize":
+        rows.extend(_settings_pagesize_grid(user_id))
+    elif screen == "settings_screens":
+        rows.extend(_settings_screens_grid(user_id))
+    elif screen in (
+        "settings_cat_card",
+        "settings_cat_notifications",
+        "settings_cat_voice",
+        "settings_cat_terminal",
+        "settings_cat_behavior",
+    ):
+        rows.extend(_settings_category_grid(user_id, screen))
+    elif screen == "settings_bg_notify_finished":
+        rows.extend(
+            _settings_bg_notify_grid(
+                user_id, "bg_notify_finished", "settings_cat_notifications"
+            )
+        )
+    elif screen == "settings_bg_notify_error":
+        rows.extend(
+            _settings_bg_notify_grid(
+                user_id, "bg_notify_error", "settings_cat_notifications"
+            )
+        )
+    elif screen == "settings_bg_notify_needs_action":
+        rows.extend(
+            _settings_bg_notify_grid(
+                user_id, "bg_notify_needs_action", "settings_cat_notifications"
+            )
+        )
     else:
-        # ◀ Older + N/N pagination row at the very top — same layout as
-        # the history view's pagination so the live-card and history
-        # surfaces look identical (no "blinking" keyboard between
-        # streaming events). When the page count isn't cached yet (very
-        # first render on a fresh session), the counter is dropped — it
-        # populates on the next render after a prewarm. Suppressed in
-        # callers that compose this keyboard as extras BELOW a history-
-        # view's own pagination row (switcher tap / /screenshot Back /
-        # CB_HISTORY_PREV/NEXT) to avoid two stacked ◀ Older buttons.
+        # In-card pagination row at the very top — [◀] [N/M] [▶].
+        # ``N/M`` taps jump to the default-focus page (latest answer).
+        # ◀ at page 0 falls back to opening the older-history view
+        # (the full transcript, beyond the card's CARD_MAX_EVENTS).
+        # Suppressed in callers that compose this keyboard as extras
+        # BELOW a history-view's own pagination row.
         if include_older_btn and _has_active_session(user_id):
-            pag_row: list[InlineKeyboardButton] = [
-                InlineKeyboardButton("◀ Older", callback_data=CB_FT_OLDER)
-            ]
             active = session_manager.get_active_session(user_id)
-            if active is not None and active.window_id:
-                from .history import get_cached_total_pages
+            page_idx = 0
+            total_pages = 1
+            if active is not None:
+                from .notifications import card_page_info, get_card_state
 
-                total = get_cached_total_pages(active.window_id)
-                if total is not None and total >= 1:
-                    pag_row.append(
-                        InlineKeyboardButton(f"{total}/{total}", callback_data="noop")
-                    )
+                page_idx, total_pages = card_page_info(
+                    get_card_state(user_id, active), user_id
+                )
+            pag_row: list[InlineKeyboardButton] = [
+                InlineKeyboardButton("◀", callback_data=CB_PG_PREV),
+                InlineKeyboardButton(
+                    f"{page_idx + 1}/{total_pages}", callback_data=CB_PG_JUMP
+                ),
+                InlineKeyboardButton("▶", callback_data=CB_PG_NEXT),
+            ]
             rows.append(pag_row)
         top = _footer_top_row(user_id, is_busy=is_busy)
         if top:
@@ -621,9 +917,18 @@ _GROUP_TEXT_KEYS: dict[str, str] = {
     "settings_language": "settings.lang.body",
     "settings_weeklyday": "settings.weeklyday.body",
     "settings_approve": "settings.approve.body",
-    "settings_tokens": "settings.tokens.body",
     "settings_local": "settings.local.body",
-    "settings_cardpos": "settings.cardpos.body",
+    "settings_cardhist": "settings.cardhist.body",
+    "settings_pagesize": "settings.pagesize.body",
+    "settings_screens": "settings.screens.body",
+    "settings_cat_card": "settings.cat.card.body",
+    "settings_cat_notifications": "settings.cat.notifications.body",
+    "settings_cat_voice": "settings.cat.voice.body",
+    "settings_cat_terminal": "settings.cat.terminal.body",
+    "settings_cat_behavior": "settings.cat.behavior.body",
+    "settings_bg_notify_finished": "settings.bg_notify.finished.body",
+    "settings_bg_notify_error": "settings.bg_notify.error.body",
+    "settings_bg_notify_needs_action": "settings.bg_notify.needs_action.body",
 }
 
 

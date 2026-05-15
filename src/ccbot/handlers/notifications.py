@@ -1100,15 +1100,29 @@ def release_card_message(user_id: int, session_id: str) -> None:
 
 
 async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
-    """Re-render the card with whatever events accumulated while paused,
-    then drop the pause."""
+    """Drop the menu-pause so future events render again, and re-paint
+    the carrier with the buffered events.
+
+    CRITICAL: clears ``in_menu_view`` UNCONDITIONALLY when the state
+    exists — even when ``msg_id`` was lost (carrier stale / deleted /
+    not yet created). Earlier this returned early without clearing
+    the pause, leaving the card stuck in ``must_buffer=True`` forever
+    (symptom: chronic ``card_update buffered`` log, body never updates
+    even though claude is producing events). When ``msg_id`` is None
+    we still clear the flag; the next claude event spawns a fresh
+    card via ``_send_card`` because ``state.msg_id is None``.
+    """
     state = _cards.get((user_id, sess.id))
-    if state is None or state.msg_id is None:
+    if state is None:
         return
     state.in_menu_view = False
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
     state.pending_edit = None
+    if state.msg_id is None:
+        # Nothing to paint right now — the next event will create a
+        # fresh card. The unpause above is the important part.
+        return
     text = _render_card(sess, state, user_id=user_id)
     keyboard = build_footer_keyboard(user_id, screen="main", is_busy=True)
     if await _edit_card(bot, user_id, state, text=text, reply_markup=keyboard):

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -22,16 +21,14 @@ from ...handlers.directory_browser import (
     clear_session_picker_state,
     clear_window_picker_state,
 )
-from ...handlers.history import prewarm_pages_cache, send_history
 from ...handlers.interactive_ui import (
     adopt_interactive_msg,
     render_interactive_keyboard,
 )
-from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_edit, safe_send
 from ...handlers.notifications import (
+    paint_card_on_carrier,
     pause_card_view,
-    release_card_message,
     transfer_card_to_carrier,
 )
 from ...session import session_manager
@@ -123,82 +120,34 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                             logger.debug("pending UI safe_edit failed: %s", e)
 
         if not showed_interactive_ui:
-            # Paint the session's full transcript history onto the carrier
-            # so the user lands on context immediately — no extra ⋯ Menu →
-            # History tap. The footer + switcher rows come along as
-            # ``extra_rows`` below the pagination row, so management
-            # controls stay reachable.
+            # Switcher tap unifies with Menu → Sessions: the carrier
+            # becomes the target session's LIVE CARD. No frozen JSONL
+            # transcript, no release_card_message, no second message
+            # spawning below on the next event.
             #
-            # On the next claude event, ``update_session_card`` will
-            # repaint the carrier with the live card; the history page is
-            # ephemeral by design.
-            footer_kb = build_footer_keyboard(
-                user.id, screen="main", is_busy=False, include_older_btn=False
-            )
-            extra_rows = (
-                [list(r) for r in footer_kb.inline_keyboard]
-                if footer_kb is not None
-                else None
-            )
-            history_painted = False
-            if sess.window_id:
+            # ``paint_card_on_carrier`` claims the carrier, seeds JSONL
+            # history if state.events is empty, and renders the full
+            # live-card surface (header + paginated body + bg-panel +
+            # main footer). Subsequent claude events edit the same msg.
+            #
+            # Fallback: session has no window (lost/archived restore in
+            # flight) → fall through to a short preview so the user at
+            # least sees the header.
+            painted = False
+            if sess.window_id and query.message is not None:
                 try:
-                    await send_history(
-                        target=query,
-                        window_id=sess.window_id,
-                        edit=True,
-                        user_id=user.id,
-                        extra_rows=extra_rows,
+                    await paint_card_on_carrier(
+                        context.bot, user.id, sess, query.message.message_id
                     )
-                    history_painted = True
+                    painted = True
                 except Exception as e:
-                    logger.debug("switch history paint failed: %s", e)
-
-            if history_painted:
-                # Detach the TO session's live-card from the carrier
-                # message — the carrier now holds a frozen history view,
-                # NOT a live card. Without this, the very next event for
-                # ``sess`` (or a refresh_panel triggered by a bg event)
-                # would call edit_message_text on the carrier and clobber
-                # the history we just painted. With msg_id=None, the next
-                # claude event opens a fresh live card below; the history
-                # carrier stays put and the user can still paginate it.
-                release_card_message(user.id, target_id)
-
-                # Pre-warm the cache for the user's OTHER active
-                # sessions so a back-and-forth tap doesn't pay the cold
-                # parse cost (~1 s for a multi-thousand-message JSONL).
-                # Runs detached — the current edit is already in
-                # flight, this is purely speculative work.
-                async def _prewarm_others() -> None:
-                    for other in list(session_manager.sessions.values()):
-                        if other.id == target_id:
-                            continue
-                        if other.state not in ("active", "idle") or not other.window_id:
-                            continue
-                        try:
-                            await prewarm_pages_cache(other.window_id)
-                        except Exception as e:
-                            logger.debug(
-                                "switcher prewarm failed for %s: %s",
-                                other.window_id,
-                                e,
-                            )
-
-                asyncio.create_task(_prewarm_others())
-
-            if not history_painted:
-                # Fallback: session has no window yet (lost/archived
-                # restore in flight, etc.). Fall back to the legacy
-                # short preview so the user at least sees the header.
+                    logger.debug("paint_card_on_carrier failed: %s", e)
+            if not painted:
                 try:
                     preview = await render_session_preview(sess)
-                    await safe_edit(query, preview, reply_markup=footer_kb)
+                    await safe_edit(query, preview)
                 except Exception as e:
                     logger.debug("preview safe_edit failed: %s", e)
-
-            if query.message and footer_kb is not None:
-                session_manager.set_last_switcher_msg(user.id, query.message.message_id)
 
         # Panel housekeeping: the user switched INTO this session, so it
         # is no longer "background" relative to them — drop its bg entry.

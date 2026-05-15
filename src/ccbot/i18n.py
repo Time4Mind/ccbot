@@ -208,6 +208,17 @@ _EN: dict[str, str] = {
     "cardpos.push": "push",
     "cardpos.delete": "delete",
     "cardpos.repost": "repost",
+    # Settings group: how many recent end_turn boundaries to seed into a
+    # fresh live card from the JSONL transcript.
+    "settings.group.card_history": "Card history",
+    "settings.cardhist.body": (
+        "*Card history*\n\n"
+        "How many recent end-of-turn boundaries to load into the live "
+        "card on first access (after a bot restart, switcher tap, or "
+        "Menu → Sessions). Deep history beyond this stays accessible "
+        "via /history regardless of the chosen value.\n\n"
+        "Higher = more scrollback in the card, more memory per session."
+    ),
     # Settings group: pop a native Terminal/iTerm window per new session
     "settings.group.local_terminal": "Local terminal",
     "settings.local.body": (
@@ -488,6 +499,15 @@ _RU: dict[str, str] = {
     "cardpos.push": "push",
     "cardpos.delete": "удалить",
     "cardpos.repost": "переслать",
+    "settings.group.card_history": "История в карточке",
+    "settings.cardhist.body": (
+        "*История в карточке*\n\n"
+        "Сколько последних end-of-turn границ подгружать в карточку\n"
+        "при первом доступе (после рестарта бота, тапа в свитчере или\n"
+        "Меню → Sessions). Глубокая история сверх этого всегда\n"
+        "доступна через /history независимо от значения.\n\n"
+        "Больше = больше истории в карточке, больше памяти на сессию."
+    ),
     "settings.group.local_terminal": "Локальный терминал",
     "settings.local.body": (
         "*Локальный терминал*\n\n"
@@ -760,6 +780,14 @@ _ZH: dict[str, str] = {
     "cardpos.push": "push",
     "cardpos.delete": "删除",
     "cardpos.repost": "重发",
+    "settings.group.card_history": "卡片历史",
+    "settings.cardhist.body": (
+        "*卡片历史*\n\n"
+        "首次访问时(机器人重启 / 切换器点击 / 菜单→Sessions)\n"
+        "从 JSONL 转录加载多少最近的 end-of-turn 边界。\n"
+        "更深的历史始终通过 /history 访问,与该值无关。\n\n"
+        "更多 = 卡片内更多历史,每会话占用更多内存。"
+    ),
     "settings.group.local_terminal": "本地终端",
     "settings.local.body": (
         "*本地终端*\n\n"

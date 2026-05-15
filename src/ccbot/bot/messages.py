@@ -699,6 +699,27 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await safe_reply(update.message, f"❌ {message}")
         return
 
+    # Immediate typing-indicator so the user sees feedback within ~500 ms
+    # of sending — claude can take 5-30 s before emitting its first event
+    # (long tool prelude / thinking) and ``status_polling`` won't fire
+    # typing until the pane enters the busy-spinner state. Without this
+    # early fire the chat looks frozen.
+    try:
+        await context.bot.send_chat_action(chat_id=user.id, action=ChatAction.TYPING)
+        logger.info(
+            "typing_fired source=text_handler.post_send user=%d wid=%s",
+            user.id,
+            wid,
+            extra={
+                "event": "typing_fired",
+                "source": "text_handler.post_send",
+                "user_id": user.id,
+                "window_id": wid,
+            },
+        )
+    except Exception:
+        pass
+
     sess = session_manager.find_session_by_window(wid)
     if sess is not None:
         session_manager.touch_session(sess.id)

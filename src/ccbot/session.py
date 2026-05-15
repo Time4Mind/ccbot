@@ -683,6 +683,13 @@ class SessionManager:
         #   repost — resend the live card as a new message below the
         #            user line and drop the previous card message
         "card_position": "push",
+        # How many trailing end_turn boundaries to pull from the JSONL
+        # transcript when seeding an empty live-card state (e.g. after
+        # a bot restart, after switcher-tap / Menu → Sessions on a fresh
+        # state). Higher = more in-card scrollback at the cost of memory
+        # (each turn ≈ several events × ~500 bytes). Deep history is
+        # always accessible via /history regardless of this setting.
+        "card_history": 20,
     }
 
     def get_user_settings(self, user_id: int) -> dict[str, Any]:

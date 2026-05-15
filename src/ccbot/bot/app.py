@@ -87,12 +87,16 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
 
     await application.bot.delete_my_commands()
 
-    # Trimmed /-menu surface. New/List/Status/History/Shot/Settings/Archive
-    # all live behind the inline ≡ Menu; Stop/Kill/Clear in the live-card
-    # footer. Hidden commands still work when typed.
+    # Trimmed /-menu surface. New/Status/Shot/Settings/Archive all live
+    # behind the inline ≡ Menu; Stop/Kill/Clear in the live-card footer.
+    # ``/history`` is published — it's the canonical entry to the FULL
+    # JSONL transcript view (deep history); the live card itself only
+    # seeds the last CARD_SEED_TURNS end-of-turn boundaries.
+    # Hidden commands still work when typed.
     bot_commands = [
         BotCommand("menu", "Open menu"),
         BotCommand("help", "Quick guide / inline doc"),
+        BotCommand("history", "Full transcript of the active session"),
         BotCommand("done", "Mark a session as done"),
     ]
     for cmd_name in ("model", "effort", "compact", "memory"):

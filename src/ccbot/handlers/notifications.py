@@ -745,13 +745,18 @@ def get_card_state(user_id: int, sess: Session) -> CardState:
     return _cards.setdefault((user_id, sess.id), CardState())
 
 
-async def _seed_events_from_jsonl(sess: Session) -> list[Event]:
+async def _seed_events_from_jsonl(
+    sess: Session, max_turns: int = CARD_SEED_TURNS
+) -> list[Event]:
     """Build a list[Event] from the session's JSONL transcript.
 
-    Pulls the last ``CARD_SEED_TURNS`` end-of-turn boundaries so the
-    card has visible history after a bot restart (when in-memory
-    ``state.events`` is empty). Returns ``[]`` on any failure — caller
-    just continues with an empty card.
+    Pulls the last ``max_turns`` end-of-turn boundaries so the card has
+    visible history after a bot restart (when in-memory ``state.events``
+    is empty). Returns ``[]`` on any failure — caller just continues
+    with an empty card.
+
+    ``max_turns`` defaults to the module constant but is overridden by
+    ``_ensure_seeded`` from the user's ``card_history`` setting.
     """
     if not sess.window_id:
         return []
@@ -801,7 +806,7 @@ async def _seed_events_from_jsonl(sess: Session) -> list[Event]:
             in ("end_turn", "stop_sequence", "max_tokens")
         ):
             end_turn_idxs.append(i)
-            if len(end_turn_idxs) >= CARD_SEED_TURNS:
+            if len(end_turn_idxs) >= max_turns:
                 break
     if end_turn_idxs:
         start_idx = end_turn_idxs[-1]
@@ -849,7 +854,16 @@ async def _ensure_seeded(user_id: int, sess: Session, state: CardState) -> None:
     if getattr(state, "_seed_attempted", False):
         return
     state._seed_attempted = True  # type: ignore[attr-defined]
-    seeded = await _seed_events_from_jsonl(sess)
+    # User-settable depth — Settings → Card history (10/20/50/100).
+    try:
+        max_turns = int(
+            session_manager.get_user_settings(user_id).get(
+                "card_history", CARD_SEED_TURNS
+            )
+        )
+    except (TypeError, ValueError):
+        max_turns = CARD_SEED_TURNS
+    seeded = await _seed_events_from_jsonl(sess, max_turns=max_turns)
     if seeded:
         state.events = seeded
         logger.info(

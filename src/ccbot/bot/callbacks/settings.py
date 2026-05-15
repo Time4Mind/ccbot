@@ -13,6 +13,7 @@ from ... import voice_install
 from ...handlers.callback_data import (
     CB_ST_APPROVE,
     CB_ST_BACK,
+    CB_ST_CHIST,
     CB_ST_CPOS,
     CB_ST_GRP,
     CB_ST_LAG,
@@ -199,6 +200,7 @@ _GROUP_TO_SCREEN = {
     "auto_approve": "settings_approve",
     "local_terminal": "settings_local",
     "card_position": "settings_cardpos",
+    "card_history": "settings_cardhist",
 }
 
 
@@ -266,6 +268,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         CB_ST_LOCAL,
         CB_ST_LTERM,
         CB_ST_CPOS,
+        CB_ST_CHIST,
     )
     if not any(data.startswith(p) for p in setter_prefixes):
         return False
@@ -330,6 +333,14 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         if value in ("push", "delete", "repost"):
             session_manager.update_user_setting(user.id, "card_position", value)
         screen_name = "settings_cardpos"
+    elif data.startswith(CB_ST_CHIST):
+        try:
+            v = int(data[len(CB_ST_CHIST) :])
+        except ValueError:
+            v = 20
+        if v in (10, 20, 50, 100):
+            session_manager.update_user_setting(user.id, "card_history", v)
+        screen_name = "settings_cardhist"
 
     text = render_settings_group_text(user.id, screen_name)  # type: ignore[arg-type]
     keyboard = build_footer_keyboard(user.id, screen=screen_name)  # type: ignore[arg-type]

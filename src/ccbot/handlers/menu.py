@@ -42,6 +42,7 @@ from .callback_data import (
     CB_MM_STATUS,
     CB_ST_APPROVE,
     CB_ST_BACK,
+    CB_ST_CHIST,
     CB_ST_CPOS,
     CB_ST_GRP,
     CB_ST_LAG,
@@ -69,6 +70,7 @@ Screen = Literal[
     "settings_approve",
     "settings_local",
     "settings_cardpos",
+    "settings_cardhist",
 ]
 
 # Group key -> (label translation key, sub-screen name, settings-dict key)
@@ -100,6 +102,12 @@ _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
         "settings.group.card_position",
         "settings_cardpos",
         "card_position",
+    ),
+    (
+        "card_history",
+        "settings.group.card_history",
+        "settings_cardhist",
+        "card_history",
     ),
 )
 
@@ -276,6 +284,8 @@ def _settings_main_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             value_str = t(user_id, f"local.{cur}") if cur else "?"
         elif value_key == "card_position":
             value_str = t(user_id, f"cardpos.{cur}") if cur else "?"
+        elif value_key == "card_history":
+            value_str = f"{int(cur)} turns" if cur else "?"
         else:
             value_str = str(cur)
         rows.append(
@@ -430,6 +440,29 @@ def _settings_cardpos_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     ]
 
 
+def _settings_cardhist_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
+    """How many end_turn boundaries to seed into a fresh live card.
+
+    Fixed row of values 10 / 20 / 50 / 100. Deep history beyond this is
+    always reachable via ``/history`` regardless of the chosen value.
+    """
+    raw = session_manager.get_user_settings(user_id).get("card_history", 20)
+    try:
+        cur = int(raw)
+    except (TypeError, ValueError):
+        cur = 20
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(str(v), cur == v),
+                callback_data=f"{CB_ST_CHIST}{v}",
+            )
+            for v in (10, 20, 50, 100)
+        ],
+        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+    ]
+
+
 def _settings_weeklyday_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     cur = session_manager.get_user_settings(user_id).get("weekly_reset_day", "mon")
     rows: list[list[InlineKeyboardButton]] = []
@@ -509,6 +542,8 @@ def build_footer_keyboard(
         rows.extend(_settings_local_grid(user_id))
     elif screen == "settings_cardpos":
         rows.extend(_settings_cardpos_grid(user_id))
+    elif screen == "settings_cardhist":
+        rows.extend(_settings_cardhist_grid(user_id))
     else:
         # In-card pagination row at the very top — [◀] [N/M] [▶].
         # ``N/M`` taps jump to the default-focus page (latest answer).
@@ -585,6 +620,7 @@ _GROUP_TEXT_KEYS: dict[str, str] = {
     "settings_approve": "settings.approve.body",
     "settings_local": "settings.local.body",
     "settings_cardpos": "settings.cardpos.body",
+    "settings_cardhist": "settings.cardhist.body",
 }
 
 

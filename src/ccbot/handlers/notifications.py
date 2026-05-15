@@ -645,21 +645,65 @@ def _render_card(
     idx = _resolved_page_idx(state, len(pages))
     body = render_page(pages[idx], now=time.time())
 
+    # Optional bg-panel always lives at the bottom.
+    panel = ""
+    if user_id is not None:
+        panel = bg_status.render_panel(user_id, active_session_id=sess.id)
+
+    # Enforce the 4096-char Telegram limit at render time. Header +
+    # divider + footer + panel take a fixed prefix budget; whatever
+    # remains is for body. If body overflows, drop the OLDEST lines on
+    # the page (keep the freshest signal — the in-flight tool, the
+    # final-text chunk, the latest narration). Without this guard the
+    # ``Message_too_long`` BadRequest fires, ``_edit_card`` returns
+    # False, and the fallback path posts a NEW card → duplicate
+    # messages stack up in chat.
+    prefix = header + "\n─────\n"
+    suffix = ""
+    if footer:
+        suffix += "\n─────\n" + footer
+    if panel:
+        suffix += "\n" + panel
+    budget = 4096 - len(prefix) - len(suffix) - 32  # safety margin
+    if body and len(body) > budget:
+        body = _trim_body_from_top(body, budget)
+
     parts = [header, "─────"]
     if body:
         parts.append(body)
     if footer:
         parts.append("─────")
         parts.append(footer)
-    # Background-session panel — always at the very bottom of the message
-    # so a finished session in the background isn't lost above a long
-    # tool-call log. Empty string when the user has no bg sessions to
-    # show.
-    if user_id is not None:
-        panel = bg_status.render_panel(user_id, active_session_id=sess.id)
-        if panel:
-            parts.append(panel)
+    if panel:
+        parts.append(panel)
     return "\n".join(parts)
+
+
+def _trim_body_from_top(body: str, budget: int) -> str:
+    """Drop oldest lines from ``body`` until total length ≤ ``budget``.
+
+    The card's "latest signal" lives at the bottom (newest event), so we
+    preserve the tail and trim the head. A ``…`` marker indicates the
+    truncation point so the user knows there's hidden context above.
+    """
+    if len(body) <= budget:
+        return body
+    lines = body.split("\n")
+    # Walk from the end, accumulating until we hit budget.
+    kept: list[str] = []
+    total = 0
+    for line in reversed(lines):
+        line_len = len(line) + 1  # +1 for the joining newline
+        if total + line_len > budget:
+            break
+        kept.append(line)
+        total += line_len
+    kept.reverse()
+    if not kept:
+        return body[-budget:]
+    if len(kept) < len(lines):
+        kept.insert(0, "… (older events on previous pages)")
+    return "\n".join(kept)
 
 
 def card_page_info(state: CardState) -> tuple[int, int]:
@@ -1251,13 +1295,29 @@ async def _edit_card(
         )
         return True
     except BadRequest as e:
-        if "Message is not modified" in str(e):
+        err = str(e)
+        if "Message is not modified" in err:
             return True
-        logger.debug("card edit failed (BadRequest): %s", e)
+        if (
+            "Message to edit not found" in err
+            or "message can't be edited" in err.lower()
+            or "MESSAGE_ID_INVALID" in err
+        ):
+            # Carrier is genuinely gone — reset msg_id so the next event
+            # opens a fresh card. Other BadRequests (e.g. parse errors,
+            # Message_too_long) keep the existing msg_id; the caller
+            # logs a warning and the next render retries on the same
+            # message.
+            logger.info(
+                "card edit lost-carrier msg_id=%s err=%s", state.msg_id, err
+            )
+            state.msg_id = None
+            return False
+        logger.warning("card edit failed (BadRequest): %s", err)
     except RetryAfter:
         raise
     except Exception as e:
-        logger.debug("card edit failed (other): %s", e)
+        logger.warning("card edit failed (other): %s", e)
     return False
 
 
@@ -1418,7 +1478,7 @@ async def update_session_card(
             state.last_rendered = text
             state.last_edit_ts = time.monotonic()
             logger.info(
-                "card_update edited sess=%s msg_id=%s ctype=%s lines=%d",
+                "card_update edit sess=%s msg_id=%s ctype=%s lines=%d",
                 sess.id,
                 state.msg_id,
                 msg.content_type,
@@ -1433,9 +1493,21 @@ async def update_session_card(
                 },
             )
         else:
-            state.msg_id = None
-            await _send_card(bot, user_id, sess, state, text=text)
+            # Edit failed AND we couldn't recover — DO NOT fall back to
+            # _send_card here. Sending a new message produces duplicate
+            # cards in chat (this was the "2 messages in a row" bug:
+            # Message_too_long → fallback send → stale card stays + new
+            # appears). Caller's next event retries the edit; if the
+            # carrier message is truly gone (deleted, too old), the
+            # ``Message to edit not found`` branch in _edit_card resets
+            # msg_id and a fresh card spawns on the next event.
             state.last_edit_ts = time.monotonic()
+            logger.warning(
+                "card_update edit_failed sess=%s msg_id=%s — keeping "
+                "stale card; new render will retry on next event",
+                sess.id,
+                state.msg_id,
+            )
         return
 
     # Inside the coalescing window: ensure exactly one deferred edit is queued.

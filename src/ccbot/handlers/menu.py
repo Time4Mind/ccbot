@@ -173,6 +173,20 @@ def can_offer_terminal(user_id: int) -> bool:
     return True
 
 
+def _has_pending_kb_action(user_id: int) -> bool:
+    """True when the user's active session has an unresolved kb-mode
+    prompt — needs_action detected but user hasn't acted on it. Shows
+    the [🔙 Resume action] button in place of Shot in the footer.
+    """
+    from .notifications import has_pending_kb
+
+    active = session_manager.get_active_session(user_id)
+    if active is None:
+        return False
+    has_prompt, in_kb = has_pending_kb(user_id, active.id)
+    return has_prompt and not in_kb
+
+
 def _footer_top_row(
     user_id: int, *, is_busy: bool = True
 ) -> list[InlineKeyboardButton]:
@@ -186,7 +200,13 @@ def _footer_top_row(
     whole session). The is_busy signal comes from
     ``notifications._card_is_busy`` which keys off "card is alive" so
     the button doesn't flicker between tool calls.
+
+    When the active session has an unresolved kb-mode prompt (user
+    pressed Back from kb-mode but pending still active), Shot is
+    replaced with [🔙 Resume action] so the user can re-enter kb-mode.
     """
+    from .callback_data import CB_KB_RESUME
+
     row: list[InlineKeyboardButton] = []
     if _has_active_session(user_id):
         if is_busy:
@@ -200,13 +220,19 @@ def _footer_top_row(
         row.append(
             InlineKeyboardButton(t(user_id, "btn.clear"), callback_data=CB_FT_CLEAR)
         )
-        # Shot belongs next to Kill / Clear — it's a per-session control
-        # too ("snapshot this session's terminal"). Keeping it in the
-        # top row means the screenshot button stays put across switcher
-        # taps and live-card edits (anywhere the main screen is rendered).
-        row.append(
-            InlineKeyboardButton(t(user_id, "mm.shot"), callback_data=CB_MM_SHOT)
-        )
+        # Pending kb action → Resume on Shot slot. Otherwise Shot as usual.
+        if _has_pending_kb_action(user_id):
+            row.append(
+                InlineKeyboardButton(
+                    "🔙 Resume action", callback_data=CB_KB_RESUME
+                )
+            )
+        else:
+            row.append(
+                InlineKeyboardButton(
+                    t(user_id, "mm.shot"), callback_data=CB_MM_SHOT
+                )
+            )
         # Open-terminal sits with the other per-session controls so the
         # button persists across switcher taps (which re-render the
         # footer top row for the newly-active session). Visible only

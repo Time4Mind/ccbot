@@ -73,6 +73,8 @@ CB_FT_KILL = "ft:kill"  # confirm-archive active session (idle state)
 CB_FT_CLEAR = "ft:clear"  # forward /clear to active session
 CB_FT_MORE = "ft:more"  # open the Menu screen (pauses live-card updates)
 CB_FT_TERM = "ft:term"  # open a native desktop terminal for the active session
+CB_KB_BACK = "kb:back"  # exit kb-mode view → regular card; Resume button stays
+CB_KB_RESUME = "kb:resume"  # re-enter kb-mode (when pending still active)
 
 # Live-card pagination (in-card page navigation)
 CB_PG_PREV = "pg:prev"  # ◀ — previous page within the card

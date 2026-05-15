@@ -38,10 +38,11 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from telegram import Bot, InlineKeyboardMarkup
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest, RetryAfter
 
 from ..config import config
+from ..i18n import t
 from ..session import Session, session_manager
 from ..session_monitor import NewMessage
 from . import bg_status
@@ -143,6 +144,18 @@ class CardState:
     # (called from text_handler when the user types) or implicitly
     # when the card is reset.
     in_menu_view: bool = False
+    # kb-mode auto-persistence (Task #41). When claude shows an
+    # interactive prompt (AskUserQuestion / ExitPlanMode / Permission),
+    # the card msg is EDITED in place to show the prompt content + kb
+    # navigation keyboard (3×3 grid). One msg per session — no separate
+    # push. State machine:
+    #   kb_prompt non-empty + in_kb_mode=True  → card msg = kb-mode view
+    #   kb_prompt non-empty + in_kb_mode=False → user tapped Back; card
+    #     shows regular view but with [🔙 Resume action] on Shot slot
+    #   kb_prompt empty                        → no pending action
+    kb_prompt: str = ""  # current prompt content (snapshot from pane)
+    kb_ui_name: str = ""  # AskUserQuestion / ExitPlanMode / Permission
+    in_kb_mode: bool = False
 
 
 # Per-(user, session.id) card state.
@@ -693,6 +706,13 @@ def _render_card(
     if sess.goal:
         header += f"\ngoal: {sess.goal}"
 
+    # kb-mode view: card msg shows the interactive prompt content + kb
+    # keyboard. The regular event log is BELOW the keyboard (footer'd by
+    # the keyboard rather than by switcher/pagination). See Task #41.
+    if state.in_kb_mode and state.kb_prompt:
+        parts = [header, "─────", "⌨ *Waiting for your input:*", state.kb_prompt]
+        return "\n".join(parts)
+
     # Budget is in LINES (per user setting ``card_page_lines``).
     line_budget = _resolve_line_budget(user_id)
     # Lazy re-chunk: if any final_text Event in state.events exceeds
@@ -734,6 +754,165 @@ def _count_lines(text: str) -> int:
     if not text:
         return 0
     return text.count("\n") + 1
+
+
+def has_pending_kb(user_id: int, session_id: str) -> tuple[bool, bool]:
+    """Return (has_prompt, in_kb_mode) for the (user, session) card.
+
+    Public alternative to peeking at ``_cards``. ``has_prompt=True`` means
+    a prompt is pending; ``in_kb_mode`` reflects whether the card msg is
+    currently displaying kb-mode view vs the regular card.
+    """
+    state = _cards.get((user_id, session_id))
+    if state is None:
+        return False, False
+    return bool(state.kb_prompt), state.in_kb_mode
+
+
+async def enter_kb_mode(
+    bot: Bot,
+    user_id: int,
+    sess: Session,
+    prompt_content: str,
+    ui_name: str,
+) -> None:
+    """Flip the active session's card msg into kb-mode view.
+
+    Edits the existing card msg (or creates one if missing) so its body
+    shows the prompt content and its keyboard is the kb-mode 3×3 grid +
+    [Back][+ new][≡ Menu]. State is marked ``in_kb_mode=True`` and
+    ``kb_prompt`` snapshot so subsequent paints stay consistent.
+
+    No-op if state is already in kb-mode with the same prompt — avoids
+    pointless edits when status_polling re-detects the prompt each poll.
+    """
+    state = get_card_state(user_id, sess)
+    if state.in_kb_mode and state.kb_prompt == prompt_content:
+        return
+    state.kb_prompt = prompt_content
+    state.kb_ui_name = ui_name
+    state.in_kb_mode = True
+    if not sess.window_id:
+        return
+    text = _render_card(sess, state, user_id=user_id)
+    kb = build_kb_mode_keyboard(user_id, sess.window_id, ui_name=ui_name)
+    if state.msg_id is None:
+        await _send_card(bot, user_id, sess, state, text=text, reply_markup=kb)
+    else:
+        await _edit_card(bot, user_id, state, text=text, reply_markup=kb)
+    state.last_rendered = text
+    state.last_edit_ts = time.monotonic()
+    logger.info(
+        "kb_mode entered user=%d sess=%s ui=%s prompt_len=%d",
+        user_id,
+        sess.id,
+        ui_name,
+        len(prompt_content),
+        extra={
+            "event": "kb_mode_entered",
+            "user_id": user_id,
+            "session_id": sess.id,
+            "ui_name": ui_name,
+            "prompt_len": len(prompt_content),
+        },
+    )
+
+
+async def exit_kb_mode(
+    bot: Bot,
+    user_id: int,
+    sess: Session,
+    *,
+    clear_pending: bool = False,
+) -> None:
+    """Flip the card back from kb-mode to regular view.
+
+    ``clear_pending=False`` (default) — user tapped Back. ``kb_prompt``
+    is KEPT so the Resume button shows up in the footer. Tapping Resume
+    re-enters kb-mode with the same prompt.
+
+    ``clear_pending=True`` — claude moved past the prompt (terminal_parser
+    no longer detects it, after double-poll confirm) OR user explicitly
+    acted via a kb key. Wipe both ``in_kb_mode`` and ``kb_prompt`` so
+    the Resume button disappears.
+    """
+    state = _cards.get((user_id, sess.id))
+    if state is None:
+        return
+    was_in_kb = state.in_kb_mode
+    state.in_kb_mode = False
+    if clear_pending:
+        state.kb_prompt = ""
+        state.kb_ui_name = ""
+    if state.msg_id is None or not was_in_kb:
+        return
+    text = _render_card(sess, state, user_id=user_id)
+    if await _edit_card(bot, user_id, state, text=text):
+        state.last_rendered = text
+        state.last_edit_ts = time.monotonic()
+    logger.info(
+        "kb_mode exited user=%d sess=%s cleared=%s",
+        user_id,
+        sess.id,
+        clear_pending,
+        extra={
+            "event": "kb_mode_exited",
+            "user_id": user_id,
+            "session_id": sess.id,
+            "clear_pending": clear_pending,
+        },
+    )
+
+
+def build_kb_mode_keyboard(
+    user_id: int, window_id: str, ui_name: str = ""
+) -> InlineKeyboardMarkup:
+    """Build the kb-mode keyboard shown when the card msg is in kb-mode.
+
+    Layout (per current /screenshot kb-mode 3×3 grid):
+        [␣ Space] [↑] [⇥ Tab]
+        [←]       [↓] [→]
+        [⎋ Esc]   [^C] [⏎ Enter]
+        [🔙 Back] [+ new] [≡ Menu]
+
+    Tapping arrow / Space / Tab / Esc / Enter / ^C dispatches via CB_ASK_*
+    (existing keystroke handlers in handlers/interactive_ui.py).
+    """
+    from .callback_data import (
+        CB_ASK_DOWN,
+        CB_ASK_ENTER,
+        CB_ASK_ESC,
+        CB_ASK_LEFT,
+        CB_ASK_RIGHT,
+        CB_ASK_SPACE,
+        CB_ASK_TAB,
+        CB_ASK_UP,
+        CB_FT_MORE,
+        CB_KB_BACK,
+        CB_SW_NEW,
+    )
+
+    def kb(label: str, prefix: str) -> InlineKeyboardButton:
+        return InlineKeyboardButton(
+            label, callback_data=f"{prefix}{window_id}"[:64]
+        )
+
+    rows: list[list[InlineKeyboardButton]] = []
+    vertical_only = ui_name == "RestoreCheckpoint"
+    rows.append([kb("␣ Space", CB_ASK_SPACE), kb("↑", CB_ASK_UP), kb("⇥ Tab", CB_ASK_TAB)])
+    if vertical_only:
+        rows.append([kb("↓", CB_ASK_DOWN)])
+    else:
+        rows.append([kb("←", CB_ASK_LEFT), kb("↓", CB_ASK_DOWN), kb("→", CB_ASK_RIGHT)])
+    rows.append([kb("⎋ Esc", CB_ASK_ESC), kb("^C", "aq:cc:"), kb("⏎ Enter", CB_ASK_ENTER)])
+    rows.append(
+        [
+            InlineKeyboardButton("🔙 Back", callback_data=CB_KB_BACK),
+            InlineKeyboardButton("+ new", callback_data=CB_SW_NEW),
+            InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_FT_MORE),
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
 
 
 def _rechunk_oversized_finals_inplace(state: CardState, budget_lines: int) -> None:

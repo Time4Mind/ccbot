@@ -16,6 +16,8 @@ from ...handlers.callback_data import (
     CB_FT_MORE,
     CB_FT_STOP,
     CB_FT_TERM,
+    CB_KB_BACK,
+    CB_KB_RESUME,
     CB_PG_JUMP,
     CB_PG_NEXT,
     CB_PG_PREV,
@@ -24,6 +26,8 @@ from ...handlers.menu import build_footer_keyboard, render_more_text
 from ...handlers.notifications import (
     card_page_info,
     clear_card,
+    enter_kb_mode,
+    exit_kb_mode,
     get_card_state,
     pause_card_view,
     refresh_panel,
@@ -139,6 +143,35 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             await refresh_panel(context.bot, user.id)
         except Exception as e:
             logger.debug("pagination refresh failed: %s", e)
+        await query.answer()
+        return True
+
+    if data == CB_KB_BACK:
+        # User taps Back from kb-mode → flip card back to regular view.
+        # Pending kept (kb_prompt stays); Resume button shows in footer
+        # to allow re-entry. Auto-clear happens later if claude moves
+        # past the prompt (handled by session_events).
+        sess = session_manager.get_active_session(user.id)
+        if sess is None:
+            await query.answer(t(user.id, "toast.no_session"), show_alert=False)
+            return True
+        await exit_kb_mode(context.bot, user.id, sess, clear_pending=False)
+        await query.answer()
+        return True
+
+    if data == CB_KB_RESUME:
+        # User taps Resume → flip back into kb-mode using stored prompt.
+        sess = session_manager.get_active_session(user.id)
+        if sess is None:
+            await query.answer(t(user.id, "toast.no_session"), show_alert=False)
+            return True
+        state = get_card_state(user.id, sess)
+        if not state.kb_prompt:
+            await query.answer("No pending action", show_alert=False)
+            return True
+        await enter_kb_mode(
+            context.bot, user.id, sess, state.kb_prompt, state.kb_ui_name
+        )
         await query.answer()
         return True
 

@@ -26,16 +26,12 @@ from ..config import config
 from ..handlers import bg_status
 from ..handlers.interactive_ui import (
     INTERACTIVE_TOOL_NAMES,
-    clear_interactive_mode,
     clear_interactive_msg,
     get_interactive_msg_id,
-    handle_interactive_ui,
-    set_interactive_mode,
 )
 from ..handlers.notifications import (
     finalize_task,
     is_active_for_user,
-    push_event,
     refresh_panel,
     update_session_card,
 )
@@ -146,28 +142,40 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                     await refresh_panel(bot, user_id)
                 continue
 
-            set_interactive_mode(user_id, wid)
+            # Active session needs_action: card msg edits to kb-mode
+            # view (no separate push). Task #41 / Pivot kb-mode v2.
+            from ..handlers.notifications import enter_kb_mode
+
             await asyncio.sleep(0.3)
-            handled = await handle_interactive_ui(bot, user_id, wid)
-            if handled:
-                await push_event(
-                    bot, user_id, sess, text=f"interactive prompt: {msg.tool_name}"
-                )
-                claude_sess = await session_manager.resolve_session_for_window(wid)
-                if claude_sess and claude_sess.file_path:
-                    try:
-                        file_size = Path(claude_sess.file_path).stat().st_size
-                        session_manager.update_user_window_offset(
-                            user_id, wid, file_size
-                        )
-                    except OSError:
-                        pass
-                continue
-            clear_interactive_mode(user_id)
+            w = await tmux_manager.find_window_by_id(wid)
+            if w:
+                pane_text = await tmux_manager.capture_pane(w.window_id)
+                if pane_text:
+                    ui = extract_interactive_content(pane_text)
+                    if ui is not None:
+                        await enter_kb_mode(bot, user_id, sess, ui.content, ui.name)
+                        claude_sess = await session_manager.resolve_session_for_window(wid)
+                        if claude_sess and claude_sess.file_path:
+                            try:
+                                file_size = Path(claude_sess.file_path).stat().st_size
+                                session_manager.update_user_window_offset(
+                                    user_id, wid, file_size
+                                )
+                            except OSError:
+                                pass
+                        continue
+            # Pane parse failed — fall through to regular card update.
 
         # Any non-interactive event invalidates a previously-shown interactive UI.
         if get_interactive_msg_id(user_id, wid):
             await clear_interactive_msg(user_id, bot, wid)
+        # Same for the kb-mode card view — claude has moved past the
+        # prompt, so flip the card back to its regular layout.
+        from ..handlers.notifications import exit_kb_mode, has_pending_kb
+
+        has_prompt, in_kb = has_pending_kb(user_id, sess.id)
+        if has_prompt or in_kb:
+            await exit_kb_mode(bot, user_id, sess, clear_pending=True)
 
         if msg.is_complete:
             # Real end-of-turn assistant text → "task complete".  Mid-stream

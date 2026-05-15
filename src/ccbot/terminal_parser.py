@@ -106,7 +106,13 @@ UI_PATTERNS: list[UIPattern] = [
         name="Settings",
         top=(
             re.compile(r"^\s*Settings:.*tab to cycle"),
-            re.compile(r"^\s*Select model"),
+            # ``Select <word>`` covers every Claude Code slash picker:
+            # /model → "Select model", /effort → "Select reasoning effort",
+            # /agents → "Select an agent", /style → "Select output style",
+            # etc. The bottom signature (Esc/Enter/filter) keeps this
+            # specific to picker modals — false positives in normal
+            # output would have to also match one of those terminators.
+            re.compile(r"^\s*Select \w"),
         ),
         bottom=(
             re.compile(r"Esc to cancel"),

@@ -194,6 +194,18 @@ async def update_status_message(
             user_id,
             window_id,
         )
+        # Active session: route via kb-mode on the live card. Falls
+        # back to the floating-msg path only when there's no Session
+        # record (orphan window — no card to host kb-mode).
+        if sess is not None and not is_bg_session:
+            from .notifications import enter_kb_mode
+
+            content_obj = extract_interactive_content(pane_text)
+            if content_obj is not None:
+                await enter_kb_mode(
+                    bot, user_id, sess, content_obj.content, content_obj.name
+                )
+                return
         await handle_interactive_ui(bot, user_id, window_id)
         return
 
@@ -203,6 +215,16 @@ async def update_status_message(
     if is_bg_session and sess is not None and not is_interactive_ui(pane_text):
         if bg_status.clear_pending_ui(user_id, sess.id):
             await refresh_panel(bot, user_id)
+
+    # Active session was in kb-mode for a slash-command picker that
+    # has just dismissed (no JSONL event fires for /model | /effort |
+    # etc., so this is the only place the card-mode flip can happen).
+    if sess is not None and not is_bg_session:
+        from .notifications import exit_kb_mode, has_pending_kb
+
+        has_prompt, in_kb = has_pending_kb(user_id, sess.id)
+        if has_prompt or in_kb:
+            await exit_kb_mode(bot, user_id, sess, clear_pending=True)
 
     # Telegram chat-action "typing…" — fired every poll cycle for the
     # active session while it's busy. Two signals combine:

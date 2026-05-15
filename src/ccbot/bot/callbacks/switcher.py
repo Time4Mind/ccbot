@@ -167,14 +167,22 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         return True
 
     if data == CB_SW_NEW:
-        # Pause the active session before painting the directory browser
-        # on its live-card message. Otherwise events arriving in the
-        # ~seconds the user spends picking a directory would call
-        # update_session_card → ``_edit_card`` and revert the keyboard
-        # back to the live-card footer each turn ("кнопки слетают на
-        # каждой итерации"). The pause is auto-released either by
-        # ``resume_card_view`` (text typed) or by ``detach_paused_cards_at_message``
-        # in ``create_and_activate_session`` once the browser confirms.
+        # Pause the active session so its events buffer silently while
+        # the user picks a directory — without this the live card keeps
+        # editing during the picker flow. The pause is auto-released
+        # when the user switches back via the switcher (transfer ->
+        # paint_card_on_carrier clears in_menu_view).
+        #
+        # The directory browser is sent as a NEW msg below the active
+        # card (not edited over it) so the active card stays visible
+        # in chat history at its last state — when the user types into
+        # the freshly-created session, the OLD card sits above as a
+        # frozen artefact accessible via switcher tap (which paints
+        # OLD's buffered events on a fresh carrier). Previously
+        # ``safe_edit`` clobbered the card body with the picker, then
+        # ``create_and_activate_session`` clobbered it again with the
+        # "Created" notice — the user lost the OLD card's content from
+        # chat entirely.
         active = session_manager.get_active_session(user.id)
         if active is not None:
             pause_card_view(user.id, active.id)
@@ -189,10 +197,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             context.user_data[BROWSE_PAGE_KEY] = 0
             context.user_data[BROWSE_DIRS_KEY] = subdirs
             context.user_data["menu_origin"] = "main"
-        try:
-            await safe_edit(query, msg_text, reply_markup=keyboard)
-        except Exception:
-            await safe_send(context.bot, user.id, msg_text, reply_markup=keyboard)
+        await safe_send(context.bot, user.id, msg_text, reply_markup=keyboard)
         await query.answer()
         return True
 

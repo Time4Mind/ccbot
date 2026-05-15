@@ -2499,12 +2499,17 @@ async def push_event(
     text: str,
     is_error: bool = False,
 ) -> None:
-    """C5 push notification — separate `send_message` for one of the
-    user-approved triggers (completion / blocker error / interactive UI /
-    lifecycle / inbox / quota).
+    """Bg-session push — a bare one-line notification.
+
+    Format is strictly ``<emoji> <name> <text>``: no markdown brackets,
+    no inline keyboard, no switcher migration. Hijacking the active
+    card's footer buttons (the previous behaviour) confused users —
+    bg pushes are status pings, not navigation surfaces. Use the
+    switcher on the active card to actually visit the session.
     """
     emoji = "🟥" if is_error else session_emoji(sess)
-    body = f"{emoji} \\[{sess.name or sess.id}\\] {text}"
+    name = sess.name or sess.id
+    body = f"{emoji} {name} {text}"
     if len(body) > 3500:
         body = body[:3497] + "…"
     try:
@@ -2512,33 +2517,10 @@ async def push_event(
     except Exception as e:
         logger.debug("push_event failed: %s", e)
         return
-    # Migrate the switcher onto the latest pushed message. The keyboard's
-    # busy state mirrors whether the session has a live card right now —
-    # finalize_task / completion-style pushes happen after reset_card so
-    # the live state is gone, the user is at idle and should see Kill.
+    # Register the msg→session map so a reply-quote to this push still
+    # routes back to the originating session.
     if sent is not None:
         _register_msg(user_id, sent.message_id, sess.id)
-        live = _cards.get((user_id, sess.id))
-        is_busy = live is not None and live.msg_id is not None
-        keyboard: InlineKeyboardMarkup | None = build_footer_keyboard(
-            user_id, screen="main", is_busy=is_busy
-        )
-        if keyboard is not None:
-            try:
-                await bot.edit_message_reply_markup(
-                    chat_id=user_id, message_id=sent.message_id, reply_markup=keyboard
-                )
-                prev = session_manager.get_last_switcher_msg(user_id)
-                if prev and prev != sent.message_id:
-                    try:
-                        await bot.edit_message_reply_markup(
-                            chat_id=user_id, message_id=prev, reply_markup=None
-                        )
-                    except Exception:
-                        pass
-                session_manager.set_last_switcher_msg(user_id, sent.message_id)
-            except Exception as e:
-                logger.debug("push_event switcher migrate failed: %s", e)
 
 
 def is_card_busy(user_id: int, session_id: str) -> bool:

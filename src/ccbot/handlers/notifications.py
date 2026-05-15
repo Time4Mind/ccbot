@@ -174,6 +174,27 @@ class CardState:
 # Per-(user, session.id) card state.
 _cards: dict[tuple[int, str], CardState] = {}
 
+# Per-(user, session.id) async lock. Acquired by every code path that
+# may decide to ``_send_card`` (spawn a fresh card msg) so two
+# concurrent paths can't both observe ``state.msg_id is None`` and
+# both spawn — the artefact behind Task #50 ("2 messages in wrong
+# order after switcher / new card"). Edit-only paths that never spawn
+# (refresh_panel, card_timer_loop ticks, _deferred_edit) don't take
+# the lock — at worst they race a spawn and either succeed against
+# the freshly-spawned msg or hit lost-carrier and reset msg_id, which
+# is recovered on the next event.
+_card_locks: dict[tuple[int, str], asyncio.Lock] = {}
+
+
+def _card_lock(user_id: int, session_id: str) -> asyncio.Lock:
+    """Get-or-create the spawn-serialization lock for one card."""
+    key = (user_id, session_id)
+    lock = _card_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _card_locks[key] = lock
+    return lock
+
 # Reverse lookup so reply-quote can route a one-shot user message to the
 # session that owns the message being replied to. Capped via FIFO eviction.
 _MSG_REGISTRY_LIMIT = 2000
@@ -956,12 +977,16 @@ async def enter_kb_mode(
         return
     text = _render_card(sess, state, user_id=user_id)
     kb = build_kb_mode_keyboard(user_id, sess.window_id, ui_name=ui_name)
-    if state.msg_id is None:
-        await _send_card(bot, user_id, sess, state, text=text, reply_markup=kb)
-    else:
-        await _edit_card(bot, user_id, state, text=text, reply_markup=kb)
-    state.last_rendered = text
-    state.last_edit_ts = time.monotonic()
+    # Spawn-serialization (Task #50): a parallel ``update_session_card``
+    # could otherwise observe ``msg_id is None`` during ``_send_card``
+    # and spawn its own card too.
+    async with _card_lock(user_id, sess.id):
+        if state.msg_id is None:
+            await _send_card(bot, user_id, sess, state, text=text, reply_markup=kb)
+        else:
+            await _edit_card(bot, user_id, state, text=text, reply_markup=kb)
+        state.last_rendered = text
+        state.last_edit_ts = time.monotonic()
     logger.info(
         "kb_mode entered user=%d sess=%s ui=%s prompt_len=%d",
         user_id,
@@ -1677,25 +1702,30 @@ async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
             bot, user_id, sess, state, text=fresh_text, reply_markup=fresh_kb
         )
 
-    if state.msg_id is None:
-        # No carrier — spawn a fresh card now so the user lands on a
-        # visible surface immediately (used by Shot → Back after #51's
-        # ``close_card_view`` drops msg_id). Previously we waited for
-        # the next claude event; on quiet sessions that left the user
-        # staring at empty chat.
+    # Spawn-serialization (Task #50): hold the per-session lock across
+    # the msg_id check + send/edit. Otherwise a claude event arriving
+    # during ``_ensure_seeded`` / ``_send_card`` can race and produce a
+    # duplicate card via ``update_session_card``.
+    async with _card_lock(user_id, sess.id):
+        if state.msg_id is None:
+            # No carrier — spawn a fresh card now so the user lands on a
+            # visible surface immediately (used by Shot → Back after #51's
+            # ``close_card_view`` drops msg_id). Previously we waited for
+            # the next claude event; on quiet sessions that left the user
+            # staring at empty chat.
+            await _spawn_fresh()
+            return
+        text = _render_card(sess, state, user_id=user_id)
+        keyboard = build_footer_keyboard(user_id, screen="main", is_busy=True)
+        if await _edit_card(bot, user_id, state, text=text, reply_markup=keyboard):
+            state.last_rendered = text
+            state.last_edit_ts = time.monotonic()
+            return
+        # ``_edit_card`` returned False — the carrier was lost (stale msg,
+        # already-deleted, or bot can't edit it) and ``_edit_card`` has
+        # already reset msg_id internally. Spawn a fresh card so the user
+        # still lands on a visible live surface.
         await _spawn_fresh()
-        return
-    text = _render_card(sess, state, user_id=user_id)
-    keyboard = build_footer_keyboard(user_id, screen="main", is_busy=True)
-    if await _edit_card(bot, user_id, state, text=text, reply_markup=keyboard):
-        state.last_rendered = text
-        state.last_edit_ts = time.monotonic()
-        return
-    # ``_edit_card`` returned False — the carrier was lost (stale msg,
-    # already-deleted, or bot can't edit it) and ``_edit_card`` has
-    # already reset msg_id internally. Spawn a fresh card so the user
-    # still lands on a visible live surface.
-    await _spawn_fresh()
 
 
 async def paint_card_on_carrier(
@@ -2188,6 +2218,27 @@ async def update_session_card(
         )
         return
 
+    # Spawn-serialization (Task #50): hold the per-session lock from
+    # the stale-check through the actual send/edit. Otherwise two
+    # concurrent ``update_session_card`` calls (or one
+    # ``update_session_card`` racing with ``resume_card_view`` /
+    # ``repost_card`` / ``finalize_task``) can both see ``msg_id is
+    # None`` and both spawn — produces "2 messages in wrong order".
+    async with _card_lock(user_id, sess.id):
+        return await _update_session_card_locked(
+            bot, user_id, sess, msg, state, new_event, replaced
+        )
+
+
+async def _update_session_card_locked(
+    bot: Bot,
+    user_id: int,
+    sess: Session,
+    msg: NewMessage,
+    state: CardState,
+    new_event: Event,
+    replaced: bool,
+) -> None:
     # Trigger: long pause → fresh card.
     if _is_stale(state):
         state.msg_id = None
@@ -2391,11 +2442,17 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     done_kb = build_footer_keyboard(user_id, screen="main", is_busy=False)
 
     text = _render_card(sess, state, user_id=user_id)
-    if state.msg_id is None:
-        await _send_card(bot, user_id, sess, state, text=text, reply_markup=done_kb)
-    elif await _edit_card(bot, user_id, state, text=text, reply_markup=done_kb):
-        state.last_rendered = text
-    state.last_edit_ts = time.monotonic()
+    # Lock the spawn/edit decision so a parallel ``update_session_card``
+    # for the next turn can't see ``msg_id is None`` simultaneously and
+    # spawn a second card (Task #50).
+    async with _card_lock(user_id, sess.id):
+        if state.msg_id is None:
+            await _send_card(
+                bot, user_id, sess, state, text=text, reply_markup=done_kb
+            )
+        elif await _edit_card(bot, user_id, state, text=text, reply_markup=done_kb):
+            state.last_rendered = text
+        state.last_edit_ts = time.monotonic()
 
     if attachments:
         await _send_attachments(bot, user_id, attachments)
@@ -2534,14 +2591,20 @@ async def repost_card(bot: Bot, user_id: int, sess: Session) -> None:
         state.pending_edit.cancel()
         state.pending_edit = None
 
-    old_msg_id = state.msg_id
-    state.msg_id = None  # force _send_card to create a fresh message
+    # Lock the msg_id mutation + spawn so a parallel
+    # ``update_session_card`` (for a claude event arriving mid-typing)
+    # can't see the brief ``msg_id is None`` window and spawn its own
+    # card too — Task #50.
+    async with _card_lock(user_id, sess.id):
+        old_msg_id = state.msg_id
+        state.msg_id = None  # force _send_card to create a fresh message
 
-    text = _render_card(sess, state, user_id=user_id)
-    await _send_card(bot, user_id, sess, state, text=text)
-    state.last_rendered = text
-    state.last_edit_ts = time.monotonic()
-    if old_msg_id and state.msg_id and state.msg_id != old_msg_id:
+        text = _render_card(sess, state, user_id=user_id)
+        await _send_card(bot, user_id, sess, state, text=text)
+        state.last_rendered = text
+        state.last_edit_ts = time.monotonic()
+        new_msg_id = state.msg_id
+    if old_msg_id and new_msg_id and new_msg_id != old_msg_id:
         try:
             await bot.delete_message(chat_id=user_id, message_id=old_msg_id)
         except Exception as e:

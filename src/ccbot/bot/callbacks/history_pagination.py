@@ -1,9 +1,9 @@
 """History pagination callbacks (CB_HISTORY_PREV / CB_HISTORY_NEXT).
 
-Reattaches the same extras-row stack that was painted under the
-history page originally — the originating callback (CB_SW_USE,
-CB_FT_HISTORY, CB_MM_LIST, or /screenshot Back) writes a marker into
-``context.user_data`` so we know which footer to rebuild for paging.
+Reattaches the main-screen footer extras under the history page so
+page clicks don't drop the controls. (Menu→Sessions now lands on the
+live card with its own ``CB_PG_*`` pagination, so the menu-list origin
+is gone — every history page rebuilds the same main footer.)
 """
 
 from __future__ import annotations
@@ -18,29 +18,19 @@ from ...handlers.history import send_history
 from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_edit
 from ...tmux_manager import tmux_manager
-from .more_menu import HISTORY_ORIGIN_KEY
 
 logger = logging.getLogger(__name__)
 
 
-def _build_extra_rows(user_id: int, origin: str) -> list[list[Any]] | None:
-    """Rebuild the extras-row stack a freshly-painted history view would
-    have had, so a page click doesn't drop the footer."""
-    if origin == "menu_list":
-        # Menu → List paints history with the /list footer (Kill / Clear
-        # / switcher / + new / Back). Pagination has to rebuild the
-        # same layout — not the main-screen footer with ≡ Menu.
-        from .more_menu import build_list_view
-
-        _, kb = build_list_view(user_id)
-    else:
-        # "switcher" or unknown: fall back to the main footer + switcher.
-        # The pagination row is already on the message (from
-        # ``_build_history_keyboard``), so suppress the live-card's
-        # ◀ Older alias in the extras to avoid two stacked Older buttons.
-        kb = build_footer_keyboard(
-            user_id, screen="main", is_busy=False, include_older_btn=False
-        )
+def _build_extra_rows(user_id: int) -> list[list[Any]] | None:
+    """Rebuild the main footer extras under a freshly-painted history
+    page so page clicks don't drop the controls."""
+    # The pagination row is already on the message (from
+    # ``_build_history_keyboard``), so suppress the live-card's ◀ Older
+    # alias in the extras to avoid two stacked Older buttons.
+    kb = build_footer_keyboard(
+        user_id, screen="main", is_busy=False, include_older_btn=False
+    )
     if kb is None:
         return None
     return [list(r) for r in kb.inline_keyboard]
@@ -68,12 +58,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         await query.answer("Invalid data")
         return True
 
-    origin = (
-        context.user_data.get(HISTORY_ORIGIN_KEY, "switcher")
-        if context.user_data is not None
-        else "switcher"
-    )
-    extra_rows = _build_extra_rows(user.id, origin)
+    extra_rows = _build_extra_rows(user.id)
 
     w = await tmux_manager.find_window_by_id(window_id)
     if w:

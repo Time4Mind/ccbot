@@ -14,17 +14,11 @@ from ...handlers.callback_data import (
     CB_FT_CLEAR,
     CB_FT_KILL,
     CB_FT_MORE,
-    CB_FT_OLDER,
     CB_FT_STOP,
     CB_FT_TERM,
     CB_PG_JUMP,
     CB_PG_NEXT,
     CB_PG_PREV,
-)
-from ...handlers.history import (
-    get_cached_total_pages,
-    prewarm_pages_cache,
-    send_history,
 )
 from ...handlers.menu import build_footer_keyboard, render_more_text
 from ...handlers.notifications import (
@@ -33,7 +27,6 @@ from ...handlers.notifications import (
     get_card_state,
     pause_card_view,
     refresh_panel,
-    release_card_message,
 )
 from ...i18n import t
 from ...session import session_manager
@@ -114,11 +107,6 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         sess = session_manager.get_active_session(user.id)
         if sess is not None:
             pause_card_view(user.id, sess.id)
-        # Entering Menu top-level resets any sub-screen markers
-        # (`_in_list_view`, `_history_origin`).
-        from .more_menu import clear_view_markers as _clear_view_markers
-
-        _clear_view_markers(context.user_data)
         text = render_more_text(user.id)
         keyboard = build_footer_keyboard(user.id, screen="more")
         await set_view(query, context.bot, user.id, text, keyboard)
@@ -147,62 +135,6 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             await refresh_panel(context.bot, user.id)
         except Exception as e:
             logger.debug("pagination refresh failed: %s", e)
-        await query.answer()
-        return True
-
-    if data == CB_FT_OLDER:
-        sess = session_manager.get_active_session(user.id)
-        if sess is None or not sess.window_id:
-            await query.answer(t(user.id, "toast.no_session"), show_alert=False)
-            return True
-        # Make sure the pages cache is fresh so we can target page-1
-        # below; this is a no-op when the cache already matches the
-        # JSONL (mtime+size).
-        try:
-            await prewarm_pages_cache(sess.window_id)
-        except Exception as e:
-            logger.debug("ft older prewarm failed: %s", e)
-        total = get_cached_total_pages(sess.window_id)
-        if total is None:
-            await query.answer("No history yet", show_alert=False)
-            return True
-        # Target the page BEFORE the current latest — that's what "Older"
-        # means relative to the live-card view. When there's only one
-        # page, fall back to it so the user still lands on the
-        # paginated history surface (the pagination row will simply not
-        # show ◀/▶).
-        offset = max(0, total - 2)
-
-        from .more_menu import HISTORY_ORIGIN_KEY
-
-        if context.user_data is not None:
-            context.user_data[HISTORY_ORIGIN_KEY] = "switcher"
-        footer_kb = build_footer_keyboard(
-            user.id, screen="main", is_busy=False, include_older_btn=False
-        )
-        extra_rows = (
-            [list(r) for r in footer_kb.inline_keyboard]
-            if footer_kb is not None
-            else None
-        )
-        try:
-            await send_history(
-                target=query,
-                window_id=sess.window_id,
-                offset=offset,
-                edit=True,
-                user_id=user.id,
-                extra_rows=extra_rows,
-            )
-        except Exception as e:
-            logger.debug("ft older paint failed: %s", e)
-            await query.answer("History paint failed", show_alert=True)
-            return True
-        # Detach the carrier from the live-card so subsequent claude
-        # events don't clobber the freshly-painted history view.
-        release_card_message(user.id, sess.id)
-        if query.message:
-            session_manager.set_last_switcher_msg(user.id, query.message.message_id)
         await query.answer()
         return True
 

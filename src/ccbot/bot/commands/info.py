@@ -377,7 +377,6 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not update.message:
         return
 
-    from ...handlers.message_queue import get_message_queue
     from ...metrics import snapshot
 
     snap = snapshot()
@@ -392,9 +391,6 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     archived = sum(1 for s in sessions if s.state in ("archived", "completed"))
     lost = sum(1 for s in sessions if s.state == "lost")
 
-    queue = get_message_queue(user.id)
-    queue_size = queue.qsize() if queue is not None else 0
-
     lines = [
         "*Health*",
         f"uptime: {_format_duration(snap.get('uptime_seconds', 0))}",
@@ -404,9 +400,6 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "",
         "*sessions*",
         f"active: {active} · idle: {idle} · archived: {archived} · lost: {lost}",
-        "",
-        "*queue*",
-        f"depth (you): {queue_size}",
     ]
 
     interesting = (

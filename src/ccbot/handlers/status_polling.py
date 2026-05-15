@@ -2,16 +2,16 @@
 
 Provides background polling of terminal status lines for all the bot's
 single user's live sessions:
-  - Detects Claude Code status (working, waiting, etc.)
+  - Detects Claude Code status (working, waiting, etc.) and drives the
+    Telegram ``typing…`` indicator
   - Detects interactive UIs (permission prompts) not triggered via JSONL
-  - Updates per-session status messages in Telegram
   - Reaps tmux windows that vanished externally — marks Session as `lost`
     and cleans up in-memory state
 
 Key components:
   - STATUS_POLL_INTERVAL: polling frequency (1 s)
   - status_poll_loop: background polling task
-  - update_status_message: poll a single window and enqueue updates
+  - update_status_message: poll a single window for UI + typing signal
 """
 
 import asyncio
@@ -39,7 +39,6 @@ from .interactive_ui import (
     get_interactive_window,
     handle_interactive_ui,
 )
-from .message_queue import get_message_queue
 from .notifications import is_card_busy, refresh_panel
 
 # Match option lines like "  1. Yes" / " ❯ 2. Yes, and don't ask again".
@@ -99,7 +98,6 @@ async def update_status_message(
     bot: Bot,
     user_id: int,
     window_id: str,
-    skip_status: bool = False,
 ) -> None:
     """Poll terminal: detect interactive UIs and drive the typing indicator.
 
@@ -214,8 +212,6 @@ async def update_status_message(
     # gaps. As soon as finalize_task runs reset_card, msg_id drops to
     # None and the indicator naturally fades inside Telegram's ~5s
     # window. Bg sessions skip — only the foreground bubbles up.
-    if skip_status:
-        return
     status_line = parse_status_line(pane_text) or ""
     if not is_bg_session and sess is not None and is_card_busy(user_id, sess.id):
         try:
@@ -304,18 +300,7 @@ async def status_poll_loop(bot: Bot) -> None:
 
                     kick_prewarm(wid)
 
-                    # UI detection happens unconditionally inside update_status_message.
-                    # Status enqueue is skipped when interactive UI is detected
-                    # (returns early) or when the queue is non-empty.
-                    queue = get_message_queue(user_id)
-                    skip_status = queue is not None and not queue.empty()
-
-                    await update_status_message(
-                        bot,
-                        user_id,
-                        wid,
-                        skip_status=skip_status,
-                    )
+                    await update_status_message(bot, user_id, wid)
                 except Exception as e:
                     logger.debug(
                         "Status update error for user %d window %s: %s",

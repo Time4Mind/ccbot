@@ -37,7 +37,6 @@ from ..handlers.interactive_ui import (
     get_interactive_window,
     handle_interactive_ui,
 )
-from ..handlers.message_queue import clear_status_msg_info
 from ..handlers.message_sender import (
     NO_LINK_PREVIEW,
     safe_reply,
@@ -244,7 +243,6 @@ async def unsupported_content_handler(
                 "window_id": wid,
             },
         )
-        clear_status_msg_info(user.id, wid)
         success, message = await session_manager.send_to_window(wid, text_to_send)
         if not success:
             await safe_reply(msg, f"❌ {message}")
@@ -303,7 +301,6 @@ async def _forward_inbox_file(
         )
     except Exception:
         pass
-    clear_status_msg_info(user_id, wid)
     return await session_manager.send_to_window(wid, text_to_send)
 
 
@@ -483,7 +480,6 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "window_id": wid,
         },
     )
-    clear_status_msg_info(user.id, wid)
 
     success, message = await session_manager.send_to_window(wid, text)
     if not success:
@@ -593,13 +589,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     ):
         await safe_reply(update.message, "Please use the picker above, or tap Cancel.")
         return
-
-    # Typing a message exits any open Menu sub-screen — drop the markers
-    # so the next switcher tap / history paginate doesn't think the user
-    # is still on /list or /history.
-    from .callbacks.more_menu import clear_view_markers as _clear_view_markers
-
-    _clear_view_markers(context.user_data)
 
     # Reply-quote routing: if the user replied to a bot message that
     # belongs to a non-active session, send this single message there

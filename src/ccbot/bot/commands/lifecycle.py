@@ -1,8 +1,6 @@
-"""Session lifecycle slash commands: /new, /list, /kill, /done, /stop,
-/menu, /archive.
+"""Session lifecycle slash commands: /new, /kill, /done, /stop, /menu,
+/archive.
 
-The /list rendering helpers (``build_live_sessions_text``, ``shorten_workdir``)
-live here too because they're also used by the Menu→List callback path.
 ``archive_session`` is shared between /kill and /done.
 """
 
@@ -41,7 +39,6 @@ from .._common import (
     active_window,
     is_user_allowed,
     resolve_ident,
-    shorten_workdir,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,42 +109,6 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data[BROWSE_DIRS_KEY] = subdirs
         context.user_data["menu_origin"] = "main"
     await safe_reply(update.message, msg_text, reply_markup=keyboard)
-
-
-# --- /list (text + helpers used by the Menu→List callback as well) ---
-
-
-def build_live_sessions_text(user_id: int) -> str | None:
-    """Render the same body /list shows. None when there are no live sessions."""
-    sessions = session_manager.list_user_sessions(
-        user_id, states=("active", "idle", "lost")
-    )
-    if not sessions:
-        return None
-    active_sess = session_manager.get_active_session(user_id)
-    active_id = active_sess.id if active_sess else ""
-    active_block: list[str] = []
-    lost_block: list[str] = []
-    for s in sessions:
-        usage = (
-            f"{s.token_usage_total // 1000}k tok" if s.token_usage_total else "0 tok"
-        )
-        wd = shorten_workdir(s.workdir)
-        if s.state == "lost":
-            lost_block.append(f"  • *{s.name}* — {usage} · `{wd}`")
-        else:
-            marker = "✓ " if s.id == active_id else "  "
-            active_block.append(f"{marker}*{s.name}* — {usage} · `{wd}`")
-    lines: list[str] = []
-    if active_block:
-        lines.append(t(user_id, "list.active"))
-        lines.extend(active_block)
-    if lost_block:
-        if active_block:
-            lines.append("")
-        lines.append(t(user_id, "list.lost"))
-        lines.extend(lost_block)
-    return "\n".join(lines)
 
 
 # --- /kill, /done — share archive_session ---

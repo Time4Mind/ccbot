@@ -21,7 +21,6 @@ from telegram.ext import (
 )
 
 from ..config import config
-from ..handlers.message_queue import shutdown_workers
 from ..handlers.quota_alerts import quota_alerts_loop
 from ..handlers.notifications import card_timer_loop
 from ..handlers.status_polling import status_poll_loop
@@ -199,8 +198,6 @@ async def post_shutdown(
             pass
         _metrics_flush_task = None
         logger.info("Metrics flush stopped")
-
-    await shutdown_workers()
 
     if session_monitor:
         session_monitor.stop()

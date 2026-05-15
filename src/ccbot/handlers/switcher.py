@@ -1,4 +1,4 @@
-"""Inline session switcher (A8) — keyboard, attach/strip, context preview.
+"""Inline session switcher (A8) — keyboard, strip, context preview.
 
 Builds the inline-keyboard row of session buttons that appears under the most
 recent bot message. When a new bot message arrives, the previous switcher's
@@ -6,7 +6,6 @@ reply markup is stripped so only the latest message carries the switcher.
 
 Public API:
   build_switcher_keyboard(user_id) -> InlineKeyboardMarkup | None
-  attach_switcher(bot, user_id, message_id) -> None
   strip_active_switcher(bot, user_id) -> None
   build_session_preview(sess) -> str
 
@@ -144,42 +143,6 @@ async def strip_active_switcher(bot: Bot, user_id: int) -> None:
         logger.debug("strip_active_switcher unexpected: %s", e)
     finally:
         session_manager.clear_last_switcher_msg(user_id)
-
-
-async def attach_switcher(bot: Bot, user_id: int, message_id: int) -> None:
-    """Attach the default footer (Stop + ⋯ More + switcher) to `message_id`
-    and strip the previous one. No-op only when there's truly nothing to show.
-    """
-    # Local import to avoid an import cycle (menu.py imports from switcher.py).
-    from .menu import build_footer_keyboard
-
-    keyboard = build_footer_keyboard(user_id, screen="main")
-    if keyboard is None:
-        return
-
-    prev_id = session_manager.get_last_switcher_msg(user_id)
-    if prev_id and prev_id != message_id:
-        try:
-            await bot.edit_message_reply_markup(
-                chat_id=user_id, message_id=prev_id, reply_markup=None
-            )
-        except Exception as e:
-            logger.debug("attach_switcher: prev strip failed: %s", e)
-
-    try:
-        await bot.edit_message_reply_markup(
-            chat_id=user_id, message_id=message_id, reply_markup=keyboard
-        )
-        session_manager.set_last_switcher_msg(user_id, message_id)
-    except BadRequest as e:
-        # Telegram returns "Message is not modified" if keyboard didn't change.
-        # That's still success from our perspective — the keyboard is on it.
-        if "Message is not modified" in str(e):
-            session_manager.set_last_switcher_msg(user_id, message_id)
-            return
-        logger.debug("attach_switcher: edit failed: %s", e)
-    except Exception as e:
-        logger.debug("attach_switcher: unexpected: %s", e)
 
 
 def build_session_preview(

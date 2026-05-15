@@ -102,11 +102,6 @@ class Event:
         return self.type in ("tool_use", "tool_result")
 
 
-# Backwards-compat alias — pre-refactor code referred to ``CardLine``.
-# Kept so out-of-tree callers (currently none) don't break.
-CardLine = Event
-
-
 @dataclass
 class CardState:
     msg_id: int | None = None
@@ -126,17 +121,6 @@ class CardState:
     # (called from text_handler when the user types) or implicitly
     # when the card is reset.
     in_menu_view: bool = False
-
-    # ----- legacy alias -----
-    @property
-    def lines(self) -> list[Event]:
-        """Legacy alias retained for the in-place edit callsites that
-        still treat ``state.lines`` as the event list."""
-        return self.events
-
-    @lines.setter
-    def lines(self, value: list[Event]) -> None:
-        self.events = value
 
 
 # Per-(user, session.id) card state.
@@ -303,9 +287,14 @@ def _build_event(msg: NewMessage) -> Event:
             started_at=started,
         )
     is_final = msg.stop_reason in ("end_turn", "stop_sequence", "max_tokens")
+    # Narrative text events (mid-stream chunks and final answers) render
+    # ``event.text`` verbatim — don't ``_trim`` them, that would clip the
+    # answer at 200 chars and flatten newlines. The 200-char ``_trim`` cap
+    # is only meaningful for one-line summary heads (tool_use / thinking /
+    # user_msg).
     return Event(
         type="final_text" if is_final else "text",
-        text=_trim(text, 200),
+        text=text,
         body=raw_body,
         started_at=started,
         completed_at=started if is_final else None,
@@ -590,13 +579,13 @@ def pause_card_view(user_id: int, session_id: str) -> None:
         user_id,
         session_id,
         state.msg_id,
-        len(state.lines),
+        len(state.events),
         extra={
             "event": "card_pause",
             "user_id": user_id,
             "session_id": session_id,
             "msg_id": state.msg_id,
-            "lines": len(state.lines),
+            "lines": len(state.events),
         },
     )
 
@@ -612,7 +601,7 @@ def transfer_card_to_carrier(
 
     Effect:
       - FROM session is paused (``in_menu_view=True``) so its events
-        buffer silently in ``state.lines`` instead of editing the
+        buffer silently in ``state.events`` instead of editing the
         carrier (which now belongs to the TO session). No new chat
         message lands until the user switches back or types text.
       - TO session claims the carrier (``msg_id=target_message_id``)
@@ -754,7 +743,7 @@ def release_card_message(user_id: int, session_id: str) -> None:
     state.pending_edit = None
     state.msg_id = None
     state.in_menu_view = False
-    state.lines = []
+    state.events = []
     state.last_rendered = ""
     state.is_continuation = True
     logger.info(
@@ -794,6 +783,56 @@ async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
         logger.debug("resume_card_view edit failed: %s", e)
 
 
+async def paint_card_on_carrier(
+    bot: Bot,
+    user_id: int,
+    sess: Session,
+    carrier_msg_id: int,
+) -> None:
+    """Claim ``carrier_msg_id`` as ``sess``'s live card and paint it.
+
+    Used by Menu → Sessions: the carrier is the menu message the user just
+    tapped, and we want it to become the live card (one unified surface
+    instead of a separate list rendering). The previous ``state.msg_id``
+    is left as a frozen artifact in chat — the next claude event uses
+    the new carrier.
+    """
+    state = _cards.setdefault((user_id, sess.id), CardState())
+    if state.pending_edit is not None and not state.pending_edit.done():
+        state.pending_edit.cancel()
+    state.pending_edit = None
+    state.msg_id = carrier_msg_id
+    state.in_menu_view = False
+    state.last_rendered = ""
+    _register_msg(user_id, carrier_msg_id, sess.id)
+    text = _render_card(sess, state, user_id=user_id)
+    keyboard = build_footer_keyboard(
+        user_id, screen="main", is_busy=_card_is_busy(state)
+    )
+    try:
+        await bot.edit_message_text(
+            chat_id=user_id,
+            message_id=carrier_msg_id,
+            text=text,
+            reply_markup=keyboard,
+        )
+        state.last_rendered = text
+        state.last_edit_ts = time.monotonic()
+        # Migrate the switcher pointer onto the new carrier so previous
+        # switcher rows in chat stop being the canonical surface.
+        prev = session_manager.get_last_switcher_msg(user_id)
+        if prev and prev != carrier_msg_id:
+            try:
+                await bot.edit_message_reply_markup(
+                    chat_id=user_id, message_id=prev, reply_markup=None
+                )
+            except Exception:
+                pass
+        session_manager.set_last_switcher_msg(user_id, carrier_msg_id)
+    except Exception as e:
+        logger.debug("paint_card_on_carrier edit failed: %s", e)
+
+
 async def clear_card(bot: Bot, user_id: int, sess: Session) -> None:
     """Wipe the live card's body in response to a user-driven /clear.
 
@@ -809,7 +848,7 @@ async def clear_card(bot: Bot, user_id: int, sess: Session) -> None:
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
     state.pending_edit = None
-    state.lines = []
+    state.events = []
     state.last_rendered = ""
     text = _render_card(sess, state, footer="(cleared)", user_id=user_id)
     cleared_kb = build_footer_keyboard(user_id, screen="main", is_busy=False)
@@ -949,7 +988,7 @@ async def _deferred_edit(
 ) -> None:
     """Sleep `delay` then render the latest card state and edit once.
 
-    The deferred task always picks up the latest `state.lines`, so multiple
+    The deferred task always picks up the latest `state.events`, so multiple
     events arriving during the sleep collapse into a single edit.
     """
     try:
@@ -1025,14 +1064,14 @@ async def update_session_card(
             sess.id,
             msg_id_in,
             msg.content_type,
-            len(state.lines),
+            len(state.events),
             extra={
                 "event": "card_update_buffered",
                 "user_id": user_id,
                 "session_id": sess.id,
                 "msg_id": msg_id_in,
                 "content_type": msg.content_type,
-                "lines": len(state.lines),
+                "lines": len(state.events),
                 "in_menu_view": in_menu_view_in,
             },
         )
@@ -1073,14 +1112,14 @@ async def update_session_card(
             sess.id,
             state.msg_id,
             msg.content_type,
-            len(state.lines),
+            len(state.events),
             extra={
                 "event": "card_update_sent",
                 "user_id": user_id,
                 "session_id": sess.id,
                 "msg_id": state.msg_id,
                 "content_type": msg.content_type,
-                "lines": len(state.lines),
+                "lines": len(state.events),
             },
         )
         return
@@ -1102,14 +1141,14 @@ async def update_session_card(
                 sess.id,
                 state.msg_id,
                 msg.content_type,
-                len(state.lines),
+                len(state.events),
                 extra={
                     "event": "card_update_edited",
                     "user_id": user_id,
                     "session_id": sess.id,
                     "msg_id": state.msg_id,
                     "content_type": msg.content_type,
-                    "lines": len(state.lines),
+                    "lines": len(state.events),
                 },
             )
         else:

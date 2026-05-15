@@ -32,7 +32,6 @@ from ..handlers.interactive_ui import (
     handle_interactive_ui,
     set_interactive_mode,
 )
-from ..handlers.message_queue import get_message_queue
 from ..handlers.notifications import (
     finalize_task,
     is_active_for_user,
@@ -148,9 +147,6 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 continue
 
             set_interactive_mode(user_id, wid)
-            queue = get_message_queue(user_id)
-            if queue:
-                await queue.join()
             await asyncio.sleep(0.3)
             handled = await handle_interactive_ui(bot, user_id, wid)
             if handled:

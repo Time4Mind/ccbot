@@ -38,7 +38,6 @@ from ...session import session_manager
 from ...terminal_parser import extract_interactive_content, is_interactive_ui
 from ...tmux_manager import tmux_manager
 from .._common import render_session_preview
-from .more_menu import HISTORY_ORIGIN_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -133,12 +132,6 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             # On the next claude event, ``update_session_card`` will
             # repaint the carrier with the live card; the history page is
             # ephemeral by design.
-            if context.user_data is not None:
-                # Remember how we got into the history view so
-                # CB_HISTORY_PREV/NEXT can rebuild the matching extras
-                # row stack — otherwise pagination loses every button
-                # except Older/Newer.
-                context.user_data[HISTORY_ORIGIN_KEY] = "switcher"
             footer_kb = build_footer_keyboard(
                 user.id, screen="main", is_busy=False, include_older_btn=False
             )

@@ -9,6 +9,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from ...handlers.callback_data import (
+    CB_CONF_CLEAR_NO,
+    CB_CONF_CLEAR_YES,
     CB_CONF_KILL_NO,
     CB_CONF_KILL_YES,
     CB_FT_CLEAR,
@@ -25,7 +27,6 @@ from ...handlers.callback_data import (
 from ...handlers.menu import build_footer_keyboard, render_more_text
 from ...handlers.notifications import (
     card_page_info,
-    clear_card,
     enter_kb_mode,
     exit_kb_mode,
     get_card_state,
@@ -85,25 +86,35 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         return True
 
     if data == CB_FT_CLEAR:
-        wid = active_window(user.id)
-        if not wid:
+        # Clear has no rollback (unlike Kill → Restore the archived
+        # window). Surface a confirmation dialog like /kill so a stray
+        # tap on a phone doesn't nuke session context. The Yes branch
+        # also chains Stop (Esc) before /clear so the latter lands on
+        # a clean prompt — previously /clear-while-busy silently
+        # failed inside claude.
+        sess = session_manager.get_active_session(user.id)
+        if sess is None or sess.state not in ("active", "idle"):
             await query.answer(t(user.id, "toast.no_session"), show_alert=False)
             return True
-        w = await tmux_manager.find_window_by_id(wid)
-        if not w:
-            await query.answer(t(user.id, "toast.window_gone"), show_alert=False)
-            return True
-        success, message = await session_manager.send_to_window(wid, "/clear")
-        if not success:
-            await query.answer(f"Clear failed: {message}", show_alert=True)
-            return True
-        session_manager.clear_window_session(wid)
-        # Wipe the live card body so the previous turn's tool log
-        # doesn't sit there pretending to be the current state.
-        sess = session_manager.get_active_session(user.id)
-        if sess is not None:
-            await clear_card(context.bot, user.id, sess)
-        await query.answer(t(user.id, "toast.cleared"))
+        # Pause so live updates don't repaint over the prompt.
+        pause_card_view(user.id, sess.id)
+        kb = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        t(user.id, "btn.yes_clear"),
+                        callback_data=f"{CB_CONF_CLEAR_YES}{sess.id}"[:64],
+                    ),
+                    InlineKeyboardButton(
+                        t(user.id, "btn.no"), callback_data=CB_CONF_CLEAR_NO
+                    ),
+                ]
+            ]
+        )
+        await set_view(
+            query, context.bot, user.id, t(user.id, "conf.clear", name=sess.name), kb
+        )
+        await query.answer()
         return True
 
     if data == CB_FT_MORE:

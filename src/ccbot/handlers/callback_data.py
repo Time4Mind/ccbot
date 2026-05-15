@@ -116,6 +116,11 @@ CB_CONF_DEL_YES = "cn:del:y:"  # cn:del:y:<sid>
 CB_CONF_DEL_NO = "cn:del:n"
 CB_CONF_DONE_YES = "cn:done:y:"  # cn:done:y:<sid>
 CB_CONF_DONE_NO = "cn:done:n"
+# Clear has no rollback path (unlike Kill → Restore), so it's behind a
+# confirm step that also chains Stop (Esc) before /clear so the latter
+# lands on a clean prompt regardless of whatever was in flight.
+CB_CONF_CLEAR_YES = "cn:clr:y:"  # cn:clr:y:<sid>
+CB_CONF_CLEAR_NO = "cn:clr:n"
 
 # Archive
 CB_ARC_PAGE = "ar:p:"  # ar:p:<page>

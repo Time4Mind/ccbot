@@ -39,6 +39,7 @@ _EN: dict[str, str] = {
     "btn.no": "× No",
     "btn.yes_kill": "⚠ Yes, kill",
     "btn.yes_delete": "⚠ Yes, delete",
+    "btn.yes_clear": "⚠ Yes, clear",
     "btn.refresh": "🔄 Refresh",
     "btn.save": "Saved",
     "btn.cancelled": "Cancelled",
@@ -110,6 +111,10 @@ _EN: dict[str, str] = {
     "conf.done": "Mark *{name}* as done?\nGoal closed, session archived.",
     "conf.delete": (
         "Delete *{name}* from archive?\nState record gone. JSONL kept on disk."
+    ),
+    "conf.clear": (
+        "Clear *{name}*?\nSends Esc then /clear. Session context wiped — "
+        "cannot be undone (unlike Kill → Restore)."
     ),
     "conf.killed": "💀 Killed `{name}`",
     "conf.done_ok": "🎉 Marked `{name}` as done.",
@@ -407,6 +412,7 @@ _RU: dict[str, str] = {
     "btn.no": "× Нет",
     "btn.yes_kill": "⚠ Да, убить",
     "btn.yes_delete": "⚠ Да, удалить",
+    "btn.yes_clear": "⚠ Да, очистить",
     "btn.refresh": "🔄 Обновить",
     "btn.save": "Сохранено",
     "btn.cancelled": "Отменено",
@@ -471,6 +477,10 @@ _RU: dict[str, str] = {
     "conf.done": "Закрыть *{name}*?\nЦель закрыта, сессия в архиве.",
     "conf.delete": (
         "Удалить *{name}* из архива?\nЗапись стирается. JSONL остаётся на диске."
+    ),
+    "conf.clear": (
+        "Очистить *{name}*?\nОтправит Esc, затем /clear. Контекст сессии "
+        "стирается без возможности восстановления (в отличие от Kill → Restore)."
     ),
     "conf.killed": "💀 Убита `{name}`",
     "conf.done_ok": "🎉 `{name}` закрыта.",
@@ -748,6 +758,7 @@ _ZH: dict[str, str] = {
     "btn.no": "× 否",
     "btn.yes_kill": "⚠ 是，终止",
     "btn.yes_delete": "⚠ 是，删除",
+    "btn.yes_clear": "⚠ 是，清空",
     "btn.refresh": "🔄 刷新",
     "btn.save": "已保存",
     "btn.cancelled": "已取消",
@@ -808,6 +819,10 @@ _ZH: dict[str, str] = {
     ),
     "conf.done": "标记 *{name}* 为完成?\n目标已关闭,会话已归档。",
     "conf.delete": "从归档中删除 *{name}*?\n状态记录消失。JSONL 保留在磁盘。",
+    "conf.clear": (
+        "清空 *{name}*?\n先发送 Esc,然后 /clear。会话上下文将被擦除,"
+        "无法恢复(不同于 Kill → Restore)。"
+    ),
     "conf.killed": "💀 已终止 `{name}`",
     "conf.done_ok": "🎉 `{name}` 已标记完成。",
     "conf.deleted": "🗑 归档记录已删除。",

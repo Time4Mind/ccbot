@@ -649,13 +649,34 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     )
                     if ok:
                         session_manager.touch_session(target.id)
+                        # Explicit feedback so the user can see which
+                        # session received the reply-quote — bg session
+                        # would otherwise stay silent until the next
+                        # carrier interaction.
                         await safe_reply(
                             update.message,
-                            f"→ \\[{target.name or target.id}\\]",
+                            f"↩ \\[{target.name or target.id}\\]",
+                        )
+                        # Match the 👀 marker that every other input
+                        # type leaves on the user's msg (Task #30 / #32
+                        # consistency — the success path returned early
+                        # before the reaction at the bottom of text_handler).
+                        await _react_input(
+                            context.bot, user.id, update.message.message_id
                         )
                         return
                     await safe_reply(update.message, f"❌ {sm}")
                     return
+            elif target is not None and target.state not in ("active", "idle"):
+                # User aimed at a dead session (archived/lost/completed).
+                # Silent fallback would route to active with no signal —
+                # tell them so the routing surprise is visible. Falls
+                # through to the active-session dispatch below.
+                await safe_reply(
+                    update.message,
+                    f"⚠ \\[{target.name or target.id}\\] is {target.state} — "
+                    "routing to the active session instead.",
+                )
 
     wid = active_window(user.id)
     if wid is None:

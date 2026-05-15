@@ -966,7 +966,16 @@ async def enter_kb_mode(
     pointless edits when status_polling re-detects the prompt each poll.
     """
     state = get_card_state(user_id, sess)
-    if state.in_kb_mode and state.kb_prompt == prompt_content:
+    # Short-circuit ONLY when the kb-mode card is actually present in
+    # chat. After ``close_card_view`` (Shot tap) ``msg_id`` is None but
+    # ``in_kb_mode`` stays True — without the ``msg_id is not None``
+    # check, subsequent status_polling re-detections of the same UI
+    # would no-op and the kb-mode card would never be re-spawned.
+    if (
+        state.in_kb_mode
+        and state.kb_prompt == prompt_content
+        and state.msg_id is not None
+    ):
         return
     state.kb_prompt = prompt_content
     state.kb_ui_name = ui_name

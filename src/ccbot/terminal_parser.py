@@ -201,65 +201,81 @@ def is_interactive_ui(pane_text: str) -> bool:
 
 # ── Status line parsing ─────────────────────────────────────────────────
 
-# Spinner characters Claude Code uses in its status line
-STATUS_SPINNERS = frozenset(["·", "✻", "✽", "✶", "✳", "✢"])
+# Two sets:
+#   * SPINNER_ONLY — chars Claude Code uses EXCLUSIVELY for the busy
+#     status line (``✻ Thinking…``). Any line starting with one of
+#     these is a status line.
+#   * SPINNER_AMBIGUOUS — chars that ALSO appear elsewhere (``●`` is
+#     used as a bullet in the feedback prompt / Tip line, ``·`` is a
+#     general-purpose bullet). For these, parse_status_line additionally
+#     requires the line to carry a time-stats parenthetical
+#     (``(1m 13s · …``) — that's the distinguishing signature of the
+#     real busy status (``● Gallivanting… (53s · ↑2.3k tokens)``).
+SPINNER_ONLY = frozenset(["✻", "✽", "✶", "✳", "✢"])
+SPINNER_AMBIGUOUS = frozenset(["●", "·"])
+STATUS_SPINNERS = SPINNER_ONLY | SPINNER_AMBIGUOUS
+
+
+_STATUS_TIME_STATS_RE = re.compile(r"\(\s*\d+(?:m\s*\d+)?\s*[smh]")
 
 
 def parse_status_line(pane_text: str) -> str | None:
-    """Extract the Claude Code status line (``✻ Thinking…``, ``· Evaporating…``).
+    """Extract the Claude Code busy-state status line.
 
-    Claude Code shows the busy status in one of two layouts:
+    The busy line lives above the input-chrome separator and starts
+    with a spinner char (``●``, ``✻``, etc.). Between it and the
+    chrome there can be other lines that ALSO start with the same
+    char — Claude's tip / feedback prompt::
 
-      1. **Between two chrome separators** (current TUI, busy state)::
+        … content …
+        ● Gallivanting… (1m 13s · ↑2.3k tokens · thought for 8s)   ← STATUS
+        ● Tip: Use /btw to ask a quick side question…             ← tip
+        ● How is Claude doing this session? (optional)            ← feedback
+          1: Bad   2: Fine   3: Good   0: Dismiss
+        ────────────────────
+        ❯
+        ────────────────────
+          ⏵⏵ bypass permissions on …
 
-            ────────────────────
-            ✻ Evaporating… (53s)
-            ────────────────────
-              ⏵⏵ bypass permissions on …
-
-      2. **Above the top chrome** (legacy / one-chrome layout)::
-
-            ✻ Thinking…
-            ────────────────────
-              ⏵⏵ bypass permissions on …
-
-    Returns the text after the spinner, or None if no status line.
-    Chrome-bounded layout is checked first; falls back to the
-    above-chrome scan to cover the older variant.
+    Discriminator: the status line has a time-stats parenthetical
+    like ``(1m 13s ·`` / ``(53s)``. Tips and feedback prompts don't.
+    We scan up to 12 lines back from the first chrome separator and
+    pick the first spinner line with that signature. If none of the
+    spinner lines carry time-stats (older / shorter status formats
+    used by the test suite — ``✻ Reading file src/main.py``), fall
+    back to the spinner line nearest the chrome.
     """
     if not pane_text:
         return None
 
     lines = pane_text.split("\n")
-    search_start = max(0, len(lines) - 12)
-    # Collect all chrome positions in the tail.
-    chromes: list[int] = []
+
+    # Anchor on the chrome separator (first ──── line in the tail).
+    chrome_idx: int | None = None
+    search_start = max(0, len(lines) - 14)
     for i in range(search_start, len(lines)):
         stripped = lines[i].strip()
         if len(stripped) >= 20 and all(c == "─" for c in stripped):
-            chromes.append(i)
+            chrome_idx = i
+            break
+    if chrome_idx is None:
+        return None
 
-    # Layout 1: between two chromes.
-    if len(chromes) >= 2:
-        top, bot = chromes[0], chromes[-1]
-        for i in range(top + 1, bot):
-            line = lines[i].strip()
-            if not line:
-                continue
-            if line[0] in STATUS_SPINNERS:
-                return line[1:].strip()
-
-    # Layout 2: above the top chrome (legacy).
-    if chromes:
-        top = chromes[0]
-        for i in range(top - 1, max(top - 5, -1), -1):
-            line = lines[i].strip()
-            if not line:
-                continue
-            if line[0] in STATUS_SPINNERS:
-                return line[1:].strip()
-            break  # first non-empty line above the chrome isn't a spinner
-
+    # Scan upward. For SPINNER_ONLY chars (``✻`` etc.) the line is
+    # always a status. For SPINNER_AMBIGUOUS chars (``●`` / ``·``) it
+    # only counts when the time-stats parenthetical is present.
+    upper_bound = max(chrome_idx - 12, -1)
+    for i in range(chrome_idx - 1, upper_bound, -1):
+        line = lines[i].strip()
+        if not line:
+            continue
+        first = line[0]
+        if first in SPINNER_ONLY:
+            return line[1:].strip()
+        if first in SPINNER_AMBIGUOUS:
+            rest = line[1:].strip()
+            if _STATUS_TIME_STATS_RE.search(rest):
+                return rest
     return None
 
 

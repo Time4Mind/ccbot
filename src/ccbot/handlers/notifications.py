@@ -434,6 +434,7 @@ def _build_event(msg: NewMessage) -> Event:
             started_at=started,
             tool_use_id=msg.tool_use_id,
             image_data=msg.image_data,
+            is_error=msg.is_error,
         )
     if msg.role == "user":
         return Event(

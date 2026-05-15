@@ -41,15 +41,19 @@ logger = logging.getLogger(__name__)
 def _budget_for_model(model: str) -> int:
     """Per-model context-window denominator in tokens.
 
-    Claude 4.x runs with extended (1M) context in Claude Code by
-    default — we routinely observe single-turn cache_read well past
-    200k. Older / unknown models fall back to the public 200k limit.
+    Sourced from Anthropic's published model card (docs.claude.com,
+    May 2026). Only Opus 4.6 / 4.7 and Sonnet 4.6 ship with 1M
+    context — earlier 4.x and all 3.x stay at 200k. Unknown / empty
+    model names default to 200k.
     """
     if not model:
         return 200_000
     m = model.lower()
-    if "claude-opus-4" in m or "claude-sonnet-4" in m or "claude-4" in m:
+    # 1M-context models (current + legacy).
+    if m.startswith(("claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6")):
         return 1_000_000
+    # Everything else — Opus 4.5 / 4.1 / 4.0, Sonnet 4.5 / 4.0,
+    # Haiku 4.5, all 3.x — is 200k.
     return 200_000
 
 

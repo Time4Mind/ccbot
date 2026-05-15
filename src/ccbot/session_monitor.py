@@ -53,6 +53,7 @@ class NewMessage:
         None  # Assistant stop_reason: "end_turn" | "tool_use" | etc.
     )
     timestamp: str = ""  # ISO-8601 timestamp from JSONL; "" if unknown
+    is_error: bool = False  # tool_result block carried ``is_error: true``
 
 
 class SessionMonitor:
@@ -367,6 +368,7 @@ class SessionMonitor:
                             image_data=entry.image_data,
                             stop_reason=entry.stop_reason,
                             timestamp=entry.timestamp or "",
+                            is_error=entry.is_error,
                         )
                     )
 

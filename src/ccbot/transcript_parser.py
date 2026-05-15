@@ -56,6 +56,10 @@ class ParsedEntry:
     stop_reason: str | None = (
         None  # Assistant message stop_reason: "end_turn" | "tool_use" | etc.
     )
+    # ``is_error=True`` when the tool_result block carried ``is_error: true``
+    # in the JSONL — propagates through NewMessage and lands on the matching
+    # tool_use Event so ``render_event`` can flip the leading glyph to ✗.
+    is_error: bool = False
 
 
 @dataclass
@@ -487,6 +491,7 @@ class TranscriptParser:
                                     tool_use_id=_tuid,
                                     timestamp=entry_timestamp,
                                     image_data=result_images,
+                                    is_error=True,
                                 )
                             )
                         elif tool_summary:

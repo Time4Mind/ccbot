@@ -58,7 +58,7 @@ _INTER_SESSION_DELAY = 1.0
 
 
 _CONTEXT_LINE = re.compile(
-    r"(\d+(?:\.\d+)?)\s*k\s*/\s*(\d+(?:\.\d+)?)\s*k\s+tokens\s*\((\d+)\s*%\)"
+    r"(\d+(?:\.\d+)?)\s*[kKmM]?\s*/\s*(\d+(?:\.\d+)?)\s*[kKmM]?\s+tokens\s*\((\d+)\s*%\)"
 )
 
 

@@ -376,6 +376,18 @@ def _highlight(label: str, active: bool) -> str:
     return f"• {label}" if active else label
 
 
+def _parent_cat_cb(group_key: str) -> str:
+    """Callback the Back row of an individual setting points at — the
+    CATEGORY sub-screen that contains ``group_key`` (per pivot #53
+    feedback: tapping Back was dumping users at the top-level Settings
+    instead of the relevant category).
+    """
+    for _label, cat_screen, members in SETTINGS_CATEGORIES:
+        if group_key in members:
+            return f"{CB_ST_CAT}{cat_screen}"
+    return CB_MM_SETTINGS
+
+
 def _format_setting_value(user_id: int, value_key: str, cur: object) -> str:
     """Format a single setting's current value for display in buttons."""
     if value_key == "live_lag":
@@ -471,7 +483,11 @@ def _settings_previews_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
                 callback_data=f"{CB_ST_PREV}readable",
             ),
         ],
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"), callback_data=_parent_cat_cb("previews")
+            )
+        ],
     ]
 
 
@@ -485,7 +501,11 @@ def _settings_lag_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             )
             for v in (0, 2, 4, 8)
         ],
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"), callback_data=_parent_cat_cb("live_lag")
+            )
+        ],
     ]
 
 
@@ -499,7 +519,11 @@ def _settings_voice_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             )
             for v in ("auto", "whisper", "apple", "off")
         ],
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"), callback_data=_parent_cat_cb("voice")
+            )
+        ],
     ]
 
 
@@ -513,7 +537,11 @@ def _settings_language_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             )
             for code, label in LANGUAGES
         ],
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"), callback_data=_parent_cat_cb("language")
+            )
+        ],
     ]
 
 
@@ -527,7 +555,11 @@ def _settings_approve_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             )
             for v in ("off", "on")
         ],
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"), callback_data=_parent_cat_cb("auto_approve")
+            )
+        ],
     ]
 
 
@@ -577,7 +609,12 @@ def _settings_local_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
         )
 
     rows.append(
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)]
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("local_terminal"),
+            )
+        ]
     )
     return rows
 
@@ -601,7 +638,12 @@ def _settings_cardhist_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             )
             for v in (10, 20, 50, 100)
         ],
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("card_history"),
+            )
+        ],
     ]
 
 
@@ -625,7 +667,12 @@ def _settings_screens_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
                 callback_data=f"{CB_ST_SCREENS}off",
             ),
         ],
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("card_inline_screenshots"),
+            )
+        ],
     ]
 
 
@@ -677,7 +724,12 @@ def _settings_pagesize_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             )
             for v in (10, 20, 40, 70)
         ],
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("card_page_lines"),
+            )
+        ],
     ]
 
 
@@ -698,7 +750,12 @@ def _settings_weeklyday_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             ]
         )
     rows.append(
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)]
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("weekly_reset_day"),
+            )
+        ]
     )
     return rows
 

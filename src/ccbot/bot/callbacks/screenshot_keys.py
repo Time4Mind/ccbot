@@ -111,8 +111,13 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         return True
 
     if data.startswith(CB_SHOT_BACK):
-        # ``origin`` historically distinguished different surfaces;
-        # the live card is the only one now, so we ignore the suffix.
+        # Delete the photo, resume the paused live card. Events that
+        # arrived during the screenshot view buffered into state.events;
+        # resume_card_view renders them into the existing carrier so the
+        # user lands back on the same card slot with the updated body.
+        # If the carrier was lost (5-min stale window, archived), the
+        # next claude event spawns a fresh one — but we don't repost
+        # here proactively to avoid a stray new card sitting in chat.
         if query.message:
             try:
                 await query.message.delete()
@@ -120,12 +125,12 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                 logger.debug("shot back: delete photo failed: %s", e)
         active_sess = session_manager.get_active_session(user.id)
         if active_sess is not None and active_sess.window_id:
-            from ...handlers.notifications import repost_card
+            from ...handlers.notifications import resume_card_view
 
             try:
-                await repost_card(context.bot, user.id, active_sess)
+                await resume_card_view(context.bot, user.id, active_sess)
             except Exception as e:
-                logger.debug("shot back: repost_card failed: %s", e)
+                logger.debug("shot back: resume_card_view failed: %s", e)
         await query.answer()
         return True
 

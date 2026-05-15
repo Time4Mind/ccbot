@@ -217,15 +217,19 @@ def build_screenshot_compact_keyboard(
 async def emit_screenshot_compact(
     query: Any, bot: Bot, user_id: int, *, origin: str = "m"
 ) -> None:
-    """Delete the carrier message, reply with a compressed photo preview.
+    """Send a compressed photo of the active session's pane as a NEW
+    chat message, and pause the live card so claude events buffer
+    silently underneath until the user taps Back.
 
-    Visually replaces the source surface in the chat. The photo carries
-    a session switcher (taps switch active and re-render this same
-    photo with the new session's pane) plus a Back button that returns
-    to the surface the screenshot was opened from. ``origin`` is
-    ``"m"`` for the main / live-card view, ``"l"`` for the Menu→List
-    view.
+    The carrier (live card) is intentionally left intact in chat — the
+    user wants screenshots to be additive ("the active card may arrive
+    or replace only when I exit the screenshot view"). Resuming on
+    ``CB_SHOT_BACK`` re-renders the existing card with whatever events
+    accumulated.
     """
+    from ...handlers.notifications import pause_card_view
+    from ...session import session_manager
+
     wid = active_window(user_id)
     if not wid:
         await safe_send(bot, user_id, t(user_id, "toast.no_session"))
@@ -240,11 +244,11 @@ async def emit_screenshot_compact(
         return
     png_bytes = await text_to_image(text, with_ansi=True)
 
-    if query and query.message:
-        try:
-            await query.message.delete()
-        except Exception as e:
-            logger.debug("emit_screenshot: delete carrier failed: %s", e)
+    # Pause the active card so claude events don't repaint underneath
+    # while the user is looking at the screenshot. Resumed by CB_SHOT_BACK.
+    active = session_manager.get_active_session(user_id)
+    if active is not None:
+        pause_card_view(user_id, active.id)
 
     keyboard = build_screenshot_compact_keyboard(user_id, origin)
     try:

@@ -57,7 +57,7 @@ logger = logging.getLogger(__name__)
 CARD_HARD_LIMIT = 3800
 # Number of accumulated events kept; older events still live in state.events
 # but only the last N participate in pagination (FIFO eviction beyond this).
-CARD_MAX_EVENTS = 200
+CARD_MAX_EVENTS = 5000
 # After this much idleness, the next event opens a fresh card.
 STALE_CARD_SECONDS = 5 * 60
 # Max lines of body shown inside each tool/thinking spoiler. Overflow is

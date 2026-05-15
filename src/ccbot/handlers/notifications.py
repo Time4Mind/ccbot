@@ -241,58 +241,88 @@ def _split_tool_text(raw: str) -> tuple[str, str, str, str]:
 
     ``raw`` reaches us in the shape::
 
-        **ToolName**(args)
-          ⎿  Output N lines
+        **ToolName**(args)            ← head_block (can span multiple
+                                        lines if args = bash heredoc /
+                                        multi-line edit diff)
+          ⎿  Output N lines           ← summary line (optional)
         \\x02EXPQUOTE_START\\x02<content>\\x02EXPQUOTE_END\\x02
+
+    The summary line starts with whitespace + ``⎿``. Everything before
+    that marker (or before the EXPQUOTE_START sentinel, whichever comes
+    first) is the head_block — possibly multiple lines when args
+    contains literal newlines (bash heredoc).
 
     Returns ``(name, args, summary, content)`` where:
 
-    * ``name``    = bare tool name (``Bash``, ``Read``, ``Edit``), shown
-      in the card head with the ▷ / ✓ / ✗ glyph and HH:MM marker.
-    * ``args``    = whatever was between the parens (the actual command
-      / file path) — pushed under the spoiler so long commands don't
-      blow up the head line.
-    * ``summary`` = ``⎿`` line content (``Output 5 lines``), inline in
-      the head after the name.
-    * ``content`` = inside the EXPQUOTE block, minus the duplicate
-      head/summary that transcript_parser sometimes re-embeds.
+    * ``name``    = bare tool name (``Bash``, ``Read``, ``Edit``).
+    * ``args``    = whatever was between the outermost parens — pushed
+      under the spoiler so long commands don't blow up the head line.
+    * ``summary`` = ``⎿`` line content (``Output 5 lines``).
+    * ``content`` = inside the EXPQUOTE block, minus duplicate head /
+      summary lines that transcript_parser sometimes re-embeds.
 
     When the head doesn't parse as ``Name(args)`` (orphan tool_result
-    fallback or weird format), the full first line lands in ``name``
+    fallback or weird format), the full head_block lands in ``name``
     and ``args`` is empty.
     """
     if not raw:
         return "", "", "", ""
-    parts = raw.split("\n", 2)
-    head_line = parts[0] if parts else ""
-    name = _strip_for_card(head_line)
+
+    # Locate end-of-head: the first ``\n  ⎿`` summary marker OR the
+    # first ``\x02EXPQUOTE_START\x02`` content marker, whichever comes
+    # earlier. Whatever's BEFORE that boundary is the head_block (may
+    # span multiple lines when args is a bash heredoc).
+    summary_marker_re = re.compile(r"\n\s*⎿")
+    summary_match = summary_marker_re.search(raw)
+    quote_idx = raw.find("\x02EXPQUOTE_START\x02")
+    head_end = len(raw)
+    if summary_match is not None:
+        head_end = min(head_end, summary_match.start())
+    if quote_idx >= 0:
+        head_end = min(head_end, quote_idx)
+    head_block = raw[:head_end].rstrip("\n")
+
+    name = _strip_for_card(head_block)
     args = ""
-    m = _TOOL_HEAD_RE.match(head_line)
+    m = _TOOL_HEAD_RE.match(head_block)
     if m:
         name = m.group("name").strip()
         args = m.group("args").strip()
+        # The first-line ``Name(`` prefix being matched means the regex
+        # already used DOTALL — args may legitimately contain newlines.
+
     summary = ""
-    rest = ""
-    if len(parts) >= 2:
-        summary_line = parts[1].lstrip(" ").lstrip("⎿").strip()
-        summary = _strip_for_card(summary_line)
-    if len(parts) >= 3:
-        rest = parts[2]
-    # Extract inner content from EXPQUOTE block if present, otherwise
-    # treat ``rest`` as plain content.
-    inner = _extract_expquote_inner(rest) if rest else ""
-    content = inner if inner else rest
+    after_head = raw[head_end:]
+    if after_head.startswith("\n"):
+        after_head = after_head[1:]
+    # Pull the summary line if it's first.
+    if after_head.lstrip(" ").startswith("⎿"):
+        nl = after_head.find("\n")
+        if nl == -1:
+            summary_line = after_head
+            after_head = ""
+        else:
+            summary_line = after_head[:nl]
+            after_head = after_head[nl + 1 :]
+        summary = _strip_for_card(summary_line.lstrip(" ").lstrip("⎿").strip())
+
+    # ``after_head`` is now either an EXPQUOTE block or plain rest.
+    inner = _extract_expquote_inner(after_head) if after_head else ""
+    content = inner if inner else after_head
     # Drop duplicate head/summary rows that transcript_parser may
     # re-embed at the top of the EXPQUOTE block.
     if content:
         content_lines = content.split("\n")
         first_norm = _strip_for_card(content_lines[0]).strip()
-        head_norm = _strip_for_card(head_line).strip()
+        head_norm = _strip_for_card(head_block).strip()
         if (
             first_norm == head_norm
-            or first_norm.endswith(head_norm)
-            or first_norm.startswith(("✓ ", "▷ ", "✗ "))
-            and head_norm in first_norm
+            or (head_norm and first_norm.endswith(head_norm))
+            or (
+                first_norm.startswith(("✓ ", "▷ ", "✗ "))
+                and head_norm
+                and head_norm in first_norm
+            )
         ):
             content_lines = content_lines[1:]
         if content_lines and content_lines[0].lstrip().startswith("⎿"):
@@ -585,14 +615,17 @@ def _resolved_page_idx(state: CardState, total_pages: int) -> int:
 def render_page(events: list[Event], now: float) -> str:
     """Render the events of one page into a single body string.
 
-    Events are separated by a blank line so tool/thinking blocks don't
-    bleed into one another visually — the previous solid wall of text
-    was unreadable.
+    Events are separated by ``\\n\\n\\n`` (two blank lines in the
+    rendered MarkdownV2 source). Telegram swallows one blank row after
+    a closing expandable blockquote ``||``, so a single ``\\n\\n``
+    collapses to zero visible gap and the page reads as a wall of text.
+    Two empty lines survive as exactly one visible blank row between
+    tool/thinking blocks — the gap the user actually needs.
     """
     parts: list[str] = []
     for i, ev in enumerate(events):
         parts.append(render_event(ev, in_flight=_is_in_flight(ev, events, i), now=now))
-    return "\n\n".join(parts)
+    return "\n\n\n".join(parts)
 
 
 # ─── Card composition ─────────────────────────────────────────────────

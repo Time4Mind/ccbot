@@ -17,12 +17,10 @@ Status: draft v0.1. Authoritative until superseded.
 - Authentication via Claude Code subscription (CLI auth, Max x20). No Anthropic API key required.
 - Run on macOS (Apple Silicon) and Linux arm64.
 
-### Non-goals (v0.1)
+### Non-goals
 
 - Multi-user. The bot is personal; allowlist is a single Telegram user id.
 - Webhooks / external event triggers (CI, GitHub, monitoring).
-- Telegram Mini App. Listed as a v1.5+ extension; v0.1 must work fully via DM commands and inline buttons.
-- Permission relay through Telegram. We always run with `--dangerously-skip-permissions`.
 - Replacing the markdown→TG converter (we keep `telegramify-markdown` and tune around it).
 
 ---
@@ -188,12 +186,9 @@ Format (C5: prefix + emoji):
 
 Example: `🟦 [scraper] done in 4m. Wrote 3 files.`
 
-**Background work footer experiment** (open question, not v0.1 default).
-
-`BG_NOTIFY_MODE` env var with two values:
-
-- `separate` (v0.1 default): non-active sessions emit their own card edits and push notifications as above.
-- `footer`: non-active session events are appended to the active session's most recent bot message as a footer block, with a separator and per-session lines. We try this in week 2 of real usage and decide.
+Background sessions don't emit their own chat messages. Their state
+shows up as a per-row badge in the bg-panel at the bottom of the
+active session's live card (see `handlers.bg_status.render_panel`).
 
 ### 4.5 Status (`/status`)
 
@@ -317,10 +312,6 @@ Install footprint:
 - Inline `Restore` button on archived and lost sessions.
 - On restore: create tmux window, run `claude --resume <session-id> --dangerously-skip-permissions` in the original workdir, attach monitor.
 
-### Investigation (research, not v0.1 commitment)
-
-- Evaluate F5 (claude `--resume` as the persistence mechanism, dropping reliance on long-lived tmux). If viable, simplifies restart semantics. Decision deferred until after v0.1 ships and we have empirical data on `--resume` reliability.
-
 ---
 
 ## 10. Auth (L1)
@@ -359,18 +350,7 @@ Install footprint:
 
 ---
 
-## 13. Future (vNext, out of scope for v0.1)
-
-Kept for context only. Not committed.
-
-- **Telegram Mini App**: dashboard with session grid, transcript viewer, token charts. Bot publishes state on a local HTTP endpoint; Mini App consumes it. Auth via Telegram `initData`.
-- **F5 hot resume** as the canonical persistence (see section 9).
-- **Permission relay** (give up `--dangerously-skip-permissions` and approve via inline buttons).
-- **Hard quotas / billing-aware throttling** if soft G6 proves insufficient.
-
----
-
-## 14. Configuration cheatsheet (env vars)
+## 12. Configuration cheatsheet (env vars)
 
 ```
 # Auth
@@ -391,7 +371,6 @@ PREVIEW_USER_LINES=4
 PREVIEW_ASSISTANT_LINES=8
 PREVIEW_TOOLS=2
 PREVIEW_LIVE_LAG=4             # seconds; 0 disables live updates
-BG_NOTIFY_MODE=separate        # separate | footer
 
 # Budgets (calibrated empirically)
 MAX_5H_TOKENS=50000
@@ -409,7 +388,7 @@ IS_SANDBOX=1                   # quiets non-interactive warnings
 
 ---
 
-## 15. v0.1 acceptance criteria
+## 13. Acceptance criteria
 
 The fork ships when all of the following are true on a fresh Linux arm64 VPS install:
 
@@ -428,9 +407,7 @@ The fork ships when all of the following are true on a fresh Linux arm64 VPS ins
 
 ---
 
-## 16. Open questions parked for later
+## 14. Open questions parked for later
 
 - Calibration of `MAX_5H_TOKENS` / `MAX_WEEKLY_TOKENS` — measured during week 1.
-- `BG_NOTIFY_MODE=footer` — try in week 2, decide default.
-- F5 hot resume vs current tmux+state.json — investigate after v0.1 stable.
 - Table/code formatting heuristics — tune as edge cases appear.

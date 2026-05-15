@@ -211,13 +211,6 @@ _EXPQUOTE_BLOCK_RE = re.compile(
 # pair up (transcript_format builds tool blocks with nested sentinels;
 # the outer pair gets stripped but the inner one can leak in body).
 _EXPQUOTE_ANY_RE = re.compile(r"\x02EXPQUOTE_(?:START|END)\x02")
-# MarkdownV2 markers we strip for plain-text card rendering. The card is
-# sent without ``parse_mode``, so ``**bold**`` would otherwise show as
-# literal asterisks. (History view still gets full markdown via
-# ``safe_edit`` / ``_ensure_formatted`` — this only flattens the card.)
-_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
-_MD_ITALIC_RE = re.compile(r"(?<!\w)_(.+?)_(?!\w)", re.DOTALL)
-_MD_BACKTICK_RE = re.compile(r"`+")
 # Pull the inner content out of an EXPQUOTE_START / END pair.
 _EXPQUOTE_INNER_RE = re.compile(
     r"\x02EXPQUOTE_START\x02(.*?)\x02EXPQUOTE_END\x02",
@@ -232,28 +225,26 @@ def _extract_expquote_inner(text: str) -> str:
 
 
 def _strip_for_card(text: str) -> str:
-    """Strip markup so the card renders cleanly as plain text.
+    """Strip residue that would render literally in MarkdownV2 mode.
 
-    The live card is sent without ``parse_mode`` — Markdown markers and
-    expandable-quote sentinels would otherwise show up as literal
-    characters in chat. Strip:
+    Card text is now sent with ``parse_mode=MarkdownV2`` (via
+    ``send_with_fallback`` / ``_send_card_md``), so MarkdownV2 markers
+    like ``**bold**`` get rendered properly. We only strip:
 
-    * The full ``EXPQUOTE_START … EXPQUOTE_END`` block (one-liner heads
-      that historically embedded a body block — body lives in
-      ``event.body`` now, not in ``event.text``).
-    * Any leftover lone ``EXPQUOTE_*`` sentinel that snuck through
-      (transcript_format nests these in tool body strings).
-    * ``**bold**`` → ``bold``, ``_italic_`` → ``italic``, backticks
-      dropped.
+    * The full ``EXPQUOTE_START … EXPQUOTE_END`` block when it appears
+      INSIDE a head line (heads are one-liners; the embedded quote
+      belongs in the body, not the head).
+    * Any orphan ``EXPQUOTE_*`` sentinel that escaped pair-matching.
     * ``$HOME`` → ``~`` so long Mac paths don't waste 30+ chars.
+
+    The MarkdownV2 ``convert_markdown`` step inside ``send_with_fallback``
+    handles escaping special chars and expanding paired EXPQUOTE blocks
+    into expandable blockquote syntax.
     """
     import os
 
     out = _EXPQUOTE_BLOCK_RE.sub("", text)
     out = _EXPQUOTE_ANY_RE.sub("", out)
-    out = _MD_BOLD_RE.sub(r"\1", out)
-    out = _MD_ITALIC_RE.sub(r"\1", out)
-    out = _MD_BACKTICK_RE.sub("", out)
     home = os.path.expanduser("~")
     if home and home != "/":
         out = out.replace(home, "~")
@@ -513,18 +504,20 @@ def _chunk_final_text(text: str, budget: int = CARD_PAGE_BUDGET) -> list[str]:
     return chunks
 
 
-def _indent_body(body: str) -> str:
-    """Format ``body`` as a plain-text indented block under a head.
+def _spoiler_body(body: str) -> str:
+    """Wrap ``body`` in EXPQUOTE_START/END so MarkdownV2 conversion turns
+    it into an expandable blockquote.
 
-    The card is sent without ``parse_mode``, so we can't use MarkdownV2
-    expandable blockquotes — they'd render as literal ``**>…||``. Indent
-    body lines with two spaces, strip markdown markers, cap at
-    ``SPOILER_MAX_LINES``.
+    Trims to ``SPOILER_MAX_LINES`` first, drops the home-path noise,
+    keeps MarkdownV2 markers (``**bold**`` etc.) intact — they get
+    properly rendered by ``convert_markdown`` at send time.
     """
+    from ..transcript_format import format_expandable_quote
+
     trimmed = _body_trim(_strip_for_card(body))
     if not trimmed:
         return ""
-    return "\n".join(f"  {line}" for line in trimmed.split("\n"))
+    return format_expandable_quote(trimmed)
 
 
 def render_event(event: Event, *, in_flight: bool, now: float) -> str:
@@ -542,7 +535,7 @@ def render_event(event: Event, *, in_flight: bool, now: float) -> str:
 
     if event.type == "thinking":
         head = f"∴ thinking{marker}"
-        body = _indent_body(event.body)
+        body = _spoiler_body(event.body)
         return f"{head}\n{body}" if body else head
 
     if event.type == "tool_use":
@@ -553,14 +546,14 @@ def render_event(event: Event, *, in_flight: bool, now: float) -> str:
         else:
             glyph = "✓"
         head = f"{glyph} {event.text}{marker}"
-        body = _indent_body(event.body)
+        body = _spoiler_body(event.body)
         return f"{head}\n{body}" if body else head
 
     if event.type == "tool_result":
         # Fallback when the matching tool_use Event isn't found (parser
         # race / restart). Render as a standalone row.
         head = f"✓ {event.text}{marker}"
-        body = _indent_body(event.body)
+        body = _spoiler_body(event.body)
         return f"{head}\n{body}" if body else head
 
     if event.type in ("text", "final_text", "error"):
@@ -1089,17 +1082,9 @@ async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
     state.pending_edit = None
     text = _render_card(sess, state, user_id=user_id)
     keyboard = build_footer_keyboard(user_id, screen="main", is_busy=True)
-    try:
-        await bot.edit_message_text(
-            chat_id=user_id,
-            message_id=state.msg_id,
-            text=text,
-            reply_markup=keyboard,
-        )
+    if await _edit_card(bot, user_id, state, text=text, reply_markup=keyboard):
         state.last_rendered = text
         state.last_edit_ts = time.monotonic()
-    except Exception as e:
-        logger.debug("resume_card_view edit failed: %s", e)
 
 
 async def paint_card_on_carrier(
@@ -1131,13 +1116,7 @@ async def paint_card_on_carrier(
     keyboard = build_footer_keyboard(
         user_id, screen="main", is_busy=_card_is_busy(state)
     )
-    try:
-        await bot.edit_message_text(
-            chat_id=user_id,
-            message_id=carrier_msg_id,
-            text=text,
-            reply_markup=keyboard,
-        )
+    if await _edit_card(bot, user_id, state, text=text, reply_markup=keyboard):
         state.last_rendered = text
         state.last_edit_ts = time.monotonic()
         # Migrate the switcher pointer onto the new carrier so previous
@@ -1151,8 +1130,6 @@ async def paint_card_on_carrier(
             except Exception:
                 pass
         session_manager.set_last_switcher_msg(user_id, carrier_msg_id)
-    except Exception as e:
-        logger.debug("paint_card_on_carrier edit failed: %s", e)
 
 
 async def clear_card(bot: Bot, user_id: int, sess: Session) -> None:
@@ -1174,15 +1151,7 @@ async def clear_card(bot: Bot, user_id: int, sess: Session) -> None:
     state.last_rendered = ""
     text = _render_card(sess, state, footer="(cleared)", user_id=user_id)
     cleared_kb = build_footer_keyboard(user_id, screen="main", is_busy=False)
-    try:
-        await bot.edit_message_text(
-            chat_id=user_id,
-            message_id=state.msg_id,
-            text=text,
-            reply_markup=cleared_kb,
-        )
-    except Exception as e:
-        logger.debug("clear_card edit failed: %s", e)
+    await _edit_card(bot, user_id, state, text=text, reply_markup=cleared_kb)
     reset_card(user_id, sess.id)
 
 
@@ -1229,10 +1198,18 @@ async def _send_card(
         # explicitly with the Kill keyboard when a turn completes.
         reply_markup = build_footer_keyboard(user_id, screen="main", is_busy=True)
     keyboard = reply_markup
+    # Send through MarkdownV2 with plain-text fallback so spoilers /
+    # bold / italic render properly. ``send_with_fallback`` runs the
+    # text through ``convert_markdown`` (expanding EXPQUOTE sentinels
+    # into MarkdownV2 expandable blockquote syntax) and falls back to
+    # ``strip_sentinels(text)`` on conversion error.
+    from .message_sender import send_with_fallback
+
     try:
-        sent = await bot.send_message(
-            chat_id=user_id,
-            text=text,
+        sent = await send_with_fallback(
+            bot,
+            user_id,
+            text,
             reply_markup=keyboard,
             disable_notification=True,
         )
@@ -1286,11 +1263,18 @@ async def _edit_card(
         reply_markup = build_footer_keyboard(
             user_id, screen="main", is_busy=_card_is_busy(state)
         )
+    # Edit through MarkdownV2 with plain-text fallback so the live card
+    # renders **bold**, EXPQUOTE expandable blockquotes, etc. properly.
+    from ..markdown_v2 import convert_markdown
+    from .message_sender import PARSE_MODE, strip_sentinels
+
+    formatted = convert_markdown(text)
     try:
         await bot.edit_message_text(
             chat_id=user_id,
             message_id=state.msg_id,
-            text=text,
+            text=formatted,
+            parse_mode=PARSE_MODE,
             reply_markup=reply_markup,
         )
         return True
@@ -1304,16 +1288,32 @@ async def _edit_card(
             or "MESSAGE_ID_INVALID" in err
         ):
             # Carrier is genuinely gone — reset msg_id so the next event
-            # opens a fresh card. Other BadRequests (e.g. parse errors,
-            # Message_too_long) keep the existing msg_id; the caller
-            # logs a warning and the next render retries on the same
-            # message.
+            # opens a fresh card.
             logger.info(
                 "card edit lost-carrier msg_id=%s err=%s", state.msg_id, err
             )
             state.msg_id = None
             return False
-        logger.warning("card edit failed (BadRequest): %s", err)
+        # Parse error / can't render — fall back to stripped plain text
+        # on the SAME carrier. Keep the card alive.
+        logger.warning("card edit MarkdownV2 failed msg=%s err=%s", state.msg_id, err)
+        try:
+            await bot.edit_message_text(
+                chat_id=user_id,
+                message_id=state.msg_id,
+                text=strip_sentinels(text),
+                reply_markup=reply_markup,
+            )
+            return True
+        except BadRequest as e2:
+            err2 = str(e2)
+            if "Message is not modified" in err2:
+                return True
+            logger.warning("card edit plain fallback failed msg=%s err=%s", state.msg_id, err2)
+        except RetryAfter:
+            raise
+        except Exception as e2:
+            logger.warning("card edit plain fallback exc msg=%s err=%s", state.msg_id, e2)
     except RetryAfter:
         raise
     except Exception as e:

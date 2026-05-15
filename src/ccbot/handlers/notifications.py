@@ -1914,7 +1914,7 @@ async def _edit_card(
     # Edit through MarkdownV2 with plain-text fallback so the live card
     # renders **bold**, EXPQUOTE expandable blockquotes, etc. properly.
     from ..markdown_v2 import convert_markdown
-    from .message_sender import PARSE_MODE, strip_sentinels
+    from .message_sender import NO_LINK_PREVIEW, PARSE_MODE, strip_sentinels
 
     formatted = convert_markdown(text)
 
@@ -1933,6 +1933,7 @@ async def _edit_card(
             text=formatted,
             parse_mode=PARSE_MODE,
             reply_markup=reply_markup,
+            link_preview_options=NO_LINK_PREVIEW,
         )
         return True
     except BadRequest as e:
@@ -1958,6 +1959,7 @@ async def _edit_card(
                 message_id=state.msg_id,
                 text=strip_sentinels(text),
                 reply_markup=reply_markup,
+                link_preview_options=NO_LINK_PREVIEW,
             )
             return True
         except BadRequest as e2:

@@ -42,6 +42,8 @@ from .callback_data import (
     CB_MM_STATUS,
     CB_ST_APPROVE,
     CB_ST_BACK,
+    CB_ST_BGNOTIFY,
+    CB_ST_CAT,
     CB_ST_CHIST,
     CB_ST_CPOS,
     CB_ST_PAGESIZE,
@@ -64,6 +66,13 @@ Screen = Literal[
     "main",
     "more",
     "settings",
+    # Category sub-screens (group selector → category contents).
+    "settings_cat_card",
+    "settings_cat_notifications",
+    "settings_cat_voice",
+    "settings_cat_terminal",
+    "settings_cat_behavior",
+    # Individual setting sub-screens.
     "settings_previews",
     "settings_lag",
     "settings_voice",
@@ -75,6 +84,9 @@ Screen = Literal[
     "settings_cardhist",
     "settings_pagesize",
     "settings_screens",
+    "settings_bg_notify_finished",
+    "settings_bg_notify_error",
+    "settings_bg_notify_needs_action",
 ]
 
 # Group key -> (label translation key, sub-screen name, settings-dict key)
@@ -124,6 +136,70 @@ _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
         "settings.group.card_inline_screenshots",
         "settings_screens",
         "card_inline_screenshots",
+    ),
+    (
+        "bg_notify_finished",
+        "settings.group.bg_notify_finished",
+        "settings_bg_notify_finished",
+        "bg_notify_finished",
+    ),
+    (
+        "bg_notify_error",
+        "settings.group.bg_notify_error",
+        "settings_bg_notify_error",
+        "bg_notify_error",
+    ),
+    (
+        "bg_notify_needs_action",
+        "settings.group.bg_notify_needs_action",
+        "settings_bg_notify_needs_action",
+        "bg_notify_needs_action",
+    ),
+)
+
+
+# Category taxonomy — main Settings screen renders categories; tapping
+# a category shows its members. Settings became too many for a flat
+# list (user feedback). The first entry in each tuple is the i18n
+# label key; the second is the category sub-screen name; the third is
+# the ordered tuple of setting keys (must match ``_SETTINGS_GROUPS``).
+SETTINGS_CATEGORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    (
+        "settings.cat.card",
+        "settings_cat_card",
+        (
+            "previews",
+            "live_lag",
+            "card_position",
+            "card_history",
+            "card_page_lines",
+            "card_inline_screenshots",
+        ),
+    ),
+    (
+        "settings.cat.notifications",
+        "settings_cat_notifications",
+        (
+            "bg_notify_finished",
+            "bg_notify_error",
+            "bg_notify_needs_action",
+            "weekly_reset_day",
+        ),
+    ),
+    (
+        "settings.cat.voice",
+        "settings_cat_voice",
+        ("voice",),
+    ),
+    (
+        "settings.cat.terminal",
+        "settings_cat_terminal",
+        ("local_terminal",),
+    ),
+    (
+        "settings.cat.behavior",
+        "settings_cat_behavior",
+        ("auto_approve", "language"),
     ),
 )
 
@@ -309,41 +385,86 @@ def _highlight(label: str, active: bool) -> str:
     return f"• {label}" if active else label
 
 
+def _format_setting_value(user_id: int, value_key: str, cur: object) -> str:
+    """Format a single setting's current value for display in buttons."""
+    if value_key == "live_lag":
+        return f"{int(cur)}s" if cur is not None else "?"  # type: ignore[arg-type]
+    if value_key == "weekly_reset_day":
+        return t(user_id, f"day.{cur}") if cur else "?"
+    if value_key == "auto_approve":
+        return t(user_id, f"approve.{cur}") if cur else "?"
+    if value_key == "local_terminal":
+        return t(user_id, f"local.{cur}") if cur else "?"
+    if value_key == "card_position":
+        return t(user_id, f"cardpos.{cur}") if cur else "?"
+    if value_key == "card_history":
+        return f"{int(cur)} turns" if cur else "?"  # type: ignore[arg-type]
+    if value_key == "card_page_lines":
+        return f"{int(cur)} lines" if cur else "?"  # type: ignore[arg-type]
+    if value_key == "card_inline_screenshots":
+        return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
+    if value_key in ("bg_notify_finished", "bg_notify_error", "bg_notify_needs_action"):
+        return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
+    return str(cur) if cur is not None else "?"
+
+
 def _settings_main_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
-    """Top-level Settings screen: one button per group + Back-to-Menu."""
-    s = session_manager.get_user_settings(user_id)
+    """Top-level Settings screen — category selector.
+
+    Settings became too many for a flat list (user feedback). Each
+    category opens a sub-screen listing its members. Languages /
+    auto-approve land in the 'Behavior' category for now.
+    """
     rows: list[list[InlineKeyboardButton]] = []
-    for key, label_key, _screen, value_key in _SETTINGS_GROUPS:
-        cur = s.get(value_key, "")
+    for label_key, screen_name, _members in SETTINGS_CATEGORIES:
         label = t(user_id, label_key)
-        if value_key == "live_lag":
-            value_str = f"{int(cur)}s"
-        elif value_key == "weekly_reset_day":
-            value_str = t(user_id, f"day.{cur}") if cur else "?"
-        elif value_key == "auto_approve":
-            value_str = t(user_id, f"approve.{cur}") if cur else "?"
-        elif value_key == "local_terminal":
-            value_str = t(user_id, f"local.{cur}") if cur else "?"
-        elif value_key == "card_position":
-            value_str = t(user_id, f"cardpos.{cur}") if cur else "?"
-        elif value_key == "card_history":
-            value_str = f"{int(cur)} turns" if cur else "?"
-        elif value_key == "card_page_lines":
-            value_str = f"{int(cur)} lines" if cur else "?"
-        elif value_key == "card_inline_screenshots":
-            value_str = t(user_id, "screens.on") if cur else t(user_id, "screens.off")
-        else:
-            value_str = str(cur)
         rows.append(
             [
                 InlineKeyboardButton(
-                    f"{label}: {value_str}",
-                    callback_data=f"{CB_ST_GRP}{key}",
+                    label,
+                    callback_data=f"{CB_ST_CAT}{screen_name}",
                 )
             ]
         )
     rows.append(
         [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_ST_BACK)]
+    )
+    return rows
+
+
+def _settings_category_grid(
+    user_id: int, screen_name: str
+) -> list[list[InlineKeyboardButton]]:
+    """Sub-screen for one category: its member settings as buttons."""
+    members: tuple[str, ...] = ()
+    for _label_key, sname, m in SETTINGS_CATEGORIES:
+        if sname == screen_name:
+            members = m
+            break
+    s = session_manager.get_user_settings(user_id)
+    groups_by_key = {key: (lk, sc, vk) for key, lk, sc, vk in _SETTINGS_GROUPS}
+    rows: list[list[InlineKeyboardButton]] = []
+    for member_key in members:
+        if member_key not in groups_by_key:
+            continue
+        label_key, _sub_screen, value_key = groups_by_key[member_key]
+        cur = s.get(value_key, "")
+        label = t(user_id, label_key)
+        value_str = _format_setting_value(user_id, value_key, cur)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"{label}: {value_str}",
+                    callback_data=f"{CB_ST_GRP}{member_key}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"), callback_data=f"{CB_ST_CAT}settings"
+            )
+        ]
     )
     return rows
 
@@ -515,7 +636,7 @@ def _settings_screens_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     """
     cur = bool(
         session_manager.get_user_settings(user_id).get(
-            "card_inline_screenshots", True
+            "card_inline_screenshots", False
         )
     )
     return [
@@ -530,6 +651,34 @@ def _settings_screens_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             ),
         ],
         [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+    ]
+
+
+def _settings_bg_notify_grid(
+    user_id: int, key: str, back_to: str
+) -> list[list[InlineKeyboardButton]]:
+    """Simple on/off toggle for one bg_notify_* setting.
+
+    ``key`` is one of bg_notify_finished / _error / _needs_action.
+    ``back_to`` is the screen name to return to (the parent category).
+    """
+    cur = bool(session_manager.get_user_settings(user_id).get(key, True))
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(t(user_id, "screens.on"), cur),
+                callback_data=f"{CB_ST_BGNOTIFY}{key}:on",
+            ),
+            InlineKeyboardButton(
+                _highlight(t(user_id, "screens.off"), not cur),
+                callback_data=f"{CB_ST_BGNOTIFY}{key}:off",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"), callback_data=f"{CB_ST_CAT}{back_to}"
+            )
+        ],
     ]
 
 
@@ -642,6 +791,32 @@ def build_footer_keyboard(
         rows.extend(_settings_pagesize_grid(user_id))
     elif screen == "settings_screens":
         rows.extend(_settings_screens_grid(user_id))
+    elif screen in (
+        "settings_cat_card",
+        "settings_cat_notifications",
+        "settings_cat_voice",
+        "settings_cat_terminal",
+        "settings_cat_behavior",
+    ):
+        rows.extend(_settings_category_grid(user_id, screen))
+    elif screen == "settings_bg_notify_finished":
+        rows.extend(
+            _settings_bg_notify_grid(
+                user_id, "bg_notify_finished", "settings_cat_notifications"
+            )
+        )
+    elif screen == "settings_bg_notify_error":
+        rows.extend(
+            _settings_bg_notify_grid(
+                user_id, "bg_notify_error", "settings_cat_notifications"
+            )
+        )
+    elif screen == "settings_bg_notify_needs_action":
+        rows.extend(
+            _settings_bg_notify_grid(
+                user_id, "bg_notify_needs_action", "settings_cat_notifications"
+            )
+        )
     else:
         # In-card pagination row at the very top — [◀] [N/M] [▶].
         # ``N/M`` taps jump to the default-focus page (latest answer).
@@ -721,6 +896,14 @@ _GROUP_TEXT_KEYS: dict[str, str] = {
     "settings_cardhist": "settings.cardhist.body",
     "settings_pagesize": "settings.pagesize.body",
     "settings_screens": "settings.screens.body",
+    "settings_cat_card": "settings.cat.card.body",
+    "settings_cat_notifications": "settings.cat.notifications.body",
+    "settings_cat_voice": "settings.cat.voice.body",
+    "settings_cat_terminal": "settings.cat.terminal.body",
+    "settings_cat_behavior": "settings.cat.behavior.body",
+    "settings_bg_notify_finished": "settings.bg_notify.finished.body",
+    "settings_bg_notify_error": "settings.bg_notify.error.body",
+    "settings_bg_notify_needs_action": "settings.bg_notify.needs_action.body",
 }
 
 

@@ -140,6 +140,20 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                     user_id, sess.id, "needs_action", interactive_ui=ui_tuple
                 ):
                     await refresh_panel(bot, user_id)
+                    # Bg push notification (Task #42): only on TRANSITION
+                    # into needs_action (update_status returned True). The
+                    # user-setting toggles this — default on.
+                    if session_manager.get_user_settings(user_id).get(
+                        "bg_notify_needs_action", True
+                    ):
+                        from ..handlers.notifications import push_event
+
+                        try:
+                            await push_event(
+                                bot, user_id, sess, text="needs your attention"
+                            )
+                        except Exception as e:
+                            logger.debug("bg needs_action push failed: %s", e)
                 continue
 
             # Active session needs_action: card msg edits to kb-mode
@@ -201,6 +215,20 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 )
                 if bg_status.update_status(user_id, sess.id, new_status):
                     await refresh_panel(bot, user_id)
+                    # Bg push (Task #42): only on TRANSITION into finished.
+                    # ``update_status`` returns True only on actual change
+                    # — natural dedup, won't spam if same state re-affirms.
+                    if new_status == "finished" and session_manager.get_user_settings(
+                        user_id
+                    ).get("bg_notify_finished", True):
+                        from ..handlers.notifications import push_event
+
+                        try:
+                            await push_event(
+                                bot, user_id, sess, text="task complete"
+                            )
+                        except Exception as e:
+                            logger.debug("bg finished push failed: %s", e)
 
             claude_sess = await session_manager.resolve_session_for_window(wid)
             if claude_sess and claude_sess.file_path:

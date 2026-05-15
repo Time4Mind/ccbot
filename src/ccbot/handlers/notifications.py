@@ -816,11 +816,11 @@ async def _capture_pane_png(window_id: str) -> tuple[bytes | None, str]:
 
 
 def _inline_screens_enabled(user_id: int | None) -> bool:
-    """Read the ``card_inline_screenshots`` user-setting (default True)."""
+    """Read the ``card_inline_screenshots`` user-setting (default False)."""
     if user_id is None:
         return False
     settings = session_manager.get_user_settings(user_id)
-    return bool(settings.get("card_inline_screenshots", True))
+    return bool(settings.get("card_inline_screenshots", False))
 
 
 def has_pending_kb(user_id: int, session_id: str) -> tuple[bool, bool]:

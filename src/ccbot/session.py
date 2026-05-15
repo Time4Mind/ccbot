@@ -696,7 +696,13 @@ class SessionManager:
         # event but throttled to 1 photo-edit per 3 sec; skips refresh
         # when pane unchanged. Note: TG caption limit is 1024 chars vs
         # text 4096 — page size effectively shrinks ~4x when ON.
-        "card_inline_screenshots": True,
+        "card_inline_screenshots": False,
+        # Bg session push notifications (Task #42). Three independent
+        # toggles — user asked to make each granular. Default all-on
+        # so the user knows what bg sessions are doing.
+        "bg_notify_finished": True,
+        "bg_notify_error": True,
+        "bg_notify_needs_action": True,
         # Max page size in logical \n-delimited LINES. Values 10/20/40/70.
         # 20 keeps the card compact on phone; 70 is for power users who
         # scroll long bodies. Anchor (page top) chunking handles overflow

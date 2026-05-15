@@ -245,6 +245,55 @@ _EN: dict[str, str] = {
     ),
     "screens.on": "on",
     "screens.off": "off",
+    # Bg notifications (Task #42) — three independent toggles.
+    "settings.group.bg_notify_finished": "Bg: task complete",
+    "settings.group.bg_notify_error": "Bg: errors",
+    "settings.group.bg_notify_needs_action": "Bg: needs action",
+    "settings.bg_notify.finished.body": (
+        "*Bg session: task complete*\n\n"
+        "When a background session reaches end-of-turn, push a quiet "
+        "notification ✅ [<name>] task complete so you can switch in."
+    ),
+    "settings.bg_notify.error.body": (
+        "*Bg session: errors*\n\n"
+        "Push ❌ [<name>] error when a background session emits an "
+        "error event. (Currently fires only on explicit error events; "
+        "exception detection is being extended.)"
+    ),
+    "settings.bg_notify.needs_action.body": (
+        "*Bg session: needs action*\n\n"
+        "Push ❓ [<name>] needs your attention when a background session "
+        "shows an AskUserQuestion / ExitPlanMode / Permission prompt. "
+        "Otherwise only the ❓ badge in the bg-panel signals it — easy "
+        "to miss."
+    ),
+    # Settings categories (top-level Settings is now a category selector).
+    "settings.cat.card": "🃏 Card / view",
+    "settings.cat.notifications": "🔔 Notifications",
+    "settings.cat.voice": "🎙 Voice",
+    "settings.cat.terminal": "🖥 Local terminal",
+    "settings.cat.behavior": "⚙ Behavior & language",
+    "settings.cat.card.body": (
+        "*Card / view*\n\n"
+        "Layout, density and refresh of the live session card."
+    ),
+    "settings.cat.notifications.body": (
+        "*Notifications*\n\n"
+        "Bg-session pushes (finished / errors / needs-action) and "
+        "the weekly-reset day for quota alerts."
+    ),
+    "settings.cat.voice.body": (
+        "*Voice*\n\n"
+        "Speech-to-text backend for incoming voice messages."
+    ),
+    "settings.cat.terminal.body": (
+        "*Local terminal*\n\n"
+        "Native Terminal / iTerm window attached to each new session."
+    ),
+    "settings.cat.behavior.body": (
+        "*Behavior & language*\n\n"
+        "Auto-approve interactive prompts; UI language."
+    ),
     # Settings group: pop a native Terminal/iTerm window per new session
     "settings.group.local_terminal": "Local terminal",
     "settings.local.body": (
@@ -558,6 +607,48 @@ _RU: dict[str, str] = {
     ),
     "screens.on": "on",
     "screens.off": "off",
+    "settings.group.bg_notify_finished": "Bg: задача готова",
+    "settings.group.bg_notify_error": "Bg: ошибки",
+    "settings.group.bg_notify_needs_action": "Bg: нужен ввод",
+    "settings.bg_notify.finished.body": (
+        "*Bg-сессия: задача готова*\n\n"
+        "Когда фоновая сессия достигает end-of-turn, шлём тихий\n"
+        "push ✅ [<name>] task complete, чтобы юзер мог переключиться."
+    ),
+    "settings.bg_notify.error.body": (
+        "*Bg-сессия: ошибки*\n\n"
+        "Push ❌ [<name>] error когда фоновая сессия эмитит\n"
+        "ошибочный ивент. (Сейчас срабатывает только на явные\n"
+        "error-ивенты; детект исключений будет расширен.)"
+    ),
+    "settings.bg_notify.needs_action.body": (
+        "*Bg-сессия: нужен ввод*\n\n"
+        "Push ❓ [<name>] needs your attention когда фоновая сессия\n"
+        "показывает AskUserQuestion / ExitPlanMode / Permission промпт.\n"
+        "Иначе только ❓ бейдж в bg-panel — легко пропустить."
+    ),
+    "settings.cat.card": "🃏 Карточка / вид",
+    "settings.cat.notifications": "🔔 Уведомления",
+    "settings.cat.voice": "🎙 Голос",
+    "settings.cat.terminal": "🖥 Локальный терминал",
+    "settings.cat.behavior": "⚙ Поведение и язык",
+    "settings.cat.card.body": (
+        "*Карточка / вид*\n\nРаскладка, плотность и refresh живой карточки."
+    ),
+    "settings.cat.notifications.body": (
+        "*Уведомления*\n\n"
+        "Bg-сессионные пуши (готово / ошибки / нужен ввод) и день\n"
+        "сброса для weekly-quota алертов."
+    ),
+    "settings.cat.voice.body": (
+        "*Голос*\n\nДвижок speech-to-text для входящих voice."
+    ),
+    "settings.cat.terminal.body": (
+        "*Локальный терминал*\n\nНативное Terminal / iTerm окно к tmux."
+    ),
+    "settings.cat.behavior.body": (
+        "*Поведение и язык*\n\nАвто-Yes на промпты; язык интерфейса."
+    ),
     "settings.group.local_terminal": "Локальный терминал",
     "settings.local.body": (
         "*Локальный терминал*\n\n"
@@ -858,6 +949,37 @@ _ZH: dict[str, str] = {
     ),
     "screens.on": "开",
     "screens.off": "关",
+    "settings.group.bg_notify_finished": "Bg:任务完成",
+    "settings.group.bg_notify_error": "Bg:错误",
+    "settings.group.bg_notify_needs_action": "Bg:需要操作",
+    "settings.bg_notify.finished.body": (
+        "*Bg 会话:任务完成*\n\n"
+        "后台会话进入 end-of-turn 时,推送 ✅ [<name>] task complete。"
+    ),
+    "settings.bg_notify.error.body": (
+        "*Bg 会话:错误*\n\n"
+        "后台会话发出错误事件时,推送 ❌ [<name>] error。"
+    ),
+    "settings.bg_notify.needs_action.body": (
+        "*Bg 会话:需要操作*\n\n"
+        "后台会话显示 AskUserQuestion / ExitPlanMode / Permission\n"
+        "提示时,推送 ❓ [<name>] needs your attention。"
+    ),
+    "settings.cat.card": "🃏 卡片 / 视图",
+    "settings.cat.notifications": "🔔 通知",
+    "settings.cat.voice": "🎙 语音",
+    "settings.cat.terminal": "🖥 本地终端",
+    "settings.cat.behavior": "⚙ 行为和语言",
+    "settings.cat.card.body": "*卡片 / 视图*\n\n实时会话卡片的布局、密度和刷新。",
+    "settings.cat.notifications.body": (
+        "*通知*\n\nBg 会话推送(完成 / 错误 / 需要操作)和\n"
+        "weekly quota 提醒的重置日。"
+    ),
+    "settings.cat.voice.body": "*语音*\n\n语音消息的 STT 后端。",
+    "settings.cat.terminal.body": "*本地终端*\n\n附加到每个新会话的本地终端窗口。",
+    "settings.cat.behavior.body": (
+        "*行为和语言*\n\n自动同意交互提示;界面语言。"
+    ),
     "settings.group.local_terminal": "本地终端",
     "settings.local.body": (
         "*本地终端*\n\n"

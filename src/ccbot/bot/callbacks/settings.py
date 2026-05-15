@@ -13,6 +13,8 @@ from ... import voice_install
 from ...handlers.callback_data import (
     CB_ST_APPROVE,
     CB_ST_BACK,
+    CB_ST_BGNOTIFY,
+    CB_ST_CAT,
     CB_ST_CHIST,
     CB_ST_CPOS,
     CB_ST_PAGESIZE,
@@ -33,6 +35,7 @@ from ...handlers.menu import (
     build_footer_keyboard,
     render_more_text,
     render_settings_group_text,
+    render_settings_text,
 )
 from ...handlers.message_sender import safe_edit, safe_send
 from ...i18n import t
@@ -234,6 +237,19 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         await query.answer()
         return True
 
+    if data.startswith(CB_ST_CAT):
+        screen_name = data[len(CB_ST_CAT) :]
+        if screen_name == "settings":
+            text = render_settings_text(user.id)
+        else:
+            text = render_settings_group_text(user.id, screen_name)  # type: ignore[arg-type]
+        keyboard = build_footer_keyboard(user.id, screen=screen_name)  # type: ignore[arg-type]
+        await safe_edit(query, text, reply_markup=keyboard)
+        if query.message and keyboard is not None:
+            session_manager.set_last_switcher_msg(user.id, query.message.message_id)
+        await query.answer()
+        return True
+
     if data == CB_ST_LCLAUDE:
         await _send_linux_claude_prompt(query, user.id)
         await query.answer()
@@ -275,6 +291,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         CB_ST_CHIST,
         CB_ST_PAGESIZE,
         CB_ST_SCREENS,
+        CB_ST_BGNOTIFY,
     )
     if not any(data.startswith(p) for p in setter_prefixes):
         return False
@@ -371,6 +388,20 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
 
             reset_card_msg_id_for_user(user.id)
         screen_name = "settings_screens"
+    elif data.startswith(CB_ST_BGNOTIFY):
+        payload = data[len(CB_ST_BGNOTIFY) :]
+        try:
+            key, sval = payload.split(":", 1)
+        except ValueError:
+            key, sval = "", ""
+        if key in (
+            "bg_notify_finished",
+            "bg_notify_error",
+            "bg_notify_needs_action",
+        ) and sval in ("on", "off"):
+            session_manager.update_user_setting(user.id, key, sval == "on")
+        short = key.removeprefix("bg_notify_")
+        screen_name = f"settings_bg_notify_{short}"
 
     text = render_settings_group_text(user.id, screen_name)  # type: ignore[arg-type]
     keyboard = build_footer_keyboard(user.id, screen=screen_name)  # type: ignore[arg-type]

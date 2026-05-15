@@ -21,8 +21,6 @@ from ...handlers.callback_data import (
     CB_KEYS_PREFIX,
     CB_SCREENSHOT_REFRESH,
     CB_SHOT_BACK,
-    CB_SHOT_KEYS,
-    CB_SHOT_MODE,
     CB_SHOT_SW,
 )
 from ...handlers.history import send_history
@@ -152,41 +150,12 @@ def build_screenshot_compact_keyboard(
     ``origin`` is ``"m"`` (main / live card) or ``"l"`` (Menu → List
     view); the Back button routes back to that surface in both modes.
     """
+    # Manual ⌨ kb-mode toggle removed (Task #41) — kb-mode comes up
+    # automatically on the live card when claude shows a prompt, no
+    # need for a button in the shot photo. The photo keyboard is just
+    # session-switcher + Back now.
+    del mode  # legacy param, ignored
     active_sess = session_manager.get_active_session(user_id)
-
-    if mode == "k":
-        active_window = active_sess.window_id if active_sess is not None else ""
-
-        def kb(label: str, key_id: str) -> InlineKeyboardButton:
-            return InlineKeyboardButton(
-                label,
-                callback_data=f"{CB_SHOT_KEYS}{key_id}:{origin}:{active_window}"[:64],
-            )
-
-        rows: list[list[InlineKeyboardButton]] = []
-        if active_window:
-            rows.extend(
-                [
-                    [kb("␣ Space", "spc"), kb("↑", "up"), kb("⇥ Tab", "tab")],
-                    [kb("←", "lt"), kb("↓", "dn"), kb("→", "rt")],
-                    [kb("⎋ Esc", "esc"), kb("^C", "cc"), kb("⏎ Enter", "ent")],
-                ]
-            )
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    "← Switcher",
-                    callback_data=f"{CB_SHOT_MODE}s:{origin}",
-                ),
-                InlineKeyboardButton(
-                    t(user_id, "btn.back"),
-                    callback_data=f"{CB_SHOT_BACK}{origin}",
-                ),
-            ]
-        )
-        return InlineKeyboardMarkup(rows)
-
-    # mode == "s" — switcher layout (default).
     sessions = session_manager.list_user_sessions(user_id, states=("active", "idle"))
     active_id = active_sess.id if active_sess is not None else ""
     rows = []
@@ -200,17 +169,14 @@ def build_screenshot_compact_keyboard(
             row = []
     if row:
         rows.append(row)
-    bottom: list[InlineKeyboardButton] = [
-        InlineKeyboardButton(
-            "⌨ Keys",
-            callback_data=f"{CB_SHOT_MODE}k:{origin}",
-        ),
-        InlineKeyboardButton(
-            t(user_id, "btn.back"),
-            callback_data=f"{CB_SHOT_BACK}{origin}",
-        ),
-    ]
-    rows.append(bottom)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=f"{CB_SHOT_BACK}{origin}",
+            ),
+        ]
+    )
     return InlineKeyboardMarkup(rows)
 
 

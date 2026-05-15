@@ -21,12 +21,10 @@ from ...handlers.directory_browser import (
     clear_session_picker_state,
     clear_window_picker_state,
 )
-from ...handlers.interactive_ui import (
-    adopt_interactive_msg,
-    render_interactive_keyboard,
-)
 from ...handlers.message_sender import safe_edit, safe_send
 from ...handlers.notifications import (
+    enter_kb_mode,
+    get_card_state,
     paint_card_on_carrier,
     pause_card_view,
     transfer_card_to_carrier,
@@ -93,9 +91,9 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         # keeps the layout visually stable across the transition.
 
         # If this bg session has a stashed AskUserQuestion / ExitPlanMode /
-        # permission prompt, paint that UI on the carrier instead of the
-        # standard preview. Re-verify against the live pane first — claude
-        # may have moved on while the badge was up.
+        # permission prompt, paint kb-mode on the carrier directly.
+        # Re-verify against the live pane first — claude may have moved
+        # on while the badge was up.
         showed_interactive_ui = False
         pending_ui = bg_status.get_pending_interactive_ui(user.id, target_id)
         if pending_ui is not None and sess.window_id and query.message is not None:
@@ -105,19 +103,23 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                 if pane and is_interactive_ui(pane):
                     content_obj = extract_interactive_content(pane)
                     if content_obj is not None:
-                        kb = render_interactive_keyboard(
-                            sess.window_id, content_obj.name
-                        )
+                        # Claim the carrier as the live card msg, then
+                        # flip it into kb-mode view. paint_card_on_carrier
+                        # sets msg_id; enter_kb_mode then edits in place.
                         try:
-                            await safe_edit(query, content_obj.content, reply_markup=kb)
-                            adopt_interactive_msg(
+                            state = get_card_state(user.id, sess)
+                            state.msg_id = query.message.message_id
+                            state.in_menu_view = False
+                            await enter_kb_mode(
+                                context.bot,
                                 user.id,
-                                sess.window_id,
-                                query.message.message_id,
+                                sess,
+                                content_obj.content,
+                                content_obj.name,
                             )
                             showed_interactive_ui = True
                         except Exception as e:
-                            logger.debug("pending UI safe_edit failed: %s", e)
+                            logger.debug("pending UI kb_mode failed: %s", e)
 
         if not showed_interactive_ui:
             # Switcher tap unifies with Menu → Sessions: the carrier

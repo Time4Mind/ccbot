@@ -28,7 +28,6 @@ from ...handlers.callback_data import (
     CB_SCREENSHOT_REFRESH,
     CB_SHOT_BACK,
     CB_SHOT_KEYS,
-    CB_SHOT_MODE,
     CB_SHOT_SW,
 )
 from ...handlers import bg_status
@@ -159,41 +158,6 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         except Exception as e:
             logger.error("Failed to refresh screenshot: %s", e)
             await query.answer("Failed to refresh", show_alert=True)
-        return True
-
-    if data.startswith(CB_SHOT_MODE):
-        # sh:m:<k|s>:<m|l> — toggle the compact photo's keyboard between
-        # switcher rows and an arrow / Enter / Esc grid. Both modes also
-        # refresh the photo so the user sees the current pane state.
-        rest = data[len(CB_SHOT_MODE) :]
-        parts = rest.split(":", 1)
-        if len(parts) != 2 or parts[0] not in ("k", "s"):
-            await query.answer("Invalid data")
-            return True
-        mode, origin = parts
-        active = session_manager.get_active_session(user.id)
-        if active is None or not active.window_id:
-            await query.answer("No active session", show_alert=True)
-            return True
-        w = await tmux_manager.find_window_by_id(active.window_id)
-        if not w:
-            await query.answer("Window not found", show_alert=True)
-            return True
-        text = await tmux_manager.capture_pane(w.window_id, with_ansi=True)
-        if not text:
-            await query.answer("Failed to capture pane", show_alert=True)
-            return True
-        png_bytes = await text_to_image(text, with_ansi=True)
-        keyboard = build_screenshot_compact_keyboard(user.id, origin, mode=mode)
-        try:
-            await query.edit_message_media(
-                media=InputMediaPhoto(media=io.BytesIO(png_bytes)),
-                reply_markup=keyboard,
-            )
-            await query.answer("⌨" if mode == "k" else "switcher")
-        except Exception as e:
-            logger.debug("shot mode toggle failed: %s", e)
-            await query.answer("Refresh failed", show_alert=True)
         return True
 
     if data.startswith(CB_SHOT_KEYS):

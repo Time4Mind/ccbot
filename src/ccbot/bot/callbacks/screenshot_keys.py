@@ -87,6 +87,15 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
 
         session_manager.set_active_session(user.id, target_id)
         bg_status.clear_for_user_session(user.id, target_id)
+        # Hold the new active session's card in menu-mode so claude
+        # events buffer silently while the user is still on the photo.
+        # The Back handler's ``resume_card_view`` clears this flag and
+        # spawns / repaints the card afterwards. Without this, events
+        # for the newly-active session would race the photo view
+        # because ``_should_buffer`` no longer treats it as bg.
+        from ...handlers.notifications import mark_card_paused
+
+        mark_card_paused(user.id, target_id)
 
         w = await tmux_manager.find_window_by_id(sess.window_id)
         if not w:

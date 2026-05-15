@@ -1407,6 +1407,15 @@ async def close_card_view(
     )
 
 
+def mark_card_paused(user_id: int, session_id: str) -> None:
+    """Force a card to ``in_menu_view=True``, creating empty state if
+    none exists. Differs from :func:`pause_card_view` which silently
+    no-ops on a missing state — needed for the Shot → switcher path
+    where the user pivots onto a session whose card was never seeded.
+    """
+    _cards.setdefault((user_id, session_id), CardState()).in_menu_view = True
+
+
 def pause_card_view(user_id: int, session_id: str) -> None:
     """Mark the live card paused so session updates buffer instead of
     rendering. Called when the user opens a Menu / sub-screen on the
@@ -1624,9 +1633,11 @@ async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
     we still clear the flag; the next claude event spawns a fresh
     card via ``_send_card`` because ``state.msg_id is None``.
     """
-    state = _cards.get((user_id, sess.id))
-    if state is None:
-        return
+    # ``setdefault`` so a session with no card-state yet (just-switched
+    # bg session via Shot's switcher) still lands on a visible surface.
+    # Without this, resume_card_view silently bailed and Back left the
+    # user staring at empty chat.
+    state = _cards.setdefault((user_id, sess.id), CardState())
     state.in_menu_view = False
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()

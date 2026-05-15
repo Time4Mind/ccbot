@@ -829,6 +829,11 @@ def _render_card(
         parts.append("─────")
         parts.append(footer)
     if panel:
+        # Explicit gap before the bg-status panel so it reads as a
+        # distinct block from the active-session body. The panel itself
+        # carries its own ``─── фон ───`` label-separator (pivot #39
+        # feedback: previously the bg-row glued to the last body line).
+        parts.append("")
         parts.append(panel)
     return "\n".join(parts)
 
@@ -1955,7 +1960,7 @@ async def _edit_card(
     return False
 
 
-_PHOTO_EDIT_MIN_INTERVAL = 3.0  # seconds — per-session throttle on editMessageMedia
+_PHOTO_EDIT_MIN_INTERVAL = 2.5  # seconds — per-session throttle on editMessageMedia
 
 
 async def _edit_photo_card(
@@ -2549,10 +2554,13 @@ async def refresh_panel(bot: Bot, user_id: int) -> None:
 # ─── Tool-timer tick ──────────────────────────────────────────────────
 
 # How often to re-render the active card to advance the ⏳ M:SS counter
-# on the latest in-flight tool/thinking entry. 3–4 s is the sweet spot:
-# fast enough to feel live, slow enough that we don't waste editMessageText
-# calls or hit the 30/s rate limiter.
-CARD_TIMER_TICK_SECONDS = 3.0
+# on the latest in-flight tool/thinking entry. Matches the
+# session_monitor poll cadence (2 s) so the card feels as responsive as
+# Telegram's own "typing…" indicator — per-user feedback on pivot #39.
+# Inline-screenshot cards are additionally throttled by
+# ``_PHOTO_EDIT_MIN_INTERVAL`` (2.5 s) so editMessageMedia bursts stay
+# within Telegram's limits.
+CARD_TIMER_TICK_SECONDS = 2.0
 
 
 def _latest_inflight_idx(page_events: list[Event]) -> int | None:

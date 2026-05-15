@@ -160,6 +160,60 @@ def set_context_pct(user_id: int, session_id: str, pct: int) -> None:
     _entry(user_id, session_id).context_pct = pct
 
 
+async def infer_status_from_jsonl(sess: "Session") -> Status | None:
+    """Read the last assistant turn from ``sess``'s JSONL and infer
+    whether the session is currently working or has finished.
+
+    Used when a session becomes background and we need to seed its
+    panel row with a meaningful badge — the in-memory bg_status entry
+    may be stale ("working" left over from before the user switched
+    INTO it) or missing entirely (session finished while the bot was
+    off, no JSONL event has fired since). Returns None when there's
+    no JSONL to read.
+    """
+    # Lazy imports: top-level would cycle through SessionManager._load_state.
+    from .. import session_claude_io
+
+    if not sess.claude_session_id or not sess.workdir:
+        return None
+    file_path = session_claude_io.build_session_file_path(
+        sess.claude_session_id, sess.workdir
+    )
+    if file_path is None or not file_path.exists():
+        return None
+    last_stop: str = ""
+    last_role: str = ""
+    import json as _json
+
+    import aiofiles
+
+    try:
+        async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
+            async for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                if obj.get("type") != "assistant":
+                    continue
+                msg = obj.get("message", {})
+                last_role = "assistant"
+                last_stop = msg.get("stop_reason", "") or ""
+    except OSError as e:
+        logger.debug("infer_status: cannot read %s: %s", file_path, e)
+        return None
+    if last_role != "assistant":
+        return None
+    if last_stop in ("end_turn", "stop_sequence", "max_tokens"):
+        return "finished"
+    # ``tool_use`` stop_reason — session was mid-turn when the JSONL
+    # last got a write. Treat as still working.
+    return "working"
+
+
 def clear_for_session(session_id: str) -> bool:
     """Drop the entry for ``session_id`` across all users. Called on
     archive / kill / done. Returns True if anything was dropped."""

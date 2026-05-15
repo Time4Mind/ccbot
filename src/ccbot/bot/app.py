@@ -172,6 +172,41 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     asyncio.create_task(_prewarm_history_caches())
     logger.info("History cache pre-warm scheduled")
 
+    # Seed bg_status for every bg session from JSONL so the panel
+    # shows honest badges right after restart (sessions that ended
+    # before the restart would otherwise sit as ⏳ "working" or be
+    # missing entirely until a fresh JSONL event lands).
+    async def _seed_bg_statuses() -> None:
+        from ..handlers import bg_status
+        from ..handlers.notifications import refresh_panel
+
+        for user_id in config.allowed_users:
+            active = session_manager.get_active_session(user_id)
+            active_id = active.id if active is not None else None
+            changed = False
+            for sess in list(session_manager.sessions.values()):
+                if sess.state not in ("active", "idle"):
+                    continue
+                if sess.id == active_id:
+                    continue
+                try:
+                    inferred = await bg_status.infer_status_from_jsonl(sess)
+                except Exception as e:
+                    logger.debug("infer bg status failed for %s: %s", sess.id, e)
+                    continue
+                if inferred is None:
+                    continue
+                if bg_status.update_status(user_id, sess.id, inferred):
+                    changed = True
+            if changed:
+                try:
+                    await refresh_panel(application.bot, user_id)
+                except Exception as e:
+                    logger.debug("refresh_panel after seed failed: %s", e)
+
+    asyncio.create_task(_seed_bg_statuses())
+    logger.info("Bg-status seed scheduled")
+
 
 async def post_shutdown(
     application: "Application[Any, Any, Any, Any, Any, Any]",

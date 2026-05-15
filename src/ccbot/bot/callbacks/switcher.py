@@ -85,6 +85,38 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
 
         session_manager.set_active_session(user.id, target_id)
 
+        # The session we just LEFT is now bg. Seed its panel row from
+        # JSONL so the user sees an honest status (✅ finished / ⏳
+        # working) instead of either nothing or a stale "working"
+        # carried over from when it was last touched. Fire-and-forget
+        # — we don't block the switcher tap on the JSONL read.
+        if (
+            old_active is not None
+            and old_active.id != target_id
+            and old_active.window_id
+        ):
+            import asyncio as _asyncio
+
+            from ...session_models import Session as _Session
+
+            async def _seed_bg_status(old_sess: _Session) -> None:
+                try:
+                    inferred = await bg_status.infer_status_from_jsonl(old_sess)
+                except Exception as e:
+                    logger.debug("infer bg status failed: %s", e)
+                    return
+                if inferred is None:
+                    return
+                if bg_status.update_status(user.id, old_sess.id, inferred):
+                    try:
+                        from ...handlers.notifications import refresh_panel
+
+                        await refresh_panel(context.bot, user.id)
+                    except Exception as e:
+                        logger.debug("refresh_panel after seed failed: %s", e)
+
+            _asyncio.create_task(_seed_bg_status(old_active))
+
         # The switcher tap always lands the user on the session's
         # history view, regardless of which view fired it (main card,
         # /screenshot, etc.). The Menu button anchored to the bottom row

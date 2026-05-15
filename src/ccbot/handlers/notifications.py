@@ -64,9 +64,22 @@ STALE_CARD_SECONDS = 5 * 60
 # truncated with a "… (+N more lines)" trailer. Env-tunable.
 SPOILER_MAX_LINES = 5
 
-# Char budget for one rendered card page. Telegram message limit is 4096;
-# we leave headroom for header, divider, bg-panel.
+# Char budget for one rendered card page — kept as a hard ceiling for
+# the Telegram-level 4096-char limit. Headroom for header / divider /
+# bg-panel. The user-facing budget is in LINES (see ``card_page_lines``
+# user-setting / ``_resolve_line_budget``); chars budget here is only
+# a sanity-cap when the page-by-lines result would still overflow TG.
 CARD_PAGE_BUDGET = 3500
+
+# Default page-size budget in LINES (logical \n-delimited rows in the
+# MarkdownV2 source — close enough to visual lines on a phone for ±5
+# tolerance the user explicitly accepted). User overrides via
+# Settings → Page size (15 / 30 / 50 / 100).
+CARD_PAGE_LINES_DEFAULT = 30
+
+# Allowed overshoot (in lines) when trimming a page or chunking an
+# anchor so a sentence / paragraph isn't broken mid-content.
+CARD_PAGE_LINES_OVERSHOOT = 5
 
 # Number of trailing end_turn boundaries to pull from JSONL when seeding
 # an empty ``state.events`` (e.g. after a bot restart). Each end_turn
@@ -489,36 +502,65 @@ def _body_trim(body: str, max_lines: int = SPOILER_MAX_LINES) -> str:
     return "\n".join(kept)
 
 
-def _chunk_final_text(text: str, budget: int = CARD_PAGE_BUDGET) -> list[str]:
-    """Split a long final answer into chunks each ≤ ``budget`` chars.
+_SENTENCE_END_RE = re.compile(r"[.!?][\s)\]\"»]*\s")
 
-    Tries to break on paragraph boundaries (``\\n\\n``), then line
-    boundaries (``\\n``), then hard char cut as a last resort. Each chunk
-    becomes a separate ``final_text`` Event with ``is_page_break=True``,
-    so the card renders one chunk per page and never overflows
-    Telegram's 4096-char message limit.
 
-    Empty / short input returns a single-chunk list (or ``[]`` when empty).
+def _chunk_final_text(
+    text: str, budget_lines: int = CARD_PAGE_LINES_DEFAULT
+) -> list[str]:
+    """Split a long final answer into chunks each ≤ ``budget_lines`` lines.
+
+    Smart-boundary preference (per user spec): paragraph (``\\n\\n``) →
+    line (``\\n``) → sentence terminator (``.!?``) → word (space) → hard.
+    Allows up to ``CARD_PAGE_LINES_OVERSHOOT`` extra lines so a sentence
+    isn't broken mid-content. NEVER breaks mid-word.
+
+    Empty / short input returns a single-chunk list.
     """
     if not text:
         return []
-    if len(text) <= budget:
+    lines = text.split("\n")
+    if len(lines) <= budget_lines:
         return [text]
+
     chunks: list[str] = []
     remaining = text
-    while len(remaining) > budget:
-        # Prefer paragraph break.
-        cut = remaining.rfind("\n\n", 0, budget)
+    while _count_lines(remaining) > budget_lines:
+        rem_lines = remaining.split("\n")
+        # 1. Paragraph break — look at the last \n\n within budget+overshoot.
+        cap = budget_lines + CARD_PAGE_LINES_OVERSHOOT
+        # Convert line cap to char index.
+        char_cap = sum(len(rem_lines[i]) + 1 for i in range(min(cap, len(rem_lines))))
+        cut = remaining.rfind("\n\n", 0, char_cap)
+
+        # 2. Line break within budget (no overshoot).
         if cut <= 0:
-            # Try line break.
-            cut = remaining.rfind("\n", 0, budget)
+            char_budget = sum(
+                len(rem_lines[i]) + 1
+                for i in range(min(budget_lines, len(rem_lines)))
+            )
+            cut = remaining.rfind("\n", 0, char_budget)
+
+        # 3. Sentence terminator within budget+overshoot.
         if cut <= 0:
-            # Hard cut.
-            cut = budget
+            m_iter = list(_SENTENCE_END_RE.finditer(remaining[:char_cap]))
+            if m_iter:
+                cut = m_iter[-1].end()
+
+        # 4. Word boundary within budget+overshoot.
+        if cut <= 0:
+            cut = remaining.rfind(" ", 0, char_cap)
+
+        # 5. Hard cut (last resort — only if no other boundary found in
+        #    the entire overshoot window). Use char_cap to avoid mid-word
+        #    if possible; otherwise raw budget cut.
+        if cut <= 0:
+            cut = char_cap if char_cap > 0 else len(remaining)
+
         chunk = remaining[:cut].rstrip()
         if chunk:
             chunks.append(chunk)
-        remaining = remaining[cut:].lstrip("\n")
+        remaining = remaining[cut:].lstrip("\n").lstrip(" ")
     if remaining:
         chunks.append(remaining)
     return chunks
@@ -667,15 +709,10 @@ def _render_card(
     # MUST stay paired or the spoiler structure breaks ("text при
     # пагинации - ломается"). Older events stay reachable on previous
     # pages via ◀.
-    prefix = header + "\n─────\n"
-    suffix = ""
-    if footer:
-        suffix += "\n─────\n" + footer
-    if panel:
-        suffix += "\n" + panel
-    # Reserve 25% headroom for MarkdownV2 escape expansion + safety.
-    budget = int((4096 - len(prefix) - len(suffix) - 32) * 0.80)
-    page_events = _trim_page_events(pages[idx], budget)
+    # Budget is in LINES (per user setting ``card_page_lines``).
+    # _trim_page_events drops middle events to fit; anchor + tail kept.
+    line_budget = _resolve_line_budget(user_id)
+    page_events = _trim_page_events(pages[idx], line_budget)
     body = render_page(page_events, now=time.time())
     if len(page_events) < len(pages[idx]):
         dropped = len(pages[idx]) - len(page_events)
@@ -692,8 +729,36 @@ def _render_card(
     return "\n".join(parts)
 
 
-def _trim_page_events(events: list[Event], budget: int) -> list[Event]:
-    """Drop middle events from ``events`` until rendered size ≤ ``budget``.
+def _count_lines(text: str) -> int:
+    """Count logical \\n-delimited lines in a rendered string."""
+    if not text:
+        return 0
+    return text.count("\n") + 1
+
+
+def _resolve_line_budget(user_id: int | None) -> int:
+    """Read the user's ``card_page_lines`` setting (15/30/50/100).
+
+    Returns the default when the user has no setting or ``user_id`` is
+    None (e.g. unit-test paths). Always clamps to the allowed range.
+    """
+    if user_id is None:
+        return CARD_PAGE_LINES_DEFAULT
+    try:
+        raw = session_manager.get_user_settings(user_id).get(
+            "card_page_lines", CARD_PAGE_LINES_DEFAULT
+        )
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = CARD_PAGE_LINES_DEFAULT
+    if value not in (15, 30, 50, 100):
+        return CARD_PAGE_LINES_DEFAULT
+    return value
+
+
+def _trim_page_events(events: list[Event], budget_lines: int) -> list[Event]:
+    """Drop middle events from ``events`` until rendered line-count
+    ≤ ``budget_lines`` (with ``CARD_PAGE_LINES_OVERSHOOT`` slack).
 
     Always preserves:
     * The FIRST event (page anchor — usually the ``is_page_break``
@@ -707,22 +772,23 @@ def _trim_page_events(events: list[Event], budget: int) -> list[Event]:
     if not events:
         return events
     now = time.time()
-    full = render_page(events, now=now)
-    if len(full) <= budget:
+    full_lines = _count_lines(render_page(events, now=now))
+    cap = budget_lines + CARD_PAGE_LINES_OVERSHOOT
+    if full_lines <= cap:
         return events
     anchor = events[0]
-    anchor_size = len(render_event(anchor, in_flight=False, now=now)) + 1
-    remaining_budget = max(0, budget - anchor_size)
+    anchor_lines = _count_lines(render_event(anchor, in_flight=False, now=now))
+    remaining = max(0, budget_lines - anchor_lines)
     # Walk from the end (excluding anchor), accumulating until budget.
     kept_tail_rev: list[Event] = []
     total = 0
     for i in range(len(events) - 1, 0, -1):
         rendered = render_event(events[i], in_flight=False, now=now)
-        size = len(rendered) + 1
-        if kept_tail_rev and total + size > remaining_budget:
+        ev_lines = _count_lines(rendered)
+        if kept_tail_rev and total + ev_lines > remaining:
             break
         kept_tail_rev.append(events[i])
-        total += size
+        total += ev_lines
     kept_tail = list(reversed(kept_tail_rev))
     return [anchor, *kept_tail]
 
@@ -1616,12 +1682,13 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
 
     # Final answer = ONE OR MORE is_page_break Events: each chunk
     # anchors a new page. ``_chunk_final_text`` keeps every chunk under
-    # ``CARD_PAGE_BUDGET`` chars (well below Telegram's 4096 limit) so
-    # the rendered page never overflows. Default focus lands on the
-    # FIRST chunk's page so the user reads the answer from the top.
+    # ``card_page_lines`` user-setting (in LINES) so the rendered page
+    # respects what the user picked. Smart boundaries (paragraph / line
+    # / sentence / word) prevent mid-content breaks. Default focus lands
+    # on the FIRST chunk's page so the user reads the answer from the top.
     now = time.time()
     stripped_full = _strip_for_card(cleaned)
-    chunks = _chunk_final_text(stripped_full)
+    chunks = _chunk_final_text(stripped_full, _resolve_line_budget(user_id))
     final_events = [
         Event(
             type="final_text",

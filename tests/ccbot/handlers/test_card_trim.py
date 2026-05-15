@@ -1,10 +1,19 @@
 """Tests for ``_trim_page_events`` — drops middle events from a page so the
-rendered output fits Telegram's 4096-char limit while preserving the
-page anchor (the first event = answer text) and the latest tail."""
+rendered output fits the user's line-budget (with ±5 lines overshoot).
+
+Always preserves the anchor (first event = page answer / page break) and
+the freshest tail events (latest signal).
+"""
 
 from __future__ import annotations
 
-from ccbot.handlers.notifications import Event, _trim_page_events, render_page
+from ccbot.handlers.notifications import (
+    CARD_PAGE_LINES_OVERSHOOT,
+    Event,
+    _count_lines,
+    _trim_page_events,
+    render_page,
+)
 
 
 def _ev(type_: str, text: str, started_at: float = 1.0, **kw: object) -> Event:
@@ -13,14 +22,14 @@ def _ev(type_: str, text: str, started_at: float = 1.0, **kw: object) -> Event:
 
 class TestTrimPageEvents:
     def test_empty_in_empty_out(self) -> None:
-        assert _trim_page_events([], 1000) == []
+        assert _trim_page_events([], 30) == []
 
     def test_under_budget_unchanged(self) -> None:
         events = [
             _ev("user_msg", "👤 hi"),
             _ev("tool_use", "Bash", started_at=2.0),
         ]
-        out = _trim_page_events(events, 10_000)
+        out = _trim_page_events(events, 100)
         assert out == events
 
     def test_drops_middle_events_to_fit_budget(self) -> None:
@@ -29,7 +38,7 @@ class TestTrimPageEvents:
         # middles dropped.
         anchor = _ev(
             "final_text",
-            "ANCHOR " + "x" * 200,
+            "ANCHOR\nline2\nline3",
             started_at=1.0,
             is_page_break=True,
         )
@@ -39,10 +48,10 @@ class TestTrimPageEvents:
         ]
         tail = _ev("thinking", "", started_at=100.0)
         events = [anchor, *middles, tail]
-        out = _trim_page_events(events, 500)
+        out = _trim_page_events(events, 10)
         # Anchor preserved as the first event.
         assert out[0] is anchor
-        # Tail (last event before trim) is in the kept slice.
+        # Tail is in the kept slice.
         assert tail in out
         # Some middle events dropped.
         assert len(out) < len(events)
@@ -52,27 +61,29 @@ class TestTrimPageEvents:
         # the anchor the page has no context whatsoever).
         anchor = _ev(
             "final_text",
-            "x" * 5000,
+            "\n".join([f"line {i}" for i in range(200)]),
             started_at=1.0,
             is_page_break=True,
         )
-        out = _trim_page_events([anchor, _ev("tool_use", "Read")], 100)
+        out = _trim_page_events([anchor, _ev("tool_use", "Read")], 10)
         assert out[0] is anchor
 
-    def test_renders_under_budget_after_trim(self) -> None:
-        # Synthetic page that renders well over budget; after trim it
-        # should fit.
+    def test_renders_under_budget_lines_after_trim(self) -> None:
+        # Page with many tool events, each rendering as multiple lines.
+        # After trim, rendered line count ≤ budget + overshoot.
         events = [
             _ev("final_text", "ANSWER", started_at=1.0, is_page_break=True),
         ] + [
-            _ev("tool_use", "tool", started_at=2.0 + i, body="y" * 200)
+            _ev(
+                "tool_use",
+                "tool",
+                started_at=2.0 + i,
+                body="\n".join(["body"] * 5),  # multi-line body
+            )
             for i in range(40)
         ]
-        budget = 1500
+        budget = 15
         out = _trim_page_events(events, budget)
         rendered = render_page(out, now=2.0)
-        # Allow a small overshoot tolerance for joining newlines + the
-        # body's EXPQUOTE wrapping that render_page applies after the
-        # event-level size estimate (~10-20% headroom is what the caller
-        # in _render_card budgets anyway).
-        assert len(rendered) <= int(budget * 1.6)
+        actual_lines = _count_lines(rendered)
+        assert actual_lines <= budget + CARD_PAGE_LINES_OVERSHOOT + 5  # render_page joins with \\n\\n\\n

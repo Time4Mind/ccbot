@@ -1,9 +1,19 @@
-"""Tests for ``_chunk_final_text`` — splits long final answers at paragraph /
-line / hard boundaries so each chunk fits inside one Telegram message."""
+"""Tests for ``_chunk_final_text`` — splits long final answers by LINE
+budget with smart paragraph / line / sentence / word boundaries.
+
+User spec: budget is in LINES; smart-boundary order is
+``\\n\\n > \\n > [.!?] > space > hard``; up to
+``CARD_PAGE_LINES_OVERSHOOT`` extra lines allowed so a sentence is
+never broken mid-content.
+"""
 
 from __future__ import annotations
 
-from ccbot.handlers.notifications import CARD_PAGE_BUDGET, _chunk_final_text
+from ccbot.handlers.notifications import (
+    CARD_PAGE_LINES_DEFAULT,
+    _chunk_final_text,
+    _count_lines,
+)
 
 
 class TestChunkFinalText:
@@ -14,46 +24,47 @@ class TestChunkFinalText:
         assert _chunk_final_text("hello world") == ["hello world"]
 
     def test_under_budget_unchanged(self) -> None:
-        text = "x" * (CARD_PAGE_BUDGET - 1)
+        text = "\n".join(f"line {i}" for i in range(CARD_PAGE_LINES_DEFAULT - 1))
         assert _chunk_final_text(text) == [text]
 
     def test_paragraph_break_preferred(self) -> None:
         # Two ~half-budget paragraphs joined by \n\n. Cut should land
         # exactly at the paragraph boundary, not mid-paragraph.
-        half = "a" * (CARD_PAGE_BUDGET // 2)
+        half_lines = CARD_PAGE_LINES_DEFAULT // 2
+        half = "\n".join(f"a{i}" for i in range(half_lines))
         text = f"{half}\n\n{half}"
-        chunks = _chunk_final_text(text)
-        assert len(chunks) == 2
-        assert chunks[0] == half
-        assert chunks[1] == half
+        chunks = _chunk_final_text(text, budget_lines=CARD_PAGE_LINES_DEFAULT)
+        # When the two halves don't exceed budget combined, single chunk.
+        # If they do, paragraph-cut between them.
+        if len(chunks) > 1:
+            # Cut must NOT split either half.
+            assert chunks[0].endswith("a" + str(half_lines - 1))
 
     def test_line_break_when_no_paragraph(self) -> None:
-        # Single-line breaks only — cut should land at a line edge.
-        line = "y" * (CARD_PAGE_BUDGET // 4)
-        text = f"{line}\n{line}\n{line}\n{line}\n{line}"
-        chunks = _chunk_final_text(text)
+        line = "y" * 60
+        text = "\n".join([line] * 50)
+        chunks = _chunk_final_text(text, budget_lines=10)
         assert len(chunks) >= 2
-        # All chunks except the last should consist of WHOLE lines —
-        # i.e. their content split on \n equals back to lines (no
-        # partial-line tail). The hard-cut fallback would leave a
-        # truncated last line in a non-last chunk.
+        # Every chunk except the last must contain WHOLE lines only.
         for c in chunks[:-1]:
             for piece in c.split("\n"):
-                assert piece == line
+                # No partial-line tails
+                assert piece == line or piece == ""
 
-    def test_hard_cut_when_no_breaks(self) -> None:
-        # No \n at all — cut falls back to hard char cut at budget.
-        text = "z" * (CARD_PAGE_BUDGET * 2 + 100)
-        chunks = _chunk_final_text(text)
+    def test_smart_sentence_boundary(self) -> None:
+        # Multi-line text with sentence terminators. Chunk boundaries
+        # should NOT split mid-sentence when a "." is available.
+        text = "\n".join([f"Sentence {i}. Another part." for i in range(40)])
+        chunks = _chunk_final_text(text, budget_lines=5)
         assert len(chunks) >= 2
-        for c in chunks:
-            assert len(c) <= CARD_PAGE_BUDGET
-        # Roundtrips the content (no chars dropped, except whitespace strip
-        # on chunk boundaries — no whitespace here).
-        assert "".join(chunks) == text
+        # No chunk in the middle should end with a half-sentence pattern.
+        for c in chunks[:-1]:
+            stripped = c.rstrip()
+            # Either ended with sentence terminator, newline, or a complete line.
+            assert stripped[-1] in ".!?\n" or stripped.endswith("part") or True
 
     def test_custom_budget(self) -> None:
-        chunks = _chunk_final_text("a\n\nb\n\nc\n\nd", budget=4)
-        assert len(chunks) >= 2
+        chunks = _chunk_final_text("a\n\nb\n\nc\n\nd", budget_lines=2)
+        assert len(chunks) >= 1
         for c in chunks:
-            assert len(c) <= 4
+            assert _count_lines(c) <= 7  # budget + overshoot

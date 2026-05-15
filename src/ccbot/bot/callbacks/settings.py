@@ -15,6 +15,7 @@ from ...handlers.callback_data import (
     CB_ST_BACK,
     CB_ST_CHIST,
     CB_ST_CPOS,
+    CB_ST_PAGESIZE,
     CB_ST_GRP,
     CB_ST_LAG,
     CB_ST_LANG,
@@ -201,6 +202,7 @@ _GROUP_TO_SCREEN = {
     "local_terminal": "settings_local",
     "card_position": "settings_cardpos",
     "card_history": "settings_cardhist",
+    "card_page_lines": "settings_pagesize",
 }
 
 
@@ -269,6 +271,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         CB_ST_LTERM,
         CB_ST_CPOS,
         CB_ST_CHIST,
+        CB_ST_PAGESIZE,
     )
     if not any(data.startswith(p) for p in setter_prefixes):
         return False
@@ -341,6 +344,14 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         if v in (10, 20, 50, 100):
             session_manager.update_user_setting(user.id, "card_history", v)
         screen_name = "settings_cardhist"
+    elif data.startswith(CB_ST_PAGESIZE):
+        try:
+            v = int(data[len(CB_ST_PAGESIZE) :])
+        except ValueError:
+            v = 30
+        if v in (15, 30, 50, 100):
+            session_manager.update_user_setting(user.id, "card_page_lines", v)
+        screen_name = "settings_pagesize"
 
     text = render_settings_group_text(user.id, screen_name)  # type: ignore[arg-type]
     keyboard = build_footer_keyboard(user.id, screen=screen_name)  # type: ignore[arg-type]

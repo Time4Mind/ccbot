@@ -219,6 +219,16 @@ _EN: dict[str, str] = {
         "via /history regardless of the chosen value.\n\n"
         "Higher = more scrollback in the card, more memory per session."
     ),
+    "settings.group.card_page_lines": "Page size",
+    "settings.pagesize.body": (
+        "*Page size*\n\n"
+        "Max lines on one card page. Older events drop to previous "
+        "pages (◀); a long final answer is chunked across multiple "
+        "pages with smart paragraph / sentence boundaries — no breaks "
+        "mid-word. ±5 lines tolerance.\n\n"
+        "Smaller = compact phone view. Larger = more context per page "
+        "but heavier message edits."
+    ),
     # Settings group: pop a native Terminal/iTerm window per new session
     "settings.group.local_terminal": "Local terminal",
     "settings.local.body": (
@@ -508,6 +518,17 @@ _RU: dict[str, str] = {
         "доступна через /history независимо от значения.\n\n"
         "Больше = больше истории в карточке, больше памяти на сессию."
     ),
+    "settings.group.card_page_lines": "Размер страницы",
+    "settings.pagesize.body": (
+        "*Размер страницы*\n\n"
+        "Максимум строк на одну страницу карточки. Старые события\n"
+        "уходят на предыдущие страницы (◀); длинный финальный ответ\n"
+        "режется на несколько страниц по умным границам (абзац /\n"
+        "строка / предложение / слово) — без обрывов посреди слова.\n"
+        "Допускается отклонение ±5 строк.\n\n"
+        "Меньше = компактнее для телефона. Больше = больше контекста\n"
+        "на странице, но тяжелее edits."
+    ),
     "settings.group.local_terminal": "Локальный терминал",
     "settings.local.body": (
         "*Локальный терминал*\n\n"
@@ -787,6 +808,15 @@ _ZH: dict[str, str] = {
         "从 JSONL 转录加载多少最近的 end-of-turn 边界。\n"
         "更深的历史始终通过 /history 访问,与该值无关。\n\n"
         "更多 = 卡片内更多历史,每会话占用更多内存。"
+    ),
+    "settings.group.card_page_lines": "页面大小",
+    "settings.pagesize.body": (
+        "*页面大小*\n\n"
+        "卡片单页最大行数。较旧事件落到前面的页面(◀);\n"
+        "较长的最终回答按智能边界(段落 / 行 / 句子 / 单词)\n"
+        "拆分多页 — 不会在单词中间断开。允许 ±5 行偏差。\n\n"
+        "更小 = 手机视图更紧凑。更大 = 单页更多上下文,\n"
+        "但 edit 消息更重。"
     ),
     "settings.group.local_terminal": "本地终端",
     "settings.local.body": (

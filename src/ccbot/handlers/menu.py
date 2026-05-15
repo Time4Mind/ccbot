@@ -44,6 +44,7 @@ from .callback_data import (
     CB_ST_BACK,
     CB_ST_CHIST,
     CB_ST_CPOS,
+    CB_ST_PAGESIZE,
     CB_ST_GRP,
     CB_ST_LAG,
     CB_ST_LANG,
@@ -71,6 +72,7 @@ Screen = Literal[
     "settings_local",
     "settings_cardpos",
     "settings_cardhist",
+    "settings_pagesize",
 ]
 
 # Group key -> (label translation key, sub-screen name, settings-dict key)
@@ -108,6 +110,12 @@ _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
         "settings.group.card_history",
         "settings_cardhist",
         "card_history",
+    ),
+    (
+        "card_page_lines",
+        "settings.group.card_page_lines",
+        "settings_pagesize",
+        "card_page_lines",
     ),
 )
 
@@ -286,6 +294,8 @@ def _settings_main_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             value_str = t(user_id, f"cardpos.{cur}") if cur else "?"
         elif value_key == "card_history":
             value_str = f"{int(cur)} turns" if cur else "?"
+        elif value_key == "card_page_lines":
+            value_str = f"{int(cur)} lines" if cur else "?"
         else:
             value_str = str(cur)
         rows.append(
@@ -463,6 +473,30 @@ def _settings_cardhist_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     ]
 
 
+def _settings_pagesize_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
+    """Max page size in logical \\n-delimited lines.
+
+    Fixed row 15 / 30 / 50 / 100. Smart anchor chunking with ±5 lines
+    overshoot handles single events that exceed the budget without
+    breaking mid-sentence / mid-word.
+    """
+    raw = session_manager.get_user_settings(user_id).get("card_page_lines", 30)
+    try:
+        cur = int(raw)
+    except (TypeError, ValueError):
+        cur = 30
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(str(v), cur == v),
+                callback_data=f"{CB_ST_PAGESIZE}{v}",
+            )
+            for v in (15, 30, 50, 100)
+        ],
+        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+    ]
+
+
 def _settings_weeklyday_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     cur = session_manager.get_user_settings(user_id).get("weekly_reset_day", "mon")
     rows: list[list[InlineKeyboardButton]] = []
@@ -544,6 +578,8 @@ def build_footer_keyboard(
         rows.extend(_settings_cardpos_grid(user_id))
     elif screen == "settings_cardhist":
         rows.extend(_settings_cardhist_grid(user_id))
+    elif screen == "settings_pagesize":
+        rows.extend(_settings_pagesize_grid(user_id))
     else:
         # In-card pagination row at the very top — [◀] [N/M] [▶].
         # ``N/M`` taps jump to the default-focus page (latest answer).
@@ -621,6 +657,7 @@ _GROUP_TEXT_KEYS: dict[str, str] = {
     "settings_local": "settings.local.body",
     "settings_cardpos": "settings.cardpos.body",
     "settings_cardhist": "settings.cardhist.body",
+    "settings_pagesize": "settings.pagesize.body",
 }
 
 

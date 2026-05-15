@@ -739,23 +739,28 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await asyncio.sleep(0.2)
         await handle_interactive_ui(context.bot, user.id, wid)
 
-    # User-message disposition: keep the live card visually below the
-    # user's latest line per the active card_position setting.
-    pos_mode = session_manager.get_user_settings(user.id).get("card_position", "push")
-    if pos_mode == "delete":
-        try:
-            await context.bot.delete_message(
-                chat_id=user.id, message_id=update.message.message_id
-            )
-        except Exception as e:
-            logger.debug("card_position=delete user msg delete failed: %s", e)
-    elif pos_mode == "repost" and sess is not None:
+    # Always repost the live card below the user's message (the
+    # card_position setting was ripped out — repost is the single
+    # canonical behaviour). The user's message stays in chat with a
+    # reaction emoji so the conversation chain is traceable. The
+    # reaction also marks reply-quote dispatches (same path).
+    if sess is not None:
         from ..handlers.notifications import repost_card
 
         try:
             await repost_card(context.bot, user.id, sess)
         except Exception as e:
-            logger.debug("card_position=repost failed: %s", e)
+            logger.debug("repost_card failed: %s", e)
+    try:
+        from telegram import ReactionTypeEmoji
+
+        await context.bot.set_message_reaction(
+            chat_id=user.id,
+            message_id=update.message.message_id,
+            reaction=[ReactionTypeEmoji(emoji="👀")],
+        )
+    except Exception as e:
+        logger.debug("set_message_reaction failed: %s", e)
 
 
 # Re-export so existing callers (callbacks/dir_browser.py) keep working.

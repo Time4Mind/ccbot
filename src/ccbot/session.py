@@ -675,14 +675,6 @@ class SessionManager:
         # shell-quoted attach snippet.
         "local_terminal_cmd": "",
         # Disposition of the user's outgoing text relative to the live
-        # session card. Telegram appends new messages to the bottom, so
-        # a fresh user line pushes the card up out of sight:
-        #   push   — leave it (current behaviour; card scrolls up)
-        #   delete — delete the user's message after dispatch so the
-        #            card stays as the latest chat entry
-        #   repost — resend the live card as a new message below the
-        #            user line and drop the previous card message
-        "card_position": "push",
         # How many trailing end_turn boundaries to pull from the JSONL
         # transcript when seeding an empty live-card state (e.g. after
         # a bot restart, after switcher-tap / Menu → Sessions on a fresh

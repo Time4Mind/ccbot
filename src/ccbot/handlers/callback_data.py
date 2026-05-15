@@ -100,7 +100,6 @@ CB_ST_APPROVE = "st:apr:"  # st:apr:<off|webfetch|all>
 CB_ST_LOCAL = "st:local:"  # st:local:<off|on>  toggle native Terminal popup
 CB_ST_LTERM = "st:lterm:"  # st:lterm:<emulator-name>  pick Linux template
 CB_ST_LCLAUDE = "st:lcl:claude"  # send Linux Claude-fallback prompt to chat
-CB_ST_CPOS = "st:cpos:"  # st:cpos:<push|delete|repost>  user-msg disposition
 CB_ST_CHIST = "st:chist:"  # st:chist:<10|20|50|100>  end_turn boundaries to seed
 CB_ST_PAGESIZE = "st:psz:"  # st:psz:<15|30|50|100>  max page size in lines
 CB_ST_SCREENS = "st:scr:"  # st:scr:<on|off>  inline screenshots toggle

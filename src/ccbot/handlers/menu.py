@@ -45,7 +45,6 @@ from .callback_data import (
     CB_ST_BGNOTIFY,
     CB_ST_CAT,
     CB_ST_CHIST,
-    CB_ST_CPOS,
     CB_ST_PAGESIZE,
     CB_ST_SCREENS,
     CB_ST_GRP,
@@ -80,7 +79,6 @@ Screen = Literal[
     "settings_weeklyday",
     "settings_approve",
     "settings_local",
-    "settings_cardpos",
     "settings_cardhist",
     "settings_pagesize",
     "settings_screens",
@@ -112,12 +110,6 @@ _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
         "settings.group.local_terminal",
         "settings_local",
         "local_terminal",
-    ),
-    (
-        "card_position",
-        "settings.group.card_position",
-        "settings_cardpos",
-        "card_position",
     ),
     (
         "card_history",
@@ -170,7 +162,6 @@ SETTINGS_CATEGORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         (
             "previews",
             "live_lag",
-            "card_position",
             "card_history",
             "card_page_lines",
             "card_inline_screenshots",
@@ -395,8 +386,6 @@ def _format_setting_value(user_id: int, value_key: str, cur: object) -> str:
         return t(user_id, f"approve.{cur}") if cur else "?"
     if value_key == "local_terminal":
         return t(user_id, f"local.{cur}") if cur else "?"
-    if value_key == "card_position":
-        return t(user_id, f"cardpos.{cur}") if cur else "?"
     if value_key == "card_history":
         return f"{int(cur)} turns" if cur else "?"  # type: ignore[arg-type]
     if value_key == "card_page_lines":
@@ -593,20 +582,6 @@ def _settings_local_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     return rows
 
 
-def _settings_cardpos_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
-    cur = session_manager.get_user_settings(user_id).get("card_position", "push")
-    return [
-        [
-            InlineKeyboardButton(
-                _highlight(t(user_id, f"cardpos.{v}"), cur == v),
-                callback_data=f"{CB_ST_CPOS}{v}",
-            )
-            for v in ("push", "delete", "repost")
-        ],
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
-    ]
-
-
 def _settings_cardhist_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     """How many end_turn boundaries to seed into a fresh live card.
 
@@ -783,8 +758,6 @@ def build_footer_keyboard(
         rows.extend(_settings_approve_grid(user_id))
     elif screen == "settings_local":
         rows.extend(_settings_local_grid(user_id))
-    elif screen == "settings_cardpos":
-        rows.extend(_settings_cardpos_grid(user_id))
     elif screen == "settings_cardhist":
         rows.extend(_settings_cardhist_grid(user_id))
     elif screen == "settings_pagesize":
@@ -894,7 +867,6 @@ _GROUP_TEXT_KEYS: dict[str, str] = {
     "settings_weeklyday": "settings.weeklyday.body",
     "settings_approve": "settings.approve.body",
     "settings_local": "settings.local.body",
-    "settings_cardpos": "settings.cardpos.body",
     "settings_cardhist": "settings.cardhist.body",
     "settings_pagesize": "settings.pagesize.body",
     "settings_screens": "settings.screens.body",

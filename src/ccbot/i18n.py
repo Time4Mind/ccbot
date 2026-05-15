@@ -196,18 +196,6 @@ _EN: dict[str, str] = {
     "local.off": "off",
     "local.manual": "manual",
     "local.auto": "auto",
-    # Settings group: user-message disposition relative to the live card.
-    "settings.group.card_position": "Card position",
-    "settings.cardpos.body": (
-        "*Card position*\n\n"
-        "Where the live card sits after you type:\n"
-        "• `push` — leave it (your message pushes the card up)\n"
-        "• `delete` — delete your message so the card stays last\n"
-        "• `repost` — resend the card below your message"
-    ),
-    "cardpos.push": "push",
-    "cardpos.delete": "delete",
-    "cardpos.repost": "repost",
     # Settings group: how many recent end_turn boundaries to seed into a
     # fresh live card from the JSONL transcript.
     "settings.group.card_history": "Card history",
@@ -563,17 +551,6 @@ _RU: dict[str, str] = {
     "local.off": "выкл",
     "local.manual": "по кнопке",
     "local.auto": "всегда",
-    "settings.group.card_position": "Положение карточки",
-    "settings.cardpos.body": (
-        "*Положение карточки*\n\n"
-        "Где остаётся живая карточка после твоего сообщения:\n"
-        "• `push` — оставить как есть (твоё сообщение сдвигает карточку вверх)\n"
-        "• `delete` — удалить твоё сообщение, чтобы карточка оставалась последней\n"
-        "• `repost` — переслать карточку под твоё сообщение"
-    ),
-    "cardpos.push": "push",
-    "cardpos.delete": "удалить",
-    "cardpos.repost": "переслать",
     "settings.group.card_history": "История в карточке",
     "settings.cardhist.body": (
         "*История в карточке*\n\n"
@@ -910,17 +887,6 @@ _ZH: dict[str, str] = {
     "local.off": "关",
     "local.manual": "按钮",
     "local.auto": "总是",
-    "settings.group.card_position": "卡片位置",
-    "settings.cardpos.body": (
-        "*卡片位置*\n\n"
-        "你输入后,实时卡片的位置:\n"
-        "• `push` — 保持原样(你的消息把卡片推上去)\n"
-        "• `delete` — 删除你的消息,卡片留在最下方\n"
-        "• `repost` — 在你消息下方重新发送卡片"
-    ),
-    "cardpos.push": "push",
-    "cardpos.delete": "删除",
-    "cardpos.repost": "重发",
     "settings.group.card_history": "卡片历史",
     "settings.cardhist.body": (
         "*卡片历史*\n\n"

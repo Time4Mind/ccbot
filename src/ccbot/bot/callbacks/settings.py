@@ -16,7 +16,6 @@ from ...handlers.callback_data import (
     CB_ST_BGNOTIFY,
     CB_ST_CAT,
     CB_ST_CHIST,
-    CB_ST_CPOS,
     CB_ST_PAGESIZE,
     CB_ST_SCREENS,
     CB_ST_GRP,
@@ -204,7 +203,6 @@ _GROUP_TO_SCREEN = {
     "weekly_reset_day": "settings_weeklyday",
     "auto_approve": "settings_approve",
     "local_terminal": "settings_local",
-    "card_position": "settings_cardpos",
     "card_history": "settings_cardhist",
     "card_page_lines": "settings_pagesize",
     "card_inline_screenshots": "settings_screens",
@@ -287,7 +285,6 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         CB_ST_APPROVE,
         CB_ST_LOCAL,
         CB_ST_LTERM,
-        CB_ST_CPOS,
         CB_ST_CHIST,
         CB_ST_PAGESIZE,
         CB_ST_SCREENS,
@@ -351,11 +348,6 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                 user.id, "local_terminal_cmd", LINUX_TEMPLATES[emu]
             )
         screen_name = "settings_local"
-    elif data.startswith(CB_ST_CPOS):
-        value = data[len(CB_ST_CPOS) :]
-        if value in ("push", "delete", "repost"):
-            session_manager.update_user_setting(user.id, "card_position", value)
-        screen_name = "settings_cardpos"
     elif data.startswith(CB_ST_CHIST):
         try:
             v = int(data[len(CB_ST_CHIST) :])

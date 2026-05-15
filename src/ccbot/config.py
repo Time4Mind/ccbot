@@ -140,7 +140,7 @@ class Config:
         # Background-poll interval for the live /usage modal (used by the
         # quota-crossing alarms in handlers/quota_alerts.py).
         self.quota_alert_poll_interval: float = _parse_duration(
-            os.getenv("QUOTA_ALERT_POLL_INTERVAL", "5m"), 5 * 60
+            os.getenv("QUOTA_ALERT_POLL_INTERVAL", "10m"), 10 * 60
         )
 
         # Preview

@@ -35,7 +35,6 @@ from .commands.info import (
     help_command,
     history_command,
     screenshot_command,
-    status_command,
     usage_command,
 )
 from .commands.lifecycle import (
@@ -241,7 +240,6 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     application.add_handler(CommandHandler("done", done_command))
     application.add_handler(CommandHandler("stop", stop_command))
     application.add_handler(CommandHandler("archive", archive_command))
-    application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("health", health_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CallbackQueryHandler(callback_handler))

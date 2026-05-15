@@ -1363,8 +1363,11 @@ async def close_card_view(
 
     Steps:
       - Cancel any pending edit on the old carrier.
-      - Strip its reply markup so the orphaned message looks finalized.
-      - Drop ``msg_id`` so the next claude event spawns a fresh card.
+      - **Delete** the old carrier message so the chat reads as a
+        clean replacement (per #52 follow-up — stripping the keyboard
+        was confusing, the orphaned message read like a frozen card).
+      - Drop ``msg_id`` so the next claude event / Shot Back spawns a
+        fresh card.
       - Leave ``in_menu_view=True`` so events buffer until the user
         actually navigates back (the Shot Back handler clears it).
     """
@@ -1383,12 +1386,12 @@ async def close_card_view(
     state.in_menu_view = True
     if old_msg_id is not None:
         try:
-            await bot.edit_message_reply_markup(
-                chat_id=user_id, message_id=old_msg_id, reply_markup=None
-            )
+            await bot.delete_message(chat_id=user_id, message_id=old_msg_id)
         except Exception as e:
             logger.debug(
-                "close_card_view: strip kb failed msg_id=%s: %s", old_msg_id, e
+                "close_card_view: delete old msg failed msg_id=%s: %s",
+                old_msg_id,
+                e,
             )
     logger.info(
         "card_close user=%d sess=%s old_msg_id=%s",
@@ -1629,8 +1632,15 @@ async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
         state.pending_edit.cancel()
     state.pending_edit = None
     if state.msg_id is None:
-        # Nothing to paint right now — the next event will create a
-        # fresh card. The unpause above is the important part.
+        # No carrier — spawn a fresh card now so the user lands on a
+        # visible surface immediately (used by Shot → Back after #51's
+        # ``close_card_view`` drops msg_id). Previously we waited for
+        # the next claude event; on quiet sessions that left the user
+        # staring at empty chat.
+        await _ensure_seeded(user_id, sess, state)
+        text = _render_card(sess, state, user_id=user_id)
+        keyboard = build_footer_keyboard(user_id, screen="main", is_busy=True)
+        await _send_card(bot, user_id, sess, state, text=text, reply_markup=keyboard)
         return
     text = _render_card(sess, state, user_id=user_id)
     keyboard = build_footer_keyboard(user_id, screen="main", is_busy=True)

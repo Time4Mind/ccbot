@@ -1,4 +1,4 @@
-"""Read-only info commands: /status, /history, /screenshot, /usage, /health, /help.
+"""Read-only info commands: /history, /screenshot, /usage, /health, /help.
 
 These also expose ``emit_*`` / ``render_help`` helpers used by the
 inline Menu and Help callbacks when the user opens the same view from
@@ -30,7 +30,6 @@ from ...i18n import t
 from ...screenshot import text_to_image
 from ...session import session_manager
 from ...tmux_manager import tmux_manager
-from ...usage import format_usage_breakdown_compact
 from .._common import active_window, is_user_allowed
 
 logger = logging.getLogger(__name__)
@@ -230,53 +229,6 @@ async def emit_screenshot_compact(
         logger.debug("emit_screenshot send failed: %s", e)
 
 
-# --- /status + emitter ---
-
-
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """`/status` — live usage from Claude's own ``/usage`` modal.
-
-    Uses the same fetch path as Menu→Status: a dedicated ccbot-usage
-    tmux window pops ``/usage``, captures the rendered modal, and we
-    parse it. The locally-aggregated JSONL counter was misleading
-    (didn't reflect Claude's authoritative window/weekly counters), so
-    we now report only what Claude itself reports.
-    """
-    user = update.effective_user
-    if not user or not is_user_allowed(user.id):
-        return
-    if not update.message:
-        return
-
-    from ...handlers.message_sender import safe_edit
-
-    placeholder = await safe_reply(update.message, t(user.id, "usage.fetching"))
-    text = await _format_live_usage(user.id)
-    await safe_edit(placeholder, text)
-
-
-async def emit_status(bot: Bot, user_id: int) -> None:
-    """Send /status as a fresh message (Menu→Status callback uses a richer
-    keyboard variant via callbacks/more_menu.py)."""
-    placeholder = await safe_send(bot, user_id, t(user_id, "usage.fetching"))
-    text = await _format_live_usage(user_id)
-    if placeholder is not None:
-        from ...handlers.message_sender import safe_edit
-
-        await safe_edit(placeholder, text)
-    else:
-        await safe_send(bot, user_id, text)
-
-
-async def _format_live_usage(user_id: int) -> str:
-    """Run Claude's /usage modal in the dedicated window and render its
-    parsed breakdown. Falls back to a short ``unavailable`` notice when
-    parsing fails — same surface as Menu→Status."""
-    from .._usage_window import fetch_claude_usage
-
-    info = await fetch_claude_usage()
-    block = format_usage_breakdown_compact(user_id, info)
-    return block or t(user_id, "usage.unavailable")
 
 
 # --- /usage (interactive Claude TUI) ---

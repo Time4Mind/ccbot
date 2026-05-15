@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -34,9 +35,14 @@ from .session import Session, session_manager
 logger = logging.getLogger(__name__)
 
 
-# Default Claude context window in tokens. Sessions in 1M-context mode
-# will under-report — acceptable for an at-a-glance "how full" signal.
-CONTEXT_BUDGET = 200_000
+# Claude context window in tokens, used as the denominator for the
+# "context: N%" display on the live card. Claude Code on Claude 4.x
+# (Opus 4.7 / Sonnet 4.6) runs with the extended-window beta enabled
+# by default — observed cache_read alone routinely exceeds 200k, which
+# is impossible under the 200k limit. 1M is the right denominator for
+# Claude-Code-driven sessions today. Override via env if running
+# elsewhere.
+CONTEXT_BUDGET = int(os.getenv("CCBOT_CONTEXT_BUDGET", "1000000"))
 
 
 @dataclass

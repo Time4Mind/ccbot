@@ -44,7 +44,6 @@ from telegram.error import BadRequest, RetryAfter
 from ..config import config
 from ..session import Session, session_manager
 from ..session_monitor import NewMessage
-from ..transcript_format import format_expandable_quote
 from . import bg_status
 from .message_sender import safe_send
 from .menu import build_footer_keyboard
@@ -198,24 +197,53 @@ _EXPQUOTE_BLOCK_RE = re.compile(
     r"\x02EXPQUOTE_START\x02.*?\x02EXPQUOTE_END\x02",
     re.DOTALL,
 )
+# Drop residual EXPQUOTE_START / EXPQUOTE_END sentinels that didn't
+# pair up (transcript_format builds tool blocks with nested sentinels;
+# the outer pair gets stripped but the inner one can leak in body).
+_EXPQUOTE_ANY_RE = re.compile(r"\x02EXPQUOTE_(?:START|END)\x02")
+# MarkdownV2 markers we strip for plain-text card rendering. The card is
+# sent without ``parse_mode``, so ``**bold**`` would otherwise show as
+# literal asterisks. (History view still gets full markdown via
+# ``safe_edit`` / ``_ensure_formatted`` — this only flattens the card.)
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+_MD_ITALIC_RE = re.compile(r"(?<!\w)_(.+?)_(?!\w)", re.DOTALL)
+_MD_BACKTICK_RE = re.compile(r"`+")
+# Pull the inner content out of an EXPQUOTE_START / END pair.
+_EXPQUOTE_INNER_RE = re.compile(
+    r"\x02EXPQUOTE_START\x02(.*?)\x02EXPQUOTE_END\x02",
+    re.DOTALL,
+)
+
+
+def _extract_expquote_inner(text: str) -> str:
+    """Return the content between the FIRST EXPQUOTE_START / END pair."""
+    m = _EXPQUOTE_INNER_RE.search(text or "")
+    return m.group(1) if m else ""
 
 
 def _strip_for_card(text: str) -> str:
-    """Drop expandable-quote sentinels + their content from a card line.
+    """Strip markup so the card renders cleanly as plain text.
 
-    The quote sentinels ``\x02EXPQUOTE_START\x02 … \x02EXPQUOTE_END\x02``
-    are meant for the history view's MarkdownV2 renderer. On the live
-    card each event is a one-liner, and a 160-char trim happily cuts
-    through the middle of a sentinel — leaving raw ``EXPQUOTE_S…`` in
-    the chat. Strip the whole quote block here; the user gets the
-    one-line summary (``Output 64 lines``) without the noise.
+    The live card is sent without ``parse_mode`` — Markdown markers and
+    expandable-quote sentinels would otherwise show up as literal
+    characters in chat. Strip:
 
-    Also collapses ``$HOME`` to ``~`` so a Bash command line on a Mac
-    doesn't waste 30+ chars on ``/Users/<user>/...``.
+    * The full ``EXPQUOTE_START … EXPQUOTE_END`` block (one-liner heads
+      that historically embedded a body block — body lives in
+      ``event.body`` now, not in ``event.text``).
+    * Any leftover lone ``EXPQUOTE_*`` sentinel that snuck through
+      (transcript_format nests these in tool body strings).
+    * ``**bold**`` → ``bold``, ``_italic_`` → ``italic``, backticks
+      dropped.
+    * ``$HOME`` → ``~`` so long Mac paths don't waste 30+ chars.
     """
     import os
 
     out = _EXPQUOTE_BLOCK_RE.sub("", text)
+    out = _EXPQUOTE_ANY_RE.sub("", out)
+    out = _MD_BOLD_RE.sub(r"\1", out)
+    out = _MD_ITALIC_RE.sub(r"\1", out)
+    out = _MD_BACKTICK_RE.sub("", out)
     home = os.path.expanduser("~")
     if home and home != "/":
         out = out.replace(home, "~")
@@ -255,10 +283,20 @@ def _build_event(msg: NewMessage) -> Event:
     started = _parse_timestamp(msg.timestamp)
 
     if msg.content_type == "thinking":
+        # Thinking text reaches us already wrapped in EXPQUOTE sentinels
+        # (transcript_parser → format_expandable_quote). For the card we
+        # render as plain indented text — pull the inner content out so
+        # ``_indent_body`` doesn't strip it away as a quote block.
+        inner = _extract_expquote_inner(raw_body)
+        body_text = inner if inner else ""
+        # The placeholder ``(thinking)`` is parser fallback when there's
+        # no thinking_text — show only the head, no duplicated body row.
+        if body_text.strip() == "(thinking)":
+            body_text = ""
         return Event(
             type="thinking",
-            text=_trim(text, 160),
-            body=raw_body,
+            text="",  # head is just "∴ thinking" — no per-event preview text
+            body=body_text,
             started_at=started,
         )
     if msg.content_type == "tool_use":
@@ -361,13 +399,22 @@ def _body_trim(body: str, max_lines: int = SPOILER_MAX_LINES) -> str:
     return "\n".join(kept)
 
 
-def render_event(event: Event, *, in_flight: bool, now: float) -> str:
-    """Render one Event as a body block.
+def _indent_body(body: str) -> str:
+    """Format ``body`` as a plain-text indented block under a head.
 
-    The result may contain ``EXPANDABLE_QUOTE_START/_END`` sentinels —
-    ``markdown_v2`` expands them into MarkdownV2 expandable blockquote
-    syntax (``**>line\\n>line||``) at send time.
+    The card is sent without ``parse_mode``, so we can't use MarkdownV2
+    expandable blockquotes — they'd render as literal ``**>…||``. Indent
+    body lines with two spaces, strip markdown markers, cap at
+    ``SPOILER_MAX_LINES``.
     """
+    trimmed = _body_trim(_strip_for_card(body))
+    if not trimmed:
+        return ""
+    return "\n".join(f"  {line}" for line in trimmed.split("\n"))
+
+
+def render_event(event: Event, *, in_flight: bool, now: float) -> str:
+    """Render one Event as a plain-text block for the card."""
     # Build the trailing time-or-elapsed marker
     if in_flight:
         marker = f" · ⏳ {_format_elapsed(now - event.started_at)}"
@@ -381,10 +428,8 @@ def render_event(event: Event, *, in_flight: bool, now: float) -> str:
 
     if event.type == "thinking":
         head = f"∴ thinking{marker}"
-        if event.body:
-            quoted = format_expandable_quote(_body_trim(event.body))
-            return f"{head}\n{quoted}"
-        return head
+        body = _indent_body(event.body)
+        return f"{head}\n{body}" if body else head
 
     if event.type == "tool_use":
         if event.is_error:
@@ -394,22 +439,18 @@ def render_event(event: Event, *, in_flight: bool, now: float) -> str:
         else:
             glyph = "▷"
         head = f"{glyph} {event.text}{marker}"
-        if event.body:
-            quoted = format_expandable_quote(_body_trim(event.body))
-            return f"{head}\n{quoted}"
-        return head
+        body = _indent_body(event.body)
+        return f"{head}\n{body}" if body else head
 
     if event.type == "tool_result":
         # Fallback when the matching tool_use Event isn't found (parser
         # race / restart). Render as a standalone row.
         head = f"✓ {event.text}{marker}"
-        if event.body:
-            quoted = format_expandable_quote(_body_trim(event.body))
-            return f"{head}\n{quoted}"
-        return head
+        body = _indent_body(event.body)
+        return f"{head}\n{body}" if body else head
 
     if event.type in ("text", "final_text", "error"):
-        # Mid-stream / final / error — inline, no spoiler glyph.
+        # Mid-stream / final / error — inline, no glyph.
         return event.text
 
     return event.text

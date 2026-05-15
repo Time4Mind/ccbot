@@ -42,11 +42,17 @@ def _msg(
 
 class TestBuildEvent:
     def test_thinking_event(self) -> None:
-        ev = _build_event(_msg("thinking", "pondering oauth flow"))
+        # Real thinking arrives EXPQUOTE-wrapped from transcript_parser;
+        # _build_event pulls the inner text into ``body`` for plain-text
+        # card rendering and leaves ``text`` empty (head is just
+        # "∴ thinking").
+        wrapped = "\x02EXPQUOTE_START\x02pondering oauth flow\x02EXPQUOTE_END\x02"
+        ev = _build_event(_msg("thinking", wrapped))
         assert ev.type == "thinking"
         assert ev.is_page_break is False
         assert ev.completed_at is None
-        assert "pondering" in ev.text
+        assert "pondering" in ev.body
+        assert ev.text == ""
 
     def test_tool_use_carries_id_and_name(self) -> None:
         ev = _build_event(

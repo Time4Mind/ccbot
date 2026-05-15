@@ -543,6 +543,12 @@ class SessionManager:
         sess = self.sessions.get(session_id)
         if not sess:
             return
+        if sess.state == "lost":
+            # Carry the lost-marker into archival so /archive can tag it
+            # explicitly (per user feedback on pivot #38). Without this
+            # the row reads identical to a clean archive and the fact
+            # that the tmux window died externally is lost forever.
+            sess.was_lost = True
         sess.state = "completed" if completed else "archived"
         sess.archived_at = time.time()
         sess.window_id = ""

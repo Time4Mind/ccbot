@@ -39,7 +39,7 @@ from .interactive_ui import (
     get_interactive_window,
     handle_interactive_ui,
 )
-from .notifications import is_card_busy, refresh_panel
+from .notifications import is_card_busy, is_card_in_menu_view, refresh_panel
 
 # Match option lines like "  1. Yes" / " ❯ 2. Yes, and don't ask again".
 _OPTION_LINE_RE = re.compile(r"^[\s❯>]*?(\d+)\.\s+(.+?)\s*$")
@@ -204,30 +204,45 @@ async def update_status_message(
         if bg_status.clear_pending_ui(user_id, sess.id):
             await refresh_panel(bot, user_id)
 
-    # Telegram chat-action "typing…" — fired every poll cycle while the
-    # active session has an in-flight live card (msg_id set, finalize
-    # hasn't run yet). The card-busy signal is the right gate: claude
-    # can be silently thinking between events for 20+ s, and event-only
-    # firing in session_events leaves the indicator dark during those
-    # gaps. As soon as finalize_task runs reset_card, msg_id drops to
-    # None and the indicator naturally fades inside Telegram's ~5s
-    # window. Bg sessions skip — only the foreground bubbles up.
+    # Telegram chat-action "typing…" — fired every poll cycle for the
+    # active session while it's busy. Two signals combine:
+    #
+    #   * ``is_card_busy``: a recent claude event arrived (within
+    #     ``2 × CARD_EDIT_LAG``) AND the tail event isn't a terminal
+    #     one. Bridges intra-turn gaps and prevents post-completion
+    #     stickiness.
+    #   * pane spinner (``parse_status_line``): claude TUI is showing
+    #     ``⠋ Working…``. Picks up the long-thinking case where no
+    #     JSONL events arrive for 20+ s — without this the indicator
+    #     would go dark even though claude is genuinely working.
+    #
+    # Both gated on ``not is_bg_session`` (bg sessions don't surface
+    # the chat-header typing badge) and not in_menu_view (user is
+    # browsing menu screens; typing there is noise).
     status_line = parse_status_line(pane_text) or ""
-    if not is_bg_session and sess is not None and is_card_busy(user_id, sess.id):
+    pane_busy = bool(status_line)
+    in_menu = sess is not None and is_card_in_menu_view(user_id, sess.id)
+    card_busy = sess is not None and is_card_busy(user_id, sess.id)
+    if not is_bg_session and not in_menu and (card_busy or pane_busy):
         try:
             await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
             logger.info(
-                "typing_fired source=status_polling user=%d sess=%s wid=%s status=%r",
+                "typing_fired source=status_polling user=%d sess=%s wid=%s "
+                "card_busy=%s pane_busy=%s status=%r",
                 user_id,
-                sess.id,
+                sess.id if sess else "-",
                 window_id,
+                card_busy,
+                pane_busy,
                 status_line[:40] if status_line else "",
                 extra={
                     "event": "typing_fired",
                     "source": "status_polling",
                     "user_id": user_id,
-                    "session_id": sess.id,
+                    "session_id": sess.id if sess else None,
                     "window_id": window_id,
+                    "card_busy": card_busy,
+                    "pane_busy": pane_busy,
                     "status_line": status_line[:80] if status_line else "",
                 },
             )

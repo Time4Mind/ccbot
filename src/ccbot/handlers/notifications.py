@@ -1800,14 +1800,26 @@ def _card_is_busy(state: CardState) -> bool:
     """Is this card actually producing output right now? Drives the
     Stop ↔ Kill keyboard split AND the polling-side TYPING indicator.
 
-      1. ``msg_id`` must be set (card alive — finalize hasn't reset).
-      2. A recent claude event within ``2 × CARD_EDIT_LAG``. Bridges
-         the 100-500 ms gap between ``tool_use`` and ``tool_result``
-         where the event stream briefly clears.
+    Busy iff ALL of:
+      1. ``msg_id`` set (card alive).
+      2. There IS an event log AND its tail is not a terminal event
+         (``final_text`` / ``error``). After ``finalize_task`` lands
+         a ``final_text`` chunk the turn is done — TYPING and the
+         Stop button should clear immediately, not linger for the
+         grace window.
+      3. Last event was within ``2 × CARD_EDIT_LAG`` (bridges the
+         100-500 ms ``tool_use`` ↔ ``tool_result`` gap; longer gaps
+         where claude is silently thinking are picked up by
+         ``status_polling`` via the pane spinner instead).
     """
     if state.msg_id is None:
         return False
     if state.last_event_ts <= 0:
+        return False
+    if not state.events:
+        return False
+    last = state.events[-1]
+    if last.type in ("final_text", "error"):
         return False
     now = time.time()
     grace = max(2.0, config.card_edit_lag * 2)
@@ -2521,6 +2533,15 @@ async def push_event(
     # routes back to the originating session.
     if sent is not None:
         _register_msg(user_id, sent.message_id, sess.id)
+
+
+def is_card_in_menu_view(user_id: int, session_id: str) -> bool:
+    """True if the user is currently browsing a Menu / sub-screen on
+    this session's card. Used by ``status_polling`` to gate the TYPING
+    indicator — firing it while the user navigates menus is just noise.
+    """
+    state = _cards.get((user_id, session_id))
+    return state is not None and state.in_menu_view
 
 
 def is_card_busy(user_id: int, session_id: str) -> bool:

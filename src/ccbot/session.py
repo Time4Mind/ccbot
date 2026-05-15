@@ -657,10 +657,6 @@ class SessionManager:
         # permissions doesn't already bypass (e.g. WebFetch per-domain
         # trust). "off" = surface in TG, "on" = auto-Yes on every prompt.
         "auto_approve": "off",
-        # Three ascending per-session token thresholds (in tokens). Each
-        # triggers a one-shot push notification when the session crosses it.
-        # Adjustable in 50_000-token steps via Settings.
-        "session_token_alerts": [100_000, 200_000, 400_000],
         # Three states for the desktop terminal companion:
         #   off    — never spawn, never offer
         #   manual — don't auto-spawn, but show "Open terminal" in Menu

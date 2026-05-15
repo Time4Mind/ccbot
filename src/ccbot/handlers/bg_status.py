@@ -12,11 +12,6 @@ Status states (driven only by ``handle_new_message`` transitions):
   - "needs_action" ❓  AskUserQuestion / ExitPlanMode / permission
                        prompt detected on bg session
 
-Quota indicator is a separate overlay (``quota_level``), updated by
-``update_quota`` from the usage layer when a session crosses one of
-``config.bg_status_quota_thresholds``. Levels are sticky upward —
-once a session hits red it stays red for the lifetime of the badge.
-
 The pending interactive UI itself is detected and remembered here
 (``pending_interactive_ui``) so the switcher-tap handler can render
 the prompt+keyboard on the active carrier without re-running
@@ -57,7 +52,6 @@ logger = logging.getLogger(__name__)
 
 
 Status = Literal["working", "finished", "error", "needs_action"]
-QuotaLevel = Literal["none", "green", "yellow", "red"]
 
 
 _STATUS_EMOJI: dict[Status, str] = {
@@ -67,21 +61,6 @@ _STATUS_EMOJI: dict[Status, str] = {
     "needs_action": "❓",
 }
 
-_QUOTA_EMOJI: dict[QuotaLevel, str] = {
-    "none": "",
-    "green": "⚠️🟢",
-    "yellow": "⚠️🟡",
-    "red": "⚠️🔴",
-}
-
-
-_QUOTA_ORDER: dict[QuotaLevel, int] = {
-    "none": 0,
-    "green": 1,
-    "yellow": 2,
-    "red": 3,
-}
-
 
 @dataclass
 class BgStatus:
@@ -89,7 +68,6 @@ class BgStatus:
 
     Attributes:
         status: latest status enum.
-        quota_level: latest quota threshold crossed, sticky upward.
         last_change: wall-clock timestamp of the last status mutation,
             used to sort newest-first in the panel.
         pending_interactive_ui: snapshot of the interactive UI body
@@ -99,7 +77,6 @@ class BgStatus:
     """
 
     status: Status = "working"
-    quota_level: QuotaLevel = "none"
     last_change: float = 0.0
     pending_interactive_ui: tuple[str, str] | None = None  # (content, ui_name)
 
@@ -146,19 +123,6 @@ def update_status(
     return is_new_entry or old_status != status
 
 
-def update_quota(user_id: int, session_id: str, level: QuotaLevel) -> bool:
-    """Lift quota level for one session. Sticky upward — once at red, stays
-    red even if later usage measurements suggest otherwise (because the
-    underlying transcript tokens-spent counter is monotonic). Returns
-    True if the visible level changed."""
-    entry = _entry(user_id, session_id)
-    if _QUOTA_ORDER[level] <= _QUOTA_ORDER[entry.quota_level]:
-        return False
-    entry.quota_level = level
-    _touch(entry)
-    return True
-
-
 def get_pending_interactive_ui(user_id: int, session_id: str) -> tuple[str, str] | None:
     """Return (content, ui_name) snapshot for a bg session in needs_action,
     or None if not in that state."""
@@ -181,29 +145,6 @@ def clear_pending_ui(user_id: int, session_id: str) -> bool:
         entry.status = "working"
     _touch(entry)
     return True
-
-
-def quota_glyph_for(user_id: int, session_id: str) -> str:
-    """Return ``⚠️🟢/🟡/🔴`` for a session whose quota crossed a threshold,
-    or empty string."""
-    entry = _bg.get(user_id, {}).get(session_id)
-    if entry is None:
-        return ""
-    return _QUOTA_EMOJI.get(entry.quota_level, "")
-
-
-def threshold_to_quota_level(threshold: int) -> QuotaLevel:
-    """Map an absolute token threshold to a quota level. ``threshold`` is
-    the value returned by ``usage.pop_session_token_alert`` — i.e. the
-    cumulative session-token bound that was just crossed."""
-    g, y, r = config.bg_status_quota_thresholds
-    if threshold >= r:
-        return "red"
-    if threshold >= y:
-        return "yellow"
-    if threshold >= g:
-        return "green"
-    return "none"
 
 
 def clear_for_session(session_id: str) -> bool:
@@ -233,16 +174,13 @@ def clear_for_user_session(user_id: int, session_id: str) -> bool:
 
 
 def _badge(sess: "Session", entry: BgStatus) -> str:
-    """Render one panel row: ``<emoji> <name> <status_glyph> [<quota_glyph>]``."""
+    """Render one panel row: ``<emoji> <name> <status_glyph>``."""
     from .switcher import session_emoji
 
     name = sess.name or sess.id
     sess_emoji = session_emoji(sess)
     status_glyph = _STATUS_EMOJI.get(entry.status, "")
-    quota_glyph = _QUOTA_EMOJI.get(entry.quota_level, "")
     parts = [sess_emoji, name, status_glyph]
-    if quota_glyph:
-        parts.append(quota_glyph)
     return " ".join(p for p in parts if p)
 
 
@@ -305,7 +243,6 @@ def serialize_per_user() -> dict[str, dict[str, dict[str, Any]]]:
         for sid, entry in bucket.items():
             row[sid] = {
                 "status": entry.status,
-                "quota_level": entry.quota_level,
                 "last_change": entry.last_change,
             }
         if row:
@@ -316,7 +253,8 @@ def serialize_per_user() -> dict[str, dict[str, dict[str, Any]]]:
 def load_per_user(raw: dict[str, Any] | None) -> None:
     """Populate the in-memory map from a state.json blob. Skip malformed
     entries silently — restart should never be blocked by a corrupted
-    panel snapshot. Tolerates legacy ``seen`` field by ignoring it."""
+    panel snapshot. Tolerates legacy ``quota_level``/``seen`` fields by
+    ignoring them."""
     _bg.clear()
     if not raw:
         return
@@ -334,15 +272,11 @@ def load_per_user(raw: dict[str, Any] | None) -> None:
             status_val = data.get("status", "working")
             if status_val not in ("working", "finished", "error", "needs_action"):
                 continue
-            quota_val = data.get("quota_level", "none")
-            if quota_val not in ("none", "green", "yellow", "red"):
-                quota_val = "none"
             try:
                 last_change = float(data.get("last_change", 0.0))
             except (TypeError, ValueError):
                 last_change = 0.0
             target[sid] = BgStatus(
                 status=status_val,
-                quota_level=quota_val,
                 last_change=last_change,
             )

@@ -15,8 +15,6 @@ Public API:
   compute_user_usage(user_id) -> UserUsage
   format_usage_breakdown_compact(...) — render the live /usage modal block
   format_usage_status(...) — /status text body
-  pop_session_token_alert(sess, user_id) -> int | None
-      next per-session token threshold this session has just crossed
 """
 
 from __future__ import annotations
@@ -366,42 +364,3 @@ def format_usage_status(user_id: int, usage: UserUsage) -> str:
                 f"{s.tokens_5h // 1000}k 5h / {s.tokens_total // 1000}k total"
             )
     return "\n".join(lines)
-
-
-# --- Per-session token alerts ---
-
-
-def _user_token_thresholds(user_id: int) -> list[int]:
-    """User-configurable session-token alert thresholds, ascending order."""
-    settings = session_manager.get_user_settings(user_id)
-    raw = settings.get("session_token_alerts")
-    if not isinstance(raw, list) or len(raw) != 3:
-        raw = list(config.session_token_alert_defaults)
-    out: list[int] = []
-    for v in raw:
-        try:
-            out.append(max(0, int(v)))
-        except (TypeError, ValueError):
-            out.append(0)
-    return sorted(t for t in out if t > 0)
-
-
-def pop_session_token_alert(sess: Session, user_id: int) -> int | None:
-    """Return the next per-session token threshold this session crossed, once.
-
-    Mutates ``sess.alerted_token_thresholds`` to remember which thresholds
-    have already fired. Caller is expected to persist the Session record.
-    Returns the integer threshold (e.g. 100_000) or None.
-    """
-    thresholds = _user_token_thresholds(user_id)
-    if not thresholds:
-        return None
-    fired: set[int] = set(sess.alerted_token_thresholds or [])
-    for th in thresholds:
-        if th in fired:
-            continue
-        if sess.token_usage_total >= th:
-            fired.add(th)
-            sess.alerted_token_thresholds = sorted(fired)
-            return th
-    return None

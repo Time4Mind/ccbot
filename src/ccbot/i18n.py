@@ -208,14 +208,6 @@ _EN: dict[str, str] = {
     "cardpos.push": "push",
     "cardpos.delete": "delete",
     "cardpos.repost": "repost",
-    # Settings group: per-session token alert thresholds
-    "settings.group.token_alerts": "Token alerts",
-    "settings.tokens.body": (
-        "*Per-session token alerts*\n\n"
-        "Three thresholds. The bot pushes one notification each time a "
-        "session's lifetime token usage crosses one of these — adjust in "
-        "50k-token steps."
-    ),
     # Settings group: pop a native Terminal/iTerm window per new session
     "settings.group.local_terminal": "Local terminal",
     "settings.local.body": (
@@ -502,12 +494,6 @@ _RU: dict[str, str] = {
     "cardpos.push": "push",
     "cardpos.delete": "удалить",
     "cardpos.repost": "переслать",
-    "settings.group.token_alerts": "Алерты по токенам",
-    "settings.tokens.body": (
-        "*Алерты по токенам сессии*\n\n"
-        "Три порога. Бот один раз пришлёт уведомление, когда\n"
-        "суммарный расход сессии переходит каждый — шаг 50k."
-    ),
     "settings.group.local_terminal": "Локальный терминал",
     "settings.local.body": (
         "*Локальный терминал*\n\n"
@@ -786,12 +772,6 @@ _ZH: dict[str, str] = {
     "cardpos.push": "push",
     "cardpos.delete": "删除",
     "cardpos.repost": "重发",
-    "settings.group.token_alerts": "Token 提醒",
-    "settings.tokens.body": (
-        "*会话 Token 提醒*\n\n"
-        "三个阈值。每当会话累计 token 跨过一个阈值时,\n"
-        "机器人发送一次推送通知,步长 50k。"
-    ),
     "settings.group.local_terminal": "本地终端",
     "settings.local.body": (
         "*本地终端*\n\n"

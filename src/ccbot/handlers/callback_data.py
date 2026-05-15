@@ -96,7 +96,6 @@ CB_ST_LAG = "st:lag:"  # st:lag:<value>
 CB_ST_VOICE = "st:voice:"  # st:voice:<value>
 CB_ST_WDAY = "st:wday:"  # st:wday:<mon|tue|...|sun>
 CB_ST_APPROVE = "st:apr:"  # st:apr:<off|webfetch|all>
-CB_ST_TOK = "st:tok:"  # st:tok:<slot>:<+|->  bump session-token threshold
 CB_ST_LOCAL = "st:local:"  # st:local:<off|on>  toggle native Terminal popup
 CB_ST_LTERM = "st:lterm:"  # st:lterm:<emulator-name>  pick Linux template
 CB_ST_LCLAUDE = "st:lcl:claude"  # send Linux Claude-fallback prompt to chat

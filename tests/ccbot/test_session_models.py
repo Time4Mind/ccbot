@@ -25,21 +25,15 @@ class TestSession:
         assert len(sid) == 8
         int(sid, 16)  # raises if not hex
 
-    def test_default_alerted_thresholds_empty(self) -> None:
-        s = Session(id="x", name="y")
-        assert s.alerted_token_thresholds == []
-
-    def test_round_trip_preserves_alerted_thresholds(self) -> None:
+    def test_round_trip_preserves_token_usage_total(self) -> None:
         s = Session(
             id="abc",
             name="test",
             window_id="@5",
             workdir="/tmp",
             token_usage_total=12345,
-            alerted_token_thresholds=[100_000, 200_000],
         )
         restored = Session.from_dict(s.to_dict())
-        assert restored.alerted_token_thresholds == [100_000, 200_000]
         assert restored.token_usage_total == 12345
         assert restored.window_id == "@5"
 
@@ -47,8 +41,10 @@ class TestSession:
         s = Session.from_dict({"id": "x", "state": "bogus"})
         assert s.state == "active"
 
-    def test_from_dict_handles_corrupt_alert_list(self) -> None:
+    def test_from_dict_ignores_legacy_alert_field(self) -> None:
+        # Legacy state.json files may still carry ``alerted_token_thresholds``;
+        # from_dict tolerates extra keys silently.
         s = Session.from_dict(
-            {"id": "x", "alerted_token_thresholds": ["junk", 100_000, None]}
+            {"id": "x", "alerted_token_thresholds": [100_000, 200_000]}
         )
-        assert s.alerted_token_thresholds == [100_000]
+        assert s.id == "x"

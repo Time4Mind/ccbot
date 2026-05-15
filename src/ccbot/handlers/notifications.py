@@ -140,6 +140,7 @@ _cards: dict[tuple[int, str], CardState] = {}
 _MSG_REGISTRY_LIMIT = 2000
 _msg_to_session: dict[tuple[int, int], str] = {}
 
+
 def _register_msg(user_id: int, message_id: int, session_id: str) -> None:
     """Remember which session a bot message belongs to for reply-quote routing."""
     key = (user_id, message_id)
@@ -230,7 +231,9 @@ def _parse_timestamp(ts: str) -> float:
         return time.time()
 
 
-_TOOL_HEAD_RE = re.compile(r"^\s*\**(?P<name>[A-Za-z][\w-]*)\**\s*\((?P<args>.*)\)\s*$", re.DOTALL)
+_TOOL_HEAD_RE = re.compile(
+    r"^\s*\**(?P<name>[A-Za-z][\w-]*)\**\s*\((?P<args>.*)\)\s*$", re.DOTALL
+)
 
 
 def _split_tool_text(raw: str) -> tuple[str, str, str, str]:
@@ -350,7 +353,9 @@ def _build_event(msg: NewMessage) -> Event:
         name, args, summary, content = _split_tool_text(raw_body)
         # Head: just the tool name + summary inline (e.g. "Edit · Added
         # 12 lines"). args goes under spoiler with content.
-        head_with_summary = f"{name} · {summary}" if (name and summary) else name or summary
+        head_with_summary = (
+            f"{name} · {summary}" if (name and summary) else name or summary
+        )
         spoiler_body = args
         if content:
             spoiler_body = f"{spoiler_body}\n{content}" if args else content
@@ -419,6 +424,12 @@ def _format_hhmm(epoch: float) -> str:
     import datetime as _dt
 
     return _dt.datetime.fromtimestamp(epoch).strftime("%H:%M")
+
+
+def _format_hhmmss(epoch: float) -> str:
+    import datetime as _dt
+
+    return _dt.datetime.fromtimestamp(epoch).strftime("%H:%M:%S")
 
 
 def _is_in_flight(event: Event, events: list[Event], idx: int) -> bool:
@@ -572,11 +583,16 @@ def _resolved_page_idx(state: CardState, total_pages: int) -> int:
 
 
 def render_page(events: list[Event], now: float) -> str:
-    """Render the events of one page into a single body string."""
+    """Render the events of one page into a single body string.
+
+    Events are separated by a blank line so tool/thinking blocks don't
+    bleed into one another visually — the previous solid wall of text
+    was unreadable.
+    """
     parts: list[str] = []
     for i, ev in enumerate(events):
         parts.append(render_event(ev, in_flight=_is_in_flight(ev, events, i), now=now))
-    return "\n".join(parts)
+    return "\n\n".join(parts)
 
 
 # ─── Card composition ─────────────────────────────────────────────────
@@ -592,24 +608,13 @@ def _render_card(
     emoji = session_emoji(sess)
     state_label = sess.state
     cont_marker = " · …continued" if state.is_continuation else ""
-    # Active-session quota glyph in the header — ⚠️🟢/🟡/🔴 when the
-    # session has crossed a usage threshold. Same data source as the
-    # bg-panel rows for non-active sessions.
-    quota_glyph = ""
-    if user_id is not None:
-        quota_glyph = bg_status.quota_glyph_for(user_id, sess.id)
-    # Last-event timestamp — HH:MM of the most recent event of any kind.
+    # Last-event timestamp in the header — HH:MM:SS of the most recent
+    # event of any kind (per-event timestamps inside the body stay HH:MM).
     ts_suffix = ""
     if state.last_event_ts > 0:
-        ts_suffix = " · " + _format_hhmm(state.last_event_ts)
+        ts_suffix = " · " + _format_hhmmss(state.last_event_ts)
     name_part = sess.name or sess.id
-    if quota_glyph:
-        header = (
-            f"{emoji} *{name_part}* {quota_glyph} · "
-            f"{state_label}{cont_marker}{ts_suffix}"
-        )
-    else:
-        header = f"{emoji} *{name_part}* · {state_label}{cont_marker}{ts_suffix}"
+    header = f"{emoji} *{name_part}* · {state_label}{cont_marker}{ts_suffix}"
     if sess.goal:
         header += f"\ngoal: {sess.goal}"
 
@@ -759,7 +764,8 @@ async def _seed_events_from_jsonl(sess: Session) -> list[Event]:
         if (
             getattr(p, "role", "") == "assistant"
             and getattr(p, "content_type", "") == "text"
-            and getattr(p, "stop_reason", "") in ("end_turn", "stop_sequence", "max_tokens")
+            and getattr(p, "stop_reason", "")
+            in ("end_turn", "stop_sequence", "max_tokens")
         ):
             end_turn_idxs.append(i)
             if len(end_turn_idxs) >= CARD_SEED_TURNS:
@@ -1279,9 +1285,7 @@ async def _edit_card(
         ):
             # Carrier is genuinely gone — reset msg_id so the next event
             # opens a fresh card.
-            logger.info(
-                "card edit lost-carrier msg_id=%s err=%s", state.msg_id, err
-            )
+            logger.info("card edit lost-carrier msg_id=%s err=%s", state.msg_id, err)
             state.msg_id = None
             return False
         # Parse error / can't render — fall back to stripped plain text
@@ -1299,11 +1303,15 @@ async def _edit_card(
             err2 = str(e2)
             if "Message is not modified" in err2:
                 return True
-            logger.warning("card edit plain fallback failed msg=%s err=%s", state.msg_id, err2)
+            logger.warning(
+                "card edit plain fallback failed msg=%s err=%s", state.msg_id, err2
+            )
         except RetryAfter:
             raise
         except Exception as e2:
-            logger.warning("card edit plain fallback exc msg=%s err=%s", state.msg_id, e2)
+            logger.warning(
+                "card edit plain fallback exc msg=%s err=%s", state.msg_id, e2
+            )
     except RetryAfter:
         raise
     except Exception as e:

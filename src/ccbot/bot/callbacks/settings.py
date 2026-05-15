@@ -10,7 +10,6 @@ from telegram.ext import ContextTypes
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from ... import voice_install
-from ...config import config
 from ...handlers.callback_data import (
     CB_ST_APPROVE,
     CB_ST_BACK,
@@ -22,7 +21,6 @@ from ...handlers.callback_data import (
     CB_ST_LOCAL,
     CB_ST_LTERM,
     CB_ST_PREV,
-    CB_ST_TOK,
     CB_ST_VOICE,
     CB_ST_VOICE_INSTALL_GO,
     CB_ST_VOICE_INSTALL_NO,
@@ -199,29 +197,9 @@ _GROUP_TO_SCREEN = {
     "voice": "settings_voice",
     "weekly_reset_day": "settings_weeklyday",
     "auto_approve": "settings_approve",
-    "session_token_alerts": "settings_tokens",
     "local_terminal": "settings_local",
     "card_position": "settings_cardpos",
 }
-
-
-def _bump_token_threshold(user_id: int, slot: int, delta_sign: int) -> None:
-    """Adjust slot ``slot`` of session_token_alerts by ±step, keep ascending."""
-    if slot not in (0, 1, 2):
-        return
-    settings = session_manager.get_user_settings(user_id)
-    raw = settings.get("session_token_alerts") or list(
-        config.session_token_alert_defaults
-    )
-    if not isinstance(raw, list) or len(raw) != 3:
-        raw = list(config.session_token_alert_defaults)
-    values = [int(v) for v in raw]
-    step = config.session_token_alert_step
-    new_value = max(step, values[slot] + delta_sign * step)
-    values[slot] = new_value
-    # Re-sort to keep ascending order so adjacent slots stay valid.
-    values.sort()
-    session_manager.update_user_setting(user_id, "session_token_alerts", values)
 
 
 async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> bool:
@@ -285,7 +263,6 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         CB_ST_LANG,
         CB_ST_WDAY,
         CB_ST_APPROVE,
-        CB_ST_TOK,
         CB_ST_LOCAL,
         CB_ST_LTERM,
         CB_ST_CPOS,
@@ -348,19 +325,6 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
                 user.id, "local_terminal_cmd", LINUX_TEMPLATES[emu]
             )
         screen_name = "settings_local"
-    elif data.startswith(CB_ST_TOK):
-        # Format: st:tok:<slot>:<+|->
-        payload = data[len(CB_ST_TOK) :]
-        try:
-            slot_str, sign_str = payload.split(":", 1)
-            slot = int(slot_str)
-        except (ValueError, IndexError):
-            await query.answer("Invalid")
-            return True
-        delta = 1 if sign_str == "+" else -1 if sign_str == "-" else 0
-        if delta:
-            _bump_token_threshold(user.id, slot, delta)
-        screen_name = "settings_tokens"
     elif data.startswith(CB_ST_CPOS):
         value = data[len(CB_ST_CPOS) :]
         if value in ("push", "delete", "repost"):

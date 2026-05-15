@@ -137,15 +137,6 @@ class Config:
         self.archive_purge_after: float = _parse_duration(
             os.getenv("ARCHIVE_PURGE_AFTER", "14d"), 14 * 86400
         )
-        # Per-session token alert defaults — three thresholds the user can
-        # adjust in Settings. Each must be a positive multiple of 50_000.
-        self.session_token_alert_defaults: tuple[int, int, int] = (
-            100_000,
-            200_000,
-            400_000,
-        )
-        self.session_token_alert_step: int = 50_000
-
         # Background-poll interval for the live /usage modal (used by the
         # quota-crossing alarms in handlers/quota_alerts.py).
         self.quota_alert_poll_interval: float = _parse_duration(

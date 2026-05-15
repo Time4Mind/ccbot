@@ -408,7 +408,6 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "sessions_created",
         "sessions_archived",
         "sessions_completed",
-        "session_token_alerts_emitted",
         "quota_alerts_emitted",
     )
     counter_lines = [f"{k}: {counters[k]}" for k in interesting if k in counters]

@@ -43,7 +43,7 @@ from ..session import session_manager
 from ..session_monitor import NewMessage
 from ..terminal_parser import extract_interactive_content
 from ..tmux_manager import tmux_manager
-from ..usage import aggregate_session, pop_session_token_alert
+from ..usage import aggregate_session
 
 logger = logging.getLogger(__name__)
 
@@ -202,26 +202,16 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 except OSError:
                     pass
 
-            # Per-session token alerts — push is gone in bg-molchit mode;
-            # the threshold crossing now flips the ⚠️🟢/🟡/🔴 glyph on
-            # the bg panel row (or active card header).
+            # Keep ``token_usage_total`` warm for /status display. Aggregation
+            # is cheap and bounded; failures are non-fatal.
             if msg.role == "assistant" and msg.content_type == "text":
                 try:
                     su = await aggregate_session(sess)
-                    sess.token_usage_total = su.tokens_total
-                    threshold = pop_session_token_alert(sess, user_id)
-                    if threshold is not None:
-                        from .. import metrics
-
+                    if sess.token_usage_total != su.tokens_total:
+                        sess.token_usage_total = su.tokens_total
                         session_manager.save_state()
-                        metrics.inc("session_token_alerts_emitted")
-                        level = bg_status.threshold_to_quota_level(threshold)
-                        if level != "none" and bg_status.update_quota(
-                            user_id, sess.id, level
-                        ):
-                            await refresh_panel(bot, user_id)
                 except Exception as e:
-                    logger.debug("token-alert check failed: %s", e)
+                    logger.debug("usage aggregate failed: %s", e)
         else:
             # Streaming chunk — best-effort card update.
             await update_session_card(bot, user_id, sess, msg)

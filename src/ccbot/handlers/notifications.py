@@ -452,13 +452,17 @@ def _format_hhmm(epoch: float) -> str:
 
 
 def _is_in_flight(event: Event, events: list[Event], idx: int) -> bool:
-    """A tool_use is in-flight while ``completed_at`` is unset.
-    Thinking/text are in-flight only when they're the very last event."""
-    if event.type == "tool_use":
-        return event.completed_at is None
-    if event.type in ("thinking", "text"):
-        return idx == len(events) - 1 and event.completed_at is None
-    return False
+    """Per spec: ``⏳`` lives only on the LAST event of the latest page.
+
+    Older events with ``completed_at=None`` are implicitly considered
+    finished by virtue of a newer event having started — for the user
+    the timer "moves" with whatever block claude is currently producing.
+    """
+    if idx != len(events) - 1:
+        return False
+    if event.completed_at is not None:
+        return False
+    return event.type in ("tool_use", "thinking", "text")
 
 
 def _body_trim(body: str, max_lines: int = SPOILER_MAX_LINES) -> str:
@@ -544,10 +548,10 @@ def render_event(event: Event, *, in_flight: bool, now: float) -> str:
     if event.type == "tool_use":
         if event.is_error:
             glyph = "✗"
-        elif event.completed_at is not None:
-            glyph = "✓"
-        else:
+        elif in_flight:
             glyph = "▷"
+        else:
+            glyph = "✓"
         head = f"{glyph} {event.text}{marker}"
         body = _indent_body(event.body)
         return f"{head}\n{body}" if body else head
@@ -1700,6 +1704,9 @@ async def repost_card(bot: Bot, user_id: int, sess: Session) -> None:
     if state is not None and state.in_menu_view:
         return
     state = get_card_state(user_id, sess)
+    # Seed history from JSONL on first call after a bot restart so the
+    # reposted card lands with full context, not an empty body.
+    await _ensure_seeded(user_id, sess, state)
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
         state.pending_edit = None

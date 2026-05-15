@@ -1242,10 +1242,13 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
 
     # Final answer = a single is_page_break Event: it anchors the top of
     # the latest page and pushes pre-answer events into the previous one.
+    # ``text`` carries the FULL stripped answer (render_event renders
+    # ``event.text`` verbatim for final_text). No ``_trim`` here — that
+    # would clip the answer to 200 chars and flatten newlines.
     now = time.time()
     final_event = Event(
         type="final_text",
-        text=_trim(cleaned, 200),
+        text=_strip_for_card(cleaned),
         body=cleaned,
         started_at=now,
         completed_at=now,

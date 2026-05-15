@@ -57,6 +57,10 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         if sess is None or sess.state not in ("active", "idle", "lost"):
             await query.answer(t(user.id, "toast.nothing_to_kill"), show_alert=False)
             return True
+        # Pause the card so live updates don't repaint over the
+        # confirmation prompt. Resumed on Yes (archive resets card) or
+        # No (CB_CONF_KILL_NO handler clears the pause + re-renders).
+        pause_card_view(user.id, sess.id)
         kb = InlineKeyboardMarkup(
             [
                 [

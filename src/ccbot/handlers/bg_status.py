@@ -67,7 +67,11 @@ class BgStatus:
     """One row in the bg-status panel.
 
     Attributes:
-        status: latest status enum.
+        status: latest status badge OR None when no badge should show
+            (session is live but has no recent notification to surface
+            — e.g. after the user viewed a "finished" result, status
+            clears to None but the row stays in the panel so the
+            session itself remains visible).
         last_change: wall-clock timestamp of the last status mutation,
             used to sort newest-first in the panel.
         pending_interactive_ui: snapshot of the interactive UI body
@@ -76,7 +80,7 @@ class BgStatus:
             can render the prompt without re-capturing the pane.
     """
 
-    status: Status = "working"
+    status: Status | None = None
     last_change: float = 0.0
     pending_interactive_ui: tuple[str, str] | None = None  # (content, ui_name)
     # Latest known context-fill percent for this session, sourced from
@@ -228,30 +232,39 @@ def clear_for_session(session_id: str) -> bool:
 
 
 def clear_for_user_session(user_id: int, session_id: str) -> bool:
-    """Drop the bg entry for one (user, session). Called when the user
-    switches INTO this session — it's no longer "background" relative
-    to them. Returns True if anything was dropped."""
+    """Clear the *status* badge for one (user, session) without dropping
+    the entry. Called when the user switches INTO this session — the
+    completion / needs-action notification has been acknowledged, but
+    the panel row itself should keep its context-pct so the next time
+    the session is bg the badge can re-appear with up-to-date info.
+    Returns True if anything visibly changed.
+    """
     bucket = _bg.get(user_id)
     if not bucket or session_id not in bucket:
         return False
-    bucket.pop(session_id, None)
-    if not bucket:
-        _bg.pop(user_id, None)
+    entry = bucket[session_id]
+    if entry.status is None and entry.pending_interactive_ui is None:
+        return False
+    entry.status = None
+    entry.pending_interactive_ui = None
+    _touch(entry)
     return True
 
 
 def _badge(sess: "Session", entry: BgStatus) -> str:
-    """Render one panel row: ``<emoji> <name> <status_glyph> [context N%]``.
+    """Render one panel row: ``<emoji> <name> [<status_glyph>] [· context N%]``.
 
-    The context-fill suffix sits AFTER all the status emoji so a glance
-    parses status-first, fill-second (pivot #43 feedback). When pct is
-    unknown, the suffix is omitted entirely.
+    Status glyph is omitted when ``entry.status is None`` — meaning
+    the session is live but has no fresh notification to surface
+    (already-viewed completion / never-changed working state). The
+    context-fill suffix is also conditional on ``context_pct`` being
+    known.
     """
     from .switcher import session_emoji
 
     name = sess.name or sess.id
     sess_emoji = session_emoji(sess)
-    status_glyph = _STATUS_EMOJI.get(entry.status, "")
+    status_glyph = _STATUS_EMOJI.get(entry.status, "") if entry.status else ""
     parts = [sess_emoji, name, status_glyph]
     line = " ".join(p for p in parts if p)
     if entry.context_pct is not None:
@@ -260,38 +273,30 @@ def _badge(sess: "Session", entry: BgStatus) -> str:
 
 
 def render_panel(user_id: int, *, active_session_id: str = "") -> str:
-    """Render the bg-status block for ``user_id``. Empty string when no
-    background session has anything to report.
-
-    The active session is never shown in the panel — its state already
-    occupies the live card above. Entries are sorted newest-first
-    (``last_change`` desc) and capped by ``config.bg_status_max``; the
-    overflow tail collapses to a single ``+N more`` line.
+    """Render the bg-status block for ``user_id``. Lists EVERY live
+    (active/idle) session of the user except the currently active one —
+    even those without a fresh status notification, so the user can
+    see what else they have going at a glance. Status glyphs and
+    context % render when the corresponding bg_status fields are set.
     """
-    bucket = _bg.get(user_id)
-    if not bucket:
-        return ""
-
     # Late import: top-level would cycle through SessionManager._load_state
     # which calls back into this module before session_manager is bound.
     from ..session import session_manager
 
-    rows: list[tuple[float, str]] = []
-    for sid, entry in bucket.items():
-        if sid == active_session_id:
-            continue
-        sess = session_manager.get_session(sid)
-        if sess is None:
-            continue
-        if sess.state not in ("active", "idle"):
-            # Archived/lost shouldn't appear in panel; the lifecycle
-            # path should have called ``clear_for_session`` but guard
-            # anyway in case of a missed hook.
-            continue
-        rows.append((entry.last_change, _badge(sess, entry)))
-
-    if not rows:
+    sessions = [
+        s
+        for s in session_manager.list_user_sessions(user_id, states=("active", "idle"))
+        if s.id != active_session_id
+    ]
+    if not sessions:
         return ""
+
+    bucket = _bg.get(user_id, {})
+
+    rows: list[tuple[float, str]] = []
+    for sess in sessions:
+        entry = bucket.get(sess.id, BgStatus())
+        rows.append((entry.last_change, _badge(sess, entry)))
 
     rows.sort(key=lambda r: r[0], reverse=True)
     cap = config.bg_status_max
@@ -345,9 +350,12 @@ def load_per_user(raw: dict[str, Any] | None) -> None:
         for sid, data in bucket.items():
             if not isinstance(data, dict):
                 continue
-            status_val = data.get("status", "working")
-            if status_val not in ("working", "finished", "error", "needs_action"):
-                continue
+            status_raw = data.get("status")
+            status_val: Status | None
+            if status_raw in ("working", "finished", "error", "needs_action"):
+                status_val = status_raw  # type: ignore[assignment]
+            else:
+                status_val = None
             try:
                 last_change = float(data.get("last_change", 0.0))
             except (TypeError, ValueError):

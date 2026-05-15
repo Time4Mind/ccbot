@@ -92,6 +92,12 @@ class SessionManager:
     # DM mode: routing key for inbound user text.
     # user_id -> Session.id (short hex). Single active session per user.
     active_sessions: dict[int, str] = field(default_factory=dict)
+    # Stack of previously-active session ids per user (most recent at the
+    # end). Used by ``mark_session_archived`` to auto-pick the next
+    # active session when the current one gets killed — without this the
+    # user ends up with no active session and the live card shows the
+    # empty state. Capped at the last 10 entries per user.
+    active_history: dict[int, list[str]] = field(default_factory=dict)
     # All sessions known to the bot (active, idle, archived, completed, lost).
     # Keyed by Session.id.
     sessions: dict[str, "Session"] = field(default_factory=dict)
@@ -123,6 +129,9 @@ class SessionManager:
             },
             "active_sessions": {
                 str(uid): sid for uid, sid in self.active_sessions.items()
+            },
+            "active_history": {
+                str(uid): hist for uid, hist in self.active_history.items()
             },
             "sessions": {sid: s.to_dict() for sid, s in self.sessions.items()},
             "last_switcher_msg_id": {
@@ -162,6 +171,11 @@ class SessionManager:
                 self.active_sessions = {
                     int(uid): sid
                     for uid, sid in state.get("active_sessions", {}).items()
+                }
+                self.active_history = {
+                    int(uid): list(hist)
+                    for uid, hist in state.get("active_history", {}).items()
+                    if isinstance(hist, list)
                 }
                 self.sessions = {
                     sid: Session.from_dict(data)
@@ -436,6 +450,15 @@ class SessionManager:
         if session_id not in self.sessions:
             raise KeyError(f"Unknown session id: {session_id}")
         prev = self.active_sessions.get(user_id)
+        if prev and prev != session_id:
+            history = self.active_history.setdefault(user_id, [])
+            # Deduplicate — if prev is already in history, move it to top.
+            if prev in history:
+                history.remove(prev)
+            history.append(prev)
+            # Cap recent-history depth.
+            if len(history) > 10:
+                del history[: len(history) - 10]
         self.active_sessions[user_id] = session_id
         self.save_state()
         sess = self.sessions[session_id]
@@ -552,10 +575,42 @@ class SessionManager:
         sess.state = "completed" if completed else "archived"
         sess.archived_at = time.time()
         sess.window_id = ""
-        # If this was anyone's active session, clear that
+        # If this was anyone's active session, auto-pick the
+        # previously-active session as the replacement (per user
+        # request: "при удалении активной сессии необходимо
+        # автоматически выбирать последнюю активную до нее"). Walks
+        # ``active_history`` newest-first, skipping any entries that
+        # are themselves no longer live.
         for uid, sid in list(self.active_sessions.items()):
-            if sid == session_id:
-                del self.active_sessions[uid]
+            if sid != session_id:
+                continue
+            del self.active_sessions[uid]
+            history = self.active_history.get(uid, [])
+            # Also drop the just-archived session from history if
+            # present so it can't be re-picked later.
+            while session_id in history:
+                history.remove(session_id)
+            while history:
+                candidate_id = history.pop()
+                candidate = self.sessions.get(candidate_id)
+                if candidate is not None and candidate.state in (
+                    "active",
+                    "idle",
+                ):
+                    self.active_sessions[uid] = candidate_id
+                    logger.info(
+                        "auto_active_replacement user=%d killed=%s -> %s",
+                        uid,
+                        session_id,
+                        candidate_id,
+                        extra={
+                            "event": "auto_active_replacement",
+                            "user_id": uid,
+                            "killed_session_id": session_id,
+                            "new_active_session_id": candidate_id,
+                        },
+                    )
+                    break
         # Drop any bg-status panel entry — an archived session shouldn't
         # linger as a stale ✅/❓ badge on the next user message.
         from .handlers import bg_status
@@ -639,9 +694,24 @@ class SessionManager:
         if session_id not in self.sessions:
             return False
         del self.sessions[session_id]
+        # Defensive auto-replacement: delete is normally called on already-
+        # archived sessions, but if a record is purged while still listed as
+        # active, walk active_history newest-first to pick a successor (same
+        # rule as ``mark_session_archived``).
         for uid, sid in list(self.active_sessions.items()):
-            if sid == session_id:
-                del self.active_sessions[uid]
+            if sid != session_id:
+                continue
+            del self.active_sessions[uid]
+            history = self.active_history.get(uid, [])
+            while history:
+                candidate_id = history.pop()
+                candidate = self.sessions.get(candidate_id)
+                if candidate is not None and candidate.state in ("active", "idle"):
+                    self.active_sessions[uid] = candidate_id
+                    break
+        for hist in self.active_history.values():
+            while session_id in hist:
+                hist.remove(session_id)
         from .handlers import bg_status
 
         bg_status.clear_for_session(session_id)

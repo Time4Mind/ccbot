@@ -184,16 +184,17 @@ async def emit_screenshot_compact(
     query: Any, bot: Bot, user_id: int, *, origin: str = "m"
 ) -> None:
     """Send a compressed photo of the active session's pane as a NEW
-    chat message, and pause the live card so claude events buffer
-    silently underneath until the user taps Back.
+    chat message, and CLOSE the live card so claude events spawn a
+    fresh message instead of editing the now-orphaned carrier.
 
-    The carrier (live card) is intentionally left intact in chat — the
-    user wants screenshots to be additive ("the active card may arrive
-    or replace only when I exit the screenshot view"). Resuming on
-    ``CB_SHOT_BACK`` re-renders the existing card with whatever events
-    accumulated.
+    Task #51: switched from ``pause_card_view`` (kept msg_id, edited
+    in place on resume) to ``close_card_view`` (drops msg_id, strips
+    reply markup on the old carrier). When the user taps Back, a NEW
+    card lands below the screenshot — replacement of one message by
+    another — instead of the resume-edit hitting a stale far-up
+    message that Telegram might refuse to edit anyway.
     """
-    from ...handlers.notifications import pause_card_view
+    from ...handlers.notifications import close_card_view
     from ...session import session_manager
 
     wid = active_window(user_id)
@@ -210,11 +211,13 @@ async def emit_screenshot_compact(
         return
     png_bytes = await text_to_image(text, with_ansi=True)
 
-    # Pause the active card so claude events don't repaint underneath
-    # while the user is looking at the screenshot. Resumed by CB_SHOT_BACK.
+    # Close the active card so claude events don't try to edit it
+    # underneath while the user is looking at the screenshot. The next
+    # event after Back creates a fresh card (replacement of one
+    # message by another). See ``close_card_view``.
     active = session_manager.get_active_session(user_id)
     if active is not None:
-        pause_card_view(user_id, active.id)
+        await close_card_view(bot, user_id, active.id)
 
     keyboard = build_screenshot_compact_keyboard(user_id, origin)
     try:

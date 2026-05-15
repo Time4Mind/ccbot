@@ -127,7 +127,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             await query.answer(t(user.id, "toast.no_session"), show_alert=False)
             return True
         state = get_card_state(user.id, sess)
-        idx, total = card_page_info(state)
+        idx, total = card_page_info(state, user.id)
         if data == CB_PG_JUMP:
             # Jump to default-focus (= latest page when no answer-anchor
             # was set explicitly). ``None`` means "stick to latest".

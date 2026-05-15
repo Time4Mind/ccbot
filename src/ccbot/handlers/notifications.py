@@ -647,11 +647,16 @@ def render_event(event: Event, *, in_flight: bool, now: float) -> str:
 
 
 def paginate_events(events: list[Event]) -> list[list[Event]]:
-    """Split ``events`` into pages.
+    """Split ``events`` into pages by ``is_page_break``.
 
     Page break: each Event with ``is_page_break=True`` becomes the TOP
     of a new page (everything before it lives on the previous page).
     Empty input → ``[[]]`` so callers can address page 0.
+
+    NOTE: this is the "logical" pagination — by answer boundary only.
+    Live cards must use :func:`paginate_events_for_card` to also split
+    over-budget logical pages into navigable sub-pages, so the ◀/▶
+    counter matches what's actually rendered.
     """
     pages: list[list[Event]] = []
     current: list[Event] = []
@@ -664,6 +669,72 @@ def paginate_events(events: list[Event]) -> list[list[Event]]:
     if current:
         pages.append(current)
     return pages if pages else [[]]
+
+
+# render_page joins events with "\n\n\n" (3 newlines = 2 blank lines visually).
+# Account for the joiner when summing per-event line counts in sub-pagination.
+_JOINER_LINES = 2
+
+
+def _split_page_by_budget(
+    page: list[Event], budget_lines: int
+) -> list[list[Event]]:
+    """Split one logical page into budget-fitting sub-pages.
+
+    Returns the page unchanged when it fits in ``budget_lines +
+    CARD_PAGE_LINES_OVERSHOOT``. Otherwise greedy-packs events forward:
+    flush to a new sub-page when adding the next event (plus joiner
+    overhead) would push us past ``budget_lines``.
+
+    A single huge event (one tool_result that alone exceeds budget)
+    lands on its own sub-page — we don't split events, EXPQUOTE
+    sentinels must stay paired.
+
+    Sub-pages are navigable via ◀/▶: the user lands on the LATEST
+    sub-page (default focus) and can step back to read older events.
+    """
+    if not page:
+        return [page]
+    now = time.time()
+    cap = budget_lines + CARD_PAGE_LINES_OVERSHOOT
+    total_lines = _count_lines(render_page(page, now=now))
+    if total_lines <= cap:
+        return [page]
+    sub_pages: list[list[Event]] = []
+    current: list[Event] = []
+    current_lines = 0
+    for ev in page:
+        ev_lines = _count_lines(render_event(ev, in_flight=False, now=now))
+        overhead = _JOINER_LINES if current else 0
+        if current and current_lines + overhead + ev_lines > budget_lines:
+            sub_pages.append(current)
+            current = [ev]
+            current_lines = ev_lines
+        else:
+            current.append(ev)
+            current_lines += overhead + ev_lines
+    if current:
+        sub_pages.append(current)
+    return sub_pages
+
+
+def paginate_events_for_card(
+    state: CardState, user_id: int | None
+) -> list[list[Event]]:
+    """Canonical pagination for live cards (is_page_break + budget split).
+
+    The ◀/▶ counter and the rendered body MUST agree. Older callers
+    that used :func:`paginate_events` directly would report 1/1 while
+    the body silently dropped middle events ("(+N older events on
+    previous pages)"). This unified entry point makes both sides see
+    the same page list.
+    """
+    budget = _resolve_line_budget(user_id)
+    base_pages = paginate_events(state.events)
+    final_pages: list[list[Event]] = []
+    for page in base_pages:
+        final_pages.extend(_split_page_by_budget(page, budget))
+    return final_pages or [[]]
 
 
 def _resolved_page_idx(state: CardState, total_pages: int) -> int:
@@ -731,7 +802,7 @@ def _render_card(
     # to fit the new size. Idempotent: chunks below budget stay intact.
     _rechunk_oversized_finals_inplace(state, line_budget)
 
-    pages = paginate_events(state.events)
+    pages = paginate_events_for_card(state, user_id)
     idx = _resolved_page_idx(state, len(pages))
 
     # Optional bg-panel always lives at the bottom.
@@ -739,12 +810,17 @@ def _render_card(
     if user_id is not None:
         panel = bg_status.render_panel(user_id, active_session_id=sess.id)
 
-    # _trim_page_events drops middle events to fit; anchor + tail kept.
+    # Safety net: a sub-page should fit by construction, but a single
+    # huge event (one tool_result well over budget) can still overflow
+    # — and we can't split it (EXPQUOTE atomicity). When that happens
+    # _trim_page_events keeps anchor + tail; the dropped events become
+    # genuinely inaccessible (no prior sub-page covers them), so the
+    # marker phrasing acknowledges that.
     page_events = _trim_page_events(pages[idx], line_budget)
     body = render_page(page_events, now=time.time())
     if len(page_events) < len(pages[idx]):
         dropped = len(pages[idx]) - len(page_events)
-        body = f"… (+{dropped} older events on previous pages)\n{body}"
+        body = f"… (+{dropped} events trimmed to fit)\n{body}"
 
     parts = [header, "─────"]
     if body:
@@ -1082,9 +1158,18 @@ def _trim_page_events(events: list[Event], budget_lines: int) -> list[Event]:
     return [anchor, *kept_tail]
 
 
-def card_page_info(state: CardState) -> tuple[int, int]:
-    """Return (current_page_idx, total_pages) for the keyboard counter."""
-    pages = paginate_events(state.events)
+def card_page_info(
+    state: CardState, user_id: int | None = None
+) -> tuple[int, int]:
+    """Return (current_page_idx, total_pages) for the keyboard counter.
+
+    Uses :func:`paginate_events_for_card` so the count reflects the
+    budget-aware sub-pagination — matching what's actually rendered.
+    ``user_id`` is only optional for legacy callers; passing it in
+    yields the user-specific budget (otherwise default budget is used,
+    which can mismatch the rendered card).
+    """
+    pages = paginate_events_for_card(state, user_id)
     total = max(1, len(pages))
     idx = _resolved_page_idx(state, total)
     return idx, total
@@ -1262,6 +1347,61 @@ def _should_buffer(user_id: int, session_id: str, state: CardState) -> bool:
 def reset_card(user_id: int, session_id: str) -> None:
     """Drop the cached card so the next event creates a fresh message."""
     _cards.pop((user_id, session_id), None)
+
+
+async def close_card_view(
+    bot: Bot, user_id: int, session_id: str
+) -> None:
+    """Release the live card slot so the next event creates a fresh
+    message instead of editing the old carrier.
+
+    Used by the Shot button (Task #51): the screenshot photo replaces
+    the live card visually, and when the user comes back from the
+    screenshot we want a NEW card message to appear (replacement of
+    one message by another), not an in-place edit of a now-stale
+    carrier far up the chat.
+
+    Steps:
+      - Cancel any pending edit on the old carrier.
+      - Strip its reply markup so the orphaned message looks finalized.
+      - Drop ``msg_id`` so the next claude event spawns a fresh card.
+      - Leave ``in_menu_view=True`` so events buffer until the user
+        actually navigates back (the Shot Back handler clears it).
+    """
+    state = _cards.get((user_id, session_id))
+    if state is None:
+        return
+    if state.pending_edit is not None and not state.pending_edit.done():
+        state.pending_edit.cancel()
+    state.pending_edit = None
+    old_msg_id = state.msg_id
+    state.msg_id = None
+    state.is_photo_msg = False
+    state.last_rendered = ""
+    state.last_pane_hash = ""
+    state.last_photo_edit_ts = 0.0
+    state.in_menu_view = True
+    if old_msg_id is not None:
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=user_id, message_id=old_msg_id, reply_markup=None
+            )
+        except Exception as e:
+            logger.debug(
+                "close_card_view: strip kb failed msg_id=%s: %s", old_msg_id, e
+            )
+    logger.info(
+        "card_close user=%d sess=%s old_msg_id=%s",
+        user_id,
+        session_id,
+        old_msg_id,
+        extra={
+            "event": "card_close",
+            "user_id": user_id,
+            "session_id": session_id,
+            "old_msg_id": old_msg_id,
+        },
+    )
 
 
 def pause_card_view(user_id: int, session_id: str) -> None:
@@ -2164,7 +2304,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     # the FIRST chunk's page so the user starts at the top. When there's
     # only one chunk, ``None`` = latest, which is that same page.
     if len(final_events) > 1:
-        pages_after = paginate_events(state.events)
+        pages_after = paginate_events_for_card(state, user_id)
         # The first chunk's page is at index (len(pages) - len(chunks)).
         first_chunk_page = max(0, len(pages_after) - len(final_events))
         state.current_page_idx = first_chunk_page
@@ -2418,7 +2558,7 @@ async def card_timer_loop(bot: Bot) -> None:
                     active = session_manager.get_active_session(uid)
                     if active is None or active.id != sid:
                         continue
-                    pages = paginate_events(state.events)
+                    pages = paginate_events_for_card(state, uid)
                     idx = _resolved_page_idx(state, len(pages))
                     # Timer renders only on the latest page.
                     if idx != len(pages) - 1:

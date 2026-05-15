@@ -831,7 +831,9 @@ def build_footer_keyboard(
             if active is not None:
                 from .notifications import card_page_info, get_card_state
 
-                page_idx, total_pages = card_page_info(get_card_state(user_id, active))
+                page_idx, total_pages = card_page_info(
+                    get_card_state(user_id, active), user_id
+                )
             pag_row: list[InlineKeyboardButton] = [
                 InlineKeyboardButton("◀", callback_data=CB_PG_PREV),
                 InlineKeyboardButton(

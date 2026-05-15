@@ -167,22 +167,13 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         return True
 
     if data == CB_SW_NEW:
-        # Pause the active session so its events buffer silently while
-        # the user picks a directory — without this the live card keeps
-        # editing during the picker flow. The pause is auto-released
-        # when the user switches back via the switcher (transfer ->
-        # paint_card_on_carrier clears in_menu_view).
+        # The entire + new flow lives on the SAME carrier message: old
+        # live card → dir browser → new session's empty live card. No
+        # extra "Created" notice — the message just transitions in place.
         #
-        # The directory browser is sent as a NEW msg below the active
-        # card (not edited over it) so the active card stays visible
-        # in chat history at its last state — when the user types into
-        # the freshly-created session, the OLD card sits above as a
-        # frozen artefact accessible via switcher tap (which paints
-        # OLD's buffered events on a fresh carrier). Previously
-        # ``safe_edit`` clobbered the card body with the picker, then
-        # ``create_and_activate_session`` clobbered it again with the
-        # "Created" notice — the user lost the OLD card's content from
-        # chat entirely.
+        # Pause the active session first so its events buffer silently
+        # while the user picks a directory; events catch up when the
+        # user switches back via the switcher.
         active = session_manager.get_active_session(user.id)
         if active is not None:
             pause_card_view(user.id, active.id)
@@ -197,7 +188,10 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
             context.user_data[BROWSE_PAGE_KEY] = 0
             context.user_data[BROWSE_DIRS_KEY] = subdirs
             context.user_data["menu_origin"] = "main"
-        await safe_send(context.bot, user.id, msg_text, reply_markup=keyboard)
+        try:
+            await safe_edit(query, msg_text, reply_markup=keyboard)
+        except Exception:
+            await safe_send(context.bot, user.id, msg_text, reply_markup=keyboard)
         await query.answer()
         return True
 

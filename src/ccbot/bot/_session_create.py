@@ -16,7 +16,10 @@ import logging
 from telegram.ext import ContextTypes
 
 from ..handlers.message_sender import safe_edit, safe_send
-from ..handlers.notifications import detach_paused_cards_at_message
+from ..handlers.notifications import (
+    detach_paused_cards_at_message,
+    paint_card_on_carrier,
+)
 from ..local_terminal import open_terminal_for_window
 from ..session import session_manager
 from ..tmux_manager import tmux_manager
@@ -119,8 +122,21 @@ async def create_and_activate_session(
     if session_manager.get_user_settings(user.id).get("local_terminal") == "auto":
         await open_terminal_for_window(created_wid, user_id=user.id)
 
-    status = "Resumed" if resume_session_id else "Created"
-    await safe_edit(query, f"✅ {message}\n\n{status}. Send messages here.")
+    # Transition the carrier from dir-browser to the new session's
+    # empty live card in place. No separate "Created. Send messages
+    # here." notice — that was a dead-end stub; the live card itself
+    # is the destination and already conveys "this is the new session,
+    # ready for input" via its header + standard footer.
+    if query.message is not None:
+        try:
+            await paint_card_on_carrier(
+                context.bot, user.id, sess, query.message.message_id
+            )
+        except Exception as e:
+            logger.debug("paint new session card failed: %s", e)
+            # Fallback: a minimal notice so the user isn't staring at
+            # the stale dir-browser body when paint fails.
+            await safe_edit(query, f"✅ {message}")
 
     # Forward any pending text held while the picker was up.
     pending_text = context.user_data.get("_pending_text") if context.user_data else None

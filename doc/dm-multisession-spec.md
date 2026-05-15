@@ -162,12 +162,15 @@ Hidden (typed only):
 | `/kill [name]` | Stop tmux window and archive after confirmation. |
 | `/stop` | Send Esc to the active session's tmux window (interrupt current task). |
 | `/archive` | Show archived sessions, paginated, last 0–72h. |
-| `/status` | Detailed status: per-session usage, 5h/weekly budget, host stats. |
 | `/screenshot` | Snapshot the active session's tmux pane as a PNG. |
 | `/history` | Paginated transcript of the active session from the JSONL. |
 | `/usage` | Live `/usage` modal sample (5h / weekly / Sonnet). |
 | `/health` | Uptime, queue stats, latency, counters. |
 | `/restore-file <msg_id>` | Re-fetch a previously-uploaded inbox file from Telegram. |
+
+The legacy ``/status`` command was retired — Menu → Status surfaces
+the same Anthropic-quota numbers via the dedicated `ccbot-usage` tmux
+window.
 
 `/stop` is also exposed as an inline button at the bottom of the active session's most recent bot message.
 
@@ -202,41 +205,59 @@ Background sessions don't emit their own chat messages. Their state
 shows up as a per-row badge in the bg-panel at the bottom of the
 active session's live card (see `handlers.bg_status.render_panel`).
 
-### 4.5 Status (`/status`)
+### 4.5 Status (Menu → Status)
 
-Output structure:
+Menu → 📊 Status fetches a fresh snapshot of Claude Code's own
+`/usage` modal via the dedicated `ccbot-usage` tmux window and edits
+the carrier into a compact block:
 
 ```
-Usage (Max x20)
----
-5-hour window: ~62% (32k / ~50k est)
-Weekly:        ~28% (180k / ~640k est)
-
-Active sessions
----
-v frontend   running   14k tokens   8% of 5h budget
-  last: Edit src/auth.tsx
-  goal: implement google-oauth login
-  context: 41% used (~80k of subscription default 200k)
-
-  scraper    idle 12m  11k tokens   7% of 5h
-  last: Bash curl https://...
-  goal: fix linkedin scraper at page 50
-
-  chores     working    7k tokens   4% of 5h
-  last: Read package.json
-  goal: bump deps
----
-Host: linux-arm64  -  tmux: 3 windows  -  RAM: 1.2G / 8G
+Claude Code
+🟡 5h: 62% · 12.4%/h · 17:00
+🟢 week: 28% · 4.0%/d · Mon 17:00
+🟢 week (Sonnet): 12% · Mon 17:00
+Extra: off
 ```
 
-Limits for Max x20 are starting estimates. They are calibrated empirically over the first week and overridable via env: `MAX_5H_TOKENS`, `MAX_WEEKLY_TOKENS`.
+The locally-aggregated 5h/weekly token counter was retired — the
+authoritative numbers come from Anthropic's own quota modal, so we
+report exactly what it says (with our own burn-rate / reset suffix).
 
-### 4.6 Per-session token quota (G6, soft)
+### 4.6 Per-session context fill (display only)
 
-- `SESSION_TOKEN_BUDGET_5H` defaults to `15k`. Calibrated.
-- At 75% the bot posts `warning: <session> burned 75% of its 5h quota` to that session's card.
-- No hard block. The user decides whether to continue.
+The live card and the bg-status panel show `context: N%` per session.
+The number is computed from the session's JSONL transcript:
+
+```
+pct = round(
+    (latest_assistant_turn.usage.input_tokens
+     + latest_assistant_turn.usage.cache_creation_input_tokens
+     + latest_assistant_turn.usage.cache_read_input_tokens)
+    * 100
+    / budget_for_model(latest_assistant_turn.model)
+)
+```
+
+`budget_for_model` (in `usage.py`):
+
+| Model | Budget |
+|---|---|
+| `claude-opus-4-7` / `claude-opus-4-6` / `claude-sonnet-4-6` | 1 000 000 |
+| Everything else (Opus 4.5 / 4.1, Sonnet 4.5, Haiku 4.5, 3.x, …) | 200 000 |
+
+Refresh fires in `session_events.handle_new_message` on every
+assistant end-of-turn text turn and stashes the value on
+`CardState.context_pct` / `BgStatus.context_pct`.
+
+**Methodology note** — the value is an *approximation* of Claude
+Code's own `/context` modal, typically within ±10 % relative. The two
+diverge because `/context` additionally counts system prompt /
+system tools / memory files / autocompact buffer that are not always
+reflected in the last assistant turn's `cache_read`. We tried sending
+`/context` into each pane periodically, but Claude Code writes the
+modal output back into the JSONL as a fake user turn → pollutes the
+live card AND eats real tokens from the session's context. JSONL
+math is non-invasive and good enough for an at-a-glance signal.
 
 ---
 
@@ -376,7 +397,9 @@ CCBOT_DIR=/var/lib/ccbot
 MAX_SESSIONS=10                # soft cap, warning only
 SESSION_IDLE_TTL=4h            # active -> archived
 ARCHIVE_PURGE_AFTER=14d
-SESSION_TOKEN_BUDGET_5H=15000  # per-session soft warning
+
+# Quota alerts
+QUOTA_ALERT_POLL_INTERVAL=10m  # background poll of /usage modal
 
 # UI
 PREVIEW_USER_LINES=4
@@ -384,9 +407,9 @@ PREVIEW_ASSISTANT_LINES=8
 PREVIEW_TOOLS=2
 PREVIEW_LIVE_LAG=4             # seconds; 0 disables live updates
 
-# Budgets (calibrated empirically)
-MAX_5H_TOKENS=50000
-MAX_WEEKLY_TOKENS=640000
+# Context-fill display (per-session %)
+# Override if the host runs a non-Claude-Code model with a different
+# context window; usage._budget_for_model handles the published list.
 
 # Voice
 VOICE_BACKEND=auto             # auto | whisper | apple | off
@@ -411,8 +434,8 @@ The fork ships when all of the following are true on a fresh Linux arm64 VPS ins
 5. Three concurrent sessions can run long-running tasks in parallel; switching between them does not pause any of them.
 6. After 4h with no input, a session auto-archives. `/archive` shows it. `Restore` brings it back via `claude --resume`.
 7. Voice message is transcribed locally via whisper.cpp; no OpenAI key configured.
-8. Photo / document upload lands in `.ccbot-inbox` and the active session sees a synthetic notice.
-9. `/status` shows correct per-session token usage, 5h window aggregate, and weekly aggregate within ~5% of manually-counted ground truth.
+8. Photo / document upload lands in `.ccbot-inbox` and the active session receives the relative path (optionally prefixed by the user's caption).
+9. Menu → Status reflects Claude's live `/usage` modal (5h / weekly / Sonnet) — JSONL-derived counters were retired. Per-session ``context: N%`` is rendered on the card (JSONL approximation, ±10 % from `/context`).
 10. `/done <name>` archives the session and `/archive` reflects it.
 11. After VPS reboot, `systemctl restart ccbot` recovers all sessions whose tmux windows still exist; lost ones are listed with `Restore`.
 12. No `--dangerously-load-development-channels`, no Anthropic API key, no OpenAI API key required for any of the above.
@@ -421,5 +444,9 @@ The fork ships when all of the following are true on a fresh Linux arm64 VPS ins
 
 ## 14. Open questions parked for later
 
-- Calibration of `MAX_5H_TOKENS` / `MAX_WEEKLY_TOKENS` — measured during week 1.
 - Table/code formatting heuristics — tune as edge cases appear.
+- ``context: N%`` vs `/context` parity. Current JSONL math diverges
+  from the modal by ±10 %; an exact match would need either a
+  pollution-free way to invoke `/context` per session or a richer
+  parse of the JSONL (system / tools / memory aren't always in
+  `cache_read`). Acceptable as-is for the at-a-glance signal.

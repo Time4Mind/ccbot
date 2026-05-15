@@ -9,7 +9,8 @@ bottom of the active card.
 A fresh card opens (a new TG message is sent) on:
 
   - long pause: previous card sat idle for >= STALE_CARD_SECONDS
-  - ``repost_card`` (Settings → card_position = repost)
+  - ``repost_card`` (always-repost behaviour: every user-msg replaces
+    the card with a fresh one below)
   - first event of a new session
 
 Within a single card, content is paginated. Each ``Event`` with
@@ -2508,11 +2509,12 @@ async def repost_card(bot: Bot, user_id: int, sess: Session) -> None:
     """Send a fresh live-card below the user's latest message, and drop
     the previous one if it exists.
 
-    Called from text_handler when ``card_position == repost`` so the
-    user always sees a bot-side card immediately below the message they
-    just typed (instead of having to wait for claude's first event,
-    which may come seconds later — long enough that the user reports
-    "I don't see updates").
+    Called from text_handler on every user-msg dispatch (the legacy
+    ``card_position`` setting was retired; always-repost is now the
+    single canonical behaviour). The user always sees a bot-side card
+    immediately below the message they just typed instead of having
+    to wait for claude's first event — which may come seconds later
+    when the model spends a while in thinking before any tool call.
 
     No-op only when the card is paused (Menu / sub-screen open). In all
     other cases — including the post-finalize_task state where the

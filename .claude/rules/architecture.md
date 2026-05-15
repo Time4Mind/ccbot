@@ -100,7 +100,7 @@ bot/ package (was bot.py before A1, split per CLAUDE.md size budget):
   session_events.py   ─ handle_new_message — claude → TG dispatch
   commands/lifecycle.py    ─ /new /list /use /rename /kill /done /stop
                             /menu /archive  (+ archive_session shared helper)
-  commands/info.py         ─ /status /history /screenshot /usage  (+ emit_*)
+  commands/info.py         ─ /history /screenshot /usage  (+ emit_*)
   callbacks/__init__.py    ─ Top-level dispatcher; tries each handler in order
   callbacks/dir_browser.py ─ CB_DIR_*, CB_SESSION_*  (+ Haiku summary cache)
   callbacks/window_picker.py ─ CB_WIN_*
@@ -122,15 +122,19 @@ Handler modules (handlers/):
                        bg-window interactive-UI detection (suppress + stash)
   notifications.py    ─ Live card per session + push events + completion +
                        bg-status panel injection + active-quota glyph in header +
-                       refresh_panel + repost_card (card_position=repost)
+                       refresh_panel + repost_card (always-repost behaviour:
+                       every user-msg replaces the card by a fresh one below;
+                       a 👀 reaction goes on the user msg for chain visibility)
   bg_status.py        ─ Per-user bg session status map (working/finished/error/
-                       needs_action), quota_level, seen, pending_interactive_ui;
-                       render_panel for the active card's tail block.
-                       Persisted in state.json (status/quota/seen/last_change;
+                       needs_action), context_pct, pending_interactive_ui;
+                       render_panel for the active card's tail block (each row:
+                       ``<emoji> <name> <status> · context N%``).
+                       Persisted in state.json (status/last_change/context_pct;
                        pending UI re-detected after restart by terminal_parser).
   archive.py          ─ /archive page rendering + restore + idle/purge sweeps
   history.py          ─ Paginated /history rendering (with optional extra rows)
-  quota_alerts.py     ─ Background /usage modal poll → 5h/weekly band crossings
+  quota_alerts.py     ─ Background /usage modal poll (default 10 min) →
+                       5h/weekly band crossings 50/75/90 %
   inbox.py            ─ photo/document inbox under <workdir>/.ccbot-inbox/
   interactive_ui.py   ─ AskUserQuestion / ExitPlanMode / Permission UI +
                        adopt_interactive_msg / render_interactive_keyboard
@@ -146,7 +150,11 @@ Handler modules (handlers/):
 
 State files (~/.ccbot/ or $CCBOT_DIR/):
   state.json         ─ window states + display names + read offsets + user
-                      settings (incl. card_position) + bg_status snapshot
+                      settings (previews / live_lag / voice / card_history /
+                      card_page_lines / card_inline_screenshots /
+                      bg_notify_finished / bg_notify_error /
+                      bg_notify_needs_action / language / weekly_reset_day /
+                      auto_approve / local_terminal*) + bg_status snapshot
   session_map.json   ─ hook-generated window_id→session mapping
   monitor_state.json ─ poll progress (byte offset) per JSONL file
 ```

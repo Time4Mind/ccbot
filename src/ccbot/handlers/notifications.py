@@ -278,6 +278,61 @@ def _parse_timestamp(ts: str) -> float:
         return time.time()
 
 
+def _split_tool_text(raw: str) -> tuple[str, str, str]:
+    """Split transcript_format's tool text into head / summary / content.
+
+    ``raw`` reaches us in the shape::
+
+        **ToolName**(args)
+          ⎿  Output N lines
+        \\x02EXPQUOTE_START\\x02<content>\\x02EXPQUOTE_END\\x02
+
+    Returns ``(head, summary, content)`` where:
+
+    * ``head``    = first line, markdown-stripped (e.g. ``Bash(args)``)
+    * ``summary`` = second line stripped of the ``⎿`` glyph and indent
+      (e.g. ``Output 5 lines``), or "" when absent
+    * ``content`` = everything inside the EXPQUOTE block, or "" when
+      there isn't one. The duplicate head/summary that transcript_parser
+      often re-embeds inside the quote is filtered out so the card
+      doesn't show ``Tool(args)`` twice.
+    """
+    if not raw:
+        return "", "", ""
+    parts = raw.split("\n", 2)
+    head = _strip_for_card(parts[0]) if parts else ""
+    summary = ""
+    rest = ""
+    if len(parts) >= 2:
+        summary_line = parts[1].lstrip(" ").lstrip("⎿").strip()
+        summary = _strip_for_card(summary_line)
+    if len(parts) >= 3:
+        rest = parts[2]
+    # Extract inner content from EXPQUOTE block if present, otherwise
+    # treat ``rest`` as plain content.
+    inner = _extract_expquote_inner(rest) if rest else ""
+    content = inner if inner else rest
+    # Drop the duplicate head row that transcript_parser sometimes
+    # re-embeds at the top of the EXPQUOTE block.
+    if content:
+        content_lines = content.split("\n")
+        # Strip if first content line matches head (with or without ✓/▷)
+        first_norm = _strip_for_card(content_lines[0]).strip()
+        head_norm = head.strip()
+        if (
+            first_norm == head_norm
+            or first_norm.endswith(head_norm)
+            or first_norm.startswith(("✓ ", "▷ ", "✗ "))
+            and head_norm in first_norm
+        ):
+            content_lines = content_lines[1:]
+        # Drop the trailing/leading "⎿  summary" repeat too.
+        if content_lines and content_lines[0].lstrip().startswith("⎿"):
+            content_lines = content_lines[1:]
+        content = "\n".join(content_lines).strip("\n")
+    return head, summary, content
+
+
 def _build_event(msg: NewMessage) -> Event:
     """Build an ``Event`` from one ``NewMessage``.
 
@@ -310,19 +365,29 @@ def _build_event(msg: NewMessage) -> Event:
             started_at=started,
         )
     if msg.content_type == "tool_use":
+        head, _summary, content = _split_tool_text(raw_body)
         return Event(
             type="tool_use",
-            text=_trim(text, 160),
-            body=raw_body,
+            text=_trim(head, 160),
+            body=content,
             started_at=started,
             tool_use_id=msg.tool_use_id,
             tool_name=msg.tool_name,
         )
     if msg.content_type == "tool_result":
+        head, summary, content = _split_tool_text(raw_body)
+        # On a tool_result, prefer head+summary in ``text`` so a missed
+        # fold (no matching tool_use Event) still displays a useful
+        # one-liner. ``_apply_tool_result`` reads these into the
+        # original Event.
+        if summary:
+            head_with_summary = f"{head} · {summary}" if head else summary
+        else:
+            head_with_summary = head
         return Event(
             type="tool_result",
-            text=_trim(text, 160),
-            body=raw_body,
+            text=_trim(head_with_summary, 200),
+            body=content,
             started_at=started,
             tool_use_id=msg.tool_use_id,
             image_data=msg.image_data,

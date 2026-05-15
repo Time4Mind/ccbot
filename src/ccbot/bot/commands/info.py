@@ -229,8 +229,6 @@ async def emit_screenshot_compact(
         logger.debug("emit_screenshot send failed: %s", e)
 
 
-
-
 # --- /usage (interactive Claude TUI) ---
 
 

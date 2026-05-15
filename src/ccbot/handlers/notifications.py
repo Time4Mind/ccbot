@@ -195,6 +195,7 @@ def _card_lock(user_id: int, session_id: str) -> asyncio.Lock:
         _card_locks[key] = lock
     return lock
 
+
 # Reverse lookup so reply-quote can route a one-shot user message to the
 # session that owns the message being replied to. Capped via FIFO eviction.
 _MSG_REGISTRY_LIMIT = 2000
@@ -584,8 +585,7 @@ def _chunk_final_text(
         # 2. Line break within budget (no overshoot).
         if cut <= 0:
             char_budget = sum(
-                len(rem_lines[i]) + 1
-                for i in range(min(budget_lines, len(rem_lines)))
+                len(rem_lines[i]) + 1 for i in range(min(budget_lines, len(rem_lines)))
             )
             cut = remaining.rfind("\n", 0, char_budget)
 
@@ -703,9 +703,7 @@ def paginate_events(events: list[Event]) -> list[list[Event]]:
 _JOINER_LINES = 2
 
 
-def _split_page_by_budget(
-    page: list[Event], budget_lines: int
-) -> list[list[Event]]:
+def _split_page_by_budget(page: list[Event], budget_lines: int) -> list[list[Event]]:
     """Split one logical page into budget-fitting sub-pages.
 
     Returns the page unchanged when it fits in ``budget_lines +
@@ -1078,18 +1076,20 @@ def build_kb_mode_keyboard(
     )
 
     def kb(label: str, prefix: str) -> InlineKeyboardButton:
-        return InlineKeyboardButton(
-            label, callback_data=f"{prefix}{window_id}"[:64]
-        )
+        return InlineKeyboardButton(label, callback_data=f"{prefix}{window_id}"[:64])
 
     rows: list[list[InlineKeyboardButton]] = []
     vertical_only = ui_name == "RestoreCheckpoint"
-    rows.append([kb("␣ Space", CB_ASK_SPACE), kb("↑", CB_ASK_UP), kb("⇥ Tab", CB_ASK_TAB)])
+    rows.append(
+        [kb("␣ Space", CB_ASK_SPACE), kb("↑", CB_ASK_UP), kb("⇥ Tab", CB_ASK_TAB)]
+    )
     if vertical_only:
         rows.append([kb("↓", CB_ASK_DOWN)])
     else:
         rows.append([kb("←", CB_ASK_LEFT), kb("↓", CB_ASK_DOWN), kb("→", CB_ASK_RIGHT)])
-    rows.append([kb("⎋ Esc", CB_ASK_ESC), kb("^C", "aq:cc:"), kb("⏎ Enter", CB_ASK_ENTER)])
+    rows.append(
+        [kb("⎋ Esc", CB_ASK_ESC), kb("^C", "aq:cc:"), kb("⏎ Enter", CB_ASK_ENTER)]
+    )
     rows.append(
         [
             InlineKeyboardButton("🔙 Back", callback_data=CB_KB_BACK),
@@ -1200,9 +1200,7 @@ def _trim_page_events(events: list[Event], budget_lines: int) -> list[Event]:
     return [anchor, *kept_tail]
 
 
-def card_page_info(
-    state: CardState, user_id: int | None = None
-) -> tuple[int, int]:
+def card_page_info(state: CardState, user_id: int | None = None) -> tuple[int, int]:
     """Return (current_page_idx, total_pages) for the keyboard counter.
 
     Uses :func:`paginate_events_for_card` so the count reflects the
@@ -1391,9 +1389,7 @@ def reset_card(user_id: int, session_id: str) -> None:
     _cards.pop((user_id, session_id), None)
 
 
-async def close_card_view(
-    bot: Bot, user_id: int, session_id: str
-) -> None:
+async def close_card_view(bot: Bot, user_id: int, session_id: str) -> None:
     """Release the live card slot so the next event creates a fresh
     message instead of editing the old carrier.
 
@@ -1965,7 +1961,11 @@ async def _edit_card(
     # else editMessageCaption to refresh just the text.
     if state.is_photo_msg:
         return await _edit_photo_card(
-            bot, user_id, state, text=text, formatted=formatted,
+            bot,
+            user_id,
+            state,
+            text=text,
+            formatted=formatted,
             reply_markup=reply_markup,
         )
 
@@ -2105,9 +2105,7 @@ async def _edit_photo_card(
             or "message can't be edited" in err.lower()
             or "MESSAGE_ID_INVALID" in err
         ):
-            logger.info(
-                "photo card edit lost-carrier msg=%s err=%s", state.msg_id, err
-            )
+            logger.info("photo card edit lost-carrier msg=%s err=%s", state.msg_id, err)
             state.msg_id = None
             return False
         logger.warning(
@@ -2459,9 +2457,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     # spawn a second card (Task #50).
     async with _card_lock(user_id, sess.id):
         if state.msg_id is None:
-            await _send_card(
-                bot, user_id, sess, state, text=text, reply_markup=done_kb
-            )
+            await _send_card(bot, user_id, sess, state, text=text, reply_markup=done_kb)
         elif await _edit_card(bot, user_id, state, text=text, reply_markup=done_kb):
             state.last_rendered = text
         state.last_edit_ts = time.monotonic()

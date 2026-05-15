@@ -298,15 +298,11 @@ def _footer_top_row(
         # Pending kb action → Resume on Shot slot. Otherwise Shot as usual.
         if _has_pending_kb_action(user_id):
             row.append(
-                InlineKeyboardButton(
-                    "🔙 Resume action", callback_data=CB_KB_RESUME
-                )
+                InlineKeyboardButton("🔙 Resume action", callback_data=CB_KB_RESUME)
             )
         else:
             row.append(
-                InlineKeyboardButton(
-                    t(user_id, "mm.shot"), callback_data=CB_MM_SHOT
-                )
+                InlineKeyboardButton(t(user_id, "mm.shot"), callback_data=CB_MM_SHOT)
             )
         # Open-terminal sits with the other per-session controls so the
         # button persists across switcher taps (which re-render the
@@ -652,9 +648,7 @@ def _settings_screens_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     ~4x page-size shrinkage when ON (caption limit 1024 vs text 4096).
     """
     cur = bool(
-        session_manager.get_user_settings(user_id).get(
-            "card_inline_screenshots", False
-        )
+        session_manager.get_user_settings(user_id).get("card_inline_screenshots", False)
     )
     return [
         [

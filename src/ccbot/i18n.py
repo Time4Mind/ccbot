@@ -265,8 +265,7 @@ _EN: dict[str, str] = {
     "settings.cat.terminal": "🖥 Local terminal",
     "settings.cat.behavior": "⚙ Behavior & language",
     "settings.cat.card.body": (
-        "*Card / view*\n\n"
-        "Layout, density and refresh of the live session card."
+        "*Card / view*\n\nLayout, density and refresh of the live session card."
     ),
     "settings.cat.notifications.body": (
         "*Notifications*\n\n"
@@ -274,16 +273,14 @@ _EN: dict[str, str] = {
         "the weekly-reset day for quota alerts."
     ),
     "settings.cat.voice.body": (
-        "*Voice*\n\n"
-        "Speech-to-text backend for incoming voice messages."
+        "*Voice*\n\nSpeech-to-text backend for incoming voice messages."
     ),
     "settings.cat.terminal.body": (
         "*Local terminal*\n\n"
         "Native Terminal / iTerm window attached to each new session."
     ),
     "settings.cat.behavior.body": (
-        "*Behavior & language*\n\n"
-        "Auto-approve interactive prompts; UI language."
+        "*Behavior & language*\n\nAuto-approve interactive prompts; UI language."
     ),
     # Settings group: pop a native Terminal/iTerm window per new session
     "settings.group.local_terminal": "Local terminal",
@@ -636,9 +633,7 @@ _RU: dict[str, str] = {
         "Bg-сессионные пуши (готово / ошибки / нужен ввод) и день\n"
         "сброса для weekly-quota алертов."
     ),
-    "settings.cat.voice.body": (
-        "*Голос*\n\nДвижок speech-to-text для входящих voice."
-    ),
+    "settings.cat.voice.body": ("*Голос*\n\nДвижок speech-to-text для входящих voice."),
     "settings.cat.terminal.body": (
         "*Локальный терминал*\n\nНативное Terminal / iTerm окно к tmux."
     ),
@@ -959,8 +954,7 @@ _ZH: dict[str, str] = {
         "后台会话进入 end-of-turn 时,推送 ✅ [<name>] task complete。"
     ),
     "settings.bg_notify.error.body": (
-        "*Bg 会话:错误*\n\n"
-        "后台会话发出错误事件时,推送 ❌ [<name>] error。"
+        "*Bg 会话:错误*\n\n后台会话发出错误事件时,推送 ❌ [<name>] error。"
     ),
     "settings.bg_notify.needs_action.body": (
         "*Bg 会话:需要操作*\n\n"
@@ -974,14 +968,11 @@ _ZH: dict[str, str] = {
     "settings.cat.behavior": "⚙ 行为和语言",
     "settings.cat.card.body": "*卡片 / 视图*\n\n实时会话卡片的布局、密度和刷新。",
     "settings.cat.notifications.body": (
-        "*通知*\n\nBg 会话推送(完成 / 错误 / 需要操作)和\n"
-        "weekly quota 提醒的重置日。"
+        "*通知*\n\nBg 会话推送(完成 / 错误 / 需要操作)和\nweekly quota 提醒的重置日。"
     ),
     "settings.cat.voice.body": "*语音*\n\n语音消息的 STT 后端。",
     "settings.cat.terminal.body": "*本地终端*\n\n附加到每个新会话的本地终端窗口。",
-    "settings.cat.behavior.body": (
-        "*行为和语言*\n\n自动同意交互提示;界面语言。"
-    ),
+    "settings.cat.behavior.body": ("*行为和语言*\n\n自动同意交互提示;界面语言。"),
     "settings.group.local_terminal": "本地终端",
     "settings.local.body": (
         "*本地终端*\n\n"

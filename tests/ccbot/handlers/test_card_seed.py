@@ -36,16 +36,12 @@ class TestSeedFromJsonl:
         async def _resolve(_wid: str):
             return None
 
-        monkeypatch.setattr(
-            session_manager, "resolve_session_for_window", _resolve
-        )
+        monkeypatch.setattr(session_manager, "resolve_session_for_window", _resolve)
         sess = Session(id="x", name="y", window_id="@1")
         events = await _seed_events_from_jsonl(sess)
         assert events == []
 
-    async def test_pulls_recent_end_turns(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+    async def test_pulls_recent_end_turns(self, tmp_path: Path, monkeypatch) -> None:
         from ccbot.session import Session, session_manager
         from ccbot.session_models import ClaudeSession
 
@@ -83,9 +79,7 @@ class TestSeedFromJsonl:
                 file_path=str(jsonl),
             )
 
-        monkeypatch.setattr(
-            session_manager, "resolve_session_for_window", _resolve
-        )
+        monkeypatch.setattr(session_manager, "resolve_session_for_window", _resolve)
         sess = Session(id="x", name="y", window_id="@1")
         events = await _seed_events_from_jsonl(sess)
         # Got at least the assistant final_text from end_turn.
@@ -110,9 +104,7 @@ class TestEnsureSeededIdempotent:
 
         from ccbot.session import session_manager
 
-        monkeypatch.setattr(
-            session_manager, "resolve_session_for_window", _resolve
-        )
+        monkeypatch.setattr(session_manager, "resolve_session_for_window", _resolve)
         sess = Session(id="x", name="y", window_id="@1")
         await _ensure_seeded(1, sess, state)
         assert called["resolve"] == 0  # no JSONL read because events present
@@ -127,9 +119,7 @@ class TestEnsureSeededIdempotent:
             called["resolve"] += 1
             return None  # no JSONL → empty seed
 
-        monkeypatch.setattr(
-            session_manager, "resolve_session_for_window", _resolve
-        )
+        monkeypatch.setattr(session_manager, "resolve_session_for_window", _resolve)
         state = CardState()
         sess = Session(id="x", name="y", window_id="@1")
         await _ensure_seeded(1, sess, state)

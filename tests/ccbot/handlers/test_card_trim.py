@@ -42,10 +42,7 @@ class TestTrimPageEvents:
             started_at=1.0,
             is_page_break=True,
         )
-        middles = [
-            _ev("tool_use", f"Bash_{i}", started_at=2.0 + i)
-            for i in range(50)
-        ]
+        middles = [_ev("tool_use", f"Bash_{i}", started_at=2.0 + i) for i in range(50)]
         tail = _ev("thinking", "", started_at=100.0)
         events = [anchor, *middles, tail]
         out = _trim_page_events(events, 10)
@@ -86,4 +83,6 @@ class TestTrimPageEvents:
         out = _trim_page_events(events, budget)
         rendered = render_page(out, now=2.0)
         actual_lines = _count_lines(rendered)
-        assert actual_lines <= budget + CARD_PAGE_LINES_OVERSHOOT + 5  # render_page joins with \\n\\n\\n
+        assert (
+            actual_lines <= budget + CARD_PAGE_LINES_OVERSHOOT + 5
+        )  # render_page joins with \\n\\n\\n

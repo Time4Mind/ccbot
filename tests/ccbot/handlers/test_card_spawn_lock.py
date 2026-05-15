@@ -86,9 +86,7 @@ async def test_concurrent_update_session_card_spawns_once(monkeypatch):
     monkeypatch.setattr(notifications, "_send_card", fake_send_card)
     monkeypatch.setattr(notifications, "_edit_card", fake_edit_card)
     # Skip the JSONL seeder — not relevant for the race test.
-    monkeypatch.setattr(
-        notifications, "_ensure_seeded", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr(notifications, "_ensure_seeded", AsyncMock(return_value=None))
     # Make active_session resolve to this session so _should_buffer
     # doesn't force the buffer-only path.
     fake_active = MagicMock()
@@ -118,9 +116,7 @@ async def test_concurrent_update_session_card_spawns_once(monkeypatch):
     assert len(sent_msg_ids) == 1, (
         f"expected exactly 1 _send_card; got {len(sent_msg_ids)}"
     )
-    assert len(edits) == 1, (
-        f"expected exactly 1 _edit_card; got {len(edits)}"
-    )
+    assert len(edits) == 1, f"expected exactly 1 _edit_card; got {len(edits)}"
 
 
 @pytest.mark.asyncio
@@ -148,9 +144,7 @@ async def test_repost_card_race_with_update_spawns_once(monkeypatch):
 
     monkeypatch.setattr(notifications, "_send_card", fake_send_card)
     monkeypatch.setattr(notifications, "_edit_card", fake_edit_card)
-    monkeypatch.setattr(
-        notifications, "_ensure_seeded", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr(notifications, "_ensure_seeded", AsyncMock(return_value=None))
     fake_active = MagicMock()
     fake_active.id = sess.id
     monkeypatch.setattr(
@@ -201,9 +195,7 @@ async def test_serial_calls_still_spawn_then_edit(monkeypatch):
 
     monkeypatch.setattr(notifications, "_send_card", fake_send_card)
     monkeypatch.setattr(notifications, "_edit_card", fake_edit_card)
-    monkeypatch.setattr(
-        notifications, "_ensure_seeded", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr(notifications, "_ensure_seeded", AsyncMock(return_value=None))
     fake_active = MagicMock()
     fake_active.id = sess.id
     monkeypatch.setattr(
@@ -250,9 +242,7 @@ async def test_finalize_then_immediate_event_no_duplicate(monkeypatch):
 
     monkeypatch.setattr(notifications, "_send_card", fake_send_card)
     monkeypatch.setattr(notifications, "_edit_card", fake_edit_card)
-    monkeypatch.setattr(
-        notifications, "_ensure_seeded", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr(notifications, "_ensure_seeded", AsyncMock(return_value=None))
 
     # finalize_task calls prewarm_pages_cache (async); stub it out.
     async def fake_prewarm(window_id):
@@ -287,6 +277,4 @@ async def test_finalize_then_immediate_event_no_duplicate(monkeypatch):
     )
 
     # Exactly one card spawn; the loser took the edit branch.
-    assert len(sent) == 1, (
-        f"expected 1 spawn across finalize+update; got {len(sent)}"
-    )
+    assert len(sent) == 1, f"expected 1 spawn across finalize+update; got {len(sent)}"

@@ -309,9 +309,7 @@ async def _forward_inbox_file(
         rel_path = f".ccbot-inbox/{file_path.name}"
     else:
         rel_path = str(file_path)
-    text_to_send = (
-        f"{caption}\n\n{rel_path}" if caption.strip() else rel_path
-    )
+    text_to_send = f"{caption}\n\n{rel_path}" if caption.strip() else rel_path
     try:
         await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         logger.info(

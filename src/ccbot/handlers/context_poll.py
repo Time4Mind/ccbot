@@ -131,7 +131,9 @@ async def _read_context_pct(window_id: str) -> int | None:
         # Always dismiss — leaving the modal up would block the user
         # the next time they look at the pane.
         try:
-            await tmux_manager.send_keys(w.window_id, "Escape", enter=False, literal=False)
+            await tmux_manager.send_keys(
+                w.window_id, "Escape", enter=False, literal=False
+            )
         except Exception as e:
             logger.debug("context_poll dismiss failed: %s", e)
     return pct
@@ -139,9 +141,7 @@ async def _read_context_pct(window_id: str) -> int | None:
 
 async def context_poll_loop(bot: Bot) -> None:
     """Run forever, refreshing context-fill % for every live session."""
-    logger.info(
-        "context_poll_loop started interval=%.0fs", CONTEXT_POLL_INTERVAL
-    )
+    logger.info("context_poll_loop started interval=%.0fs", CONTEXT_POLL_INTERVAL)
     # Stagger the first run a bit so we don't pile onto a fresh-boot
     # claude startup.
     await asyncio.sleep(30.0)
@@ -174,16 +174,16 @@ async def _one_pass(bot: Bot) -> None:
             try:
                 pct = await _read_context_pct(sess.window_id)
             except Exception as e:
-                logger.debug(
-                    "context_poll read failed sess=%s: %s", sess.id, e
-                )
+                logger.debug("context_poll read failed sess=%s: %s", sess.id, e)
                 pct = None
             if pct is not None:
                 set_card_context_pct(user_id, sess.id, pct)
                 bg_status.set_context_pct(user_id, sess.id, pct)
                 touched = True
                 logger.info(
-                    "context_poll sess=%s pct=%d", sess.id, pct,
+                    "context_poll sess=%s pct=%d",
+                    sess.id,
+                    pct,
                     extra={
                         "event": "context_poll_update",
                         "user_id": user_id,

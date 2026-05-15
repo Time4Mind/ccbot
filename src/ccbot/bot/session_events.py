@@ -168,7 +168,9 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                     ui = extract_interactive_content(pane_text)
                     if ui is not None:
                         await enter_kb_mode(bot, user_id, sess, ui.content, ui.name)
-                        claude_sess = await session_manager.resolve_session_for_window(wid)
+                        claude_sess = await session_manager.resolve_session_for_window(
+                            wid
+                        )
                         if claude_sess and claude_sess.file_path:
                             try:
                                 file_size = Path(claude_sess.file_path).stat().st_size
@@ -224,9 +226,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                         from ..handlers.notifications import push_event
 
                         try:
-                            await push_event(
-                                bot, user_id, sess, text="task complete"
-                            )
+                            await push_event(bot, user_id, sess, text="task complete")
                         except Exception as e:
                             logger.debug("bg finished push failed: %s", e)
 

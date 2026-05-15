@@ -98,9 +98,9 @@ _EN: dict[str, str] = {
         "• `off` — drop voice messages"
     ),
     "settings.lang.body": "*Language*\n\nUI language. Switches everything\nbut Claude's own output.",
-    # /list
-    "list.active": "*Active*",
-    "list.lost": "*Lost*",
+    # Sessions list — only ``list.empty`` is still used (Menu → Sessions
+    # empty-state when there's no active session). ``list.active`` /
+    # ``list.lost`` are legacy.
     "list.empty": "No live sessions. Use 🆕 New to create one.",
     # Confirm dialogs
     "conf.kill": (
@@ -264,13 +264,12 @@ _EN: dict[str, str] = {
     "help.body.menu": (
         "*≡ Menu*\n\n"
         "Open via /menu or the ≡ Menu inline button. Items:\n"
-        "• 📋 *List* — live transcript of the active session "
-        "(🧑‍💻 Shot lives here)\n"
+        "• 📋 *Sessions* — jump to the active session's live card\n"
         "• 📊 *Status* — Claude Code 5h / weekly / sonnet quotas\n"
-        "• 📜 *History* — paginated transcript of the active session\n"
+        "• 🧑‍💻 *Shot* — terminal snapshot of the active session\n"
         "• 🆕 *New* — create a session from a directory browser\n"
         "• 📦 *Archive* — restore / inspect / delete archived sessions\n"
-        "• ⚙ *Settings* — language, voice, alerts, local terminal, …"
+        "• ⚙ *Settings* — language, voice, local terminal, …"
     ),
     "help.body.commands": (
         "*Slash commands*\n\n"
@@ -294,9 +293,6 @@ _EN: dict[str, str] = {
     ),
     "help.body.alerts": (
         "*Alerts*\n\n"
-        "*Per-session token alerts.* Three thresholds (defaults "
-        "100k / 200k / 400k). Bot pushes once per session per crossing. "
-        "Adjust via Settings → Token alerts (50k step ±).\n\n"
         "*Quota alerts.* 5h / weekly / weekly-Sonnet quotas are sampled "
         "from the live `/usage` modal every 5 min. Bot pushes when % "
         "crosses 50, 75, or 90."
@@ -393,8 +389,6 @@ _RU: dict[str, str] = {
     "settings.lang.body": (
         "*Язык*\n\nЯзык интерфейса. Переключает всё,\nкроме самого вывода Claude."
     ),
-    "list.active": "*Активные*",
-    "list.lost": "*Потерянные*",
     "list.empty": "Активных сессий нет. Тапни 🆕 Новая, чтобы создать.",
     "conf.kill": (
         "Убить *{name}*?\nTmux-окно умрёт, claude session id сохранится.\n"
@@ -549,13 +543,12 @@ _RU: dict[str, str] = {
     "help.body.menu": (
         "*≡ Меню*\n\n"
         "Открывается через /menu или инлайн-кнопку ≡. Пункты:\n"
-        "• 📋 *List* — transcript активной сессии "
-        "(🧑‍💻 Shot живёт здесь)\n"
+        "• 📋 *Sessions* — переход на живую карточку активной\n"
         "• 📊 *Status* — лимиты Claude Code (5ч / неделя / sonnet)\n"
-        "• 📜 *History* — постраничный transcript активной\n"
+        "• 🧑‍💻 *Shot* — снимок терминала активной сессии\n"
         "• 🆕 *New* — создать сессию через выбор директории\n"
         "• 📦 *Archive* — восстановить / посмотреть / удалить\n"
-        "• ⚙ *Settings* — язык, голос, алерты, терминал, ..."
+        "• ⚙ *Settings* — язык, голос, терминал, ..."
     ),
     "help.body.commands": (
         "*Слэш-команды*\n\n"
@@ -579,9 +572,6 @@ _RU: dict[str, str] = {
     ),
     "help.body.alerts": (
         "*Алерты*\n\n"
-        "*Per-session по токенам.* Три порога (по умолчанию "
-        "100k / 200k / 400k). Бот шлёт push один раз на сессию на каждый "
-        "переход. Настройка: Settings → Token alerts (шаг 50k через ±).\n\n"
         "*Квоты Claude Code.* 5ч / неделя / неделя Sonnet — бот опрашивает "
         "живой `/usage` каждые 5 мин и пушит при пересечении 50, 75, 90 %."
     ),
@@ -674,8 +664,6 @@ _ZH: dict[str, str] = {
         "• `off` — 忽略语音"
     ),
     "settings.lang.body": "*语言*\n\n界面语言。切换除 Claude 自身输出外的一切文本。",
-    "list.active": "*活动*",
-    "list.lost": "*丢失*",
     "list.empty": "没有活动会话。点 🆕 新建以创建。",
     "conf.kill": (
         "终止 *{name}*?\nTmux 窗口结束,claude session id 已保存。\n可通过归档列表恢复。"
@@ -821,12 +809,12 @@ _ZH: dict[str, str] = {
     "help.body.menu": (
         "*≡ 菜单*\n\n"
         "通过 /menu 或 ≡ 菜单内联按钮打开:\n"
-        "• 📋 *List* — 当前会话的转录(🧑‍💻 Shot 在这里)\n"
+        "• 📋 *Sessions* — 跳转到当前会话的实时卡片\n"
         "• 📊 *Status* — 5h / 周 / sonnet 配额\n"
-        "• 📜 *History* — 当前会话的分页转录\n"
+        "• 🧑‍💻 *Shot* — 当前会话的终端快照\n"
         "• 🆕 *New* — 通过目录浏览器创建会话\n"
         "• 📦 *Archive* — 恢复 / 查看 / 删除\n"
-        "• ⚙ *Settings* — 语言 / 语音 / 提醒 / 终端 …"
+        "• ⚙ *Settings* — 语言 / 语音 / 终端 …"
     ),
     "help.body.commands": (
         "*斜杠命令*\n\n"
@@ -849,8 +837,6 @@ _ZH: dict[str, str] = {
     ),
     "help.body.alerts": (
         "*提醒*\n\n"
-        "*Per-session token 提醒。* 三个阈值(默认 100k / 200k / 400k)。\n"
-        "每个会话每个阈值推送一次。Settings → Token alerts(50k 步长)。\n\n"
         "*配额提醒。* 5h / 周 / 周-Sonnet 配额 — 机器人每 5 分钟轮询\n"
         "实时 `/usage` 弹窗,百分比跨过 50 / 75 / 90 时推送。"
     ),

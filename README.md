@@ -107,14 +107,11 @@ Most-frequently-tweaked optionals:
 | `QUOTA_ALERT_POLL_INTERVAL` | `5m`         | how often the live `/usage` modal is sampled |
 | `VOICE_BACKEND`             | `auto`       | `auto` / `whisper` / `apple` / `off` |
 | `WHISPER_MODEL_PATH`        | `~/.ccbot/models/ggml-medium.bin` | whisper.cpp model |
-| `BG_NOTIFY_MODE`            | `separate`   | _(legacy)_ kept for compatibility; background sessions are now silent — see "Background sessions" |
 | `BG_STATUS_MAX`             | `4`          | max badges in the bg-status panel; older entries collapse to `+N more` |
-| `BG_STATUS_QUOTA_THRESHOLDS`| `100000,200000,400000` | per-session token thresholds that flip the ⚠️🟢/🟡/🔴 quota glyph |
-| `CARD_PRIOR_CONTEXT`        | `5`          | how many transcript entries to seed at the top of a fresh live card; `0` disables |
 | `CARD_EDIT_LAG`             | `2.0`        | coalescing window for live-card edits (seconds) |
 | `TG_PROXY_URL`              | _(unset)_    | outbound proxy for the Bot API (`socks5://…` or `http://…`) |
 
-The full list lives in `doc/dm-multisession-spec.md` § 14.
+The full list lives in `doc/dm-multisession-spec.md` § 12.
 
 ## Hook setup
 
@@ -172,9 +169,8 @@ of that session onto the carrier message and switches the active
 session in one go. Pagination buttons (◀ Older / Newer ▶) keep the
 footer keyboard under them — they're the navigation affordance, so
 there is no separate "History" entry in the Menu. Tapping the
-already-active button is a no-op. `Back` from `/screenshot` also
-lands the user on the paginated transcript (origin `m` returns to
-the main view, origin `l` to /list).
+already-active button is a no-op. `Back` from `/screenshot` reposts
+the live card.
 
 Reply-quoting a bot message belonging to a non-active session routes
 that single reply there without changing the active session.
@@ -194,10 +190,10 @@ Their state surfaces only as a compact panel at the bottom of the
 active session's card:
 
 ```
-[session-A] ⏳         ← working in background
-[scraper]   ✅         ← finished
-[chores]    ❌         ← errored
-[v frontend] ❓ ⚠️🟡    ← needs user action + crossed token threshold
+🟦 session-A ⏳        ← working in background
+🟪 scraper   ✅        ← finished
+🟧 chores    ❌        ← errored
+🟨 frontend  ❓        ← needs user action (AskUserQuestion / permission)
 ```
 
 The panel sticks across active-card edits so a finished bg session
@@ -207,17 +203,11 @@ shows `❓`, the switcher tap paints the stashed AskUserQuestion /
 ExitPlanMode prompt with the same arrow/Enter/Esc keyboard you'd
 get on a foreground prompt.
 
-When a session crosses a `BG_STATUS_QUOTA_THRESHOLDS` band, its
-quota glyph flips to `⚠️🟢` / `🟡` / `🔴`. The active session
-shows the same glyph in its card header. **No push notifications
-are sent** — the visual indicator is the alert.
-
 ### Live card UX knobs
 
-A fresh live card (after a turn completes / clear / overflow split)
-pre-seeds itself with up to `CARD_PRIOR_CONTEXT` (default 5)
-transcript entries from before your most recent message so context
-doesn't disappear between turns.
+A fresh live card seeds itself with up to `CARD_SEED_TURNS` (default
+20) recent end-of-turn boundaries from the session's JSONL transcript
+so the history doesn't disappear across a bot restart.
 
 `Settings → Card position` controls how your outgoing text relates
 to the live card:

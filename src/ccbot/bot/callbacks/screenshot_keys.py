@@ -5,7 +5,7 @@ Two flavours of screenshot live in the chat:
 
 * ``/screenshot`` slash → reply_document with the arrow-key control
   keyboard. Handled by ``CB_SCREENSHOT_REFRESH`` + ``CB_KEYS_*``.
-* Shot button (main footer / /list view) → ``emit_screenshot_compact``
+* Shot button (main footer top row) → ``emit_screenshot_compact``
   sends a photo with either a switcher-mode keyboard (default) or a
   kb-mode key grid. Handled by ``CB_SHOT_SW`` (switch active +
   redraw), ``CB_SHOT_BACK`` (delete photo + restore origin surface),
@@ -111,8 +111,8 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         return True
 
     if data.startswith(CB_SHOT_BACK):
-        # ``origin`` was used to switch between /list and main-card surfaces;
-        # both now unify on the live card, so we ignore the suffix.
+        # ``origin`` historically distinguished different surfaces;
+        # the live card is the only one now, so we ignore the suffix.
         if query.message:
             try:
                 await query.message.delete()

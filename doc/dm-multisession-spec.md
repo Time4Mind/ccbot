@@ -142,20 +142,32 @@ This covers the "drop a quick note into a background session" case without break
 
 ### 4.3 Slash commands (B7 — published via `setMyCommands`)
 
-Commands appear in the Telegram `/`-menu for discoverability:
+Only the truly user-needed commands are published in the Telegram `/`-menu;
+everything else lives behind the inline ≡ Menu. Hidden commands still
+work when typed.
+
+Published:
 
 | Command | Effect |
 |---|---|
-| `/new [name] [path]` | Create a new session. Without args, opens an inline form. |
-| `/list` | Show all active sessions with state and token usage. |
-| `/use <name-or-id>` | Make the given session active. Same as tapping a switcher button. |
-| `/rename <old> <new>` | Rename a session. |
-| `/kill <name-or-id>` | Stop tmux window and archive immediately. |
+| `/menu` | Open the inline Menu surface (Sessions / Status / Shot / Archive / Settings). |
+| `/help` | Inline mini-doc with section buttons. |
+| `/done [name]` | Mark goal achieved. Archives with a "completed" tag. |
+
+Hidden (typed only):
+
+| Command | Effect |
+|---|---|
+| `/new [name] [path]` | Create a new session. Without args, opens the directory browser. |
+| `/kill [name]` | Stop tmux window and archive after confirmation. |
 | `/stop` | Send Esc to the active session's tmux window (interrupt current task). |
-| `/done <session>` | Mark goal achieved. Archives with a "completed" tag. |
 | `/archive` | Show archived sessions, paginated, last 0–72h. |
-| `/archive --all` | Include 72h–14d range. |
 | `/status` | Detailed status: per-session usage, 5h/weekly budget, host stats. |
+| `/screenshot` | Snapshot the active session's tmux pane as a PNG. |
+| `/history` | Paginated transcript of the active session from the JSONL. |
+| `/usage` | Live `/usage` modal sample (5h / weekly / Sonnet). |
+| `/health` | Uptime, queue stats, latency, counters. |
+| `/restore-file <msg_id>` | Re-fetch a previously-uploaded inbox file from Telegram. |
 
 `/stop` is also exposed as an inline button at the bottom of the active session's most recent bot message.
 
@@ -304,7 +316,7 @@ Install footprint:
 - Read `state.json`.
 - For each session marked active or idle: check if its tmux window still exists.
   - If yes: re-attach. Re-bind monitor offsets.
-  - If no: mark as `lost`. Show in `/list` with a `Restore` button.
+  - If no: mark as `lost`. Surfaces in the switcher with a `Restore` button.
 - For each archived session: nothing to do at startup.
 
 ### Manual restore (F3)

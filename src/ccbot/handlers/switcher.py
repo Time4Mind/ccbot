@@ -68,9 +68,9 @@ def build_switcher_keyboard(
     """Build the inline switcher keyboard for a user.
 
     With `include_lost=True`, lost sessions also appear as buttons whose
-    callback restores the session (CB_ARC_RESTORE) — used by /list per
-    spec §9 (F2). Default behavior (active+idle only) is unchanged for
-    content-message attachments.
+    callback restores the session (CB_ARC_RESTORE) per spec §9 (F2).
+    Default behavior (active+idle only) is unchanged for content-message
+    attachments.
 
     `include_new` controls whether the trailing "+ new" row is appended.
     Callers that want to place "+ new" next to another bottom-row button

@@ -111,7 +111,7 @@ def _has_active_session(user_id: int) -> bool:
 
 
 def can_offer_terminal(user_id: int) -> bool:
-    """Show the "Open terminal" button (in /list) for this user?
+    """Show the "Open terminal" button on the live card for this user?
 
     Visible iff:
       * the user has an active session with a live window_id,
@@ -163,7 +163,7 @@ def _footer_top_row(
     """Default top row — per-session controls. Menu lives in its own
     bottom row (see ``_footer_bottom_row``) so its slot stays put
     across view transitions (the same spot Back occupies in
-    /list / /archive / other sub-screens).
+    /archive / settings sub-screens).
 
     Busy session shows *Stop* (sends Escape — interrupt the running
     task without terminating). Idle session shows *Kill* (archive the
@@ -187,8 +187,7 @@ def _footer_top_row(
         # Shot belongs next to Kill / Clear — it's a per-session control
         # too ("snapshot this session's terminal"). Keeping it in the
         # top row means the screenshot button stays put across switcher
-        # taps, /list paints, and live-card edits (anywhere the main
-        # screen is rendered).
+        # taps and live-card edits (anywhere the main screen is rendered).
         row.append(
             InlineKeyboardButton(t(user_id, "mm.shot"), callback_data=CB_MM_SHOT)
         )
@@ -208,7 +207,7 @@ def _footer_bottom_row(user_id: int) -> list[InlineKeyboardButton]:
     """Bottom row for the main screen: `[+ new] [≡ Menu]`. The pair sits
     on a single row so the two most-used "go elsewhere" affordances land
     side-by-side and the user's eye doesn't ping-pong between rows. Same
-    slot as Back on /list / /archive / settings sub-screens, just with
+    slot as Back on /archive / settings sub-screens, just with
     two buttons instead of one.
     """
     return [

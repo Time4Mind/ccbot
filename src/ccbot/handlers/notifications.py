@@ -140,45 +140,6 @@ _cards: dict[tuple[int, str], CardState] = {}
 _MSG_REGISTRY_LIMIT = 2000
 _msg_to_session: dict[tuple[int, int], str] = {}
 
-# Per-user set of message_ids that hold a finalised live-card body (the
-# task's final answer). Any callback-driven edit on such a message
-# would clobber an immutable chat artifact, so ``safe_edit`` redirects
-# to a fresh message and strips the keyboard from the finalised one.
-# In-memory only — resets across bot restarts (acceptable: the user
-# would re-establish a fresh carrier on the next event anyway).
-_finalized_msgs: dict[int, set[int]] = {}
-_FINALIZED_LIMIT_PER_USER = 200
-
-
-def mark_msg_finalized(user_id: int, message_id: int) -> None:
-    """Pin a Telegram message as a finalised live card so UI navigation
-    spawns a new carrier instead of overwriting the answer.
-
-    Capped per user to keep memory bounded — oldest ids drop first.
-    """
-    bucket = _finalized_msgs.setdefault(user_id, set())
-    if len(bucket) >= _FINALIZED_LIMIT_PER_USER and message_id not in bucket:
-        drop = max(1, _FINALIZED_LIMIT_PER_USER // 10)
-        for _ in range(drop):
-            try:
-                bucket.pop()
-            except KeyError:
-                break
-    bucket.add(message_id)
-
-
-def is_msg_finalized(user_id: int, message_id: int) -> bool:
-    return message_id in _finalized_msgs.get(user_id, ())
-
-
-def discard_finalized_msg(user_id: int, message_id: int) -> None:
-    bucket = _finalized_msgs.get(user_id)
-    if bucket:
-        bucket.discard(message_id)
-        if not bucket:
-            _finalized_msgs.pop(user_id, None)
-
-
 def _register_msg(user_id: int, message_id: int, session_id: str) -> None:
     """Remember which session a bot message belongs to for reply-quote routing."""
     key = (user_id, message_id)
@@ -1643,41 +1604,20 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
         except Exception as e:
             logger.debug("finalize_task prewarm failed: %s", e)
 
-    # Finalised card → ``is_busy=False`` keyboard so the user sees Kill,
-    # not Stop, on a completed result.
+    # Final answer → ``is_busy=False`` keyboard so the user sees Kill,
+    # not Stop. State stays live (rolling card); the next turn's events
+    # keep editing the SAME message — no reset_card, no pin.
     done_kb = build_footer_keyboard(user_id, screen="main", is_busy=False)
-
-    # Track every Telegram message this finalize fans out into so each
-    # gets pinned in ``_finalized_msgs`` below. Without that pinning, the
-    # next UI callback on the answer card would clobber the answer via
-    # ``safe_edit``. The pin reroutes any such edit to a fresh carrier.
-    finalised_ids: list[int] = []
 
     text = _render_card(sess, state, user_id=user_id)
     if state.msg_id is None:
         await _send_card(bot, user_id, sess, state, text=text, reply_markup=done_kb)
-    else:
-        if await _edit_card(bot, user_id, state, text=text, reply_markup=done_kb):
-            state.last_rendered = text
+    elif await _edit_card(bot, user_id, state, text=text, reply_markup=done_kb):
+        state.last_rendered = text
     state.last_edit_ts = time.monotonic()
-    if state.msg_id is not None:
-        finalised_ids.append(state.msg_id)
-    # ``chunks`` retained for future overflow split if a single answer
-    # exceeds 4096 chars after pagination — pagination handles this by
-    # treating the spilled chunk as a sub-page. Today's path renders all
-    # of cleaned into the final_event.body and trusts pagination to split.
-    del chunks
 
     if attachments:
         await _send_attachments(bot, user_id, attachments)
-
-    # ROLLING CARD: don't pin the message as "finalised" and don't
-    # reset_card. The next turn's events keep editing the SAME live
-    # card; pagination handles the growing history. This kills the
-    # "2 messages back-to-back" UX where every turn boundary spawned
-    # a new card below the previous one. Errors and AskUserQuestion
-    # still emit their own pushes via push_event — those need to ping
-    # the user.
 
 
 async def _send_attachments(

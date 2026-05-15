@@ -1,13 +1,22 @@
-"""Per-user /usage modal renderer + back-compat JSONL parsers.
+"""Per-user /usage modal renderer + per-session context-fill from JSONL.
 
-Context-fill % per session is sourced from Claude's own ``/context``
-command via :mod:`ccbot.handlers.context_poll` (not from JSONL token
-math — extended-window models render the JSONL approach unreliable).
+Context-fill % per session is computed from the JSONL transcript —
+sending the live ``/context`` command into the pane writes the modal
+output back into the JSONL (as a fake user turn) AND eats real tokens
+from claude's own context window. JSONL math is non-invasive.
+
+Per-model denominator:
+  * Claude 4.x (opus-4-*, sonnet-4-*) — 1 000 000 (extended context
+    is the Claude Code default for these models)
+  * Claude 3.x and unknown — 200 000
 
 Public API:
   parse_session_usage(file_path) -> list[Turn]
       back-compat parser used by tests; sums input + output, ignores
       cache fields.
+  context_pct_for_session(sess) -> int | None
+      latest assistant turn's full input size (incl. cache reads)
+      divided by the per-model budget, clamped to ``[0, 100]``.
   format_usage_breakdown_compact(user_id, info) -> str | None
       renders the live /usage modal block (Menu→Status / Anthropic
       quota glyphs).
@@ -23,9 +32,25 @@ from pathlib import Path
 
 import aiofiles
 
-from .session import session_manager
+from . import session_claude_io
+from .session import Session, session_manager
 
 logger = logging.getLogger(__name__)
+
+
+def _budget_for_model(model: str) -> int:
+    """Per-model context-window denominator in tokens.
+
+    Claude 4.x runs with extended (1M) context in Claude Code by
+    default — we routinely observe single-turn cache_read well past
+    200k. Older / unknown models fall back to the public 200k limit.
+    """
+    if not model:
+        return 200_000
+    m = model.lower()
+    if "claude-opus-4" in m or "claude-sonnet-4" in m or "claude-4" in m:
+        return 1_000_000
+    return 200_000
 
 
 @dataclass
@@ -84,6 +109,56 @@ async def parse_session_usage(file_path: Path) -> list[Turn]:
     except OSError as e:
         logger.debug("usage: cannot read %s: %s", file_path, e)
     return turns
+
+
+async def context_pct_for_session(sess: Session) -> int | None:
+    """Latest assistant turn's full context size as % of the model's
+    budget. None when there's no JSONL data yet.
+
+    "Full context size" = ``input_tokens + cache_creation_input_tokens
+    + cache_read_input_tokens`` of the most recent assistant message.
+    The model name is read from that same message and routed through
+    :func:`_budget_for_model` so Claude 4.x sessions use the 1M
+    denominator instead of the public 200k.
+    """
+    if not sess.claude_session_id or not sess.workdir:
+        return None
+    file_path = session_claude_io.build_session_file_path(
+        sess.claude_session_id, sess.workdir
+    )
+    if file_path is None or not file_path.exists():
+        return None
+    last_total: int | None = None
+    last_model: str = ""
+    try:
+        async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
+            async for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("type") != "assistant":
+                    continue
+                msg = obj.get("message", {})
+                usage = msg.get("usage") or {}
+                inp = int(usage.get("input_tokens", 0) or 0)
+                cc = int(usage.get("cache_creation_input_tokens", 0) or 0)
+                cr = int(usage.get("cache_read_input_tokens", 0) or 0)
+                total = inp + cc + cr
+                if total > 0:
+                    last_total = total
+                    last_model = msg.get("model", "") or last_model
+    except OSError as e:
+        logger.debug("context_pct: cannot read %s: %s", file_path, e)
+        return None
+    if last_total is None:
+        return None
+    budget = _budget_for_model(last_model)
+    pct = int(round(last_total * 100 / budget))
+    return max(0, min(100, pct))
 
 
 # --- /usage modal compact renderer (Menu→Status) ---

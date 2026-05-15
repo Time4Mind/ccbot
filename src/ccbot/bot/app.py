@@ -21,7 +21,6 @@ from telegram.ext import (
 )
 
 from ..config import config
-from ..handlers.context_poll import context_poll_loop
 from ..handlers.quota_alerts import quota_alerts_loop
 from ..handlers.notifications import card_timer_loop
 from ..handlers.status_polling import status_poll_loop
@@ -142,8 +141,15 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     _quota_alerts_task = asyncio.create_task(quota_alerts_loop(application.bot))
     logger.info("Quota alerts task started")
 
-    _context_poll_task = asyncio.create_task(context_poll_loop(application.bot))
-    logger.info("Context poll task started")
+    # Context-poll loop disabled — sending /context to live panes
+    # writes the modal's markdown output INTO the session's JSONL as
+    # a user-turn, which then renders on the live card as a fake
+    # ``[Request interrupted by user] ## Context Usage…`` block AND
+    # eats real tokens from claude's own context window every cycle.
+    # Context % is now computed from JSONL math (input + cache reads
+    # vs. 1M default for Claude 4.x models). See ``usage.context_pct_for_session``.
+    # _context_poll_task = asyncio.create_task(context_poll_loop(application.bot))
+    # logger.info("Context poll task started")
 
     _metrics_flush_task = asyncio.create_task(metrics_flush_loop())
     logger.info("Metrics flush task started")

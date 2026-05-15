@@ -262,6 +262,24 @@ async def unsupported_content_handler(
     )
 
 
+async def _react_input(bot: Bot, chat_id: int, message_id: int) -> None:
+    """👀 reaction on the user's incoming msg (text / voice / photo /
+    document) so the routing leaves a traceable mark in chat history.
+    One consistent emoji across input types — Telegram's free reaction
+    set is narrow (no 📎, no 🎤), so 👀 carries "received + routed"
+    universally."""
+    try:
+        from telegram import ReactionTypeEmoji
+
+        await bot.set_message_reaction(
+            chat_id=chat_id,
+            message_id=message_id,
+            reaction=[ReactionTypeEmoji(emoji="👀")],
+        )
+    except Exception as e:
+        logger.debug("input reaction failed: %s", e)
+
+
 # --- inbox file plumbing (photo + document share this) ---
 
 
@@ -274,16 +292,19 @@ async def _forward_inbox_file(
     label: str,
     bot: Bot,
 ) -> tuple[bool, str]:
-    """Send a synthetic 'received file' notice to the active session."""
-    rel = file_path.name
-    sess = session_manager.find_session_by_window(wid)
-    workdir = sess.workdir if sess else ""
-    location = f"{workdir}/.ccbot-inbox/{rel}" if workdir else str(file_path)
-    text_to_send = (
-        f"{caption}\n\n({label} attached: {location})"
-        if caption
-        else f"({label} attached: {location})"
-    )
+    """Route an inbound file to the active session.
+
+    The file is already saved in ``<workdir>/.ccbot-inbox/`` by the
+    caller — claude can read it via the standard tools whenever the
+    user references it. We do NOT push a synthetic "received file"
+    line into the pane any more (per user feedback on pivot #32:
+    "если там сообщение о получении — не требуется"). When the user
+    attached a caption, that caption becomes the user message routed
+    to claude verbatim; otherwise the pane stays silent and the file
+    just sits in the inbox until the user mentions it.
+    """
+    if not caption.strip():
+        return True, ""
     try:
         await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         logger.info(
@@ -301,7 +322,7 @@ async def _forward_inbox_file(
         )
     except Exception:
         pass
-    return await session_manager.send_to_window(wid, text_to_send)
+    return await session_manager.send_to_window(wid, caption)
 
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -354,8 +375,10 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
-    # No success reply — the user just sent the image, they don't need
-    # the bot to tell them it was received. Errors still surface above.
+    # 📎 reaction on the user's incoming photo so the routing leaves a
+    # traceable mark in chat history (same intent as the 👀 reaction on
+    # text messages — Task #30).
+    await _react_input(context.bot, user.id, update.message.message_id)
 
 
 async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -407,7 +430,7 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
-    # No success reply — see photo_handler for the same reasoning.
+    await _react_input(context.bot, user.id, update.message.message_id)
 
 
 # --- voice ---
@@ -486,7 +509,13 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await safe_reply(update.message, f"❌ {message}")
         return
 
-    await safe_reply(update.message, f'🎤 "{text}"')
+    # 🎤 reply removed (chat-clutter on every PTT). The transcription
+    # is now traceable via the 👀 reaction on the user's voice msg
+    # itself + whatever the live card shows next. Telegram's free
+    # reaction set doesn't include 🎤, so we fall back to 👀 (same as
+    # text / attachment handlers) for one consistent "received +
+    # routed" marker across all input types.
+    await _react_input(context.bot, user.id, update.message.message_id)
 
 
 # --- text + bash !cmd capture ---
@@ -751,16 +780,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await repost_card(context.bot, user.id, sess)
         except Exception as e:
             logger.debug("repost_card failed: %s", e)
-    try:
-        from telegram import ReactionTypeEmoji
-
-        await context.bot.set_message_reaction(
-            chat_id=user.id,
-            message_id=update.message.message_id,
-            reaction=[ReactionTypeEmoji(emoji="👀")],
-        )
-    except Exception as e:
-        logger.debug("set_message_reaction failed: %s", e)
+    await _react_input(context.bot, user.id, update.message.message_id)
 
 
 # Re-export so existing callers (callbacks/dir_browser.py) keep working.

@@ -25,16 +25,16 @@ class TestSession:
         assert len(sid) == 8
         int(sid, 16)  # raises if not hex
 
-    def test_round_trip_preserves_token_usage_total(self) -> None:
+    def test_round_trip_preserves_was_lost_flag(self) -> None:
         s = Session(
             id="abc",
             name="test",
             window_id="@5",
             workdir="/tmp",
-            token_usage_total=12345,
+            was_lost=True,
         )
         restored = Session.from_dict(s.to_dict())
-        assert restored.token_usage_total == 12345
+        assert restored.was_lost is True
         assert restored.window_id == "@5"
 
     def test_from_dict_normalizes_invalid_state(self) -> None:

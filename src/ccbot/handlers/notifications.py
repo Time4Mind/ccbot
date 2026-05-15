@@ -164,6 +164,10 @@ class CardState:
     is_photo_msg: bool = False
     last_pane_hash: str = ""  # md5 of last captured pane text
     last_photo_edit_ts: float = 0.0  # monotonic seconds; 3s throttle
+    # Cached context-window fill percentage for the active session, set by
+    # session_events whenever a new assistant turn lands. Rendered as a
+    # ``context: N%`` line above the bg-status panel. None = unknown.
+    context_pct: int | None = None
 
 
 # Per-(user, session.id) card state.
@@ -828,6 +832,12 @@ def _render_card(
     if footer:
         parts.append("─────")
         parts.append(footer)
+    # Active session's own context-fill — single line at the very
+    # bottom of the card body, just above the bg-status panel.
+    # See ``set_card_context_pct``.
+    if state.context_pct is not None:
+        parts.append("")
+        parts.append(f"context: {state.context_pct}%")
     if panel:
         # Explicit gap before the bg-status panel so it reads as a
         # distinct block from the active-session body. The panel itself
@@ -1410,6 +1420,15 @@ async def close_card_view(
             "old_msg_id": old_msg_id,
         },
     )
+
+
+def set_card_context_pct(user_id: int, session_id: str, pct: int) -> None:
+    """Stash the latest context-window fill percentage for this session's
+    live card. Read by ``_render_card`` to paint a ``context: N%`` line
+    above the bg-status panel. No-op when no state exists yet.
+    """
+    state = _cards.setdefault((user_id, session_id), CardState())
+    state.context_pct = pct
 
 
 def mark_card_paused(user_id: int, session_id: str) -> None:

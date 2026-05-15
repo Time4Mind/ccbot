@@ -160,10 +160,7 @@ def build_session_preview(
     parts: list[str] = []
     emoji = session_emoji(sess)
     state_label = sess.state if sess.state else "?"
-    usage = (
-        f"{sess.token_usage_total // 1000}k tok" if sess.token_usage_total else "0 tok"
-    )
-    header = f"{emoji} {sess.name or sess.id} · {state_label} · {usage}"
+    header = f"{emoji} {sess.name or sess.id} · {state_label}"
     if sess.goal:
         header += f"\ngoal: {sess.goal}"
     parts.append(header)

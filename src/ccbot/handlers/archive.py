@@ -238,18 +238,13 @@ async def build_archive_page(
             label = "✓" if sess.state == "completed" else "·"
             ts = sess.archived_at or sess.last_event_at
             age = _format_age(user_id, ts) if ts else "?"
-            usage = (
-                t(user_id, "archive.tokens_k", k=sess.token_usage_total // 1000)
-                if sess.token_usage_total
-                else t(user_id, "archive.tokens_zero")
-            )
             display_name = sess.name or sess.id
             # ``(lost)`` tag for sessions that hit the lost state before
             # archival (tmux window vanished externally; user never
             # ran Restore). Without it the row reads identical to a
             # clean archive and the recovery-skipped fact is invisible.
             lost_tag = " _(lost)_" if sess.was_lost else ""
-            line = f"{idx}. {label} *{display_name}*{lost_tag} — {age} · {usage}"
+            line = f"{idx}. {label} *{display_name}*{lost_tag} — {age}"
             blurb = blurbs.get(sess.id) or ""
             if blurb:
                 line += f"\n  {blurb}"

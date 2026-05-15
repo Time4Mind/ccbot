@@ -79,6 +79,10 @@ class BgStatus:
     status: Status = "working"
     last_change: float = 0.0
     pending_interactive_ui: tuple[str, str] | None = None  # (content, ui_name)
+    # Latest known context-fill percent for this session, sourced from
+    # the JSONL transcript by ``usage.context_pct_for_session`` after each
+    # assistant turn. Rendered as ``context N%`` in the panel row.
+    context_pct: int | None = None
 
 
 # Per-user, per-session BgStatus.
@@ -147,6 +151,15 @@ def clear_pending_ui(user_id: int, session_id: str) -> bool:
     return True
 
 
+def set_context_pct(user_id: int, session_id: str, pct: int) -> None:
+    """Cache the latest context-fill % for a session's bg-panel row.
+    Auto-creates the entry if missing — a fresh bg session that just
+    received its first turn doesn't yet have a status entry, but we
+    want the context number to show as soon as it's known.
+    """
+    _entry(user_id, session_id).context_pct = pct
+
+
 def clear_for_session(session_id: str) -> bool:
     """Drop the entry for ``session_id`` across all users. Called on
     archive / kill / done. Returns True if anything was dropped."""
@@ -174,14 +187,22 @@ def clear_for_user_session(user_id: int, session_id: str) -> bool:
 
 
 def _badge(sess: "Session", entry: BgStatus) -> str:
-    """Render one panel row: ``<emoji> <name> <status_glyph>``."""
+    """Render one panel row: ``<emoji> <name> <status_glyph> [context N%]``.
+
+    The context-fill suffix sits AFTER all the status emoji so a glance
+    parses status-first, fill-second (pivot #43 feedback). When pct is
+    unknown, the suffix is omitted entirely.
+    """
     from .switcher import session_emoji
 
     name = sess.name or sess.id
     sess_emoji = session_emoji(sess)
     status_glyph = _STATUS_EMOJI.get(entry.status, "")
     parts = [sess_emoji, name, status_glyph]
-    return " ".join(p for p in parts if p)
+    line = " ".join(p for p in parts if p)
+    if entry.context_pct is not None:
+        line = f"{line} · context {entry.context_pct}%"
+    return line
 
 
 def render_panel(user_id: int, *, active_session_id: str = "") -> str:
@@ -244,6 +265,7 @@ def serialize_per_user() -> dict[str, dict[str, dict[str, Any]]]:
             row[sid] = {
                 "status": entry.status,
                 "last_change": entry.last_change,
+                "context_pct": entry.context_pct,
             }
         if row:
             out[str(uid)] = row
@@ -276,7 +298,14 @@ def load_per_user(raw: dict[str, Any] | None) -> None:
                 last_change = float(data.get("last_change", 0.0))
             except (TypeError, ValueError):
                 last_change = 0.0
+            ctx_raw = data.get("context_pct")
+            ctx_pct: int | None
+            try:
+                ctx_pct = int(ctx_raw) if ctx_raw is not None else None
+            except (TypeError, ValueError):
+                ctx_pct = None
             target[sid] = BgStatus(
                 status=status_val,
                 last_change=last_change,
+                context_pct=ctx_pct,
             )

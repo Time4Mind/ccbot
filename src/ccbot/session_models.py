@@ -83,7 +83,6 @@ class Session:
         created_at: Unix timestamp.
         last_event_at: Unix timestamp of most recent inbound or outbound activity.
         archived_at: Unix timestamp of archival, 0 while active.
-        token_usage_total: Cumulative input+output tokens (parsed from JSONL).
         message_count: Cumulative claude turn count.
         was_lost: True if this session passed through the ``lost`` state
             before reaching its terminal state (archived/completed). Used
@@ -101,7 +100,6 @@ class Session:
     created_at: float = 0.0
     last_event_at: float = 0.0
     archived_at: float = 0.0
-    token_usage_total: int = 0
     message_count: int = 0
     was_lost: bool = False
 
@@ -122,7 +120,6 @@ class Session:
             "created_at": self.created_at,
             "last_event_at": self.last_event_at,
             "archived_at": self.archived_at,
-            "token_usage_total": self.token_usage_total,
             "message_count": self.message_count,
             "was_lost": self.was_lost,
         }
@@ -143,7 +140,6 @@ class Session:
             created_at=float(data.get("created_at", 0.0)),
             last_event_at=float(data.get("last_event_at", 0.0)),
             archived_at=float(data.get("archived_at", 0.0)),
-            token_usage_total=int(data.get("token_usage_total", 0)),
             message_count=int(data.get("message_count", 0)),
             was_lost=bool(data.get("was_lost", False)),
         )

@@ -39,7 +39,7 @@ from ..session import session_manager
 from ..session_monitor import NewMessage
 from ..terminal_parser import extract_interactive_content
 from ..tmux_manager import tmux_manager
-from ..usage import aggregate_session
+from ..usage import context_pct_for_session
 
 logger = logging.getLogger(__name__)
 
@@ -238,16 +238,27 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 except OSError:
                     pass
 
-            # Keep ``token_usage_total`` warm for /status display. Aggregation
-            # is cheap and bounded; failures are non-fatal.
+            # Refresh the cached context-pct for this session — both the
+            # active-card render and the bg-status panel read it from
+            # there (Task #43 feedback: stop maintaining bogus
+            # session-token totals; the only useful number is "how full
+            # is this session's context window").
             if msg.role == "assistant" and msg.content_type == "text":
                 try:
-                    su = await aggregate_session(sess)
-                    if sess.token_usage_total != su.tokens_total:
-                        sess.token_usage_total = su.tokens_total
-                        session_manager.save_state()
+                    pct = await context_pct_for_session(sess)
                 except Exception as e:
-                    logger.debug("usage aggregate failed: %s", e)
+                    logger.debug("context pct fetch failed: %s", e)
+                    pct = None
+                if pct is not None:
+                    from ..handlers.bg_status import set_context_pct
+                    from ..handlers.notifications import set_card_context_pct
+
+                    set_card_context_pct(user_id, sess.id, pct)
+                    set_context_pct(user_id, sess.id, pct)
+                    if is_active:
+                        await refresh_panel(bot, user_id)
+                    else:
+                        await refresh_panel(bot, user_id)
         else:
             # Streaming chunk — best-effort card update.
             await update_session_card(bot, user_id, sess, msg)

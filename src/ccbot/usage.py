@@ -1,47 +1,47 @@
-"""Token-usage tracker — reads Claude Code transcripts and aggregates totals.
+"""Context-size reader for live sessions.
 
-DM-multisession spec section 5: usage is sourced from the assistant turns in
-~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl; each assistant message
-records ``usage.input_tokens``, ``usage.output_tokens``, and cache totals.
-
-We do not maintain incremental in-memory counters — /status reads the
-JSONL files at call time and computes the rolling 5h and weekly aggregates.
-For typical session sizes this is sub-second; if it becomes hot we can move
-to the same byte-offset approach used by SessionMonitor.
+Reads each Claude Code transcript JSONL on demand and computes the
+**latest** assistant turn's full input-token count (incl. cache reads).
+That number divided by ``CONTEXT_BUDGET`` (200 000 by default) is the
+"how full is the context window" percentage shown on the live card —
+both for the active session (above the bg panel) and per-row for bg
+sessions in the panel itself.
 
 Public API:
   parse_session_usage(file_path) -> list[Turn]
-  aggregate_session(sess) -> SessionUsage
-  compute_user_usage(user_id) -> UserUsage
-  format_usage_breakdown_compact(...) — render the live /usage modal block
-  format_usage_status(...) — /status text body
+      back-compat parser used by tests; sums input + output, ignores
+      cache fields.
+  context_pct_for_session(sess) -> int | None
+      latest-turn context size / 200k, in %, or None when no data.
+  format_usage_breakdown_compact(user_id, info) -> str | None
+      renders the live /usage modal block (active session header
+      glyphs come from this).
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 import aiofiles
 
 from . import session_claude_io
-from .config import config
 from .session import Session, session_manager
 
 logger = logging.getLogger(__name__)
 
 
-SECONDS_5H = 5 * 3600
-SECONDS_WEEK = 7 * 86400
+# Default Claude context window in tokens. Sessions in 1M-context mode
+# will under-report — acceptable for an at-a-glance "how full" signal.
+CONTEXT_BUDGET = 200_000
 
 
 @dataclass
 class Turn:
-    """One assistant turn with its cost."""
+    """One assistant turn with its cost (back-compat for tests)."""
 
     timestamp: float  # unix seconds
     input_tokens: int
@@ -52,29 +52,10 @@ class Turn:
         return self.input_tokens + self.output_tokens
 
 
-@dataclass
-class SessionUsage:
-    session_id: str  # Session.id, not claude_session_id
-    name: str
-    tokens_total: int = 0
-    tokens_5h: int = 0
-    tokens_weekly: int = 0
-
-
-@dataclass
-class UserUsage:
-    sessions: list[SessionUsage] = field(default_factory=list)
-    tokens_5h: int = 0
-    tokens_weekly: int = 0
-    tokens_total: int = 0
-
-
 def _parse_iso(ts: str) -> float:
-    """Parse Claude transcript ISO timestamps to unix seconds, 0 on failure."""
     if not ts:
         return 0.0
     try:
-        # Python 3.11+ accepts trailing Z directly; <3.11 requires offset form.
         if ts.endswith("Z"):
             ts = ts[:-1] + "+00:00"
         return datetime.fromisoformat(ts).timestamp()
@@ -83,7 +64,11 @@ def _parse_iso(ts: str) -> float:
 
 
 async def parse_session_usage(file_path: Path) -> list[Turn]:
-    """Read a session JSONL and emit one Turn per assistant message with usage."""
+    """Read a session JSONL and emit one Turn per assistant message with usage.
+
+    Kept for back-compat with the existing test suite; current code
+    paths use :func:`context_pct_for_session` instead.
+    """
     turns: list[Turn] = []
     if not file_path.exists():
         return turns
@@ -97,7 +82,6 @@ async def parse_session_usage(file_path: Path) -> list[Turn]:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                # Skip non-assistant messages.
                 if obj.get("type") != "assistant":
                     continue
                 msg = obj.get("message", {})
@@ -113,50 +97,59 @@ async def parse_session_usage(file_path: Path) -> list[Turn]:
     return turns
 
 
-async def aggregate_session(sess: Session) -> SessionUsage:
-    """Compute total / 5h / weekly token usage for a single Session."""
-    out = SessionUsage(session_id=sess.id, name=sess.name or sess.id)
+async def _last_assistant_context_tokens(file_path: Path) -> int | None:
+    """Read JSONL and return the latest assistant turn's full context size
+    (input_tokens + cache_creation + cache_read). None if no data."""
+    if not file_path.exists():
+        return None
+    last: int | None = None
+    try:
+        async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
+            async for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("type") != "assistant":
+                    continue
+                msg = obj.get("message", {})
+                usage = msg.get("usage") or {}
+                inp = int(usage.get("input_tokens", 0) or 0)
+                cc = int(usage.get("cache_creation_input_tokens", 0) or 0)
+                cr = int(usage.get("cache_read_input_tokens", 0) or 0)
+                total = inp + cc + cr
+                if total > 0:
+                    last = total
+    except OSError as e:
+        logger.debug("usage: cannot read %s: %s", file_path, e)
+    return last
+
+
+async def context_pct_for_session(sess: Session) -> int | None:
+    """Latest assistant turn's context size as % of ``CONTEXT_BUDGET``.
+
+    Returns None when no JSONL yet (fresh session, before first turn).
+    Bumps to 100 % on overflow rather than reporting absurd values —
+    the user just needs to know it's full.
+    """
     if not sess.claude_session_id or not sess.workdir:
-        out.tokens_total = sess.token_usage_total  # fall back to persisted counter
-        return out
+        return None
     file_path = session_claude_io.build_session_file_path(
         sess.claude_session_id, sess.workdir
     )
     if file_path is None:
-        out.tokens_total = sess.token_usage_total
-        return out
-    turns = await parse_session_usage(file_path)
-    now = time.time()
-    for t in turns:
-        out.tokens_total += t.total
-        if t.timestamp and (now - t.timestamp) <= SECONDS_5H:
-            out.tokens_5h += t.total
-        if t.timestamp and (now - t.timestamp) <= SECONDS_WEEK:
-            out.tokens_weekly += t.total
-    return out
+        return None
+    tokens = await _last_assistant_context_tokens(file_path)
+    if tokens is None:
+        return None
+    pct = int(round(tokens * 100 / CONTEXT_BUDGET))
+    return max(0, min(100, pct))
 
 
-async def compute_user_usage(user_id: int) -> UserUsage:
-    """Aggregate usage across the user's live and recently-archived sessions.
-
-    Sessions further back than the weekly window contribute to ``tokens_total``
-    (per-session) but not to the rolling aggregates.
-    """
-    usage = UserUsage()
-    sessions = session_manager.list_user_sessions(
-        user_id, states=("active", "idle", "archived", "completed", "lost")
-    )
-    for sess in sessions:
-        s = await aggregate_session(sess)
-        usage.sessions.append(s)
-        usage.tokens_total += s.tokens_total
-        usage.tokens_5h += s.tokens_5h
-        usage.tokens_weekly += s.tokens_weekly
-        # Refresh cumulative counter on the Session record.
-        if sess.token_usage_total != s.tokens_total:
-            sess.token_usage_total = s.tokens_total
-    session_manager.save_state()
-    return usage
+# --- /usage modal compact renderer (Menu→Status) ---
 
 
 _WEEKDAY_INDEX: dict[str, int] = {
@@ -269,9 +262,6 @@ def format_usage_breakdown_compact(user_id: int, info: object) -> str | None:
         elapsed = max(0.1, 7.0 - min(7.0, days_left))
         return f" · {pct / elapsed:.1f}%/d"
 
-    # Weekly rows render even when ``Resets …`` is missing — Claude Code
-    # sometimes drops that line at 0 %, but the percentage still matters.
-    # Reset suffix is shown only when we parsed a clock.
     if b.week_pct is not None:
         if b.week_reset_hhmm:
             rate = _weekly_rate(b.week_pct, b.week_reset_hhmm)
@@ -301,66 +291,3 @@ def format_usage_breakdown_compact(user_id: int, info: object) -> str | None:
     if not rows:
         return None
     return t(user_id, "usage.title") + "\n" + "\n".join(rows)
-
-
-def format_usage_status(user_id: int, usage: UserUsage) -> str:
-    """Render the /status text — per-session 5h tokens + lifetime totals.
-
-    Sessions are split into Active / Archived / Lost groups; each line is
-    name + 5h tokens + lifetime tokens, marked with ✓ for the active one.
-    Real %-of-quota lives in the Menu→Status view (see
-    ``format_usage_breakdown_compact``); /status text reports raw numbers.
-    """
-    del user_id
-    lines: list[str] = []
-    if usage.sessions:
-        lines.append(
-            f"*Tokens* — {usage.tokens_5h // 1000}k 5h · "
-            f"{usage.tokens_weekly // 1000}k weekly · "
-            f"{usage.tokens_total // 1000}k lifetime"
-        )
-    else:
-        return "_No sessions yet._"
-
-    active = session_manager.get_active_session(
-        min(config.allowed_users) if config.allowed_users else 0
-    )
-    active_id = active.id if active else ""
-
-    # Partition sessions by state so each group renders under its own header.
-    by_state: dict[str, list[SessionUsage]] = {
-        "active": [],
-        "archived": [],
-        "lost": [],
-    }
-    for s in usage.sessions:
-        sess_obj = session_manager.get_session(s.session_id)
-        state = sess_obj.state if sess_obj else "?"
-        if state in ("active", "idle"):
-            bucket = "active"
-        elif state in ("archived", "completed"):
-            bucket = "archived"
-        elif state == "lost":
-            bucket = "lost"
-        else:
-            continue
-        by_state[bucket].append(s)
-
-    section_headers = {
-        "active": "*Active*",
-        "archived": "*Archived*",
-        "lost": "*Lost*",
-    }
-    for bucket in ("active", "archived", "lost"):
-        rows = by_state[bucket]
-        if not rows:
-            continue
-        lines.append("")
-        lines.append(section_headers[bucket])
-        for s in rows:
-            marker = "✓" if s.session_id == active_id else " "
-            lines.append(
-                f"{marker} *{s.name}* — "
-                f"{s.tokens_5h // 1000}k 5h / {s.tokens_total // 1000}k total"
-            )
-    return "\n".join(lines)

@@ -30,7 +30,6 @@ class TestSessionDataclass:
             created_at=100.0,
             last_event_at=200.0,
             archived_at=0.0,
-            token_usage_total=1234,
             message_count=5,
         )
         d = s.to_dict()

@@ -348,8 +348,8 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         try:
             v = int(data[len(CB_ST_PAGESIZE) :])
         except ValueError:
-            v = 30
-        if v in (15, 30, 50, 100):
+            v = 20
+        if v in (10, 20, 40, 70):
             session_manager.update_user_setting(user.id, "card_page_lines", v)
         screen_name = "settings_pagesize"
 

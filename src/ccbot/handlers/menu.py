@@ -476,22 +476,22 @@ def _settings_cardhist_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
 def _settings_pagesize_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     """Max page size in logical \\n-delimited lines.
 
-    Fixed row 15 / 30 / 50 / 100. Smart anchor chunking with ±5 lines
+    Fixed row 10 / 20 / 40 / 70. Smart anchor chunking with ±5 lines
     overshoot handles single events that exceed the budget without
     breaking mid-sentence / mid-word.
     """
-    raw = session_manager.get_user_settings(user_id).get("card_page_lines", 30)
+    raw = session_manager.get_user_settings(user_id).get("card_page_lines", 20)
     try:
         cur = int(raw)
     except (TypeError, ValueError):
-        cur = 30
+        cur = 20
     return [
         [
             InlineKeyboardButton(
                 _highlight(str(v), cur == v),
                 callback_data=f"{CB_ST_PAGESIZE}{v}",
             )
-            for v in (15, 30, 50, 100)
+            for v in (10, 20, 40, 70)
         ],
         [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
     ]

@@ -690,12 +690,12 @@ class SessionManager:
         # (each turn ≈ several events × ~500 bytes). Deep history is
         # always accessible via /history regardless of this setting.
         "card_history": 20,
-        # Max page size in logical \n-delimited LINES. Values 15/30/50/100.
-        # 30 keeps the card compact on phone; 100 is for power users who
+        # Max page size in logical \n-delimited LINES. Values 10/20/40/70.
+        # 20 keeps the card compact on phone; 70 is for power users who
         # scroll long bodies. Anchor (page top) chunking handles overflow
         # with smart sentence / paragraph boundaries — see
         # ``_chunk_final_text`` for the exact preference order.
-        "card_page_lines": 30,
+        "card_page_lines": 20,
     }
 
     def get_user_settings(self, user_id: int) -> dict[str, Any]:

@@ -74,8 +74,8 @@ CARD_PAGE_BUDGET = 3500
 # Default page-size budget in LINES (logical \n-delimited rows in the
 # MarkdownV2 source — close enough to visual lines on a phone for ±5
 # tolerance the user explicitly accepted). User overrides via
-# Settings → Page size (15 / 30 / 50 / 100).
-CARD_PAGE_LINES_DEFAULT = 30
+# Settings → Page size (10 / 20 / 40 / 70).
+CARD_PAGE_LINES_DEFAULT = 20
 
 # Allowed overshoot (in lines) when trimming a page or chunking an
 # anchor so a sentence / paragraph isn't broken mid-content.
@@ -693,6 +693,16 @@ def _render_card(
     if sess.goal:
         header += f"\ngoal: {sess.goal}"
 
+    # Budget is in LINES (per user setting ``card_page_lines``).
+    line_budget = _resolve_line_budget(user_id)
+    # Lazy re-chunk: if any final_text Event in state.events exceeds
+    # the CURRENT budget (e.g. user just lowered Settings → Page size,
+    # or budget changed since finalize_task), split it into multiple
+    # final_text Events on the fly. This is what makes the budget
+    # ULTIMATIVE per spec — even already-finalised answers get rebuilt
+    # to fit the new size. Idempotent: chunks below budget stay intact.
+    _rechunk_oversized_finals_inplace(state, line_budget)
+
     pages = paginate_events(state.events)
     idx = _resolved_page_idx(state, len(pages))
 
@@ -701,17 +711,7 @@ def _render_card(
     if user_id is not None:
         panel = bg_status.render_panel(user_id, active_session_id=sess.id)
 
-    # 4096-char enforcement (Telegram limit). Header + divider + footer
-    # + panel take fixed prefix/suffix; body must fit in what's left
-    # AFTER MarkdownV2 conversion (expansion can add 10-20% via escapes).
-    # We trim by DROPPING OLDEST WHOLE EVENTS — never by cutting strings
-    # mid-content, since the body uses EXPQUOTE_START/END sentinels that
-    # MUST stay paired or the spoiler structure breaks ("text при
-    # пагинации - ломается"). Older events stay reachable on previous
-    # pages via ◀.
-    # Budget is in LINES (per user setting ``card_page_lines``).
     # _trim_page_events drops middle events to fit; anchor + tail kept.
-    line_budget = _resolve_line_budget(user_id)
     page_events = _trim_page_events(pages[idx], line_budget)
     body = render_page(page_events, now=time.time())
     if len(page_events) < len(pages[idx]):
@@ -736,6 +736,49 @@ def _count_lines(text: str) -> int:
     return text.count("\n") + 1
 
 
+def _rechunk_oversized_finals_inplace(state: CardState, budget_lines: int) -> None:
+    """Walk ``state.events`` and split oversized ``final_text`` Events.
+
+    Idempotent: an Event already fitting in ``budget_lines`` is left
+    untouched. An oversized Event is replaced (in place, preserving
+    order) by N ``final_text`` Events produced by ``_chunk_final_text``,
+    each marked ``is_page_break=True`` so pagination treats every chunk
+    as a separate page.
+
+    Cap: ``budget_lines + CARD_PAGE_LINES_OVERSHOOT`` — matches the
+    tolerance ``_chunk_final_text`` uses for sentence boundaries.
+    """
+    cap = budget_lines + CARD_PAGE_LINES_OVERSHOOT
+    i = 0
+    while i < len(state.events):
+        ev = state.events[i]
+        if ev.type != "final_text" or not ev.text:
+            i += 1
+            continue
+        if _count_lines(ev.text) <= cap:
+            i += 1
+            continue
+        chunks = _chunk_final_text(ev.text, budget_lines)
+        if len(chunks) <= 1:
+            # _chunk_final_text refused to split (e.g. one huge unbroken
+            # token with no boundary candidates). Leave as is.
+            i += 1
+            continue
+        replacement = [
+            Event(
+                type="final_text",
+                text=chunk,
+                body=chunk,
+                started_at=ev.started_at,
+                completed_at=ev.completed_at,
+                is_page_break=True,
+            )
+            for chunk in chunks
+        ]
+        state.events[i : i + 1] = replacement
+        i += len(replacement)
+
+
 def _resolve_line_budget(user_id: int | None) -> int:
     """Read the user's ``card_page_lines`` setting (15/30/50/100).
 
@@ -751,7 +794,7 @@ def _resolve_line_budget(user_id: int | None) -> int:
         value = int(raw)
     except (TypeError, ValueError):
         value = CARD_PAGE_LINES_DEFAULT
-    if value not in (15, 30, 50, 100):
+    if value not in (10, 20, 40, 70):
         return CARD_PAGE_LINES_DEFAULT
     return value
 

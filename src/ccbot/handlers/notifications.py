@@ -64,6 +64,16 @@ STALE_CARD_SECONDS = 5 * 60
 # truncated with a "… (+N more lines)" trailer. Env-tunable.
 SPOILER_MAX_LINES = 5
 
+# Char budget for one rendered card page. Telegram message limit is 4096;
+# we leave headroom for header, divider, bg-panel.
+CARD_PAGE_BUDGET = 3500
+
+# Number of trailing end_turn boundaries to pull from JSONL when seeding
+# an empty ``state.events`` (e.g. after a bot restart). Each end_turn
+# becomes a page boundary, so this caps the "scrollback depth" of the
+# card without re-reading the full transcript on every event.
+CARD_SEED_TURNS = 20
+
 
 @dataclass
 class Event:
@@ -399,6 +409,41 @@ def _body_trim(body: str, max_lines: int = SPOILER_MAX_LINES) -> str:
     return "\n".join(kept)
 
 
+def _chunk_final_text(text: str, budget: int = CARD_PAGE_BUDGET) -> list[str]:
+    """Split a long final answer into chunks each ≤ ``budget`` chars.
+
+    Tries to break on paragraph boundaries (``\\n\\n``), then line
+    boundaries (``\\n``), then hard char cut as a last resort. Each chunk
+    becomes a separate ``final_text`` Event with ``is_page_break=True``,
+    so the card renders one chunk per page and never overflows
+    Telegram's 4096-char message limit.
+
+    Empty / short input returns a single-chunk list (or ``[]`` when empty).
+    """
+    if not text:
+        return []
+    if len(text) <= budget:
+        return [text]
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > budget:
+        # Prefer paragraph break.
+        cut = remaining.rfind("\n\n", 0, budget)
+        if cut <= 0:
+            # Try line break.
+            cut = remaining.rfind("\n", 0, budget)
+        if cut <= 0:
+            # Hard cut.
+            cut = budget
+        chunk = remaining[:cut].rstrip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[cut:].lstrip("\n")
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
 def _indent_body(body: str) -> str:
     """Format ``body`` as a plain-text indented block under a head.
 
@@ -564,6 +609,126 @@ def _is_stale(state: CardState) -> bool:
 
 def get_card_state(user_id: int, sess: Session) -> CardState:
     return _cards.setdefault((user_id, sess.id), CardState())
+
+
+async def _seed_events_from_jsonl(sess: Session) -> list[Event]:
+    """Build a list[Event] from the session's JSONL transcript.
+
+    Pulls the last ``CARD_SEED_TURNS`` end-of-turn boundaries so the
+    card has visible history after a bot restart (when in-memory
+    ``state.events`` is empty). Returns ``[]`` on any failure — caller
+    just continues with an empty card.
+    """
+    if not sess.window_id:
+        return []
+    try:
+        claude_sess = await session_manager.resolve_session_for_window(sess.window_id)
+    except Exception as e:
+        logger.debug("seed: resolve_session_for_window failed: %s", e)
+        return []
+    if claude_sess is None or not claude_sess.file_path:
+        return []
+    file_path = claude_sess.file_path
+    import json as _json
+    from pathlib import Path as _Path
+
+    from ..transcript_parser import TranscriptParser
+
+    try:
+        raw = _Path(file_path).read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        logger.debug("seed: read JSONL %s failed: %s", file_path, e)
+        return []
+    raw_entries: list[dict[str, object]] = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            raw_entries.append(_json.loads(line))
+        except Exception:
+            continue
+    try:
+        parsed_list, _ = TranscriptParser.parse_entries(raw_entries, pending_tools=None)
+    except Exception as e:
+        logger.debug("seed: parse_entries failed: %s", e)
+        return []
+
+    # Walk backwards collecting indices of end_turn boundaries (final
+    # assistant text). Keep only entries from the last CARD_SEED_TURNS
+    # boundaries — earlier history stays in JSONL for /screenshot or
+    # other history paths.
+    end_turn_idxs: list[int] = []
+    for i in range(len(parsed_list) - 1, -1, -1):
+        p = parsed_list[i]
+        if (
+            getattr(p, "role", "") == "assistant"
+            and getattr(p, "content_type", "") == "text"
+            and getattr(p, "stop_reason", "") in ("end_turn", "stop_sequence", "max_tokens")
+        ):
+            end_turn_idxs.append(i)
+            if len(end_turn_idxs) >= CARD_SEED_TURNS:
+                break
+    if end_turn_idxs:
+        start_idx = end_turn_idxs[-1]
+        # Pull a few entries back from start_idx so the user message that
+        # triggered the oldest kept turn is visible at the top.
+        start_idx = max(0, start_idx - 4)
+    else:
+        start_idx = max(0, len(parsed_list) - 80)
+    tail = parsed_list[start_idx:]
+
+    # Convert ParsedEntry → NewMessage → Event. tool_results fold into
+    # matching tool_use via _apply_tool_result; on miss they append.
+    pseudo_state = CardState()
+    events = pseudo_state.events
+    for p in tail:
+        ct = getattr(p, "content_type", "text")
+        msg = NewMessage(
+            session_id="seed",
+            text=getattr(p, "text", "") or "",
+            is_complete=True,
+            content_type=ct,
+            tool_use_id=getattr(p, "tool_use_id", None),
+            role=getattr(p, "role", "assistant"),
+            tool_name=getattr(p, "tool_name", None),
+            image_data=getattr(p, "image_data", None),
+            stop_reason=getattr(p, "stop_reason", None),
+            timestamp=getattr(p, "timestamp", "") or "",
+        )
+        ev = _build_event(msg)
+        if ct == "tool_result" and _apply_tool_result(pseudo_state, ev):
+            continue
+        events.append(ev)
+    return events
+
+
+async def _ensure_seeded(user_id: int, sess: Session, state: CardState) -> None:
+    """Seed ``state.events`` from JSONL on first access after restart.
+
+    No-op when events already exist or when seeding has been attempted
+    before for this state. Idempotent — ``_seed_attempted`` flag on the
+    CardState prevents repeated JSONL reads.
+    """
+    if state.events:
+        return
+    if getattr(state, "_seed_attempted", False):
+        return
+    state._seed_attempted = True  # type: ignore[attr-defined]
+    seeded = await _seed_events_from_jsonl(sess)
+    if seeded:
+        state.events = seeded
+        logger.info(
+            "card_seeded user=%d sess=%s events=%d",
+            user_id,
+            sess.id,
+            len(seeded),
+            extra={
+                "event": "card_seeded",
+                "user_id": user_id,
+                "session_id": sess.id,
+                "events": len(seeded),
+            },
+        )
 
 
 def _should_buffer(user_id: int, session_id: str, state: CardState) -> bool:
@@ -839,6 +1004,9 @@ async def paint_card_on_carrier(
     the new carrier.
     """
     state = _cards.setdefault((user_id, sess.id), CardState())
+    # Menu → Sessions on a fresh post-restart state: seed history first
+    # so the user lands on a card with their conversation, not 1/1.
+    await _ensure_seeded(user_id, sess, state)
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
     state.pending_edit = None
@@ -1068,6 +1236,9 @@ async def update_session_card(
         kick_prewarm(sess.window_id)
 
     state = get_card_state(user_id, sess)
+    # First event after a bot restart: pull JSONL history into events
+    # so the card shows context, not a single 1/1 page.
+    await _ensure_seeded(user_id, sess, state)
 
     # Should we buffer this event instead of rendering it now? Reasons:
     # - the user is on a Menu / sub-screen (state.in_menu_view set by
@@ -1217,6 +1388,9 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     ``paginate_events``.
     """
     state = get_card_state(user_id, sess)
+    # First event after a bot restart: seed JSONL history before
+    # appending the final answer so the user sees their context.
+    await _ensure_seeded(user_id, sess, state)
 
     # Bg-session silence + menu-pause buffering. Same predicate as
     # update_session_card — see ``_should_buffer`` for the rationale.
@@ -1240,43 +1414,51 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     cleaned = formatted.text
     attachments = formatted.attachments
 
-    # Final answer = a single is_page_break Event: it anchors the top of
-    # the latest page and pushes pre-answer events into the previous one.
-    # ``text`` carries the FULL stripped answer (render_event renders
-    # ``event.text`` verbatim for final_text). No ``_trim`` here — that
-    # would clip the answer to 200 chars and flatten newlines.
+    # Final answer = ONE OR MORE is_page_break Events: each chunk
+    # anchors a new page. ``_chunk_final_text`` keeps every chunk under
+    # ``CARD_PAGE_BUDGET`` chars (well below Telegram's 4096 limit) so
+    # the rendered page never overflows. Default focus lands on the
+    # FIRST chunk's page so the user reads the answer from the top.
     now = time.time()
-    final_event = Event(
-        type="final_text",
-        text=_strip_for_card(cleaned),
-        body=cleaned,
-        started_at=now,
-        completed_at=now,
-        is_page_break=True,
-    )
+    stripped_full = _strip_for_card(cleaned)
+    chunks = _chunk_final_text(stripped_full)
+    final_events = [
+        Event(
+            type="final_text",
+            text=chunk,
+            body=chunk,
+            started_at=now,
+            completed_at=now,
+            is_page_break=True,
+        )
+        for chunk in chunks
+    ]
 
     # Buffer-only path: user is on a Menu view OR session is bg.
-    # Accumulate the answer Event into state. resume_card_view (next
+    # Accumulate the answer Events into state. resume_card_view (next
     # typed message) / switcher tap will render the catch-up.
     # Attachments still go out (file delivery shouldn't wait on UI nav).
     if must_buffer:
-        state.events.append(final_event)
+        state.events.extend(final_events)
         state.last_event_ts = now
         if attachments:
             await _send_attachments(bot, user_id, attachments)
         return
 
-    state.events.append(final_event)
+    state.events.extend(final_events)
     if len(state.events) > CARD_MAX_EVENTS:
         del state.events[: len(state.events) - CARD_MAX_EVENTS]
     state.last_event_ts = now
-    # Default focus jumps to the new latest page (where final_event lives).
-    state.current_page_idx = None
-    # No continuation-card overflow path: pagination handles size by
-    # showing only the latest page; older content remains navigable via
-    # ◀ / ▶. ``chunks`` is computed here only to honour ``split_overflow``
-    # already done above.
-    chunks = [cleaned]
+    # Default focus: when the answer was split into N chunks, land on
+    # the FIRST chunk's page so the user starts at the top. When there's
+    # only one chunk, ``None`` = latest, which is that same page.
+    if len(final_events) > 1:
+        pages_after = paginate_events(state.events)
+        # The first chunk's page is at index (len(pages) - len(chunks)).
+        first_chunk_page = max(0, len(pages_after) - len(final_events))
+        state.current_page_idx = first_chunk_page
+    else:
+        state.current_page_idx = None
 
     # Refresh the pages cache so the live-card's pagination counter
     # reflects the final transcript length on the finalised message.

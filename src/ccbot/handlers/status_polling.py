@@ -39,7 +39,12 @@ from .interactive_ui import (
     get_interactive_window,
     handle_interactive_ui,
 )
-from .notifications import is_card_busy, is_card_in_menu_view, refresh_panel
+from .notifications import (
+    is_card_busy,
+    is_card_finalized,
+    is_card_in_menu_view,
+    refresh_panel,
+)
 
 # Match option lines like "  1. Yes" / " ❯ 2. Yes, and don't ask again".
 _OPTION_LINE_RE = re.compile(r"^[\s❯>]*?(\d+)\.\s+(.+?)\s*$")
@@ -245,6 +250,14 @@ async def update_status_message(
     pane_busy = bool(status_line)
     in_menu = sess is not None and is_card_in_menu_view(user_id, sess.id)
     card_busy = sess is not None and is_card_busy(user_id, sess.id)
+    # When the card is finalized (last event = ``final_text`` /
+    # ``error``), pane_busy is a lie — the spinner line is just
+    # scrollback that hasn't scrolled off yet (observed: ``Sautéed
+    # for 11m 16s · 1 shell still running`` sticks around after the
+    # turn ends because a background shell is still attached). Trust
+    # the JSONL signal in that case.
+    if pane_busy and sess is not None and is_card_finalized(user_id, sess.id):
+        pane_busy = False
     if not is_bg_session and not in_menu and (card_busy or pane_busy):
         try:
             await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)

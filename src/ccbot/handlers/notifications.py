@@ -2549,6 +2549,20 @@ def is_card_in_menu_view(user_id: int, session_id: str) -> bool:
     return state is not None and state.in_menu_view
 
 
+def is_card_finalized(user_id: int, session_id: str) -> bool:
+    """True when the card's tail event is a terminal one (``final_text``
+    or ``error``). Used by ``status_polling`` to suppress a stale pane
+    spinner (e.g. ``Sautéed for 11m 16s · 1 shell still running``) that
+    persists in scrollback after end-of-turn — without this check the
+    typing indicator stays on forever waiting for the user-visible
+    spinner string to scroll off.
+    """
+    state = _cards.get((user_id, session_id))
+    if state is None or not state.events:
+        return False
+    return state.events[-1].type in ("final_text", "error")
+
+
 def is_card_busy(user_id: int, session_id: str) -> bool:
     """True when the user's live card for ``session_id`` is currently in
     flight AND visible (msg_id set, finalize_task hasn't run, and the

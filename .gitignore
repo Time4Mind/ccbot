@@ -85,3 +85,6 @@ doc/local/
 # Project specific
 .uv/
 uv.lock
+
+# ccbot inbox — photos/documents users send to the bot
+.ccbot-inbox/

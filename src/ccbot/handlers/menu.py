@@ -45,6 +45,7 @@ from .callback_data import (
     CB_ST_CHIST,
     CB_ST_CPOS,
     CB_ST_PAGESIZE,
+    CB_ST_SCREENS,
     CB_ST_GRP,
     CB_ST_LAG,
     CB_ST_LANG,
@@ -73,6 +74,7 @@ Screen = Literal[
     "settings_cardpos",
     "settings_cardhist",
     "settings_pagesize",
+    "settings_screens",
 ]
 
 # Group key -> (label translation key, sub-screen name, settings-dict key)
@@ -116,6 +118,12 @@ _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
         "settings.group.card_page_lines",
         "settings_pagesize",
         "card_page_lines",
+    ),
+    (
+        "card_inline_screenshots",
+        "settings.group.card_inline_screenshots",
+        "settings_screens",
+        "card_inline_screenshots",
     ),
 )
 
@@ -322,6 +330,8 @@ def _settings_main_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             value_str = f"{int(cur)} turns" if cur else "?"
         elif value_key == "card_page_lines":
             value_str = f"{int(cur)} lines" if cur else "?"
+        elif value_key == "card_inline_screenshots":
+            value_str = t(user_id, "screens.on") if cur else t(user_id, "screens.off")
         else:
             value_str = str(cur)
         rows.append(
@@ -499,6 +509,30 @@ def _settings_cardhist_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     ]
 
 
+def _settings_screens_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
+    """Inline-screenshots on/off toggle. Settings body explains the
+    ~4x page-size shrinkage when ON (caption limit 1024 vs text 4096).
+    """
+    cur = bool(
+        session_manager.get_user_settings(user_id).get(
+            "card_inline_screenshots", True
+        )
+    )
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(t(user_id, "screens.on"), cur),
+                callback_data=f"{CB_ST_SCREENS}on",
+            ),
+            InlineKeyboardButton(
+                _highlight(t(user_id, "screens.off"), not cur),
+                callback_data=f"{CB_ST_SCREENS}off",
+            ),
+        ],
+        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_SETTINGS)],
+    ]
+
+
 def _settings_pagesize_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     """Max page size in logical \\n-delimited lines.
 
@@ -606,6 +640,8 @@ def build_footer_keyboard(
         rows.extend(_settings_cardhist_grid(user_id))
     elif screen == "settings_pagesize":
         rows.extend(_settings_pagesize_grid(user_id))
+    elif screen == "settings_screens":
+        rows.extend(_settings_screens_grid(user_id))
     else:
         # In-card pagination row at the very top — [◀] [N/M] [▶].
         # ``N/M`` taps jump to the default-focus page (latest answer).
@@ -684,6 +720,7 @@ _GROUP_TEXT_KEYS: dict[str, str] = {
     "settings_cardpos": "settings.cardpos.body",
     "settings_cardhist": "settings.cardhist.body",
     "settings_pagesize": "settings.pagesize.body",
+    "settings_screens": "settings.screens.body",
 }
 
 

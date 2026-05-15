@@ -16,6 +16,7 @@ from ...handlers.callback_data import (
     CB_ST_CHIST,
     CB_ST_CPOS,
     CB_ST_PAGESIZE,
+    CB_ST_SCREENS,
     CB_ST_GRP,
     CB_ST_LAG,
     CB_ST_LANG,
@@ -203,6 +204,7 @@ _GROUP_TO_SCREEN = {
     "card_position": "settings_cardpos",
     "card_history": "settings_cardhist",
     "card_page_lines": "settings_pagesize",
+    "card_inline_screenshots": "settings_screens",
 }
 
 
@@ -272,6 +274,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         CB_ST_CPOS,
         CB_ST_CHIST,
         CB_ST_PAGESIZE,
+        CB_ST_SCREENS,
     )
     if not any(data.startswith(p) for p in setter_prefixes):
         return False
@@ -352,6 +355,22 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         if v in (10, 20, 40, 70):
             session_manager.update_user_setting(user.id, "card_page_lines", v)
         screen_name = "settings_pagesize"
+    elif data.startswith(CB_ST_SCREENS):
+        sval = data[len(CB_ST_SCREENS) :]
+        if sval in ("on", "off"):
+            new_val = sval == "on"
+            session_manager.update_user_setting(
+                user.id, "card_inline_screenshots", new_val
+            )
+            # Soft reset: nuke msg_id for all user's cards so the next
+            # event creates a fresh msg of the correct type (photo+caption
+            # vs text). Old artefacts stay in chat as frozen.
+            from ...handlers.notifications import (
+                reset_card_msg_id_for_user,
+            )
+
+            reset_card_msg_id_for_user(user.id)
+        screen_name = "settings_screens"
 
     text = render_settings_group_text(user.id, screen_name)  # type: ignore[arg-type]
     keyboard = build_footer_keyboard(user.id, screen=screen_name)  # type: ignore[arg-type]

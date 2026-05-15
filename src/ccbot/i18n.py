@@ -229,6 +229,22 @@ _EN: dict[str, str] = {
         "Smaller = compact phone view. Larger = more context per page "
         "but heavier message edits."
     ),
+    "settings.group.card_inline_screenshots": "Inline screenshots",
+    "settings.screens.body": (
+        "*Inline screenshots*\n\n"
+        "When *on*, the active session card is a photo + caption: the "
+        "photo is the live pane render, the caption holds the body "
+        "text. The photo refreshes only when the pane changes, with a "
+        "3 sec throttle. The Shot button disappears from the top row "
+        "(no need — it's already inline).\n\n"
+        "*Caveat:* Telegram caption is limited to 1024 chars vs 4096 "
+        "for text — page size effectively shrinks ~4×. Use Page size "
+        "setting to compensate.\n\n"
+        "When *off*, the card is a regular text msg and Shot lives "
+        "behind the 🧑‍💻 button in the top row."
+    ),
+    "screens.on": "on",
+    "screens.off": "off",
     # Settings group: pop a native Terminal/iTerm window per new session
     "settings.group.local_terminal": "Local terminal",
     "settings.local.body": (
@@ -529,6 +545,19 @@ _RU: dict[str, str] = {
         "Меньше = компактнее для телефона. Больше = больше контекста\n"
         "на странице, но тяжелее edits."
     ),
+    "settings.group.card_inline_screenshots": "Скрины в карточке",
+    "settings.screens.body": (
+        "*Скрины в карточке*\n\n"
+        "Когда *on* — карточка активной сессии = photo+caption:\n"
+        "сверху рендер pane, под ним body. Фото обновляется только\n"
+        "когда pane меняется, с лимитером 3с между апдейтами.\n"
+        "Кнопка Shot исчезает из top-row (она уже встроена).\n\n"
+        "*Важно:* Telegram caption ограничен 1024 char vs 4096 для\n"
+        "text — размер страницы уменьшается ~в 4 раза. Регулируй\n"
+        "через настройку Размер страницы."
+    ),
+    "screens.on": "on",
+    "screens.off": "off",
     "settings.group.local_terminal": "Локальный терминал",
     "settings.local.body": (
         "*Локальный терминал*\n\n"
@@ -818,6 +847,17 @@ _ZH: dict[str, str] = {
         "更小 = 手机视图更紧凑。更大 = 单页更多上下文,\n"
         "但 edit 消息更重。"
     ),
+    "settings.group.card_inline_screenshots": "卡片内嵌截图",
+    "settings.screens.body": (
+        "*卡片内嵌截图*\n\n"
+        "*开启* 时,活动会话卡片 = photo+caption:照片为 pane\n"
+        "渲染,标题为正文。仅当 pane 变化时刷新照片,3 秒节流。\n"
+        "Shot 按钮从顶部消失(已内嵌)。\n\n"
+        "*注意:* Telegram caption 限制 1024 字符 vs text 4096 —\n"
+        "页面大小有效缩小 ~4 倍。可用「页面大小」设置补偿。"
+    ),
+    "screens.on": "开",
+    "screens.off": "关",
     "settings.group.local_terminal": "本地终端",
     "settings.local.body": (
         "*本地终端*\n\n"

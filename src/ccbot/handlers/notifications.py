@@ -156,6 +156,14 @@ class CardState:
     kb_prompt: str = ""  # current prompt content (snapshot from pane)
     kb_ui_name: str = ""  # AskUserQuestion / ExitPlanMode / Permission
     in_kb_mode: bool = False
+    # Inline-screenshots mode (Task #48). When the user has
+    # ``card_inline_screenshots=True`` and the active session is this
+    # one, the card msg is a photo+caption Telegram message (the photo
+    # is a render of the tmux pane). On toggle off, the msg_id is reset
+    # so the next event creates a fresh text-mode card.
+    is_photo_msg: bool = False
+    last_pane_hash: str = ""  # md5 of last captured pane text
+    last_photo_edit_ts: float = 0.0  # monotonic seconds; 3s throttle
 
 
 # Per-(user, session.id) card state.
@@ -754,6 +762,65 @@ def _count_lines(text: str) -> int:
     if not text:
         return 0
     return text.count("\n") + 1
+
+
+def reset_card_msg_id_for_user(user_id: int) -> None:
+    """Drop the msg_id for every card of ``user_id`` so the next event
+    creates a fresh msg of the (possibly changed) correct type.
+
+    Called when the user toggles ``card_inline_screenshots`` — the new
+    msg type (photo+caption vs text) cannot be reached via editMessage*
+    on the old msg, so we orphan the old artefact and spawn a new one.
+    """
+    for (uid, _sid), state in _cards.items():
+        if uid != user_id:
+            continue
+        state.msg_id = None
+        state.is_photo_msg = False
+        state.last_rendered = ""
+        state.last_pane_hash = ""
+        state.last_photo_edit_ts = 0.0
+
+
+async def _capture_pane_png(window_id: str) -> tuple[bytes | None, str]:
+    """Render the tmux pane to PNG bytes and return its content hash.
+
+    Returns (png_bytes, content_hash). On capture failure: (None, "").
+    The hash lets callers skip pointless ``editMessageMedia`` calls when
+    the pane hasn't changed since last refresh.
+    """
+    import hashlib
+
+    from ..screenshot import text_to_image
+    from ..tmux_manager import tmux_manager
+
+    if not window_id:
+        return None, ""
+    w = await tmux_manager.find_window_by_id(window_id)
+    if w is None:
+        return None, ""
+    try:
+        text = await tmux_manager.capture_pane(w.window_id, with_ansi=True)
+    except Exception as e:
+        logger.debug("capture_pane_png: capture failed: %s", e)
+        return None, ""
+    if not text:
+        return None, ""
+    pane_hash = hashlib.md5(text.encode("utf-8", "replace")).hexdigest()
+    try:
+        png = await text_to_image(text, with_ansi=True)
+    except Exception as e:
+        logger.debug("capture_pane_png: render failed: %s", e)
+        return None, ""
+    return png, pane_hash
+
+
+def _inline_screens_enabled(user_id: int | None) -> bool:
+    """Read the ``card_inline_screenshots`` user-setting (default True)."""
+    if user_id is None:
+        return False
+    settings = session_manager.get_user_settings(user_id)
+    return bool(settings.get("card_inline_screenshots", True))
 
 
 def has_pending_kb(user_id: int, session_id: str) -> tuple[bool, bool]:
@@ -1543,28 +1610,66 @@ async def _send_card(
         # explicitly with the Kill keyboard when a turn completes.
         reply_markup = build_footer_keyboard(user_id, screen="main", is_busy=True)
     keyboard = reply_markup
-    # Send through MarkdownV2 with plain-text fallback so spoilers /
-    # bold / italic render properly. ``send_with_fallback`` runs the
-    # text through ``convert_markdown`` (expanding EXPQUOTE sentinels
-    # into MarkdownV2 expandable blockquote syntax) and falls back to
-    # ``strip_sentinels(text)`` on conversion error.
-    from .message_sender import send_with_fallback
 
-    try:
-        sent = await send_with_fallback(
-            bot,
-            user_id,
-            text,
-            reply_markup=keyboard,
-            disable_notification=True,
-        )
-    except RetryAfter:
-        raise
-    except Exception as e:
-        logger.debug("card send failed: %s", e)
-        return
-    if not sent:
-        return
+    # Inline screenshots ON + we have a window_id: send photo+caption.
+    sent = None
+    if _inline_screens_enabled(user_id) and sess.window_id:
+        from ..markdown_v2 import convert_markdown
+        from .message_sender import PARSE_MODE, strip_sentinels
+
+        png, pane_hash = await _capture_pane_png(sess.window_id)
+        if png is not None:
+            import io as _io
+
+            caption = convert_markdown(text)
+            try:
+                sent = await bot.send_photo(
+                    chat_id=user_id,
+                    photo=_io.BytesIO(png),
+                    caption=caption,
+                    parse_mode=PARSE_MODE,
+                    reply_markup=keyboard,
+                    disable_notification=True,
+                )
+            except RetryAfter:
+                raise
+            except Exception as e:
+                logger.debug("photo send failed, retry plain caption: %s", e)
+                try:
+                    sent = await bot.send_photo(
+                        chat_id=user_id,
+                        photo=_io.BytesIO(png),
+                        caption=strip_sentinels(text),
+                        reply_markup=keyboard,
+                        disable_notification=True,
+                    )
+                except Exception as e2:
+                    logger.debug("photo send plain fallback failed: %s", e2)
+            if sent is not None:
+                state.is_photo_msg = True
+                state.last_pane_hash = pane_hash
+                state.last_photo_edit_ts = time.monotonic()
+
+    # Text-mode card OR photo path failed → text fallback.
+    if sent is None:
+        from .message_sender import send_with_fallback
+
+        try:
+            sent = await send_with_fallback(
+                bot,
+                user_id,
+                text,
+                reply_markup=keyboard,
+                disable_notification=True,
+            )
+        except RetryAfter:
+            raise
+        except Exception as e:
+            logger.debug("card send failed: %s", e)
+            return
+        if sent is None:
+            return
+        state.is_photo_msg = False
     # Strip the previous switcher (if any), then remember this one as the
     # carrier of the live switcher.
     prev = session_manager.get_last_switcher_msg(user_id)
@@ -1614,6 +1719,15 @@ async def _edit_card(
     from .message_sender import PARSE_MODE, strip_sentinels
 
     formatted = convert_markdown(text)
+
+    # Photo-mode card: editMessageMedia when pane changed (≤1 per 3s),
+    # else editMessageCaption to refresh just the text.
+    if state.is_photo_msg:
+        return await _edit_photo_card(
+            bot, user_id, state, text=text, formatted=formatted,
+            reply_markup=reply_markup,
+        )
+
     try:
         await bot.edit_message_text(
             chat_id=user_id,
@@ -1665,6 +1779,114 @@ async def _edit_card(
         raise
     except Exception as e:
         logger.warning("card edit failed (other): %s", e)
+    return False
+
+
+_PHOTO_EDIT_MIN_INTERVAL = 3.0  # seconds — per-session throttle on editMessageMedia
+
+
+async def _edit_photo_card(
+    bot: Bot,
+    user_id: int,
+    state: CardState,
+    *,
+    text: str,
+    formatted: str,
+    reply_markup: InlineKeyboardMarkup | None,
+) -> bool:
+    """Edit a photo+caption card msg.
+
+    Refresh strategy:
+    * Pane unchanged since last edit → editMessageCaption only.
+    * Pane changed AND ≥3s since last photo edit → editMessageMedia
+      with new photo + new caption + keyboard.
+    * Pane changed but throttled → editMessageCaption only. Next render
+      after the throttle window will pick up the freshest pane.
+    """
+    import io as _io
+
+    from telegram import InputMediaPhoto
+
+    from ..markdown_v2 import convert_markdown
+    from .message_sender import PARSE_MODE, strip_sentinels
+
+    # Resolve session from msg_id lookup (we don't have it here directly).
+    # Find by reverse mapping (user_id, msg_id) → session_id.
+    sess_id = lookup_session_for_message(user_id, state.msg_id or 0)
+    sess = session_manager.get_session(sess_id) if sess_id else None
+    window_id = sess.window_id if sess is not None else ""
+
+    pane_changed = False
+    pane_png: bytes | None = None
+    pane_hash = state.last_pane_hash
+    elapsed = time.monotonic() - state.last_photo_edit_ts
+    if window_id and elapsed >= _PHOTO_EDIT_MIN_INTERVAL:
+        png, h = await _capture_pane_png(window_id)
+        if png is not None and h:
+            if h != state.last_pane_hash:
+                pane_changed = True
+                pane_png = png
+                pane_hash = h
+
+    try:
+        if pane_changed and pane_png is not None:
+            media = InputMediaPhoto(
+                media=_io.BytesIO(pane_png),
+                caption=convert_markdown(text),
+                parse_mode=PARSE_MODE,
+            )
+            await bot.edit_message_media(
+                chat_id=user_id,
+                message_id=state.msg_id,
+                media=media,
+                reply_markup=reply_markup,
+            )
+            state.last_pane_hash = pane_hash
+            state.last_photo_edit_ts = time.monotonic()
+            return True
+        # Pane unchanged or throttled — caption-only refresh.
+        await bot.edit_message_caption(
+            chat_id=user_id,
+            message_id=state.msg_id,
+            caption=formatted,
+            parse_mode=PARSE_MODE,
+            reply_markup=reply_markup,
+        )
+        return True
+    except BadRequest as e:
+        err = str(e)
+        if "Message is not modified" in err:
+            return True
+        if (
+            "Message to edit not found" in err
+            or "message can't be edited" in err.lower()
+            or "MESSAGE_ID_INVALID" in err
+        ):
+            logger.info(
+                "photo card edit lost-carrier msg=%s err=%s", state.msg_id, err
+            )
+            state.msg_id = None
+            return False
+        logger.warning(
+            "photo card edit MarkdownV2 failed msg=%s err=%s", state.msg_id, err
+        )
+        # Plain-text caption fallback.
+        try:
+            await bot.edit_message_caption(
+                chat_id=user_id,
+                message_id=state.msg_id,
+                caption=strip_sentinels(text),
+                reply_markup=reply_markup,
+            )
+            return True
+        except Exception as e2:
+            logger.warning(
+                "photo card plain fallback failed msg=%s err=%s", state.msg_id, e2
+            )
+    except RetryAfter:
+        raise
+    except Exception as e:
+        logger.warning("photo card edit failed (other): %s", e)
     return False
 
 

@@ -690,6 +690,13 @@ class SessionManager:
         # (each turn ≈ several events × ~500 bytes). Deep history is
         # always accessible via /history regardless of this setting.
         "card_history": 20,
+        # Inline screenshots — photo of the pane is embedded in the
+        # active session card msg (photo+caption) instead of being a
+        # separate Shot photo accessed via Menu→Shot. Updates on every
+        # event but throttled to 1 photo-edit per 3 sec; skips refresh
+        # when pane unchanged. Note: TG caption limit is 1024 chars vs
+        # text 4096 — page size effectively shrinks ~4x when ON.
+        "card_inline_screenshots": True,
         # Max page size in logical \n-delimited LINES. Values 10/20/40/70.
         # 20 keeps the card compact on phone; 70 is for power users who
         # scroll long bodies. Anchor (page top) chunking handles overflow

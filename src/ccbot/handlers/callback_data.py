@@ -103,6 +103,7 @@ CB_ST_LCLAUDE = "st:lcl:claude"  # send Linux Claude-fallback prompt to chat
 CB_ST_CPOS = "st:cpos:"  # st:cpos:<push|delete|repost>  user-msg disposition
 CB_ST_CHIST = "st:chist:"  # st:chist:<10|20|50|100>  end_turn boundaries to seed
 CB_ST_PAGESIZE = "st:psz:"  # st:psz:<15|30|50|100>  max page size in lines
+CB_ST_SCREENS = "st:scr:"  # st:scr:<on|off>  inline screenshots toggle
 CB_ST_VOICE_INSTALL_GO = "st:vi:go"  # confirm whisper.cpp auto-install
 CB_ST_VOICE_INSTALL_NO = "st:vi:no"  # dismiss whisper.cpp install prompt
 CB_ST_BACK = "st:back"  # back to Menu

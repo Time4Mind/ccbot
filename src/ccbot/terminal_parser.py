@@ -206,41 +206,60 @@ STATUS_SPINNERS = frozenset(["·", "✻", "✽", "✶", "✳", "✢"])
 
 
 def parse_status_line(pane_text: str) -> str | None:
-    """Extract the Claude Code status line from terminal output.
+    """Extract the Claude Code status line (``✻ Thinking…``, ``· Evaporating…``).
 
-    The status line (spinner + working text) appears immediately above
-    the chrome separator (a full line of ``─`` characters).  We locate
-    the separator first, then check the line just above it — this avoids
-    false positives from ``·`` bullets in Claude's regular output.
+    Claude Code shows the busy status in one of two layouts:
 
-    Returns the text after the spinner, or None if no status line found.
+      1. **Between two chrome separators** (current TUI, busy state)::
+
+            ────────────────────
+            ✻ Evaporating… (53s)
+            ────────────────────
+              ⏵⏵ bypass permissions on …
+
+      2. **Above the top chrome** (legacy / one-chrome layout)::
+
+            ✻ Thinking…
+            ────────────────────
+              ⏵⏵ bypass permissions on …
+
+    Returns the text after the spinner, or None if no status line.
+    Chrome-bounded layout is checked first; falls back to the
+    above-chrome scan to cover the older variant.
     """
     if not pane_text:
         return None
 
     lines = pane_text.split("\n")
-
-    # Find the chrome separator: topmost ──── line in the last 10 lines
-    chrome_idx: int | None = None
-    search_start = max(0, len(lines) - 10)
+    search_start = max(0, len(lines) - 12)
+    # Collect all chrome positions in the tail.
+    chromes: list[int] = []
     for i in range(search_start, len(lines)):
         stripped = lines[i].strip()
         if len(stripped) >= 20 and all(c == "─" for c in stripped):
-            chrome_idx = i
-            break
+            chromes.append(i)
 
-    if chrome_idx is None:
-        return None  # No chrome visible — can't determine status
+    # Layout 1: between two chromes.
+    if len(chromes) >= 2:
+        top, bot = chromes[0], chromes[-1]
+        for i in range(top + 1, bot):
+            line = lines[i].strip()
+            if not line:
+                continue
+            if line[0] in STATUS_SPINNERS:
+                return line[1:].strip()
 
-    # Check lines just above the separator (skip blanks, up to 4 lines)
-    for i in range(chrome_idx - 1, max(chrome_idx - 5, -1), -1):
-        line = lines[i].strip()
-        if not line:
-            continue
-        if line[0] in STATUS_SPINNERS:
-            return line[1:].strip()
-        # First non-empty line above separator isn't a spinner → no status
-        return None
+    # Layout 2: above the top chrome (legacy).
+    if chromes:
+        top = chromes[0]
+        for i in range(top - 1, max(top - 5, -1), -1):
+            line = lines[i].strip()
+            if not line:
+                continue
+            if line[0] in STATUS_SPINNERS:
+                return line[1:].strip()
+            break  # first non-empty line above the chrome isn't a spinner
+
     return None
 
 

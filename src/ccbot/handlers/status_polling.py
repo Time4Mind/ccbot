@@ -93,6 +93,30 @@ logger = logging.getLogger(__name__)
 # Status polling interval
 STATUS_POLL_INTERVAL = 1.0  # seconds — fast feedback; rate limiting is at send layer.
 
+# Per-session cache of the last status-line seen by ``parse_status_line``,
+# used to tell "active spinner that just changed text" from "frozen
+# scrollback line that hasn't been pushed off yet". A genuinely-busy
+# claude updates the elapsed time roughly every second
+# (``Working… (17s)`` → ``(18s)`` → …). When the same line repeats
+# across polls for more than ``_PANE_STATUS_STALE_AFTER`` seconds we
+# treat it as stale and stop firing TYPING off of it.
+_pane_status_cache: dict[tuple[int, str], tuple[str, float]] = {}
+_PANE_STATUS_STALE_AFTER = 3.0
+
+
+def _pane_status_is_changing(user_id: int, key_suffix: str, status_line: str) -> bool:
+    """True iff the status line we just parsed differs from the last
+    one OR was first seen within the staleness window. Side-effect:
+    updates the cache when the line changes."""
+    key = (user_id, key_suffix)
+    prev_line, prev_ts = _pane_status_cache.get(key, ("", 0.0))
+    now = time.time()
+    if status_line != prev_line:
+        _pane_status_cache[key] = (status_line, now)
+        return True
+    return (now - prev_ts) < _PANE_STATUS_STALE_AFTER
+
+
 # Idle-archive sweep cadence (seconds).
 ARCHIVE_SWEEP_INTERVAL = 60.0
 # Archive-purge sweep cadence (seconds).
@@ -247,7 +271,9 @@ async def update_status_message(
     # the chat-header typing badge) and not in_menu_view (user is
     # browsing menu screens; typing there is noise).
     status_line = parse_status_line(pane_text) or ""
-    pane_busy = bool(status_line)
+    pane_busy = bool(status_line) and _pane_status_is_changing(
+        user_id, sess.id if sess else window_id, status_line
+    )
     in_menu = sess is not None and is_card_in_menu_view(user_id, sess.id)
     card_busy = sess is not None and is_card_busy(user_id, sess.id)
     # When the card is finalized (last event = ``final_text`` /

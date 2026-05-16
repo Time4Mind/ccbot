@@ -10,12 +10,14 @@ import asyncio
 import logging
 from typing import Any
 
-from telegram import BotCommand
+from telegram import BotCommand, Update
+from telegram.error import NetworkError, RetryAfter, TimedOut
 from telegram.ext import (
     AIORateLimiter,
     Application,
     CallbackQueryHandler,
     CommandHandler,
+    ContextTypes,
     MessageHandler,
     filters,
 )
@@ -269,8 +271,18 @@ async def post_shutdown(
         _metrics_flush_task = None
         logger.info("Metrics flush stopped")
 
+    # Drain anything spawned by the handlers BEFORE we stop the
+    # session monitor — both helpers do real I/O (history JSONL reads,
+    # editMessageText calls) that we'd rather see finish or get
+    # cancelled cleanly instead of being abandoned with the loop.
+    from ..handlers.history import cancel_pending_prewarm
+    from ..handlers.notifications import cancel_pending_card_edits
+
+    await cancel_pending_card_edits()
+    await cancel_pending_prewarm()
+
     if session_monitor:
-        session_monitor.stop()
+        await session_monitor.stop()
         logger.info("Session monitor stopped")
 
     await close_transcribe_client()
@@ -325,4 +337,46 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
         )
     )
 
+    application.add_error_handler(_error_handler)
+
     return application
+
+
+async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """PTB error handler — make exceptions visible AND actionable.
+
+    Without this, PTB's default path is to log the raw traceback under
+    ``telegram.ext.Application`` with no update / chat context attached
+    — making it hard to tell which user / message triggered the bug.
+
+    Behaviour:
+    * Transient network errors (``NetworkError`` / ``TimedOut``) come
+      from long-poll connection drops on flaky upstreams. The supervisor
+      already loops on these and the AIORateLimiter retries Bot API
+      calls. Log a one-liner at INFO; no stack trace noise.
+    * ``RetryAfter`` is a Telegram-side rate-limit signal that
+      AIORateLimiter handles already. INFO-level one-liner.
+    * Everything else is a real bug. Log at ERROR with the full
+      traceback AND whatever update / chat context we can extract.
+    """
+    err = context.error
+    if isinstance(err, (NetworkError, TimedOut)):
+        logger.info("transient network error: %s", err)
+        return
+    if isinstance(err, RetryAfter):
+        logger.info("Telegram RetryAfter: %s", err)
+        return
+    user_id: int | None = None
+    chat_id: int | None = None
+    if isinstance(update, Update):
+        if update.effective_user is not None:
+            user_id = update.effective_user.id
+        if update.effective_chat is not None:
+            chat_id = update.effective_chat.id
+    logger.exception(
+        "Unhandled exception in handler (user=%s chat=%s): %s",
+        user_id,
+        chat_id,
+        err,
+        exc_info=err,
+    )

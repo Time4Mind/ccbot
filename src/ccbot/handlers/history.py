@@ -9,6 +9,7 @@ Provides history viewing functionality for Claude Code sessions:
 Supports both full history and unread message range views.
 """
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -179,6 +180,15 @@ def get_cached_total_pages(window_id: str) -> int | None:
 
 _last_prewarm_attempt: dict[str, float] = {}
 
+# Live, fire-and-forget prewarm tasks. We keep a strong reference so
+# the event loop doesn't garbage-collect them mid-run (CPython will
+# silently drop bare ``asyncio.create_task`` results once the local
+# binding goes away), and so ``cancel_pending_prewarm()`` can drain
+# them on shutdown — otherwise asyncio logs ``Task was destroyed but
+# it is pending!`` and an in-flight JSONL read can race with the
+# session monitor's final state save.
+_prewarm_tasks: set[asyncio.Task[bool]] = set()
+
 
 def kick_prewarm(window_id: str, min_interval: float = 3.0) -> None:
     """Schedule a background prewarm of the pages cache for ``window_id``.
@@ -207,12 +217,41 @@ def kick_prewarm(window_id: str, min_interval: float = 3.0) -> None:
         return
     _last_prewarm_attempt[window_id] = now
     try:
-        asyncio.create_task(prewarm_pages_cache(window_id))
+        task = asyncio.create_task(prewarm_pages_cache(window_id))
     except RuntimeError:
         # No running loop — caller is in sync context outside the bot.
         # Skip; another path (status polling, the next callback) will
         # populate the cache eventually.
-        pass
+        return
+    _prewarm_tasks.add(task)
+    task.add_done_callback(_prewarm_tasks.discard)
+
+
+async def cancel_pending_prewarm(timeout: float = 2.0) -> None:
+    """Cancel + drain every still-running prewarm task.
+
+    Called once from ``post_shutdown`` before stopping the session
+    monitor so pending JSONL reads don't keep running after the bot
+    has nominally exited.
+    """
+    tasks = list(_prewarm_tasks)
+    if not tasks:
+        return
+    for t in tasks:
+        if not t.done():
+            t.cancel()
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True), timeout=timeout
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "prewarm shutdown drain timed out after %ss with %d tasks pending",
+            timeout,
+            sum(1 for t in tasks if not t.done()),
+        )
+    finally:
+        _prewarm_tasks.clear()
 
 
 async def prewarm_pages_cache(window_id: str) -> bool:

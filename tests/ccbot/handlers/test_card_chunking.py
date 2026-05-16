@@ -10,9 +10,14 @@ never broken mid-content.
 from __future__ import annotations
 
 from ccbot.handlers.notifications import (
+    CARD_PAGE_BUDGET,
     CARD_PAGE_LINES_DEFAULT,
+    Event,
+    CardState,
     _chunk_final_text,
     _count_lines,
+    _estimate_md_v2_size,
+    _rechunk_oversized_finals_inplace,
 )
 
 
@@ -68,3 +73,68 @@ class TestChunkFinalText:
         assert len(chunks) >= 1
         for c in chunks:
             assert _count_lines(c) <= 7  # budget + overshoot
+
+    def test_byte_budget_splits_wide_paragraph(self) -> None:
+        # Single visual line / few paragraphs but very wide: passes the
+        # line cap and would still overflow Telegram's 4096-byte edit
+        # limit after MarkdownV2 escaping. Regression for the freeze on
+        # /root/projects/pets — assistant emitted a 5400-char answer in
+        # ≈40 lines and every card edit failed with Message_too_long.
+        wide_paragraph = (
+            "Direct vendor programs (без посредников, максимум $$). "
+            "Google Android VRP — до $1M за full exploit chain. "
+            "Реалистично $5-50k за компонентные баги. "
+        ) * 40  # ~5600 chars, lots of MD-V2 special chars (- . ( ) $)
+        chunks = _chunk_final_text(
+            wide_paragraph,
+            budget_lines=CARD_PAGE_LINES_DEFAULT,
+            byte_budget=CARD_PAGE_BUDGET,
+        )
+        assert len(chunks) >= 2, "wide single-paragraph text must be split"
+        for c in chunks:
+            assert _estimate_md_v2_size(c) <= CARD_PAGE_BUDGET, (
+                f"chunk exceeds byte budget: {_estimate_md_v2_size(c)}"
+            )
+
+
+class TestRechunkOversizedFinalsInplace:
+    def test_byte_overflow_triggers_split(self) -> None:
+        # The exact scenario from the 2026-05-16 bot.log freeze:
+        # one final_text Event with low line count but high byte count
+        # after MD-V2 escaping. Pre-fix, rechunk left this untouched
+        # because it only checked _count_lines; _edit_card then failed
+        # with Message_too_long on every retry until the carrier was
+        # forcibly detached.
+        body = (
+            "Да, и довольно много. Делю по типу, сверху — самые жирные выплаты.\n"
+            + "\n".join(
+                f"• Bullet {i}: source.android.com/security/overview — до $50k."
+                for i in range(80)
+            )
+        )
+        ev = Event(
+            type="final_text",
+            text=body,
+            body=body,
+            started_at=0.0,
+            is_page_break=True,
+        )
+        state = CardState(events=[ev])
+        # User's actual budget at the time of the freeze.
+        _rechunk_oversized_finals_inplace(state, budget_lines=70)
+        assert len(state.events) >= 2, "oversized final_text must be split"
+        for split_ev in state.events:
+            assert _estimate_md_v2_size(split_ev.text) <= CARD_PAGE_BUDGET, (
+                "post-rechunk chunk still exceeds Telegram-safe byte budget"
+            )
+            # Every chunk is a fresh page so the user can paginate through.
+            assert split_ev.is_page_break is True
+            assert split_ev.type == "final_text"
+
+    def test_fits_both_budgets_is_idempotent(self) -> None:
+        body = "Короткий ответ в одну строку."
+        ev = Event(type="final_text", text=body, body=body, started_at=0.0)
+        state = CardState(events=[ev])
+        _rechunk_oversized_finals_inplace(state, budget_lines=70)
+        assert len(state.events) == 1
+        assert state.events[0] is ev

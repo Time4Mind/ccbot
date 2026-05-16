@@ -189,9 +189,6 @@ The `card_position` setting was retired. There is now one canonical
 behaviour: every inbound user message (text / voice / photo / document)
 triggers ``notifications.repost_card`` — the live card is re-sent as a
 new message below the user's text and the previous card msg is dropped.
-A ``👀`` reaction is set on the user's source message via
-``set_message_reaction`` so the routing chain stays traceable when the
-user scrolls history (including for reply-quote dispatches).
 
 ## Per-session context fill
 

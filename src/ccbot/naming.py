@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
-import shlex
 
 from .config import config
 from .session import session_manager
@@ -38,13 +38,49 @@ _PROMPT_TEMPLATE = (
 )
 
 
-async def _run(cmd: str, *, timeout: float = 30.0) -> str | None:
-    """Run a shell command, return stdout on success or None on any failure."""
+# Env vars that mark "we're being invoked from inside a Claude Code
+# session". Inheriting them into the naming subprocess makes the new
+# ``claude`` invocation try to resume / nest under the parent's session
+# id, which causes spurious failures (wrong cwd, stale tools, etc.).
+# Scrub them so each Haiku call is a clean one-shot.
+_CLAUDE_SESSION_ENV_KEYS = (
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDECODE",
+    "AI_AGENT",
+)
+
+
+def _build_naming_env() -> dict[str, str]:
+    """Subprocess env for ``claude --model haiku --print``.
+
+    Two reasons we don't just inherit ``os.environ``:
+
+    1. ``~/.claude/settings.json`` sets ``permissions.defaultMode =
+       bypassPermissions``, which is equivalent to passing
+       ``--dangerously-skip-permissions``. Under root, the CLI rejects
+       that combo unless ``IS_SANDBOX=1`` is set — so we force it.
+    2. Inherited ``CLAUDE_CODE_SESSION_ID`` / ``CLAUDECODE`` etc. make
+       the child think it's nested inside a Claude Code session and
+       trip up its lifecycle hooks (the parent's SessionStart hook
+       writes ``session_map.json`` against the WRONG session id).
+    """
+    env = {k: v for k, v in os.environ.items() if k not in _CLAUDE_SESSION_ENV_KEYS}
+    env["IS_SANDBOX"] = "1"
+    return env
+
+
+async def _run(
+    *argv: str, timeout: float = 30.0, env: dict[str, str] | None = None
+) -> str | None:
+    """Run a command via ``exec``, return stdout on success or None on any failure."""
     try:
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
     except OSError as e:
         logger.debug("naming: subprocess spawn failed: %s", e)
@@ -89,8 +125,15 @@ async def generate_name(seed_text: str) -> str | None:
         return None
     claude_bin = config.claude_command or "claude"
     prompt = _PROMPT_TEMPLATE.format(seed=seed)
-    cmd = f"{shlex.quote(claude_bin)} --model haiku --print {shlex.quote(prompt)}"
-    raw = await _run(cmd, timeout=30.0)
+    raw = await _run(
+        claude_bin,
+        "--model",
+        "haiku",
+        "--print",
+        prompt,
+        timeout=30.0,
+        env=_build_naming_env(),
+    )
     if raw is None:
         return None
     name = _sanitize(raw)

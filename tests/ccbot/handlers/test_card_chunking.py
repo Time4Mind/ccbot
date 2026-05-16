@@ -18,6 +18,8 @@ from ccbot.handlers.notifications import (
     _count_lines,
     _estimate_md_v2_size,
     _rechunk_oversized_finals_inplace,
+    _split_page_by_budget,
+    render_page,
 )
 
 
@@ -138,3 +140,47 @@ class TestRechunkOversizedFinalsInplace:
         _rechunk_oversized_finals_inplace(state, budget_lines=70)
         assert len(state.events) == 1
         assert state.events[0] is ev
+
+
+class TestSplitPageByBudget:
+    def test_byte_overflow_splits_even_when_line_fits(self) -> None:
+        # Regression for tests/@120 freeze: a page accreted many small
+        # tool_use rows whose paths and bash commands are MD-V2-escape
+        # heavy. Total line count stayed under budget, but rendered
+        # bytes exceeded Telegram's 4096-byte edit cap → Message_too_long
+        # on page navigation until the user noticed page N didn't paint.
+        # Each event is a single line (1 line ≪ budget) but accumulates
+        # ~200 bytes after MD-V2 escaping; 30 of them = ~6000 bytes > 4096.
+        events = [
+            Event(
+                type="tool_use",
+                text=f"**Bash**(/usr/local/bin/termux-exec \"pm list packages | grep -iE 'lsposed|xposed|magisk|patcher' (line {i})\")",
+                body="",
+                started_at=0.0,
+            )
+            for i in range(30)
+        ]
+        sub_pages = _split_page_by_budget(events, budget_lines=70)
+        assert len(sub_pages) >= 2, (
+            "30 byte-heavy events must split despite fitting in lines"
+        )
+        for page in sub_pages:
+            rendered = render_page(page, now=0.0)
+            assert _estimate_md_v2_size(rendered) <= CARD_PAGE_BUDGET, (
+                f"sub-page exceeds Telegram-safe byte budget: "
+                f"{_estimate_md_v2_size(rendered)} bytes"
+            )
+
+    def test_fits_both_budgets_is_one_page(self) -> None:
+        events = [
+            Event(type="text", text=f"line {i}", body="", started_at=0.0)
+            for i in range(5)
+        ]
+        sub_pages = _split_page_by_budget(events, budget_lines=70)
+        assert len(sub_pages) == 1
+        assert sub_pages[0] == events
+
+    def test_empty_returns_singleton_empty(self) -> None:
+        # Callers iterate over .extend(); preserving the [[]] shape lets
+        # pagination report 1/1 instead of 0/0 on a fresh card.
+        assert _split_page_by_budget([], budget_lines=70) == [[]]

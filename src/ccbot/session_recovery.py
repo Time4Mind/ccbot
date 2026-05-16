@@ -33,6 +33,7 @@ from .utils import atomic_write_json
 
 if TYPE_CHECKING:
     from .session import SessionManager
+    from .tmux_manager import TmuxWindow
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,64 @@ async def resolve_stale_window_ids(mgr: "SessionManager") -> None:
     await cleanup_stale_session_map_entries(mgr, live_ids)
     await cleanup_old_format_session_map_keys(mgr)
     cleanup_orphan_grouped_sessions(live_ids)
+    await detect_orphan_windows(mgr, windows)
+
+
+# Reserved utility windows that aren't tracked as Sessions and must not
+# be reported as orphans. ``__main__`` hosts the bot supervisor; the
+# ``ccbot-usage`` window is owned by ``_usage_window.py`` for /usage
+# modal scraping. Both are intentionally outside the Session model.
+_RESERVED_WINDOW_NAMES: frozenset[str] = frozenset({"__main__", "ccbot-usage"})
+
+
+async def detect_orphan_windows(
+    mgr: "SessionManager", windows: list["TmuxWindow"] | None = None
+) -> int:
+    """Log WARNING for tmux windows not bound to any Session record.
+
+    Surfaces the failure mode where a window survives archive (kill_window
+    raced a bot restart, claude trapped SIGHUP, etc.) — its claude process
+    keeps writing to the JSONL but no Session manages it, eventually
+    colliding with a fresh ``claude --resume <same_id>`` from a /new flow.
+
+    Never mutates state: just logs. Returns the count of orphans found so
+    callers (and tests) can assert on it. ``windows`` is accepted to avoid
+    a second ``list_windows`` round-trip from ``resolve_stale_window_ids``.
+    """
+    if windows is None:
+        windows = await tmux_manager.list_windows()
+    bound_ids = {sess.window_id for sess in mgr.sessions.values() if sess.window_id}
+    orphans = 0
+    for w in windows:
+        if w.window_name in _RESERVED_WINDOW_NAMES:
+            continue
+        if w.window_id in bound_ids:
+            continue
+        sid = ""
+        ws = mgr.window_states.get(w.window_id)
+        if ws is not None:
+            sid = ws.session_id
+        logger.warning(
+            "orphan_window window_id=%s name=%s session_id=%s — "
+            "no Session record references it",
+            w.window_id,
+            w.window_name,
+            sid or "<unknown>",
+            extra={
+                "event": "orphan_window",
+                "window_id": w.window_id,
+                "window_name": w.window_name,
+                "claude_session_id": sid,
+            },
+        )
+        orphans += 1
+    if orphans:
+        logger.warning(
+            "Found %d orphan tmux window(s). Investigate via /list or "
+            "kill via tmux to avoid JSONL write collisions.",
+            orphans,
+        )
+    return orphans
 
 
 async def cleanup_old_format_session_map_keys(mgr: "SessionManager") -> None:

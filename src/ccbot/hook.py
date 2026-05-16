@@ -33,6 +33,12 @@ _CLAUDE_SETTINGS_FILE = Path.home() / ".claude" / "settings.json"
 # The hook command suffix for detection
 _HOOK_COMMAND_SUFFIX = "ccbot hook"
 
+# Events this hook handles. SessionStart catches new claude processes;
+# UserPromptSubmit self-heals stale session_map.json entries on every
+# prompt — robust against /resume / /clear / bot restarts that miss the
+# SessionStart firing.
+_HOOK_EVENTS: tuple[str, ...] = ("SessionStart", "UserPromptSubmit")
+
 
 def _find_ccbot_path() -> str:
     """Find the full path to the ccbot executable.
@@ -57,15 +63,15 @@ def _find_ccbot_path() -> str:
     return "ccbot"
 
 
-def _is_hook_installed(settings: dict[str, Any]) -> bool:
-    """Check if ccbot hook is already installed in the settings.
+def _is_event_installed(settings: dict[str, Any], event: str) -> bool:
+    """True iff the ccbot hook command is registered for ``event``.
 
     Detects both 'ccbot hook' and full paths like '/path/to/ccbot hook'.
     """
     hooks = settings.get("hooks", {})
-    session_start = hooks.get("SessionStart", [])
+    entries = hooks.get(event, [])
 
-    for entry in session_start:
+    for entry in entries:
         if not isinstance(entry, dict):
             continue
         inner_hooks = entry.get("hooks", [])
@@ -73,10 +79,14 @@ def _is_hook_installed(settings: dict[str, Any]) -> bool:
             if not isinstance(h, dict):
                 continue
             cmd = h.get("command", "")
-            # Match 'ccbot hook' or paths ending with 'ccbot hook'
             if cmd == _HOOK_COMMAND_SUFFIX or cmd.endswith("/" + _HOOK_COMMAND_SUFFIX):
                 return True
     return False
+
+
+def _is_hook_installed(settings: dict[str, Any]) -> bool:
+    """True iff every event in ``_HOOK_EVENTS`` is registered."""
+    return all(_is_event_installed(settings, ev) for ev in _HOOK_EVENTS)
 
 
 def _install_hook() -> int:
@@ -97,25 +107,27 @@ def _install_hook() -> int:
             print(f"Error reading {settings_file}: {e}", file=sys.stderr)
             return 1
 
-    # Check if already installed
+    # Per-event idempotent install: skip events already wired up, add the
+    # missing ones. This handles upgrade from a SessionStart-only install
+    # without duplicating that entry.
     if _is_hook_installed(settings):
         logger.info("Hook already installed in %s", settings_file)
         print(f"Hook already installed in {settings_file}")
         return 0
+    missing = [ev for ev in _HOOK_EVENTS if not _is_event_installed(settings, ev)]
 
     # Find the full path to ccbot
     ccbot_path = _find_ccbot_path()
     hook_command = f"{ccbot_path} hook"
     hook_config = {"type": "command", "command": hook_command, "timeout": 5}
-    logger.info("Installing hook command: %s", hook_command)
+    logger.info("Installing hook command: %s (events=%s)", hook_command, missing)
 
-    # Install the hook
     if "hooks" not in settings:
         settings["hooks"] = {}
-    if "SessionStart" not in settings["hooks"]:
-        settings["hooks"]["SessionStart"] = []
-
-    settings["hooks"]["SessionStart"].append({"hooks": [hook_config]})
+    for event in missing:
+        if event not in settings["hooks"]:
+            settings["hooks"][event] = []
+        settings["hooks"][event].append({"hooks": [hook_config]})
 
     # Write back
     try:
@@ -133,7 +145,14 @@ def _install_hook() -> int:
 
 
 def hook_main() -> None:
-    """Process a Claude Code hook event from stdin, or install the hook."""
+    """Process a Claude Code hook event from stdin, or install the hook.
+
+    For UserPromptSubmit specifically, Claude Code interprets stdout as
+    text to prepend to the prompt. We therefore guarantee zero stdout
+    output on the normal hook path (logger writes to stderr; the
+    outer try/except swallows everything so a crash can't leak a
+    traceback or block the user's prompt).
+    """
     # Configure logging for the hook subprocess (main.py logging doesn't apply here)
     logging.basicConfig(
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -157,7 +176,15 @@ def hook_main() -> None:
         logger.info("Hook install requested")
         sys.exit(_install_hook())
 
-    # Normal hook processing: read JSON from stdin
+    try:
+        _process_hook_event()
+    except Exception as e:
+        logger.warning("Hook event processing failed: %s", e)
+    # Always exit 0: a non-zero exit on UserPromptSubmit blocks the user.
+
+
+def _process_hook_event() -> None:
+    """Read one hook event from stdin and update session_map.json."""
     logger.debug("Processing hook event from stdin")
     try:
         payload = json.load(sys.stdin)
@@ -183,8 +210,8 @@ def hook_main() -> None:
         logger.warning("cwd is not absolute: %s", cwd)
         return
 
-    if event != "SessionStart":
-        logger.debug("Ignoring non-SessionStart event: %s", event)
+    if event not in _HOOK_EVENTS:
+        logger.debug("Ignoring unsupported event: %s", event)
         return
 
     # Get tmux session:window key for the pane running this hook.
@@ -258,7 +285,7 @@ def hook_main() -> None:
                             "Failed to read existing session_map, starting fresh"
                         )
 
-                session_map[session_window_key] = {
+                new_entry = {
                     "session_id": session_id,
                     "cwd": cwd,
                     "window_name": window_name,
@@ -267,7 +294,19 @@ def hook_main() -> None:
                 # Clean up old-format key ("session:window_name") if it exists.
                 # Previous versions keyed by window_name instead of window_id.
                 old_key = f"{tmux_session_name}:{window_name}"
-                if old_key != session_window_key and old_key in session_map:
+                removed_old = old_key != session_window_key and old_key in session_map
+
+                # Fast path: UserPromptSubmit fires per-prompt; skip the
+                # atomic rewrite when nothing actually changed.
+                if session_map.get(session_window_key) == new_entry and not removed_old:
+                    logger.debug(
+                        "session_map already up-to-date for %s, skipping write",
+                        session_window_key,
+                    )
+                    return
+
+                session_map[session_window_key] = new_entry
+                if removed_old:
                     del session_map[old_key]
                     logger.info("Removed old-format session_map key: %s", old_key)
 

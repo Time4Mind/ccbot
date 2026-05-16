@@ -728,10 +728,18 @@ _JOINER_LINES = 2
 def _split_page_by_budget(page: list[Event], budget_lines: int) -> list[list[Event]]:
     """Split one logical page into budget-fitting sub-pages.
 
-    Returns the page unchanged when it fits in ``budget_lines +
-    CARD_PAGE_LINES_OVERSHOOT``. Otherwise greedy-packs events forward:
-    flush to a new sub-page when adding the next event (plus joiner
-    overhead) would push us past ``budget_lines``.
+    Returns the page unchanged when it fits in BOTH ``budget_lines +
+    CARD_PAGE_LINES_OVERSHOOT`` AND ``CARD_PAGE_BUDGET`` bytes (the
+    MD-V2-rendered byte cap Telegram enforces at edit time). Otherwise
+    greedy-packs events forward: flush to a new sub-page when adding
+    the next event (plus joiner overhead) would push us past either
+    budget.
+
+    Without the byte check, a page with many small events (e.g. a
+    chain of single-line tool_use rows with MD-V2-escape-heavy paths)
+    can pass the line budget but still produce a >4096-byte rendered
+    body — Telegram refuses the edit with ``Message_too_long``, the
+    card body stops rendering for that page (observed on tests/@120).
 
     A single huge event (one tool_result that alone exceeds budget)
     lands on its own sub-page — we don't split events, EXPQUOTE
@@ -744,22 +752,36 @@ def _split_page_by_budget(page: list[Event], budget_lines: int) -> list[list[Eve
         return [page]
     now = time.time()
     cap = budget_lines + CARD_PAGE_LINES_OVERSHOOT
-    total_lines = _count_lines(render_page(page, now=now))
-    if total_lines <= cap:
+    rendered = render_page(page, now=now)
+    if (
+        _count_lines(rendered) <= cap
+        and _estimate_md_v2_size(rendered) <= CARD_PAGE_BUDGET
+    ):
         return [page]
     sub_pages: list[list[Event]] = []
     current: list[Event] = []
     current_lines = 0
+    current_bytes = 0
+    # Two ASCII newlines between events at the byte level (render_page
+    # joins with "\n\n\n" but MD-V2 escape doesn't touch \n itself).
+    _JOINER_BYTES = 3
     for ev in page:
-        ev_lines = _count_lines(render_event(ev, in_flight=False, now=now))
-        overhead = _JOINER_LINES if current else 0
-        if current and current_lines + overhead + ev_lines > budget_lines:
+        rendered_ev = render_event(ev, in_flight=False, now=now)
+        ev_lines = _count_lines(rendered_ev)
+        ev_bytes = _estimate_md_v2_size(rendered_ev)
+        line_overhead = _JOINER_LINES if current else 0
+        byte_overhead = _JOINER_BYTES if current else 0
+        line_overflow = current_lines + line_overhead + ev_lines > budget_lines
+        byte_overflow = current_bytes + byte_overhead + ev_bytes > CARD_PAGE_BUDGET
+        if current and (line_overflow or byte_overflow):
             sub_pages.append(current)
             current = [ev]
             current_lines = ev_lines
+            current_bytes = ev_bytes
         else:
             current.append(ev)
-            current_lines += overhead + ev_lines
+            current_lines += line_overhead + ev_lines
+            current_bytes += byte_overhead + ev_bytes
     if current:
         sub_pages.append(current)
     return sub_pages

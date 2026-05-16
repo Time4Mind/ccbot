@@ -14,6 +14,7 @@ where **not** to put) credentials when working on or with ccbot.
 | Claude Code login token | `claude auth status` — managed by the CLI, not a file in the repo |
 | whisper.cpp model | `~/.ccbot/models/ggml-medium.bin` (path overridable via `WHISPER_MODEL_PATH`) |
 | ccbot persisted state | `~/.ccbot/state.json` — non-secret, but contains user ids / paths |
+| ccbot singleton lock | `~/.ccbot/ccbot.lock` — empty file, flock'd by the running bot. Refuses second-instance starts |
 
 `~/.ccbot/` itself is overridable via `CCBOT_DIR=…`. Local `./.env`
 beats the global one when both are present (see `config.py`).

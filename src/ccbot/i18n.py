@@ -404,7 +404,13 @@ _EN: dict[str, str] = {
         "less rate-limit pressure).\n"
         "• *Languages.* Settings → Language: en / ru / zh.\n"
         "• *Outbound proxy.* Set `TG_PROXY_URL` if the host can't reach "
-        "api.telegram.org directly."
+        "api.telegram.org directly.\n"
+        "• *Single instance.* Bot holds an exclusive flock on "
+        "`$CCBOT_DIR/ccbot.lock`; a second `uv run ccbot` refuses with "
+        "an error in stderr instead of fighting for Telegram updates.\n"
+        "• *Hook self-heal.* `SessionStart` + `UserPromptSubmit` hooks "
+        "both update `session_map.json` — a missed SessionStart is "
+        "fixed on the next prompt automatically."
     ),
 }
 
@@ -760,7 +766,13 @@ _RU: dict[str, str] = {
         "карточки сессии. Меньше = шустрее, больше = меньше rate-limit.\n"
         "• *Языки.* Settings → Language: en / ru / zh.\n"
         "• *Outbound proxy.* `TG_PROXY_URL` если api.telegram.org "
-        "недоступен напрямую."
+        "недоступен напрямую.\n"
+        "• *Один инстанс.* Бот держит exclusive flock на "
+        "`$CCBOT_DIR/ccbot.lock`; второй `uv run ccbot` откажется "
+        "стартовать с ошибкой в stderr, не подерётся за Telegram updates.\n"
+        "• *Self-heal хук.* `SessionStart` + `UserPromptSubmit` оба "
+        "обновляют `session_map.json` — пропущенный SessionStart "
+        "автоматически чинится при следующем prompt'е."
     ),
 }
 
@@ -1080,7 +1092,12 @@ _ZH: dict[str, str] = {
         "更小 = 更灵敏,更大 = 更省 rate-limit。\n"
         "• *语言。* Settings → Language:en / ru / zh。\n"
         "• *出站代理。* `TG_PROXY_URL` 如果主机无法\n"
-        "直接访问 api.telegram.org。"
+        "直接访问 api.telegram.org。\n"
+        "• *单实例锁。* bot 在 `$CCBOT_DIR/ccbot.lock` 持独占 flock;\n"
+        "第二个 `uv run ccbot` 会拒绝启动并在 stderr 报错,\n"
+        "不会和原实例争抢 Telegram updates。\n"
+        "• *Hook 自愈。* `SessionStart` + `UserPromptSubmit` 都会更新\n"
+        "`session_map.json` — 错过的 SessionStart 在下一个 prompt 自动修复。"
     ),
 }
 

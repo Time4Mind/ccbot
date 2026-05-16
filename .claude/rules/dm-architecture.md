@@ -37,7 +37,7 @@ sessions: dict[str, Session]     # short id -> Session record
 
 ### window_id -> claude session_id
 
-Unchanged. Still written by the `SessionStart` hook to `session_map.json`. `WindowState.session_id` mirrors that.
+Written by both the `SessionStart` and `UserPromptSubmit` hooks to `session_map.json`. SessionStart catches every new claude process; UserPromptSubmit fires per prompt and self-heals the mapping if it diverges from the pane's current `session_id` (covers `/resume`, `/clear`, and the bot-restart-race window where SessionStart was missed). `WindowState.session_id` mirrors the current map.
 
 ## Message flows
 
@@ -214,7 +214,7 @@ fake user turn in JSONL, polluting the live card and eating tokens.
 ## What is unchanged
 
 - `tmux_manager`, `transcript_parser`, `terminal_parser`, `screenshot`, `hook`, `monitor_state`, `markdown_v2`, `telegram_sender`.
-- `session_map.json` semantics (keyed by `tmux_session:window_id`, written by Claude Code SessionStart hook).
+- `session_map.json` semantics (keyed by `tmux_session:window_id`, written by Claude Code `SessionStart` + `UserPromptSubmit` hooks).
 - `MarkdownV2` formatting pipeline.
 - Per-user message queue and rate limiting (`AIORateLimiter`).
 - Tool-use / tool-result pairing (in-place edit).

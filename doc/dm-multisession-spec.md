@@ -53,6 +53,7 @@ State persistence in `$CCBOT_DIR`:
 - `state.json` — active session per chat, session list with metadata
 - `session_map.json` — session_id ↔ tmux window mapping
 - `monitor_state.json` — JSONL read offsets per session
+- `ccbot.lock` — singleton flock held by `main.py` for the process lifetime; second-instance starts refuse with `sys.exit(1)`
 
 Deployment target M3:
 
@@ -334,11 +335,17 @@ Install footprint:
 
 ### Auto-recover on bot start (F2)
 
+- Acquire `$CCBOT_DIR/ccbot.lock` (exclusive `fcntl.flock`). On contention, exit with code 1 — there is already a bot running and Telegram's `getUpdates` is exclusive per token. Lock is set with `FD_CLOEXEC` so it never leaks into subprocess children.
 - Read `state.json`.
 - For each session marked active or idle: check if its tmux window still exists.
   - If yes: re-attach. Re-bind monitor offsets.
   - If no: mark as `lost`. Surfaces in the switcher with a `Restore` button.
 - For each archived session: nothing to do at startup.
+- Walk live tmux windows. Windows not bound to any Session record (excluding the reserved utility windows `__main__` / `ccbot-usage`) are logged as `orphan_window` WARNINGs. Never auto-killed — surfaces the failure mode without destroying state. Typical cause: a window that survived `kill_window` during an earlier archive (claude trapped SIGHUP, or the bot crashed mid-archive).
+
+### Archive cleanup
+
+- `kill_window(window_id)` is followed by `tmux_manager.kill_orphan_claude_processes(claude_session_id)`: `pgrep` for any `claude --resume <id>` survivors and `SIGTERM` them. Self/parent PID guarded. Prevents two processes from later resuming the same session id and corrupting its JSONL.
 
 ### Manual restore (F3)
 

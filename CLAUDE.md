@@ -24,7 +24,8 @@ ccbot hook --install                  # Auto-install Claude Code SessionStart ho
 - **bypass-only** — claude is launched with `--dangerously-skip-permissions`. No permission relay UI.
 - **No message truncation** at parse layer — splitting only at send layer (`split_message`, 4096 char limit). Tables/code that overflow → file attachment.
 - **MarkdownV2 via telegramify-markdown** — use `safe_reply`/`safe_edit`/`safe_send` helpers (auto fallback to plain text).
-- **Hook-based session tracking** — `SessionStart` hook writes `session_map.json`; monitor polls it to detect session changes.
+- **Hook-based session tracking** — `SessionStart` + `UserPromptSubmit` hooks write `session_map.json`; monitor polls it to detect session changes. UserPromptSubmit self-heals stale entries on every prompt (recovers from missed SessionStart firings, e.g. `/resume`, `/clear`, bot-restart races).
+- **Single-instance lock** — `main.py` holds an exclusive `fcntl.flock` on `$CCBOT_DIR/ccbot.lock` for the process lifetime. A second start refuses with `sys.exit(1)` — guards against silent `Conflict: terminated by other getUpdates request` cross-fire when two bots end up running side by side (e.g. supervisor + manual launch).
 - **Message queue per user** — FIFO ordering, message merging (3800 char limit), tool_use/tool_result pairing.
 - **Rate limiting** — `AIORateLimiter(max_retries=5)` on the Application (30/s global). On restart, the global bucket is pre-filled to avoid burst against Telegram's server-side counter.
 
@@ -37,11 +38,11 @@ ccbot hook --install                  # Auto-install Claude Code SessionStart ho
 
 - Config directory: `~/.ccbot/` by default, override with `CCBOT_DIR` env var.
 - `.env` loading priority: local `.env` > config dir `.env`.
-- State files: `state.json` (thread bindings), `session_map.json` (hook-generated), `monitor_state.json` (byte offsets).
+- State files: `state.json` (sessions / window_states / user settings), `session_map.json` (hook-generated), `monitor_state.json` (byte offsets), `ccbot.lock` (singleton flock).
 
 ## Hook Configuration
 
-Auto-install: `ccbot hook --install`
+Auto-install: `ccbot hook --install` (per-event idempotent — re-running on a partial SessionStart-only install adds the missing UserPromptSubmit entry without duplicating).
 
 Or manually in `~/.claude/settings.json`:
 ```json
@@ -51,10 +52,17 @@ Or manually in `~/.claude/settings.json`:
       {
         "hooks": [{ "type": "command", "command": "ccbot hook", "timeout": 5 }]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [{ "type": "command", "command": "ccbot hook", "timeout": 5 }]
+      }
     ]
   }
 }
 ```
+
+The hook never writes to stdout on the normal path (UserPromptSubmit would treat stdout as prompt-prepend text) and always exits 0 (a non-zero exit would block the user's prompt). When the existing `session_map.json` entry already matches what the hook would write, the atomic rewrite is skipped — UserPromptSubmit in a stable window is a pure read.
 
 ## Architecture Details
 

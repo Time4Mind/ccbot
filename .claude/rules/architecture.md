@@ -155,17 +155,26 @@ State files (~/.ccbot/ or $CCBOT_DIR/):
                       bg_notify_needs_action / language / weekly_reset_day /
                       auto_approve / local_terminal*) + bg_status snapshot
   session_map.json   ─ hook-generated window_id→session mapping
+                       (SessionStart + UserPromptSubmit — the latter
+                       self-heals stale entries on every prompt)
   monitor_state.json ─ poll progress (byte offset) per JSONL file
+  ccbot.lock         ─ singleton flock held by main.py for the
+                       process lifetime; a second start refuses with
+                       sys.exit(1) to avoid Telegram getUpdates
+                       cross-fire
 ```
 
 ## Key Design Decisions
 
 - **DM-centric, not topic-centric** — single 1-1 chat per user; routing key is `active_sessions[user_id] -> session_id -> window_id`. Multiple parallel sessions per user, switcher in the most recent bot message.
 - **Window ID-centric** — All internal state keyed by tmux window ID (e.g. `@0`, `@12`), not window names. Window IDs are guaranteed unique within a tmux server session. Window names are kept as display names via `window_display_names` map. Same directory can have multiple windows.
-- **Hook-based session tracking** — Claude Code `SessionStart` hook writes `session_map.json`; monitor reads it each poll cycle to auto-detect session changes.
+- **Hook-based session tracking** — Claude Code `SessionStart` + `UserPromptSubmit` hooks write `session_map.json`; monitor reads it each poll cycle. SessionStart catches new claude processes; UserPromptSubmit fires per prompt and rewrites the mapping if the existing entry diverges from the current `session_id` (self-heals after `/resume`, `/clear`, or bot-restart races that miss the SessionStart firing). The hook produces zero stdout and always exits 0 — required for safety because UserPromptSubmit would otherwise prepend stdout to the prompt or block on non-zero exits. Fast-path skips the atomic rewrite when nothing changed.
 - **Tool use ↔ tool result pairing** — `tool_use_id` tracked across poll cycles; tool result edits the original tool_use Telegram message in-place.
 - **MarkdownV2 with fallback** — All messages go through `safe_reply`/`safe_edit`/`safe_send` which convert via `telegramify-markdown` and fall back to plain text on parse failure.
 - **No truncation at parse layer** — Full content preserved; splitting at send layer respects Telegram's 4096 char limit with expandable quote atomicity.
 - Only sessions registered in `session_map.json` (via hook) are monitored.
 - Notifications delivered to users via active_sessions reverse-map (claude session_id -> user with matching active session). Background sessions render their own per-session live cards.
 - **Startup re-resolution** — Window IDs reset on tmux server restart. On startup, `resolve_stale_ids()` matches persisted display names against live windows to re-map IDs. Old state.json files keyed by window name are auto-migrated.
+- **Singleton lock** — `main.py` acquires an exclusive `fcntl.flock(LOCK_EX | LOCK_NB)` on `$CCBOT_DIR/ccbot.lock` before any tmux / bot startup. `FD_CLOEXEC` prevents the lock from leaking into subprocess children. A contending instance hits `OSError`, logs the path, and exits with code 1 — the supervisor's restart-backoff then just waits for the existing instance to die.
+- **Orphan-process hygiene** — `archive_session` and `idle_archive_sweep` follow `tmux kill_window` with `tmux_manager.kill_orphan_claude_processes(claude_session_id)`: pgrep + SIGTERM any `claude --resume <id>` survivors. Catches the rare case where `claude` traps SIGHUP or the bot crashed mid-archive, leaving an orphan writer on the session's JSONL. Self/parent PID guarded.
+- **Orphan-window detection** — At startup, `session_recovery.detect_orphan_windows` lists tmux windows not bound to any Session record (excluding the reserved utility windows `__main__` / `ccbot-usage`) and logs WARNING. Never auto-kills: surfaces the failure mode without destroying user state.

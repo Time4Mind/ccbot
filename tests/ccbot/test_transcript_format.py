@@ -54,6 +54,38 @@ class TestExtractToolResultText:
         ]
         assert transcript_format.extract_tool_result_text(content) == "a\nb"
 
+    def test_strips_tool_use_error_envelope_string(self) -> None:
+        # Claude Code wraps hook-rejected results in
+        # ``<tool_use_error>...</tool_use_error>``. Without stripping,
+        # the literal tags ended up in card heads like
+        # "Bash · Error: <tool_use_error>Blocked: sleep 25 ...".
+        wrapped = (
+            "<tool_use_error>Blocked: sleep 25 followed by: cat /tmp/x. "
+            "To wait for a condition, use ...</tool_use_error>"
+        )
+        result = transcript_format.extract_tool_result_text(wrapped)
+        assert "<tool_use_error>" not in result
+        assert "</tool_use_error>" not in result
+        assert result.startswith("Blocked: sleep 25")
+
+    def test_strips_tool_use_error_envelope_in_list(self) -> None:
+        content = [
+            {
+                "type": "text",
+                "text": ("<tool_use_error>Blocked: rm -rf /</tool_use_error>"),
+            }
+        ]
+        result = transcript_format.extract_tool_result_text(content)
+        assert "<tool_use_error>" not in result
+        assert result == "Blocked: rm -rf /"
+
+    def test_no_envelope_is_passthrough(self) -> None:
+        # Make sure the strip path doesn't touch normal output.
+        assert (
+            transcript_format.extract_tool_result_text("normal output")
+            == "normal output"
+        )
+
 
 class TestExtractToolResultImages:
     def test_no_images_returns_none(self) -> None:

@@ -135,10 +135,31 @@ def format_tool_use_summary(name: str, input_data: dict[str, Any] | Any) -> str:
     return f"**{name}**"
 
 
+# Claude Code wraps blocked / hook-rejected tool calls in a literal
+# ``<tool_use_error>…</tool_use_error>`` envelope inside the JSONL
+# tool_result content. The tags are an internal framing artefact —
+# rendering them verbatim ("Bash · Error: <tool_use_error>Blocked: …")
+# leaks implementation detail into the card head. Strip both halves
+# wherever they appear; the inner message is what the user wants.
+_TOOL_USE_ERROR_OPEN = "<tool_use_error>"
+_TOOL_USE_ERROR_CLOSE = "</tool_use_error>"
+
+
+def _strip_tool_use_error_envelope(text: str) -> str:
+    if _TOOL_USE_ERROR_OPEN not in text and _TOOL_USE_ERROR_CLOSE not in text:
+        return text
+    return text.replace(_TOOL_USE_ERROR_OPEN, "").replace(_TOOL_USE_ERROR_CLOSE, "")
+
+
 def extract_tool_result_text(content: list[Any] | Any) -> str:
-    """Concatenate all text fragments from a tool_result content block."""
+    """Concatenate all text fragments from a tool_result content block.
+
+    Strips the ``<tool_use_error>…</tool_use_error>`` envelope Claude Code
+    uses to wrap hook-rejected tool calls — those tags would otherwise
+    end up in the card head verbatim.
+    """
     if isinstance(content, str):
-        return content
+        return _strip_tool_use_error_envelope(content)
     if isinstance(content, list):
         parts: list[str] = []
         for item in content:
@@ -148,7 +169,7 @@ def extract_tool_result_text(content: list[Any] | Any) -> str:
                     parts.append(t)
             elif isinstance(item, str):
                 parts.append(item)
-        return "\n".join(parts)
+        return _strip_tool_use_error_envelope("\n".join(parts))
     return ""
 
 

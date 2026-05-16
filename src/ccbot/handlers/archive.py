@@ -359,6 +359,8 @@ async def idle_archive_sweep(bot: Bot, user_id: int) -> int:
             if w:
                 await tmux_manager.kill_window(w.window_id)
             await clear_session_state(user_id, wid, bot)
+        if sess.claude_session_id:
+            await tmux_manager.kill_orphan_claude_processes(sess.claude_session_id)
         session_manager.mark_session_archived(sess.id, completed=False)
         archived += 1
     if archived:

@@ -15,7 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import re
 import shlex
+import signal
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,6 +28,12 @@ import libtmux
 from .config import SENSITIVE_ENV_VARS, config
 
 logger = logging.getLogger(__name__)
+
+# Validate before passing to pgrep so we never inject arbitrary regex
+# into the command line. claude session ids are UUIDs.
+_CLAUDE_SESSION_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 
 
 @dataclass
@@ -427,6 +437,73 @@ class TmuxManager:
             logger.info("Killed grouped session %s", target)
         except Exception as e:
             logger.debug("kill grouped session %s failed: %s", target, e)
+
+    async def kill_orphan_claude_processes(self, claude_session_id: str) -> int:
+        """SIGTERM any 'claude --resume <claude_session_id>' processes still alive.
+
+        Called after ``kill_window`` to catch processes that survived the
+        pane SIGHUP — observed when a window kill races a bot restart
+        and the pane shell exits cleanly but its claude child detaches.
+        Leaving the orphan alive corrupts the session's JSONL (multiple
+        writers, interleaved entries, broken tool_use ↔ tool_result
+        pairing) which surfaces as ghost activity / lag in the live card.
+
+        Returns the number of processes signalled.
+
+        Happy path: ``kill_window`` worked, pgrep finds nothing, no-op.
+        """
+        if not _CLAUDE_SESSION_RE.match(claude_session_id):
+            logger.warning(
+                "kill_orphan_claude_processes: invalid session id %r, skipping",
+                claude_session_id,
+            )
+            return 0
+
+        def _sync_kill_orphans() -> int:
+            try:
+                result = subprocess.run(
+                    ["pgrep", "-f", f"claude.*--resume {claude_session_id}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+            except (subprocess.TimeoutExpired, OSError) as e:
+                logger.debug("pgrep failed: %s", e)
+                return 0
+            pids: list[int] = []
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    pids.append(int(line))
+                except ValueError:
+                    continue
+            # Guard: never SIGTERM our own PID or our parent (we run inside
+            # tmux, so the pane shell is an ancestor; killing ourselves
+            # would self-destruct the bot).
+            own = os.getpid()
+            parent = os.getppid()
+            killed = 0
+            for pid in pids:
+                if pid == own or pid == parent:
+                    continue
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    killed += 1
+                    logger.info(
+                        "kill_orphan_claude pid=%d session=%s",
+                        pid,
+                        claude_session_id,
+                    )
+                except ProcessLookupError:
+                    # Already dead between pgrep and kill — fine.
+                    continue
+                except PermissionError as e:
+                    logger.warning("kill_orphan_claude pid=%d denied: %s", pid, e)
+            return killed
+
+        return await asyncio.to_thread(_sync_kill_orphans)
 
     async def create_window(
         self,

@@ -3,6 +3,7 @@
 import io
 import json
 import sys
+from typing import Any
 
 import pytest
 
@@ -36,51 +37,45 @@ class TestUuidRegex:
         assert _UUID_RE.match(value) is None
 
 
+def _hook_entry(command: str) -> dict[str, Any]:
+    return {"hooks": [{"type": "command", "command": command, "timeout": 5}]}
+
+
+def _both_events(command: str) -> dict[str, Any]:
+    return {
+        "hooks": {
+            "SessionStart": [_hook_entry(command)],
+            "UserPromptSubmit": [_hook_entry(command)],
+        }
+    }
+
+
 class TestIsHookInstalled:
     def test_hook_present(self) -> None:
-        settings = {
-            "hooks": {
-                "SessionStart": [
-                    {
-                        "hooks": [
-                            {"type": "command", "command": "ccbot hook", "timeout": 5}
-                        ]
-                    }
-                ]
-            }
-        }
-        assert _is_hook_installed(settings) is True
+        assert _is_hook_installed(_both_events("ccbot hook")) is True
 
     def test_no_hooks_key(self) -> None:
         assert _is_hook_installed({}) is False
 
     def test_different_hook_command(self) -> None:
-        settings = {
+        settings: dict[str, Any] = {
             "hooks": {
-                "SessionStart": [
-                    {"hooks": [{"type": "command", "command": "other-tool hook"}]}
-                ]
+                "SessionStart": [_hook_entry("other-tool hook")],
+                "UserPromptSubmit": [_hook_entry("other-tool hook")],
             }
         }
         assert _is_hook_installed(settings) is False
 
     def test_full_path_matches(self) -> None:
-        settings = {
-            "hooks": {
-                "SessionStart": [
-                    {
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": "/usr/bin/ccbot hook",
-                                "timeout": 5,
-                            }
-                        ]
-                    }
-                ]
-            }
+        assert _is_hook_installed(_both_events("/usr/bin/ccbot hook")) is True
+
+    def test_partial_install_returns_false(self) -> None:
+        # SessionStart registered but UserPromptSubmit missing → install
+        # is incomplete and must be re-run to wire the second event.
+        settings: dict[str, Any] = {
+            "hooks": {"SessionStart": [_hook_entry("ccbot hook")]}
         }
-        assert _is_hook_installed(settings) is True
+        assert _is_hook_installed(settings) is False
 
 
 class TestHookMainValidation:
@@ -131,9 +126,10 @@ class TestHookMainValidation:
         )
         assert not (tmp_path / "session_map.json").exists()
 
-    def test_non_session_start_event(
+    def test_unsupported_event_ignored(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
     ) -> None:
+        # Stop / PreToolUse / etc. are not in _HOOK_EVENTS — must be no-op.
         monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
         self._run_hook_main(
             monkeypatch,

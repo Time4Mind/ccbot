@@ -262,24 +262,6 @@ async def unsupported_content_handler(
     )
 
 
-async def _react_input(bot: Bot, chat_id: int, message_id: int) -> None:
-    """👀 reaction on the user's incoming msg (text / voice / photo /
-    document) so the routing leaves a traceable mark in chat history.
-    One consistent emoji across input types — Telegram's free reaction
-    set is narrow (no 📎, no 🎤), so 👀 carries "received + routed"
-    universally."""
-    try:
-        from telegram import ReactionTypeEmoji
-
-        await bot.set_message_reaction(
-            chat_id=chat_id,
-            message_id=message_id,
-            reaction=[ReactionTypeEmoji(emoji="👀")],
-        )
-    except Exception as e:
-        logger.debug("input reaction failed: %s", e)
-
-
 # --- inbox file plumbing (photo + document share this) ---
 
 
@@ -380,10 +362,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
-    # 📎 reaction on the user's incoming photo so the routing leaves a
-    # traceable mark in chat history (same intent as the 👀 reaction on
-    # text messages — Task #30).
-    await _react_input(context.bot, user.id, update.message.message_id)
 
 
 async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -435,7 +413,6 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
-    await _react_input(context.bot, user.id, update.message.message_id)
 
 
 # --- voice ---
@@ -513,14 +490,6 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
-
-    # 🎤 reply removed (chat-clutter on every PTT). The transcription
-    # is now traceable via the 👀 reaction on the user's voice msg
-    # itself + whatever the live card shows next. Telegram's free
-    # reaction set doesn't include 🎤, so we fall back to 👀 (same as
-    # text / attachment handlers) for one consistent "received +
-    # routed" marker across all input types.
-    await _react_input(context.bot, user.id, update.message.message_id)
 
 
 # --- text + bash !cmd capture ---
@@ -655,13 +624,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                             update.message,
                             f"↩ \\[{target.name or target.id}\\]",
                         )
-                        # Match the 👀 marker that every other input
-                        # type leaves on the user's msg (Task #30 / #32
-                        # consistency — the success path returned early
-                        # before the reaction at the bottom of text_handler).
-                        await _react_input(
-                            context.bot, user.id, update.message.message_id
-                        )
                         return
                     await safe_reply(update.message, f"❌ {sm}")
                     return
@@ -737,76 +699,103 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     import time as _time
 
     from .. import metrics
-    from ..handlers.notifications import resume_card_view
+    from ..handlers.notifications import (
+        begin_repost_intent,
+        end_repost_intent,
+        resume_card_view,
+    )
 
     # If the user typed while looking at a Menu / sub-screen on this
     # session's card, drop the pause so incoming events render again.
     sess = session_manager.find_session_by_window(wid)
     if sess is not None:
         await resume_card_view(context.bot, user.id, sess)
+        # Lock spawning out from under us before sending keystrokes —
+        # claude can emit the first event of its reply within
+        # milliseconds of send_to_window returning, and
+        # ``update_session_card`` would otherwise grab the card lock
+        # first, see ``state.msg_id is None`` (from the previous turn's
+        # ``finalize_task``) and spawn a fresh card just for that event.
+        # ``repost_card`` would then spawn a SECOND card and try to
+        # delete the first — succeeded delete loses claude's content,
+        # failed delete leaves both visible (user-reported "2 от бота
+        # после моего сообщения"). The buffer guarantees a single spawn.
+        begin_repost_intent(user.id, sess.id)
 
-    _t0 = _time.time()
-    success, message = await session_manager.send_to_window(wid, text)
-    metrics.observe("tg_to_claude_latency_ms", (_time.time() - _t0) * 1000.0)
-    metrics.inc("tg_messages_in")
-    if not success:
-        metrics.inc("tg_send_failures")
-        await safe_reply(update.message, f"❌ {message}")
-        return
-
-    # Immediate typing-indicator so the user sees feedback within ~500 ms
-    # of sending — claude can take 5-30 s before emitting its first event
-    # (long tool prelude / thinking) and ``status_polling`` won't fire
-    # typing until the pane enters the busy-spinner state. Without this
-    # early fire the chat looks frozen.
+    # Run the rest of the dispatch under a try/finally that always
+    # clears the repost-intent flag — without this, an early return
+    # below leaves the flag set forever and the live card stays silent
+    # for that session until the bot restarts.
+    intent_sess_id = sess.id if sess is not None else None
     try:
-        await context.bot.send_chat_action(chat_id=user.id, action=ChatAction.TYPING)
-        logger.info(
-            "typing_fired source=text_handler.post_send user=%d wid=%s",
-            user.id,
-            wid,
-            extra={
-                "event": "typing_fired",
-                "source": "text_handler.post_send",
-                "user_id": user.id,
-                "window_id": wid,
-            },
-        )
-    except Exception:
-        pass
+        _t0 = _time.time()
+        success, message = await session_manager.send_to_window(wid, text)
+        metrics.observe("tg_to_claude_latency_ms", (_time.time() - _t0) * 1000.0)
+        metrics.inc("tg_messages_in")
+        if not success:
+            metrics.inc("tg_send_failures")
+            await safe_reply(update.message, f"❌ {message}")
+            return
 
-    sess = session_manager.find_session_by_window(wid)
-    if sess is not None:
-        session_manager.touch_session(sess.id)
-        looks_default = (not sess.name) or sess.name.startswith("session-")
-        if looks_default and len(text) >= 50:
-            asyncio.create_task(maybe_auto_name(sess.id, text))
-
-    if text.startswith("!") and len(text) > 1:
-        bash_cmd = text[1:]
-        task = asyncio.create_task(
-            _capture_bash_output(context.bot, user.id, wid, bash_cmd)
-        )
-        _bash_capture_tasks[(user.id, wid)] = task
-
-    interactive_window = get_interactive_window(user.id)
-    if interactive_window and interactive_window == wid:
-        await asyncio.sleep(0.2)
-        await handle_interactive_ui(context.bot, user.id, wid)
-
-    # Always repost the live card below the user's message (the
-    # card_position setting was ripped out — repost is the single
-    # canonical behaviour). The user's message stays in chat with a
-    # reaction emoji so the conversation chain is traceable. The
-    # reaction also marks reply-quote dispatches (same path).
-    if sess is not None:
-        from ..handlers.notifications import repost_card
-
+        # Immediate typing-indicator so the user sees feedback within
+        # ~500 ms of sending — claude can take 5-30 s before emitting
+        # its first event (long tool prelude / thinking) and
+        # ``status_polling`` won't fire typing until the pane enters
+        # the busy-spinner state. Without this early fire the chat
+        # looks frozen.
         try:
-            await repost_card(context.bot, user.id, sess)
-        except Exception as e:
-            logger.debug("repost_card failed: %s", e)
-    await _react_input(context.bot, user.id, update.message.message_id)
+            await context.bot.send_chat_action(
+                chat_id=user.id, action=ChatAction.TYPING
+            )
+            logger.info(
+                "typing_fired source=text_handler.post_send user=%d wid=%s",
+                user.id,
+                wid,
+                extra={
+                    "event": "typing_fired",
+                    "source": "text_handler.post_send",
+                    "user_id": user.id,
+                    "window_id": wid,
+                },
+            )
+        except Exception:
+            pass
+
+        sess = session_manager.find_session_by_window(wid)
+        if sess is not None:
+            session_manager.touch_session(sess.id)
+            looks_default = (not sess.name) or sess.name.startswith("session-")
+            if looks_default and len(text) >= 50:
+                asyncio.create_task(maybe_auto_name(sess.id, text))
+
+        if text.startswith("!") and len(text) > 1:
+            bash_cmd = text[1:]
+            task = asyncio.create_task(
+                _capture_bash_output(context.bot, user.id, wid, bash_cmd)
+            )
+            _bash_capture_tasks[(user.id, wid)] = task
+
+        interactive_window = get_interactive_window(user.id)
+        if interactive_window and interactive_window == wid:
+            await asyncio.sleep(0.2)
+            await handle_interactive_ui(context.bot, user.id, wid)
+
+        # Always repost the live card below the user's message (the
+        # card_position setting was ripped out — repost is the single
+        # canonical behaviour). Any events claude emitted between
+        # send_to_window and here were buffered into state.events by
+        # update_session_card (it saw the repost-intent flag and held
+        # off rendering); they drain into the freshly-reposted card.
+        if sess is not None:
+            from ..handlers.notifications import repost_card
+
+            try:
+                await repost_card(context.bot, user.id, sess)
+            except Exception as e:
+                logger.debug("repost_card failed: %s", e)
+    finally:
+        if intent_sess_id is not None:
+            end_repost_intent(user.id, intent_sess_id)
 
 
 # Re-export so existing callers (callbacks/dir_browser.py) keep working.

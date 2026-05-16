@@ -526,10 +526,24 @@ class SessionMonitor:
         self._running = True
         self._task = asyncio.create_task(self._monitor_loop())
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
+        """Cancel the monitor loop and await its exit before saving state.
+
+        Awaiting matters at shutdown: dropping the reference without
+        ``await`` leaves the loop in a "cancelling" state — asyncio
+        logs ``Task was destroyed but it is pending!`` and any in-
+        flight JSONL read can corrupt ``monitor_state.json`` if it
+        races with the final ``state.save()``.
+        """
         self._running = False
-        if self._task:
-            self._task.cancel()
-            self._task = None
+        task, self._task = self._task, None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Monitor loop exited with %s", e)
         self.state.save()
         logger.info("Session monitor stopped and state saved")

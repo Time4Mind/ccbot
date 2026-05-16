@@ -123,8 +123,7 @@ Handler modules (handlers/):
   notifications.py    ─ Live card per session + push events + completion +
                        bg-status panel injection + active-quota glyph in header +
                        refresh_panel + repost_card (always-repost behaviour:
-                       every user-msg replaces the card by a fresh one below;
-                       a 👀 reaction goes on the user msg for chain visibility)
+                       every user-msg replaces the card by a fresh one below)
   bg_status.py        ─ Per-user bg session status map (working/finished/error/
                        needs_action), context_pct, pending_interactive_ui;
                        render_panel for the active card's tail block (each row:

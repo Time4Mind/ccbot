@@ -555,31 +555,53 @@ _SENTENCE_END_RE = re.compile(r"[.!?][\s)\]\"»]*\s")
 
 
 def _chunk_final_text(
-    text: str, budget_lines: int = CARD_PAGE_LINES_DEFAULT
+    text: str,
+    budget_lines: int = CARD_PAGE_LINES_DEFAULT,
+    byte_budget: int = CARD_PAGE_BUDGET,
 ) -> list[str]:
-    """Split a long final answer into chunks each ≤ ``budget_lines`` lines.
+    """Split a long final answer into chunks ≤ ``budget_lines`` AND ≤ ``byte_budget``.
 
     Smart-boundary preference (per user spec): paragraph (``\\n\\n``) →
     line (``\\n``) → sentence terminator (``.!?``) → word (space) → hard.
     Allows up to ``CARD_PAGE_LINES_OVERSHOOT`` extra lines so a sentence
     isn't broken mid-content. NEVER breaks mid-word.
 
+    The byte cap mirrors Telegram's 4096-byte edit limit (with headroom
+    for header / divider / footer / bg-panel). Without it, a wide
+    single-paragraph answer can pass the line cap and still overflow
+    after MarkdownV2 escaping — every reserved char gets a ``\\``
+    prefix, blowing the rendered size past the limit.
+
     Empty / short input returns a single-chunk list.
     """
     if not text:
         return []
-    lines = text.split("\n")
-    if len(lines) <= budget_lines:
+    if (
+        _count_lines(text) <= budget_lines
+        and _estimate_md_v2_size(text) <= byte_budget
+    ):
         return [text]
 
     chunks: list[str] = []
     remaining = text
-    while _count_lines(remaining) > budget_lines:
+    while (
+        _count_lines(remaining) > budget_lines
+        or _estimate_md_v2_size(remaining) > byte_budget
+    ):
         rem_lines = remaining.split("\n")
-        # 1. Paragraph break — look at the last \n\n within budget+overshoot.
+        # 1. Paragraph break — look at the last \n\n within budget+overshoot,
+        #    clamped to the byte budget so we never search past the safe
+        #    rendered-size window.
         cap = budget_lines + CARD_PAGE_LINES_OVERSHOOT
-        # Convert line cap to char index.
-        char_cap = sum(len(rem_lines[i]) + 1 for i in range(min(cap, len(rem_lines))))
+        char_cap_lines = sum(
+            len(rem_lines[i]) + 1 for i in range(min(cap, len(rem_lines)))
+        )
+        char_cap_bytes = _char_pos_at_byte_budget(remaining, byte_budget)
+        char_cap = min(char_cap_lines, char_cap_bytes) if char_cap_bytes else char_cap_lines
+        # If even one char is over byte budget, char_cap_bytes is 0 — use a
+        # minimal cap so the boundary scans still see SOMETHING. Edge case.
+        if char_cap <= 0:
+            char_cap = max(1, char_cap_lines)
         cut = remaining.rfind("\n\n", 0, char_cap)
 
         # 2. Line break within budget (no overshoot).
@@ -587,6 +609,7 @@ def _chunk_final_text(
             char_budget = sum(
                 len(rem_lines[i]) + 1 for i in range(min(budget_lines, len(rem_lines)))
             )
+            char_budget = min(char_budget, char_cap)
             cut = remaining.rfind("\n", 0, char_budget)
 
         # 3. Sentence terminator within budget+overshoot.
@@ -876,6 +899,49 @@ def _count_lines(text: str) -> int:
     return text.count("\n") + 1
 
 
+# Telegram MarkdownV2 reserved chars — each one gains a leading ``\``
+# during ``convert_markdown``. We use this as an upper-bound estimate of
+# the post-render byte count without paying for a real telegramify
+# round-trip on every event. The bound is sloppy on purpose: better to
+# oversplit a long answer than to send a 4096+ byte payload and lose the
+# whole card edit to ``Message_too_long``.
+_MD_V2_ESCAPE_CHARS = frozenset("_*[]()~`>#+-=|{}.!\\")
+
+
+def _estimate_md_v2_size(text: str) -> int:
+    """Upper bound on ``len(convert_markdown(text))`` (chars / bytes-ASCII).
+
+    Each MarkdownV2 reserved char contributes ``+1`` over the raw length
+    for its escape backslash. Real telegramify-markdown sometimes leaves
+    a few of these unescaped inside valid markdown tokens (``**bold**``
+    etc.), but using an over-estimate is the safe direction — we'd
+    rather chunk earlier than discover overflow at edit time.
+    """
+    if not text:
+        return 0
+    extra = sum(1 for c in text if c in _MD_V2_ESCAPE_CHARS)
+    return len(text) + extra
+
+
+def _char_pos_at_byte_budget(text: str, byte_budget: int) -> int:
+    """Largest ``p`` such that ``_estimate_md_v2_size(text[:p]) <= byte_budget``.
+
+    Returns ``len(text)`` if the whole string fits. Used by
+    ``_chunk_final_text`` to clamp the boundary-search window when a
+    long answer would otherwise overflow Telegram's 4096-byte edit cap
+    even at very few visual lines.
+    """
+    if byte_budget <= 0 or not text:
+        return 0
+    size = 0
+    for i, c in enumerate(text):
+        bump = 2 if c in _MD_V2_ESCAPE_CHARS else 1
+        if size + bump > byte_budget:
+            return i
+        size += bump
+    return len(text)
+
+
 def reset_card_msg_id_for_user(user_id: int) -> None:
     """Drop the msg_id for every card of ``user_id`` so the next event
     creates a fresh msg of the (possibly changed) correct type.
@@ -1112,26 +1178,33 @@ def build_kb_mode_keyboard(
 def _rechunk_oversized_finals_inplace(state: CardState, budget_lines: int) -> None:
     """Walk ``state.events`` and split oversized ``final_text`` Events.
 
-    Idempotent: an Event already fitting in ``budget_lines`` is left
+    Idempotent: an Event already fitting BOTH ``budget_lines`` AND the
+    MarkdownV2-rendered byte budget (``CARD_PAGE_BUDGET``) is left
     untouched. An oversized Event is replaced (in place, preserving
     order) by N ``final_text`` Events produced by ``_chunk_final_text``,
     each marked ``is_page_break=True`` so pagination treats every chunk
     as a separate page.
 
-    Cap: ``budget_lines + CARD_PAGE_LINES_OVERSHOOT`` — matches the
-    tolerance ``_chunk_final_text`` uses for sentence boundaries.
+    The byte gate matters: a wide single-paragraph answer can fit in
+    ``cap`` visual lines and STILL produce a >4096-byte payload after
+    MarkdownV2 escaping → ``Message_too_long`` on edit, plain-text
+    fallback and repost all fail → the live card freezes on the previous
+    body and the user never sees the reply. Splitting on rendered size
+    keeps every chunk within Telegram's edit limit.
     """
-    cap = budget_lines + CARD_PAGE_LINES_OVERSHOOT
+    cap_lines = budget_lines + CARD_PAGE_LINES_OVERSHOOT
     i = 0
     while i < len(state.events):
         ev = state.events[i]
         if ev.type != "final_text" or not ev.text:
             i += 1
             continue
-        if _count_lines(ev.text) <= cap:
+        fits_lines = _count_lines(ev.text) <= cap_lines
+        fits_bytes = _estimate_md_v2_size(ev.text) <= CARD_PAGE_BUDGET
+        if fits_lines and fits_bytes:
             i += 1
             continue
-        chunks = _chunk_final_text(ev.text, budget_lines)
+        chunks = _chunk_final_text(ev.text, budget_lines, CARD_PAGE_BUDGET)
         if len(chunks) <= 1:
             # _chunk_final_text refused to split (e.g. one huge unbroken
             # token with no boundary candidates). Leave as is.
@@ -1371,7 +1444,7 @@ async def _ensure_seeded(user_id: int, sess: Session, state: CardState) -> None:
 
 def _should_buffer(user_id: int, session_id: str, state: CardState) -> bool:
     """Return True when the live card must buffer events instead of
-    rendering. Two reasons:
+    rendering. Three reasons:
 
     1. The user has the carrier on a Menu / sub-screen
        (``state.in_menu_view`` — set by ``pause_card_view`` /
@@ -1386,16 +1459,86 @@ def _should_buffer(user_id: int, session_id: str, state: CardState) -> bool:
        stayed paused forever — silent until the next typed message
        woke ``resume_card_view``. This helper makes the bg check live
        so that class of bug can't reoccur.)
+    3. ``text_handler`` has signalled an imminent ``repost_card`` for
+       this (user, session) via ``begin_repost_intent``. Without the
+       buffer, claude's first reply event after the user's typed text
+       races against the repost and both ``update_session_card`` and
+       ``repost_card`` end up calling ``_send_card`` — two cards land
+       in chat (or one survives + claude's first event is lost when
+       ``delete_message`` succeeds on a card that already had content).
+       Buffering defers the rendering until ``end_repost_intent``
+       cleared the flag; events accumulate in ``state.events`` and
+       drain into the freshly-reposted card on the next render.
     """
     if state.in_menu_view:
+        return True
+    if (user_id, session_id) in _repost_intent:
         return True
     active = session_manager.get_active_session(user_id)
     return active is None or active.id != session_id
 
 
+# (user_id, session_id) pairs for which ``text_handler`` is mid-dispatch
+# and will call ``repost_card`` shortly. While the pair is in this set,
+# ``update_session_card`` buffers events instead of spawning a fresh
+# card — see ``_should_buffer`` reason 3. Populated/cleared by
+# ``begin_repost_intent`` / ``end_repost_intent``.
+_repost_intent: set[tuple[int, str]] = set()
+
+
+def begin_repost_intent(user_id: int, session_id: str) -> None:
+    """Mark (user, session) as repost-in-progress so concurrent
+    claude events buffer instead of spawning their own card.
+
+    Idempotent: re-marking a still-set pair is a no-op. Call
+    ``end_repost_intent`` AFTER ``repost_card`` (success or failure)
+    so the buffer drains. The buffer is the spawn-race fix's safety
+    net — even if ``repost_card`` itself fails, ``end_repost_intent``
+    lets normal rendering resume on the next event.
+    """
+    _repost_intent.add((user_id, session_id))
+
+
+def end_repost_intent(user_id: int, session_id: str) -> None:
+    """Clear the repost-in-progress flag set by ``begin_repost_intent``.
+
+    Safe to call when no flag is set.
+    """
+    _repost_intent.discard((user_id, session_id))
+
+
 def reset_card(user_id: int, session_id: str) -> None:
     """Drop the cached card so the next event creates a fresh message."""
     _cards.pop((user_id, session_id), None)
+
+
+async def cancel_pending_card_edits(timeout: float = 2.0) -> None:
+    """Cancel + drain every deferred ``_edit_card`` task across all cards.
+
+    Called from ``post_shutdown`` so we don't leave ``_deferred_edit``
+    tasks in the "pending" state when the event loop closes — asyncio
+    logs ``Task was destroyed but it is pending!`` for each one, and
+    any in-flight Telegram edit can race with the final state save.
+    """
+    tasks: list[asyncio.Task[None]] = []
+    for state in _cards.values():
+        t = state.pending_edit
+        if t is not None and not t.done():
+            t.cancel()
+            tasks.append(t)
+        state.pending_edit = None
+    if not tasks:
+        return
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True), timeout=timeout
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "card-edit shutdown drain timed out after %ss with %d tasks pending",
+            timeout,
+            sum(1 for t in tasks if not t.done()),
+        )
 
 
 async def close_card_view(bot: Bot, user_id: int, session_id: str) -> None:
@@ -2626,11 +2769,31 @@ async def repost_card(bot: Bot, user_id: int, sess: Session) -> None:
         state.last_rendered = text
         state.last_edit_ts = time.monotonic()
         new_msg_id = state.msg_id
+    logger.info(
+        "repost_card user=%s sess=%s old_msg=%s new_msg=%s events=%d",
+        user_id,
+        sess.id,
+        old_msg_id,
+        new_msg_id,
+        len(state.events),
+    )
     if old_msg_id and new_msg_id and new_msg_id != old_msg_id:
         try:
             await bot.delete_message(chat_id=user_id, message_id=old_msg_id)
+            logger.info(
+                "repost_card deleted_old user=%s sess=%s msg=%s",
+                user_id,
+                sess.id,
+                old_msg_id,
+            )
         except Exception as e:
-            logger.debug("repost_card delete old failed: %s", e)
+            logger.warning(
+                "repost_card delete_old_failed user=%s sess=%s msg=%s err=%s",
+                user_id,
+                sess.id,
+                old_msg_id,
+                e,
+            )
 
 
 async def refresh_panel(bot: Bot, user_id: int) -> None:

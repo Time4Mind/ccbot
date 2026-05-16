@@ -576,10 +576,7 @@ def _chunk_final_text(
     """
     if not text:
         return []
-    if (
-        _count_lines(text) <= budget_lines
-        and _estimate_md_v2_size(text) <= byte_budget
-    ):
+    if _count_lines(text) <= budget_lines and _estimate_md_v2_size(text) <= byte_budget:
         return [text]
 
     chunks: list[str] = []
@@ -597,7 +594,9 @@ def _chunk_final_text(
             len(rem_lines[i]) + 1 for i in range(min(cap, len(rem_lines)))
         )
         char_cap_bytes = _char_pos_at_byte_budget(remaining, byte_budget)
-        char_cap = min(char_cap_lines, char_cap_bytes) if char_cap_bytes else char_cap_lines
+        char_cap = (
+            min(char_cap_lines, char_cap_bytes) if char_cap_bytes else char_cap_lines
+        )
         # If even one char is over byte budget, char_cap_bytes is 0 — use a
         # minimal cap so the boundary scans still see SOMETHING. Edge case.
         if char_cap <= 0:

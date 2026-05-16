@@ -342,9 +342,7 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     return application
 
 
-async def _error_handler(
-    update: object, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """PTB error handler — make exceptions visible AND actionable.
 
     Without this, PTB's default path is to log the raw traceback under

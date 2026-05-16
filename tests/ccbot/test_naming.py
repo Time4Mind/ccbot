@@ -71,9 +71,7 @@ class TestBuildNamingEnv:
         ):
             assert key not in env, f"{key} leaked into naming subprocess env"
 
-    def test_preserves_unrelated_env(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_preserves_unrelated_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Don't be over-zealous: PATH, HOME, terminal-bot config etc.
         # must still reach the subprocess.
         monkeypatch.setenv("PATH", "/usr/bin:/bin")

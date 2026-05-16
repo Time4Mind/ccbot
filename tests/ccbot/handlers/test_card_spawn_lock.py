@@ -367,8 +367,7 @@ async def test_repost_intent_blocks_concurrent_spawn(monkeypatch):
     # The buffered event must still be in state.events so it renders in
     # the new card body.
     assert any(ev.text == "evt" for ev in state.events), (
-        "buffered claude event was dropped instead of preserved for the "
-        "next render"
+        "buffered claude event was dropped instead of preserved for the next render"
     )
 
 

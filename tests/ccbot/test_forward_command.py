@@ -48,6 +48,8 @@ class TestForwardCommand:
             mock_sm.get_active_window.return_value = "@5"
             mock_sm.get_display_name.return_value = "project"
             mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock())
+            mock_tmux.capture_pane = AsyncMock(return_value="")
+            mock_sm.find_session_by_window.return_value = None
             mock_sm.send_to_window = AsyncMock(return_value=(True, "ok"))
 
             from ccbot.bot import forward_command_handler
@@ -72,6 +74,8 @@ class TestForwardCommand:
             mock_sm.get_active_window.return_value = "@5"
             mock_sm.get_display_name.return_value = "project"
             mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock())
+            mock_tmux.capture_pane = AsyncMock(return_value="")
+            mock_sm.find_session_by_window.return_value = None
             mock_sm.send_to_window = AsyncMock(return_value=(True, "ok"))
 
             from ccbot.bot import forward_command_handler
@@ -96,6 +100,8 @@ class TestForwardCommand:
             mock_sm.get_active_window.return_value = "@5"
             mock_sm.get_display_name.return_value = "project"
             mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock())
+            mock_tmux.capture_pane = AsyncMock(return_value="")
+            mock_sm.find_session_by_window.return_value = None
             mock_sm.send_to_window = AsyncMock(return_value=(True, "ok"))
 
             from ccbot.bot import forward_command_handler

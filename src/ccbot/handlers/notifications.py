@@ -1067,6 +1067,16 @@ async def enter_kb_mode(
     state.kb_prompt = prompt_content
     state.kb_ui_name = ui_name
     state.in_kb_mode = True
+    # kb-mode is an interrupt: claude is BLOCKED waiting for the user's
+    # answer. If the user happens to be on Menu / List / Settings /
+    # History on the same carrier (``in_menu_view=True``), ``_edit_card``
+    # would short-circuit and the kb keyboard would never surface — the
+    # user only saw it appear after tapping Shot, which dropped
+    # ``msg_id=None`` and re-spawned a fresh card via ``_send_card``.
+    # Clearing the flag here lets ``_edit_card`` repaint the carrier
+    # with the kb prompt; the menu navigation is preempted because the
+    # session can't proceed without the user's input anyway.
+    state.in_menu_view = False
     if not sess.window_id:
         return
     text = _render_card(sess, state, user_id=user_id)
@@ -1465,7 +1475,7 @@ async def _ensure_seeded(user_id: int, sess: Session, state: CardState) -> None:
 
 def _should_buffer(user_id: int, session_id: str, state: CardState) -> bool:
     """Return True when the live card must buffer events instead of
-    rendering. Three reasons:
+    rendering. Four reasons:
 
     1. The user has the carrier on a Menu / sub-screen
        (``state.in_menu_view`` — set by ``pause_card_view`` /
@@ -1490,8 +1500,16 @@ def _should_buffer(user_id: int, session_id: str, state: CardState) -> bool:
        Buffering defers the rendering until ``end_repost_intent``
        cleared the flag; events accumulate in ``state.events`` and
        drain into the freshly-reposted card on the next render.
+    4. The card is in kb-mode (``state.in_kb_mode``). Without this,
+       a stray streaming event (assistant text emitted right before the
+       AskUserQuestion lands, e.g.) would trigger ``_edit_card`` with
+       the default footer keyboard — overwriting the kb keyboard the
+       user needs to act on. Buffer until ``exit_kb_mode`` clears the
+       flag; the drained events land on the next post-prompt render.
     """
     if state.in_menu_view:
+        return True
+    if state.in_kb_mode:
         return True
     if (user_id, session_id) in _repost_intent:
         return True

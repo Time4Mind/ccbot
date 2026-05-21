@@ -1353,14 +1353,20 @@ async def _seed_events_from_jsonl(
     """
     if not sess.window_id:
         return []
-    try:
-        claude_sess = await session_manager.resolve_session_for_window(sess.window_id)
-    except Exception as e:
-        logger.debug("seed: resolve_session_for_window failed: %s", e)
+    # Derive the transcript path by pure path math instead of
+    # ``resolve_session_for_window`` — the latter fully walks the JSONL
+    # just to refresh summary/token stats we don't use here, then we read
+    # the file again below. On a multi-MB resumed transcript that wasted
+    # walk costs >1s. Same fast-path the /history cache already uses.
+    from ..session_claude_io import build_session_file_path
+
+    state = session_manager.get_window_state(sess.window_id)
+    if not state.session_id or not state.cwd:
         return []
-    if claude_sess is None or not claude_sess.file_path:
+    fp = build_session_file_path(state.session_id, state.cwd)
+    if fp is None or not fp.exists():
         return []
-    file_path = claude_sess.file_path
+    file_path = str(fp)
     import json as _json
     from pathlib import Path as _Path
 

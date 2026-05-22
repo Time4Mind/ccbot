@@ -18,12 +18,16 @@ import asyncio
 import logging
 import re
 import time
+from typing import TYPE_CHECKING
 
 from telegram import Bot
 from telegram.constants import ChatAction
 
 from ..config import config
 from ..session import session_manager
+
+if TYPE_CHECKING:
+    from ..session_models import Session
 from ..terminal_parser import (
     extract_interactive_content,
     is_interactive_ui,
@@ -124,121 +128,118 @@ ARCHIVE_SWEEP_INTERVAL = 60.0
 PURGE_SWEEP_INTERVAL = 3600.0
 
 
-async def update_status_message(
+async def _resolve_existing_interactive(
     bot: Bot,
     user_id: int,
     window_id: str,
-) -> None:
-    """Poll terminal: detect interactive UIs and drive the typing indicator.
+    pane_text: str,
+    interactive_window: str | None,
+) -> bool | None:
+    """Resolve an interactive UI already claimed for THIS window.
 
-    There is no separate "status message" anymore — the live session card
-    carries its own header. The pane spinner ("…Esc to interrupt") is no
-    longer shown in chat; it drives ``send_chat_action(TYPING)`` instead.
+    Returns ``None`` when the caller should stop (UI still showing — skip
+    this poll). Otherwise returns the ``should_check_new_ui`` flag the
+    caller should carry forward: ``True`` if no prior interactive mode was
+    active for this window, ``False`` if it was just cleared.
     """
-    w = await tmux_manager.find_window_by_id(window_id)
-    if not w:
-        return
+    if interactive_window != window_id:
+        return True
+    # User is in interactive mode for THIS window
+    if is_interactive_ui(pane_text):
+        # Interactive UI still showing — skip status update (user is interacting)
+        return None
+    # Interactive UI gone — clear interactive mode, fall through.
+    await clear_interactive_msg(user_id, bot, window_id)
+    return False
 
-    pane_text = await tmux_manager.capture_pane(w.window_id)
-    if not pane_text:
-        return
 
-    interactive_window = get_interactive_window(user_id)
-    should_check_new_ui = True
+async def _surface_new_interactive_ui(
+    bot: Bot,
+    user_id: int,
+    window_id: str,
+    pane_text: str,
+    sess: "Session | None",
+    is_bg_session: bool,
+    interactive_window: str | None,
+) -> bool:
+    """Classify and surface a fresh interactive UI found by polling.
 
-    if interactive_window == window_id:
-        # User is in interactive mode for THIS window
-        if is_interactive_ui(pane_text):
-            # Interactive UI still showing — skip status update (user is interacting)
-            return
-        # Interactive UI gone — clear interactive mode, fall through.
-        await clear_interactive_msg(user_id, bot, window_id)
-        should_check_new_ui = False
+    Handles auto-approve, the bg-session stash, the busy-elsewhere skip,
+    and the active-session kb-mode / floating-msg routes. Returns ``True``
+    iff the prompt was handled — the caller should then ``return``.
 
-    sess = session_manager.find_session_by_window(window_id)
-    active = session_manager.get_active_session(user_id)
-    # Treat orphan windows (no session record) as "active-like": there's
-    # no bg-status row to flip, so falling through to the legacy handler
-    # is the safer default. Only suppress when we know this is a
-    # background-session window for a different active session.
-    is_bg_session = sess is not None and active is not None and active.id != sess.id
+    ``is_interactive_ui(pane_text)`` is assumed True by the caller.
+    """
+    # User-configurable auto-approve takes precedence — bypass both
+    # the TG surface AND the bg-status badge when the user has
+    # explicitly opted in to "Yes on everything". This must run
+    # BEFORE the bg-session branch — otherwise a background prompt
+    # would sit pending forever with ❓ instead of getting the
+    # auto-Yes the user asked for. After approval the next poll
+    # sees no UI and clears the badge naturally.
+    if await _maybe_auto_approve(user_id, window_id, pane_text):
+        return True
 
-    # Check for permission prompt (interactive UI not triggered via JSONL).
-    #
-    # ``should_check_new_ui`` is False only when an earlier branch above
-    # confirmed the user is currently engaged with THIS window's UI —
-    # in that case we already returned. From here on we're looking at a
-    # fresh prompt that polling, not the JSONL path, surfaced.
-    #
-    # The auto-approve check used to be gated on ``interactive_window is
-    # None`` — a stale entry from any prior tool surfacing (or worse, a
-    # stuck one that the cleanup path missed) would block auto-approve
-    # for EVERY other window. ``auto_approve=on`` is an explicit opt-in;
-    # respect it on every window, regardless of which prompt may also
-    # be (or have been) pending elsewhere. The TG-surface step
-    # (``handle_interactive_ui``) is the only place where stacking two
-    # interactive screens is genuinely confusing, so the
-    # ``interactive_window is None`` guard stays — but only there.
-    if should_check_new_ui and is_interactive_ui(pane_text):
-        # User-configurable auto-approve takes precedence — bypass both
-        # the TG surface AND the bg-status badge when the user has
-        # explicitly opted in to "Yes on everything". This must run
-        # BEFORE the bg-session branch — otherwise a background prompt
-        # would sit pending forever with ❓ instead of getting the
-        # auto-Yes the user asked for. After approval the next poll
-        # sees no UI and clears the badge naturally.
-        if await _maybe_auto_approve(user_id, window_id, pane_text):
-            return
-
-        if is_bg_session and sess is not None:
-            # Background session: prompt didn't qualify for auto-approve
-            # (e.g. no "Yes" option, or feature off). Never surface in
-            # chat — stash the snapshot in bg_status and flip ❓ on the
-            # panel. The switcher-tap handler renders it when the user
-            # looks at the session.
-            content_obj = extract_interactive_content(pane_text)
-            ui_tuple = (
-                (content_obj.content, content_obj.name)
-                if content_obj is not None
-                else None
-            )
-            if bg_status.update_status(
-                user_id, sess.id, "needs_action", interactive_ui=ui_tuple
-            ):
-                await refresh_panel(bot, user_id)
-            return
-        if interactive_window is not None:
-            # User is already engaged with another window's UI; don't
-            # double-surface. The prompt stays pending in the pane and
-            # will get picked up on the next poll cycle after the user
-            # clears the current one.
-            logger.debug(
-                "Interactive UI on window=%s, but user busy on window=%s — "
-                "skipping TG surface for now",
-                window_id,
-                interactive_window,
-            )
-            return
-        logger.debug(
-            "Interactive UI detected in polling (user=%d, window=%s)",
-            user_id,
-            window_id,
+    if is_bg_session and sess is not None:
+        # Background session: prompt didn't qualify for auto-approve
+        # (e.g. no "Yes" option, or feature off). Never surface in
+        # chat — stash the snapshot in bg_status and flip ❓ on the
+        # panel. The switcher-tap handler renders it when the user
+        # looks at the session.
+        content_obj = extract_interactive_content(pane_text)
+        ui_tuple = (
+            (content_obj.content, content_obj.name) if content_obj is not None else None
         )
-        # Active session: route via kb-mode on the live card. Falls
-        # back to the floating-msg path only when there's no Session
-        # record (orphan window — no card to host kb-mode).
-        if sess is not None and not is_bg_session:
-            from .notifications import enter_kb_mode
+        if bg_status.update_status(
+            user_id, sess.id, "needs_action", interactive_ui=ui_tuple
+        ):
+            await refresh_panel(bot, user_id)
+        return True
+    if interactive_window is not None:
+        # User is already engaged with another window's UI; don't
+        # double-surface. The prompt stays pending in the pane and
+        # will get picked up on the next poll cycle after the user
+        # clears the current one.
+        logger.debug(
+            "Interactive UI on window=%s, but user busy on window=%s — "
+            "skipping TG surface for now",
+            window_id,
+            interactive_window,
+        )
+        return True
+    logger.debug(
+        "Interactive UI detected in polling (user=%d, window=%s)",
+        user_id,
+        window_id,
+    )
+    # Active session: route via kb-mode on the live card. Falls
+    # back to the floating-msg path only when there's no Session
+    # record (orphan window — no card to host kb-mode).
+    if sess is not None and not is_bg_session:
+        from .notifications import enter_kb_mode
 
-            content_obj = extract_interactive_content(pane_text)
-            if content_obj is not None:
-                await enter_kb_mode(
-                    bot, user_id, sess, content_obj.content, content_obj.name
-                )
-                return
-        await handle_interactive_ui(bot, user_id, window_id)
-        return
+        content_obj = extract_interactive_content(pane_text)
+        if content_obj is not None:
+            await enter_kb_mode(
+                bot, user_id, sess, content_obj.content, content_obj.name
+            )
+            return True
+    await handle_interactive_ui(bot, user_id, window_id)
+    return True
 
+
+async def _reconcile_no_ui_state(
+    bot: Bot,
+    user_id: int,
+    pane_text: str,
+    sess: "Session | None",
+    is_bg_session: bool,
+) -> None:
+    """Reconcile card / bg-status when no interactive UI is on the pane.
+
+    Clears a stale bg-session ❓ stash and flips the active card out of a
+    dismissed slash-command kb-mode picker.
+    """
     # No interactive UI on this pane right now. If we previously stashed
     # one for a bg session (e.g. claude dismissed the prompt without our
     # input), clear it so the ❓ badge doesn't lie.
@@ -256,6 +257,17 @@ async def update_status_message(
         if has_prompt or in_kb:
             await exit_kb_mode(bot, user_id, sess, clear_pending=True)
 
+
+async def _drive_typing_indicator(
+    bot: Bot,
+    user_id: int,
+    window_id: str,
+    pane_text: str,
+    sess: "Session | None",
+    is_bg_session: bool,
+) -> None:
+    """Compute busy signals, run the stalled-session rescue, and fire
+    the Telegram ``typing…`` chat-action for the active session."""
     # Telegram chat-action "typing…" — fired every poll cycle for the
     # active session while it's busy. Two signals combine:
     #
@@ -337,6 +349,69 @@ async def update_status_message(
             )
         except Exception as e:
             logger.debug("send_chat_action TYPING failed: %s", e)
+
+
+async def update_status_message(
+    bot: Bot,
+    user_id: int,
+    window_id: str,
+) -> None:
+    """Poll terminal: detect interactive UIs and drive the typing indicator.
+
+    There is no separate "status message" anymore — the live session card
+    carries its own header. The pane spinner ("…Esc to interrupt") is no
+    longer shown in chat; it drives ``send_chat_action(TYPING)`` instead.
+    """
+    w = await tmux_manager.find_window_by_id(window_id)
+    if not w:
+        return
+
+    pane_text = await tmux_manager.capture_pane(w.window_id)
+    if not pane_text:
+        return
+
+    interactive_window = get_interactive_window(user_id)
+    should_check_new_ui = await _resolve_existing_interactive(
+        bot, user_id, window_id, pane_text, interactive_window
+    )
+    if should_check_new_ui is None:
+        return
+
+    sess = session_manager.find_session_by_window(window_id)
+    active = session_manager.get_active_session(user_id)
+    # Treat orphan windows (no session record) as "active-like": there's
+    # no bg-status row to flip, so falling through to the legacy handler
+    # is the safer default. Only suppress when we know this is a
+    # background-session window for a different active session.
+    is_bg_session = sess is not None and active is not None and active.id != sess.id
+
+    # Check for permission prompt (interactive UI not triggered via JSONL).
+    #
+    # ``should_check_new_ui`` is False only when an earlier branch above
+    # confirmed the user is currently engaged with THIS window's UI —
+    # in that case we already returned. From here on we're looking at a
+    # fresh prompt that polling, not the JSONL path, surfaced.
+    #
+    # The auto-approve check used to be gated on ``interactive_window is
+    # None`` — a stale entry from any prior tool surfacing (or worse, a
+    # stuck one that the cleanup path missed) would block auto-approve
+    # for EVERY other window. ``auto_approve=on`` is an explicit opt-in;
+    # respect it on every window, regardless of which prompt may also
+    # be (or have been) pending elsewhere. The TG-surface step
+    # (``handle_interactive_ui``) is the only place where stacking two
+    # interactive screens is genuinely confusing, so the
+    # ``interactive_window is None`` guard stays — but only there.
+    if should_check_new_ui and is_interactive_ui(pane_text):
+        if await _surface_new_interactive_ui(
+            bot, user_id, window_id, pane_text, sess, is_bg_session, interactive_window
+        ):
+            return
+
+    await _reconcile_no_ui_state(bot, user_id, pane_text, sess, is_bg_session)
+
+    await _drive_typing_indicator(
+        bot, user_id, window_id, pane_text, sess, is_bg_session
+    )
 
 
 async def status_poll_loop(bot: Bot) -> None:

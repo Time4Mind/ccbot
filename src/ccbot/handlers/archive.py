@@ -320,6 +320,12 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
     if not success:
         return False, message
 
+    # A near-limit transcript auto-compacts on resume (60-110s) before it
+    # accepts input. Flag the window so the first message waits the pane out
+    # instead of getting typed into a busy pane and dropped.
+    if sess.claude_session_id:
+        session_manager.mark_window_resuming(created_wid)
+
     hook_ok = await session_manager.wait_for_session_map_entry(
         created_wid, timeout=15.0
     )
@@ -340,7 +346,10 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
         from ..local_terminal import open_terminal_for_window
 
         await open_terminal_for_window(created_wid, user_id=user_id)
-    return True, f"Restored {sess.name or sess.id} ({created_wname})"
+    note = ""
+    if sess.claude_session_id:
+        note = " — if it was a large session it may compact for a minute; your first message is held until it's ready."
+    return True, f"Restored {sess.name or sess.id} ({created_wname}){note}"
 
 
 async def idle_archive_sweep(bot: Bot, user_id: int) -> int:

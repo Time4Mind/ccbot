@@ -6,8 +6,11 @@ those tests live in `doc/legacy/topic-architecture.md` for reference
 only.
 """
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
+from ccbot.config import config
 from ccbot.session import SessionManager, key_matches_window
 
 
@@ -131,3 +134,86 @@ class TestActiveSessions:
         assert mgr.get_active_window(100) == "@1"
         mgr.clear_active_session(100)
         assert mgr.get_active_session(100) is None
+
+
+# A pane mid-compaction: spinner line above the input chrome separator.
+_BUSY_PANE = "✻ Compacting conversation…\n" + "─" * 26 + "\n❯\n" + "─" * 26
+# A settled pane: input chrome only, no spinner line.
+_IDLE_PANE = "─" * 26 + "\n❯\n" + "─" * 26
+
+
+class TestResumeSettleGate:
+    """``send_to_window`` holds the first message to a freshly-resumed
+    window until the pane stops compacting — typing mid-compaction drops
+    the prompt (the reported "instruction not executed after restore" bug).
+    """
+
+    @pytest.fixture
+    def fast_gate(self, monkeypatch) -> None:
+        """Shrink the settle timings so the test runs in ms."""
+        monkeypatch.setattr("ccbot.session._RESUME_SETTLE_BUSY_GRACE", 0.1)
+        monkeypatch.setattr("ccbot.session._RESUME_SETTLE_IDLE_STABLE", 0.05)
+        monkeypatch.setattr("ccbot.session._RESUME_SETTLE_POLL", 0.02)
+        monkeypatch.setattr(config, "resume_settle_timeout", 5.0)
+
+    def _mock_tmux(self, monkeypatch, capture_side_effect) -> MagicMock:
+        mock_tmux = MagicMock()
+        mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock(window_id="@1"))
+        mock_tmux.capture_pane = AsyncMock(side_effect=capture_side_effect)
+        mock_tmux.send_keys = AsyncMock(return_value=True)
+        monkeypatch.setattr("ccbot.session.tmux_manager", mock_tmux)
+        return mock_tmux
+
+    @pytest.mark.asyncio
+    async def test_holds_until_compaction_ends(
+        self, mgr: SessionManager, monkeypatch, fast_gate
+    ) -> None:
+        calls = {"n": 0}
+
+        def cap(_wid):
+            calls["n"] += 1
+            return _BUSY_PANE if calls["n"] <= 2 else _IDLE_PANE
+
+        mock_tmux = self._mock_tmux(monkeypatch, cap)
+        mgr.mark_window_resuming("@1")
+
+        ok, _ = await mgr.send_to_window("@1", "do the thing")
+
+        assert ok is True
+        # Sent only after the pane went (and stayed) idle.
+        mock_tmux.send_keys.assert_awaited_once()
+        assert calls["n"] >= 3  # saw busy at least twice, then idle
+        assert "@1" not in mgr._resuming_windows  # gate cleared
+
+    @pytest.mark.asyncio
+    async def test_small_session_sends_after_grace(
+        self, mgr: SessionManager, monkeypatch, fast_gate
+    ) -> None:
+        """Never-busy pane → no compaction → send after the busy grace."""
+        mock_tmux = self._mock_tmux(monkeypatch, lambda _w: _IDLE_PANE)
+        mgr.mark_window_resuming("@1")
+
+        ok, _ = await mgr.send_to_window("@1", "hi")
+
+        assert ok is True
+        mock_tmux.send_keys.assert_awaited_once()
+        assert mock_tmux.capture_pane.await_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_non_resuming_window_sends_immediately(
+        self, mgr: SessionManager, monkeypatch, fast_gate
+    ) -> None:
+        """A window that wasn't ``--resume``d skips the settle gate."""
+        mock_tmux = self._mock_tmux(monkeypatch, lambda _w: _IDLE_PANE)
+        # Not marked resuming.
+        ok, _ = await mgr.send_to_window("@1", "hi")
+
+        assert ok is True
+        mock_tmux.send_keys.assert_awaited_once()
+        mock_tmux.capture_pane.assert_not_called()
+
+    def test_mark_noop_when_disabled(self, mgr: SessionManager, monkeypatch) -> None:
+        """resume_settle_timeout=0 disables the gate — nothing is flagged."""
+        monkeypatch.setattr(config, "resume_settle_timeout", 0.0)
+        mgr.mark_window_resuming("@9")
+        assert "@9" not in mgr._resuming_windows

@@ -105,6 +105,15 @@ class Config:
 
         self.monitor_poll_interval = float(os.getenv("MONITOR_POLL_INTERVAL", "2.0"))
 
+        # Upper bound (seconds) for holding the first message to a freshly
+        # `--resume`d window while it auto-compacts. Near-limit transcripts
+        # compact for 60-110s on resume; typing into the pane mid-compaction
+        # drops the prompt, so the send waits for the pane to settle. On
+        # timeout we send anyway (best-effort). 0 disables the gate.
+        self.resume_settle_timeout = float(
+            os.getenv("CCBOT_RESUME_SETTLE_TIMEOUT", "200")
+        )
+
         # Display user messages in history and real-time notifications
         # When True, user messages are shown with a 👤 prefix
         self.show_user_messages = (

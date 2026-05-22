@@ -89,6 +89,17 @@ UI_PATTERNS: list[UIPattern] = [
         min_gap=2,
     ),
     UIPattern(
+        # Tall AskUserQuestion whose ☐ header scrolled off the visible
+        # pane. Triggered by the cursor line ``❯ N.`` plus the
+        # "Enter to select" footer — both stay visible because they
+        # frame the option list. Placed AFTER PermissionPrompt-numbered
+        # so a Yes/No prompt still classifies as a permission.
+        name="AskUserQuestion",
+        top=(re.compile(r"^\s*❯\s*\d+\.\s+\S"),),
+        bottom=(re.compile(r"^\s*Enter to select"),),
+        min_gap=1,
+    ),
+    UIPattern(
         # Bash command approval
         name="BashApproval",
         top=(

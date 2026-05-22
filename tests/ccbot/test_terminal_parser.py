@@ -113,6 +113,37 @@ class TestExtractInteractiveContent:
         assert result.name == "AskUserQuestion"
         assert "Enter to select" in result.content
 
+    def test_ask_user_header_scrolled_off(self):
+        # A tall AskUserQuestion whose ☐ header has scrolled off the
+        # visible pane — only the cursor + numbered options + footer
+        # remain. Must still classify as AskUserQuestion so the
+        # background-session keyboard surfaces on switcher tap.
+        pane = (
+            "❯ 1. First option\n"
+            "     Long description that wraps a few lines.\n"
+            "  2. Second option\n"
+            "     Another long description.\n"
+            "  3. Type something.\n"
+            "─────\n"
+            "  4. Chat about this\n"
+            "\n"
+            "Enter to select · ↑/↓ to navigate · Esc to cancel\n"
+        )
+        result = extract_interactive_content(pane)
+        assert result is not None
+        assert result.name == "AskUserQuestion"
+        assert "❯ 1. First option" in result.content
+        assert "Enter to select" in result.content
+
+    def test_permission_numbered_yes_not_classified_as_ask_user(self):
+        # The numbered "❯ 1. Yes" permission prompt has the same cursor
+        # signature as AskUserQuestion. PermissionPrompt must still win
+        # so the prompt routes to the permission flow.
+        pane = "❯ 1. Yes\n  2. No\n  3. Yes, and don't ask again\n"
+        result = extract_interactive_content(pane)
+        assert result is not None
+        assert result.name == "PermissionPrompt"
+
     def test_permission_prompt(self, sample_pane_permission: str):
         result = extract_interactive_content(sample_pane_permission)
         assert result is not None

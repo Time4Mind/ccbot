@@ -34,6 +34,7 @@ import aiofiles
 
 from .config import config
 from .session_models import ClaudeSession, Session, SessionState, WindowState
+from .terminal_parser import parse_status_line
 from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
 from .utils import atomic_write_json
@@ -49,6 +50,11 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+# Resume-settle gate tuning (see SessionManager._wait_for_resume_settle).
+_RESUME_SETTLE_BUSY_GRACE = 6.0  # s to wait for a compaction spinner to appear
+_RESUME_SETTLE_IDLE_STABLE = 4.0  # s the pane must stay idle to count as settled
+_RESUME_SETTLE_POLL = 1.5  # s between pane captures
 
 
 def key_matches_window(key: str, window_id: str) -> bool:
@@ -113,6 +119,12 @@ class SessionManager:
     # Cached short summaries for ClaudeSession picker. Key = claude session id.
     # Value = {"summary": str, "mtime": float, "ts": float}.
     summary_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Window ids that were just `claude --resume`d and may still be
+    # auto-compacting. The first ``send_to_window`` to such a window waits
+    # for the pane to settle before typing (see ``_wait_for_resume_settle``).
+    # In-memory only — never persisted; a restart means compaction has long
+    # finished anyway. Discarded on the first settled send.
+    _resuming_windows: set[str] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         self._load_state()
@@ -910,6 +922,57 @@ class SessionManager:
 
     # --- Tmux helpers ---
 
+    def mark_window_resuming(self, window_id: str) -> None:
+        """Flag a window as freshly ``--resume``d so its first send waits out
+        any auto-compaction (see ``_wait_for_resume_settle``)."""
+        if config.resume_settle_timeout > 0:
+            self._resuming_windows.add(window_id)
+
+    async def _wait_for_resume_settle(self, window_id: str) -> bool:
+        """Block until a just-resumed window is safe to type into.
+
+        A ``claude --resume`` of a near-limit transcript auto-compacts before
+        it accepts input — 60-110s on ~1M-token sessions. Typing a prompt
+        into the pane mid-compaction silently drops it, so the first send
+        holds here. Two ways to declare "settled":
+
+          * the pane showed a busy spinner (load / compaction) and it has
+            now been gone for ``_RESUME_SETTLE_IDLE_STABLE`` seconds, or
+          * no busy spinner appeared within ``_RESUME_SETTLE_BUSY_GRACE``
+            seconds (small session — nothing to compact).
+
+        Returns True when settled, False on timeout (caller sends anyway —
+        best-effort, never worse than the old blind send).
+        """
+        loop = asyncio.get_event_loop()
+        started = loop.time()
+        deadline = started + config.resume_settle_timeout
+        saw_busy = False
+        idle_since: float | None = None
+        while loop.time() < deadline:
+            pane = await tmux_manager.capture_pane(window_id)
+            now = loop.time()
+            busy = bool(pane) and parse_status_line(pane) is not None
+            if busy:
+                saw_busy = True
+                idle_since = None
+            else:
+                if idle_since is None:
+                    idle_since = now
+                if saw_busy and (now - idle_since) >= _RESUME_SETTLE_IDLE_STABLE:
+                    return True
+                if not saw_busy and (now - started) >= _RESUME_SETTLE_BUSY_GRACE:
+                    return True
+            await asyncio.sleep(_RESUME_SETTLE_POLL)
+        logger.warning(
+            "resume-settle timed out for window %s after %.0fs (saw_busy=%s) — "
+            "sending anyway",
+            window_id,
+            config.resume_settle_timeout,
+            saw_busy,
+        )
+        return False
+
     async def send_to_window(self, window_id: str, text: str) -> tuple[bool, str]:
         """Send text to a tmux window by ID."""
         display = self.get_display_name(window_id)
@@ -922,6 +985,16 @@ class SessionManager:
         window = await tmux_manager.find_window_by_id(window_id)
         if not window:
             return False, "Window not found (may have been closed)"
+        # A freshly-resumed window may still be auto-compacting; hold the
+        # first send until the pane settles so the prompt isn't dropped.
+        if window_id in self._resuming_windows:
+            settled = await self._wait_for_resume_settle(window_id)
+            self._resuming_windows.discard(window_id)
+            logger.info(
+                "resume-settle gate cleared for window %s (settled=%s)",
+                window_id,
+                settled,
+            )
         success = await tmux_manager.send_keys(window.window_id, text)
         if success:
             return True, f"Sent to {display}"

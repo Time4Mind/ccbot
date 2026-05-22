@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from telegram.ext import ContextTypes
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from ... import voice_install
 from ...handlers.callback_data import (
@@ -31,6 +31,7 @@ from ...handlers.callback_data import (
     CB_ST_WDAY,
 )
 from ...handlers.menu import (
+    Screen,
     build_footer_keyboard,
     render_more_text,
     render_settings_group_text,
@@ -75,7 +76,7 @@ in the bot to verify a window pops up.
 If something needs my input, use AskUserQuestion."""
 
 
-async def _send_linux_claude_prompt(query: Any, user_id: int) -> None:
+async def _send_linux_claude_prompt(query: CallbackQuery, user_id: int) -> None:
     """Push a ready-to-paste prompt for the user to feed into a Claude session."""
     try:
         await safe_send(query.get_bot(), user_id, _CLAUDE_LINUX_PROMPT)
@@ -127,7 +128,9 @@ def _voice_install_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-async def _maybe_offer_voice_install(query: Any, user_id: int, value: str) -> None:
+async def _maybe_offer_voice_install(
+    query: CallbackQuery, user_id: int, value: str
+) -> None:
     """Pop the OK/Cancel install prompt when the chosen backend will use
     whisper.cpp and the binary or model is missing on this host. No-op
     otherwise."""
@@ -152,7 +155,7 @@ async def _maybe_offer_voice_install(query: Any, user_id: int, value: str) -> No
 _install_inflight: set[int] = set()
 
 
-async def _run_voice_install(query: Any, user_id: int) -> None:
+async def _run_voice_install(query: CallbackQuery, user_id: int) -> None:
     """Drive the install steps, streaming progress as new chat messages."""
     if user_id in _install_inflight:
         try:
@@ -195,7 +198,7 @@ async def _run_voice_install(query: Any, user_id: int) -> None:
         _install_inflight.discard(user_id)
 
 
-_GROUP_TO_SCREEN = {
+_GROUP_TO_SCREEN: dict[str, Screen] = {
     "language": "settings_language",
     "previews": "settings_previews",
     "live_lag": "settings_lag",
@@ -209,7 +212,9 @@ _GROUP_TO_SCREEN = {
 }
 
 
-async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> bool:
+async def handle(
+    query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
+) -> bool:
     data = query.data or ""
 
     if data == CB_ST_BACK:
@@ -223,12 +228,12 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
 
     if data.startswith(CB_ST_GRP):
         group = data[len(CB_ST_GRP) :]
-        screen_name = _GROUP_TO_SCREEN.get(group)
-        if not screen_name:
+        grp_screen = _GROUP_TO_SCREEN.get(group)
+        if not grp_screen:
             await query.answer("Unknown group")
             return True
-        text = render_settings_group_text(user.id, screen_name)  # type: ignore[arg-type]
-        keyboard = build_footer_keyboard(user.id, screen=screen_name)  # type: ignore[arg-type]
+        text = render_settings_group_text(user.id, grp_screen)
+        keyboard = build_footer_keyboard(user.id, screen=grp_screen)
         await safe_edit(query, text, reply_markup=keyboard)
         if query.message and keyboard is not None:
             session_manager.set_last_switcher_msg(user.id, query.message.message_id)
@@ -236,12 +241,12 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         return True
 
     if data.startswith(CB_ST_CAT):
-        screen_name = data[len(CB_ST_CAT) :]
-        if screen_name == "settings":
+        cat_screen = cast(Screen, data[len(CB_ST_CAT) :])
+        if cat_screen == "settings":
             text = render_settings_text(user.id)
         else:
-            text = render_settings_group_text(user.id, screen_name)  # type: ignore[arg-type]
-        keyboard = build_footer_keyboard(user.id, screen=screen_name)  # type: ignore[arg-type]
+            text = render_settings_group_text(user.id, cat_screen)
+        keyboard = build_footer_keyboard(user.id, screen=cat_screen)
         await safe_edit(query, text, reply_markup=keyboard)
         if query.message and keyboard is not None:
             session_manager.set_last_switcher_msg(user.id, query.message.message_id)
@@ -293,7 +298,7 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
     if not any(data.startswith(p) for p in setter_prefixes):
         return False
 
-    screen_name = "settings"
+    screen_name: Screen = "settings"
     if data.startswith(CB_ST_PREV):
         value = data[len(CB_ST_PREV) :]
         if value in ("economical", "readable"):
@@ -393,10 +398,10 @@ async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> b
         ) and sval in ("on", "off"):
             session_manager.update_user_setting(user.id, key, sval == "on")
         short = key.removeprefix("bg_notify_")
-        screen_name = f"settings_bg_notify_{short}"
+        screen_name = cast(Screen, f"settings_bg_notify_{short}")
 
-    text = render_settings_group_text(user.id, screen_name)  # type: ignore[arg-type]
-    keyboard = build_footer_keyboard(user.id, screen=screen_name)  # type: ignore[arg-type]
+    text = render_settings_group_text(user.id, screen_name)
+    keyboard = build_footer_keyboard(user.id, screen=screen_name)
     await safe_edit(query, text, reply_markup=keyboard)
     await query.answer(t(user.id, "toast.saved"))
     return True

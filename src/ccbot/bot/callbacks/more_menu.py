@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from ...handlers.archive import DEFAULT_LOOKBACK_SECONDS, build_archive_page
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _emit_new_flow(
-    query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any
+    query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
 ) -> None:
     """Open the directory browser from the Menu screen."""
     from ...handlers.directory_browser import (
@@ -75,7 +75,9 @@ async def _emit_new_flow(
         await safe_send(context.bot, user.id, msg_text, reply_markup=keyboard)
 
 
-async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> bool:
+async def handle(
+    query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
+) -> bool:
     data = query.data or ""
 
     if data == CB_MM_BACK:

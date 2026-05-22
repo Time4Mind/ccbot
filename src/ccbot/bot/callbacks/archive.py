@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from ...config import config
@@ -71,7 +71,9 @@ def _lookback(show_all: bool) -> float:
     return config.archive_purge_after if show_all else DEFAULT_LOOKBACK_SECONDS
 
 
-async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> bool:
+async def handle(
+    query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
+) -> bool:
     data = query.data or ""
 
     if data.startswith(CB_ARC_PAGE):

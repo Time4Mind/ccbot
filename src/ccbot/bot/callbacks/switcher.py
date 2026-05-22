@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from telegram import CallbackQuery
 from telegram.ext import ContextTypes
 
 from ...handlers import bg_status
@@ -37,7 +38,9 @@ from .._common import render_session_preview
 logger = logging.getLogger(__name__)
 
 
-async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> bool:
+async def handle(
+    query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
+) -> bool:
     data = query.data or ""
 
     if data == CB_SW_NOOP:

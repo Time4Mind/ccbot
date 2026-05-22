@@ -124,5 +124,5 @@ class TestEnsureSeededIdempotent:
         await _ensure_seeded(1, sess, state)
         await _ensure_seeded(1, sess, state)
         # Even with three calls, the path resolver fires exactly once —
-        # guarded by ``state._seed_attempted``.
+        # guarded by ``state.seed_attempted``.
         assert called["path"] == 1

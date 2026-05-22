@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from telegram import CallbackQuery
 from telegram.ext import ContextTypes
 
 from ...handlers.callback_data import CB_HLP_HOME, CB_HLP_SEC
@@ -21,7 +22,9 @@ from ..commands.info import HELP_SECTIONS, render_help
 logger = logging.getLogger(__name__)
 
 
-async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> bool:
+async def handle(
+    query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
+) -> bool:
     del context  # callback uses no per-user state
     data = query.data or ""
 

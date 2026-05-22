@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from telegram import CallbackQuery
 from telegram.ext import ContextTypes
 
 from ...handlers.callback_data import (
@@ -29,7 +30,9 @@ from ..commands.lifecycle import archive_session
 logger = logging.getLogger(__name__)
 
 
-async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> bool:
+async def handle(
+    query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
+) -> bool:
     data = query.data or ""
 
     if data.startswith(CB_CONF_KILL_YES):

@@ -11,6 +11,7 @@ import asyncio
 import logging
 from typing import Any
 
+from telegram import CallbackQuery
 from telegram.ext import ContextTypes
 
 from ...handlers.callback_data import (
@@ -47,7 +48,9 @@ _NAV = (
 )
 
 
-async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> bool:
+async def handle(
+    query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
+) -> bool:
     data = query.data or ""
 
     for prefix, tmux_key, toast in _NAV:

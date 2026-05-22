@@ -258,7 +258,7 @@ class SessionManager:
         self.save_state()
         logger.info("Updated display name: window_id %s -> '%s'", window_id, new_name)
 
-    # --- Group chat ID management (supergroup forum topic routing) ---
+    # --- session_map.json polling (hook-written window_id -> session) ---
 
     async def wait_for_session_map_entry(
         self, window_id: str, timeout: float = 5.0, interval: float = 0.5
@@ -882,7 +882,7 @@ class SessionManager:
             del self.last_switcher_msg_id[user_id]
             self.save_state()
 
-    # --- Legacy thread binding management (used during migration; removed in Phase 1) ---
+    # --- Reverse map: claude_session_id -> user(s) via active_sessions ---
 
     async def find_users_for_claude_session(
         self,

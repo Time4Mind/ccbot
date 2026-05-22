@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from telegram import CallbackQuery
 from telegram.ext import ContextTypes
 
 from ...handlers.callback_data import (
@@ -92,7 +93,7 @@ async def _resolve_session_summaries(
 
 
 async def emit_session_picker(
-    query: Any,
+    query: CallbackQuery,
     context: ContextTypes.DEFAULT_TYPE,
     sessions: list[Any],
     *,
@@ -114,7 +115,7 @@ async def emit_session_picker(
 
 
 async def _close_modal(
-    query: Any, user_id: int, context: ContextTypes.DEFAULT_TYPE
+    query: CallbackQuery, user_id: int, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Bail out of any modal flow → always Menu."""
     if context.user_data is not None:
@@ -122,7 +123,9 @@ async def _close_modal(
     await open_more_in_place(query, user_id)
 
 
-async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> bool:
+async def handle(
+    query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
+) -> bool:
     data = query.data or ""
 
     if data.startswith(CB_DIR_SELECT):

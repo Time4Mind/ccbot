@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from telegram import CallbackQuery
 from telegram.ext import ContextTypes
 
 from ...handlers.callback_data import CB_HISTORY_NEXT, CB_HISTORY_PREV
@@ -36,7 +37,9 @@ def _build_extra_rows(user_id: int) -> list[list[Any]] | None:
     return [list(r) for r in kb.inline_keyboard]
 
 
-async def handle(query: Any, context: ContextTypes.DEFAULT_TYPE, user: Any) -> bool:
+async def handle(
+    query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
+) -> bool:
     data = query.data or ""
     if not (data.startswith(CB_HISTORY_PREV) or data.startswith(CB_HISTORY_NEXT)):
         return False

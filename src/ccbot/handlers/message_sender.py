@@ -226,7 +226,6 @@ async def safe_send(
     bot: Bot,
     chat_id: int,
     text: str,
-    message_thread_id: int | None = None,
     **kwargs: Any,
 ) -> Message | None:
     """Send message with formatting, falling back to plain text on failure.
@@ -234,8 +233,6 @@ async def safe_send(
     Returns the sent Message on success, None on failure.
     """
     kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)
-    if message_thread_id is not None:
-        kwargs.setdefault("message_thread_id", message_thread_id)
     try:
         return await bot.send_message(
             chat_id=chat_id,

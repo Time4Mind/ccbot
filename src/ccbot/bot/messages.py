@@ -21,6 +21,7 @@ from typing import Any
 
 from telegram import Bot, Update
 from telegram.constants import ChatAction
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from ..config import config
@@ -68,6 +69,27 @@ from ..utils import ccbot_dir
 from ._common import active_window, is_user_allowed
 
 logger = logging.getLogger(__name__)
+
+
+# Telegram's Bot API caps file *downloads* (getFile) at 20 MB. A larger
+# upload surfaces here as BadRequest("file is too big") on .get_file();
+# turn that into actionable copy instead of a silent ERROR in the logs.
+_FILE_TOO_BIG_MSG = (
+    "❌ Telegram won't let me download this file — it's over 20 MB.\n\n"
+    "This is a Telegram **Bot API** limit (bots can only fetch files up to "
+    "20 MB via getFile), not a ccbot setting. Ways around it:\n"
+    "• gzip or split the file under 20 MB and resend\n"
+    "• drop it straight into the session's `.ccbot-inbox/` folder — no "
+    "Telegram round-trip, no limit\n"
+    "• bypass with your own Telegram **user session** (MTProto / user-api, "
+    "e.g. Telethon or Pyrogram): a user account downloads up to 2 GB (4 GB "
+    "with Premium). That needs a user-api fetch path wired into ccbot."
+)
+
+
+def _is_file_too_big(err: BadRequest) -> bool:
+    """True when a getFile call hit Telegram's 20 MB Bot-API download cap."""
+    return "too big" in str(err).lower()
 
 
 class _RepostHandle:
@@ -478,7 +500,13 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     workdir = sess.workdir if sess and sess.workdir else str(ccbot_dir() / "images")
 
     photo = update.message.photo[-1]
-    tg_file = await photo.get_file()
+    try:
+        tg_file = await photo.get_file()
+    except BadRequest as e:
+        if _is_file_too_big(e):
+            await safe_reply(update.message, _FILE_TOO_BIG_MSG)
+            return
+        raise
     filename = f"{photo.file_unique_id}.jpg"
 
     async def _fetch(target: Path) -> None:
@@ -534,7 +562,13 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     sess = session_manager.find_session_by_window(wid)
     workdir = sess.workdir if sess and sess.workdir else str(ccbot_dir() / "images")
     filename = doc.file_name or f"{doc.file_unique_id}.bin"
-    tg_file = await doc.get_file()
+    try:
+        tg_file = await doc.get_file()
+    except BadRequest as e:
+        if _is_file_too_big(e):
+            await safe_reply(update.message, _FILE_TOO_BIG_MSG)
+            return
+        raise
 
     async def _fetch(target: Path) -> None:
         await tg_file.download_to_drive(target)

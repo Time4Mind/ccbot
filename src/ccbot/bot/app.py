@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import time
 from typing import Any
 
 from telegram import BotCommand, Update
-from telegram.error import NetworkError, RetryAfter, TimedOut
+from telegram.error import Conflict, NetworkError, RetryAfter, TimedOut
 from telegram.ext import (
     AIORateLimiter,
     Application,
@@ -60,8 +62,31 @@ from .session_events import handle_new_message
 logger = logging.getLogger(__name__)
 
 
+# Sustained ``Conflict`` ⇒ a second poller owns this token's getUpdates.
+# Telegram's getUpdates is exclusive per token, so retrying can never
+# recover — the only fix is for one instance to exit so the singleton
+# flock + supervisor converge on exactly one live bot. A SINGLE transient
+# Conflict (brief overlap during a normal restart) is tolerated. We act
+# once EITHER threshold trips: ``CONFLICT_MAX_STREAK`` consecutive
+# Conflicts, OR Conflicts persisting longer than ``CONFLICT_MAX_SECONDS``.
+CONFLICT_MAX_STREAK = 3
+CONFLICT_MAX_SECONDS = 15.0
+
+# State for the sustained-Conflict detector, reset by any non-Conflict cycle.
+_conflict_streak = 0
+_conflict_first_seen: float | None = None
+
+# Debounce identical consecutive transient-network log lines (A2c) — VPN
+# drops produce the same line every 1-5 s; the bot self-recovers, so the
+# repetition is pure noise.
+_last_network_err_text: str | None = None
+
+
 # Module-globals owned by the lifecycle hooks.
 session_monitor: SessionMonitor | None = None
+# Set in ``post_init`` so ``_error_handler`` can reach the Application even
+# when ``update`` is not an Update (Conflict updates carry no chat).
+_conflict_app: "Application[Any, Any, Any, Any, Any, Any] | None" = None
 _status_poll_task: asyncio.Task[None] | None = None
 _card_timer_task: asyncio.Task[None] | None = None
 _quota_alerts_task: asyncio.Task[None] | None = None
@@ -77,7 +102,12 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
         _card_timer_task, \
         _quota_alerts_task, \
         _context_poll_task, \
-        _metrics_flush_task
+        _metrics_flush_task, \
+        _conflict_app
+
+    # Reachable from ``_error_handler`` for the sustained-Conflict exit
+    # path (Conflict updates carry no chat, so ``update`` is not an Update).
+    _conflict_app = application
 
     # Cache bot username so ``tmux_manager.create_window`` can surface it
     # to Claude via ``CCBOT_BOT_USERNAME``. ``application.bot.username``
@@ -342,6 +372,24 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     return application
 
 
+def _terminate_for_sustained_conflict() -> None:
+    """End this process so the supervisor restarts one clean instance.
+
+    ``stop_running()`` is PTB's documented in-handler stop signal; it
+    unwinds ``run_polling`` cleanly (post_shutdown fires). ``os._exit(1)``
+    is the hard fallback so a half-stuck event loop can't leave the
+    process alive-but-deaf — a non-zero code makes the supervisor treat
+    it as a crash and respawn. Split out so tests can patch it.
+    """
+    app = _conflict_app
+    if app is not None:
+        try:
+            app.stop_running()
+        except Exception as e:
+            logger.error("stop_running() failed during conflict exit: %s", e)
+    os._exit(1)
+
+
 async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """PTB error handler — make exceptions visible AND actionable.
 
@@ -350,6 +398,11 @@ async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> 
     — making it hard to tell which user / message triggered the bug.
 
     Behaviour:
+    * ``Conflict`` means a second poller owns this token's exclusive
+      getUpdates. A single transient one (restart overlap) is tolerated;
+      a SUSTAINED storm (see ``CONFLICT_MAX_*``) is unrecoverable by
+      retry, so we log CRITICAL and exit non-zero to let the singleton
+      flock + supervisor converge on exactly one live bot.
     * Transient network errors (``NetworkError`` / ``TimedOut``) come
       from long-poll connection drops on flaky upstreams. The supervisor
       already loops on these and the AIORateLimiter retries Bot API
@@ -359,10 +412,43 @@ async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> 
     * Everything else is a real bug. Log at ERROR with the full
       traceback AND whatever update / chat context we can extract.
     """
+    global _conflict_streak, _conflict_first_seen, _last_network_err_text
+
     err = context.error
-    if isinstance(err, (NetworkError, TimedOut)):
-        logger.info("transient network error: %s", err)
+    if isinstance(err, Conflict):
+        now = time.monotonic()
+        if _conflict_first_seen is None:
+            _conflict_first_seen = now
+        _conflict_streak += 1
+        elapsed = now - _conflict_first_seen
+        logger.warning(
+            "Telegram Conflict (streak=%d, %.1fs): %s",
+            _conflict_streak,
+            elapsed,
+            err,
+        )
+        if _conflict_streak >= CONFLICT_MAX_STREAK or elapsed >= CONFLICT_MAX_SECONDS:
+            logger.critical(
+                "Sustained getUpdates Conflict (streak=%d, %.1fs) — a second "
+                "poller owns this token. Exiting so the supervisor restarts a "
+                "single clean instance.",
+                _conflict_streak,
+                elapsed,
+            )
+            _terminate_for_sustained_conflict()
         return
+    # Any non-Conflict cycle clears the streak: a lone Conflict during a
+    # normal restart overlap won't accumulate toward the threshold.
+    _conflict_streak = 0
+    _conflict_first_seen = None
+
+    if isinstance(err, (NetworkError, TimedOut)):
+        text = f"transient network error: {err}"
+        if text != _last_network_err_text:
+            logger.info("%s", text)
+            _last_network_err_text = text
+        return
+    _last_network_err_text = None
     if isinstance(err, RetryAfter):
         logger.info("Telegram RetryAfter: %s", err)
         return

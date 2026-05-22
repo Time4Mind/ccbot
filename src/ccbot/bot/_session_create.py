@@ -74,14 +74,21 @@ async def create_and_activate_session(
         user.id,
         resume_session_id,
     )
-    hook_timeout = 15.0 if resume_session_id else 5.0
-    hook_ok = await session_manager.wait_for_session_map_entry(
-        created_wid, timeout=hook_timeout
-    )
-
-    # `claude --resume` records a new session_id in the hook, but messages still
-    # write to the resumed JSONL. Override window_state to track the original.
+    # `claude --resume` records a new session_id in the hook, but messages
+    # still write to the resumed JSONL. The card seeds from that existing
+    # transcript, so for a resume we must resolve the canonical session_id
+    # BEFORE painting — wait for the hook (or fall back to the known resume
+    # id on timeout), then override window_state to track it.
+    #
+    # A fresh session has nothing to seed, so this pre-paint wait is
+    # skipped entirely (see below): the empty card goes up the instant the
+    # window exists instead of blocking on claude's 2-5s boot + the
+    # SessionStart hook. The hook is confirmed (and the fresh session_id
+    # bound) after the paint, before any pending text is forwarded.
     if resume_session_id:
+        hook_ok = await session_manager.wait_for_session_map_entry(
+            created_wid, timeout=15.0
+        )
         ws = session_manager.get_window_state(created_wid)
         if not hook_ok:
             logger.warning(
@@ -137,6 +144,17 @@ async def create_and_activate_session(
             # Fallback: a minimal notice so the user isn't staring at
             # the stale dir-browser body when paint fails.
             await safe_edit(query, f"✅ {message}")
+
+    # Fresh session: claude is still booting, so the hook hasn't written
+    # the session_id yet. Confirm it now (card already on screen) and bind
+    # it onto the Session record so the monitor + history follow the right
+    # transcript and notifications reverse-map to this user — all before
+    # any pending text is forwarded below.
+    if not resume_session_id:
+        await session_manager.wait_for_session_map_entry(created_wid, timeout=5.0)
+        ws = session_manager.get_window_state(created_wid)
+        if ws.session_id and not sess.claude_session_id:
+            session_manager.set_session_claude_id(sess.id, ws.session_id)
 
     # Forward any pending text held while the picker was up.
     pending_text = context.user_data.get("_pending_text") if context.user_data else None

@@ -42,6 +42,13 @@ class UIPattern:
     top: tuple[re.Pattern[str], ...]
     bottom: tuple[re.Pattern[str], ...]
     min_gap: int = 2  # minimum lines between top and bottom (inclusive)
+    # ``exclude`` is a negative guard: if ANY of these patterns matches ANY
+    # line in the captured pane, this UIPattern is skipped even when its
+    # top/bottom delimiters line up.  Used to keep a deliberately greedy,
+    # bottom-less ``❯ N.`` cursor pattern from stealing matches from other
+    # numbered-select UIs (Permission / ResumeSummary / Settings) that share
+    # the same cursor signature but carry their own header / footer phrases.
+    exclude: tuple[re.Pattern[str], ...] = ()
 
 
 # ── UI pattern definitions (order matters — first match wins) ────────────
@@ -114,6 +121,26 @@ UI_PATTERNS: list[UIPattern] = [
         bottom=(re.compile(r"^\s*Enter to continue"),),
     ),
     UIPattern(
+        # ``claude --resume`` on a large/old session offers a numbered
+        # single-select: resume from summary / full / don't ask again.
+        # Standard ❯-cursor select, so the generic CB_ASK_* keyboard
+        # (↑/↓ + Enter/Esc) drives it. Distinguished from other selects
+        # by its header ("This session is … old" / "Resuming the full
+        # session …") — neither phrase appears in Settings/Permission
+        # prompts, so this stays specific. Placed BEFORE Settings: the
+        # shared ``Enter to confirm`` bottom is fine because Settings'
+        # top (``Select <word>`` / ``Settings:``) never matches here.
+        name="ResumeSummary",
+        top=(
+            re.compile(r"^\s*This session is\b.*\bold\b"),
+            re.compile(r"^\s*Resuming the full session"),
+        ),
+        bottom=(
+            re.compile(r"^\s*Enter to confirm"),
+            re.compile(r"^\s*Esc to cancel"),
+        ),
+    ),
+    UIPattern(
         name="Settings",
         top=(
             re.compile(r"^\s*Settings:.*tab to cycle"),
@@ -130,6 +157,48 @@ UI_PATTERNS: list[UIPattern] = [
             re.compile(r"Esc to exit"),
             re.compile(r"Enter to confirm"),
             re.compile(r"^\s*Type to filter"),
+        ),
+    ),
+    UIPattern(
+        # A5 hardening — last-resort AskUserQuestion fallback for a TALL,
+        # MULTI-QUESTION prompt where BOTH the ☐ header AND the
+        # "Enter to select" footer have scrolled off the visible pane,
+        # leaving only the ``❯ N.`` cursor line + numbered options. The
+        # earlier ``❯ N.`` + "Enter to select" pattern needs the footer;
+        # this one drops the bottom anchor entirely (extends to the last
+        # non-empty line, mirroring the multi-tab pattern).
+        #
+        # It is intentionally bottom-less and therefore greedy, so it is
+        # placed DEAD LAST: every more-specific numbered-select UI
+        # (PermissionPrompt-numbered, ResumeSummary, Settings) precedes it
+        # and wins via first-match-wins ordering. The ``exclude`` guard is
+        # belt-and-suspenders: if any of those UIs' signature header/footer
+        # phrases is still visible (header scrolled but footer didn't, or
+        # vice-versa), this pattern bows out so the prompt routes to its
+        # correct flow. Only the genuinely ambiguous case — a lone
+        # ``❯ N.`` cursor with options and none of those phrases — falls
+        # through to AskUserQuestion, which is the safe default for a
+        # bare arrow-select with no other signal.
+        name="AskUserQuestion",
+        top=(re.compile(r"^\s*❯\s*\d+\.\s+\S"),),
+        bottom=(),
+        min_gap=1,
+        exclude=(
+            # PermissionPrompt signatures
+            re.compile(r"^\s*❯\s*1\.\s*Yes"),
+            re.compile(r"^\s*Do you want to "),
+            re.compile(r"^\s*This command requires approval"),
+            re.compile(r"^\s*Bash command\s*$"),
+            # ResumeSummary signatures
+            re.compile(r"^\s*This session is\b.*\bold\b"),
+            re.compile(r"^\s*Resuming the full session"),
+            # Settings / picker signatures
+            re.compile(r"^\s*Settings:.*tab to cycle"),
+            re.compile(r"^\s*Select \w"),
+            # RestoreCheckpoint / ExitPlanMode signatures
+            re.compile(r"^\s*Restore the code"),
+            re.compile(r"^\s*Would you like to proceed\?"),
+            re.compile(r"^\s*Claude has written up a plan"),
         ),
     ),
 ]
@@ -156,7 +225,17 @@ def _try_extract(lines: list[str], pattern: UIPattern) -> InteractiveUIContent |
     When ``pattern.bottom`` is empty, the region extends from the top marker
     to the last non-empty line (used for multi-tab AskUserQuestion where the
     bottom delimiter varies by tab).
+
+    If ``pattern.exclude`` is non-empty and any of its patterns matches any
+    line of the capture, the pattern is treated as a non-match (returns
+    None) — a negative guard that keeps a greedy bottom-less cursor pattern
+    from poaching other numbered-select UIs.
     """
+    if pattern.exclude and any(
+        e.search(line) for line in lines for e in pattern.exclude
+    ):
+        return None
+
     top_idx: int | None = None
     bottom_idx: int | None = None
 

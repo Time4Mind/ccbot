@@ -169,6 +169,16 @@ class CardState:
     # session_events whenever a new assistant turn lands. Rendered as a
     # ``context: N%`` line above the bg-status panel. None = unknown.
     context_pct: int | None = None
+    # JSONL-seed bookkeeping (A6). ``_ensure_seeded`` reads the recent
+    # transcript exactly once per (re)set so the live card lands with
+    # context after a restart. The wipe sites that empty ``events`` mid-
+    # session for a NON-destructive reason (stale-pause reset, carrier
+    # release on switcher tap) clear this flag so the next event re-seeds
+    # — otherwise the card rebuilds one event at a time and the footer
+    # page counter transiently collapses to ``1/1`` while the underlying
+    # transcript still spans many turn-pages. ``/clear`` leaves it True:
+    # that is an intentional wipe-to-zero.
+    seed_attempted: bool = False
 
 
 # Per-(user, session.id) card state.
@@ -1445,14 +1455,15 @@ async def _ensure_seeded(user_id: int, sess: Session, state: CardState) -> None:
     """Seed ``state.events`` from JSONL on first access after restart.
 
     No-op when events already exist or when seeding has been attempted
-    before for this state. Idempotent — ``_seed_attempted`` flag on the
-    CardState prevents repeated JSONL reads.
+    before for this state. Idempotent — ``state.seed_attempted`` guards
+    against repeated JSONL reads. A wipe site that wants a re-seed clears
+    ``seed_attempted`` (see ``CardState.seed_attempted``).
     """
     if state.events:
         return
-    if getattr(state, "_seed_attempted", False):
+    if state.seed_attempted:
         return
-    state._seed_attempted = True  # type: ignore[attr-defined]
+    state.seed_attempted = True
     # User-settable depth — Settings → Card history (10/20/50/100).
     try:
         max_turns = int(
@@ -1852,6 +1863,11 @@ def release_card_message(user_id: int, session_id: str) -> None:
     state.events = []
     state.last_rendered = ""
     state.is_continuation = True
+    # A6: this is a non-destructive carrier hand-off — the session keeps
+    # running with a full transcript. Allow the next event's fresh card
+    # to re-seed so its footer page counter reflects the real recent
+    # turn-history instead of collapsing to ``1/1``.
+    state.seed_attempted = False
     logger.info(
         "card_release user=%d sess=%s",
         user_id,
@@ -2453,6 +2469,12 @@ async def _update_session_card_locked(
         state.current_page_idx = None
         state.is_continuation = True
         state.last_rendered = ""
+        # A6: re-seed the recent transcript so the fresh card lands with
+        # its full turn-history. Without this the card rebuilds one event
+        # at a time and the footer page counter shows ``1/1`` until a
+        # second turn completes — even though the transcript is long.
+        state.seed_attempted = False
+        await _ensure_seeded(user_id, sess, state)
 
     if not replaced:
         state.events.append(new_event)
@@ -2765,6 +2787,110 @@ def is_card_busy(user_id: int, session_id: str) -> bool:
     if state is None or state.in_menu_view:
         return False
     return _card_is_busy(state)
+
+
+# ─── Stalled-session detection (bug A4) ───────────────────────────────
+#
+# When the upstream claude subprocess silently stalls or exits
+# mid-iteration, the JSONL stops growing with renderable turns (it may
+# still get ``last-prompt`` / ``ai-title`` metadata entries, which
+# transcript_parser filters out — see transcript_parser.py:260). The
+# session monitor therefore produces ZERO card updates and the live
+# card freezes on its last "thinking"/tool_use frame with no signal to
+# the user. ``maybe_finalize_stalled`` closes that gap: when an active
+# card has sat with a non-terminal tail event AND the pane spinner has
+# been idle (gone or frozen) for ``STALL_FINALIZE_AFTER_SECONDS``, it
+# finalises the card with a clear note so the user knows the process
+# may have stalled rather than the bot being broken.
+
+# How long an active card may sit with a non-terminal tail event and an
+# idle (non-busy) pane before we declare it stalled and finalise it.
+# Deliberately generous: a genuinely-busy claude keeps the pane spinner
+# *changing* (``Working… (17s)`` → ``(18s)`` → …) so ``pane_busy`` stays
+# True and this never fires during long thinking / a slow tool. We only
+# trip when the spinner is gone or frozen AND no new renderable event
+# arrived for this long — i.e. the subprocess produced nothing.
+STALL_FINALIZE_AFTER_SECONDS = 90.0
+
+# Note appended to the card when a stall is detected. Card-body strings
+# in this module are not localized (header / "context:" / "goal:" are
+# all hard-coded English), so this note follows the same convention.
+STALL_NOTE = (
+    "⚠️ session went idle without a final reply — "
+    "the Claude process may have stalled or exited."
+)
+
+
+async def maybe_finalize_stalled(
+    bot: Bot,
+    user_id: int,
+    sess: Session,
+    *,
+    pane_busy: bool,
+    interactive_waiting: bool,
+    in_menu: bool,
+    now: float | None = None,
+) -> bool:
+    """Finalise an ACTIVE session's frozen card when the subprocess stalled.
+
+    Fires (returns True after finalising) ONLY when ALL hold:
+
+      * a card exists for this (user, session) with at least one event;
+      * the card is NOT already finalized (tail event is non-terminal —
+        mid ``thinking`` / ``tool_use`` / ``text``);
+      * the pane spinner is NOT busy (``pane_busy=False`` — gone or
+        frozen, per ``_pane_status_is_changing``);
+      * no interactive UI is waiting for the user (``interactive_waiting``
+        — AskUserQuestion / ExitPlanMode / Permission / RestoreCheckpoint,
+        or kb-mode) and the card is not in a Menu sub-screen
+        (``in_menu``);
+      * no new renderable event arrived for ``STALL_FINALIZE_AFTER_SECONDS``
+        (measured from ``state.last_event_ts``).
+
+    The last condition is what keeps this conservative: a long-thinking
+    turn keeps the pane spinner changing, so ``pane_busy`` is True and we
+    bail; a tool_use legitimately awaiting a slow result either keeps the
+    spinner alive or lands its result well before the window elapses. We
+    only trip when the spinner has died AND the transcript stopped
+    growing — the exact fingerprint of a stalled / exited subprocess.
+
+    Reuses ``finalize_task``: the stall note is appended as the turn's
+    final answer, so the card flips to the finalized (Kill, not Stop)
+    keyboard via the same path a normal completion takes.
+    """
+    if pane_busy or interactive_waiting or in_menu:
+        return False
+    state = _cards.get((user_id, sess.id))
+    if state is None or state.msg_id is None or not state.events:
+        return False
+    if state.in_menu_view or state.in_kb_mode:
+        return False
+    # Already finalized — nothing frozen to rescue.
+    if state.events[-1].type in ("final_text", "error"):
+        return False
+    if state.last_event_ts <= 0:
+        return False
+    when = now if now is not None else time.time()
+    if (when - state.last_event_ts) < STALL_FINALIZE_AFTER_SECONDS:
+        return False
+    logger.warning(
+        "stall_finalize user=%d sess=%s wid=%s idle=%.0fs tail=%s",
+        user_id,
+        sess.id,
+        sess.window_id,
+        when - state.last_event_ts,
+        state.events[-1].type,
+        extra={
+            "event": "stall_finalize",
+            "user_id": user_id,
+            "session_id": sess.id,
+            "window_id": sess.window_id,
+            "idle_seconds": round(when - state.last_event_ts),
+            "tail_type": state.events[-1].type,
+        },
+    )
+    await finalize_task(bot, user_id, sess, STALL_NOTE)
+    return True
 
 
 def is_active_for_user(user_id: int, sess: Session) -> bool:

@@ -10,6 +10,23 @@ Also enforces a single-bot mutex via flock on ``$CCBOT_DIR/ccbot.lock``
 instance silently steals updates and the original starts logging
 ``Conflict: terminated by other getUpdates request`` until one dies.
 The flock makes the second instance refuse to start instead.
+
+Exit-code contract (the supervisor / restart scripts agree with it):
+  * ``EXIT_CLEAN`` (0) — clean stop (``run_polling`` returned on
+    SIGTERM/SIGINT) OR a clean *yield* because another healthy instance
+    already holds the singleton lock. A yield is NOT a crash: the
+    supervisor must back off quietly and re-probe, never restart-promptly.
+    The process gate is owned by the supervisor, which probes the lock
+    before launching; this in-process refuse is only a last-resort race
+    guard for the window where two starts overlap.
+  * ``EXIT_CRASH`` (1) — a real failure worth retrying / surfacing:
+    misconfiguration (missing token), or any unexpected error. The
+    supervisor restarts promptly after its base backoff.
+
+The low-level ``_acquire_singleton_lock`` helper still raises
+``SystemExit(1)`` on contention (its documented "could not acquire"
+signal); ``main`` catches that and re-exits ``EXIT_CLEAN`` so the
+operational refuse path looks like a yield, not a crash.
 """
 
 import fcntl
@@ -17,6 +34,12 @@ import logging
 import sys
 from pathlib import Path
 from typing import IO, Any
+
+# Process-level exit-code contract — see module docstring. The supervisor
+# treats EXIT_CLEAN as "do not restart-promptly" and EXIT_CRASH as
+# "restart after the base backoff".
+EXIT_CLEAN = 0
+EXIT_CRASH = 1
 
 # Held at module scope so the OS keeps the flock for the whole process
 # lifetime. Local-scope file handles would be GC-closed once main()
@@ -33,6 +56,11 @@ def _acquire_singleton_lock(lock_path: Path) -> IO[Any]:
     lock doesn't leak into ``subprocess`` / ``asyncio.subprocess``
     children — a stray child outliving the parent would otherwise hold
     the lock and block future bot starts.
+
+    On contention this raises ``SystemExit(1)`` — the helper's low-level
+    "could not acquire" signal. ``main`` translates that into the clean
+    yield (``EXIT_CLEAN``); the raw helper keeps the ``1`` so callers /
+    tests can distinguish "acquired" from "someone else holds it".
     """
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fh = open(lock_path, "w")
@@ -49,7 +77,7 @@ def _acquire_singleton_lock(lock_path: Path) -> IO[Any]:
         logging.getLogger(__name__).error(msg)
         print(f"Error: {msg}", file=sys.stderr)
         fh.close()
-        sys.exit(1)
+        raise SystemExit(1)
     return fh
 
 
@@ -83,13 +111,24 @@ def main() -> None:
         print("Get your user ID from @userinfobot on Telegram.")
         sys.exit(1)
 
-    # Singleton lock has to land BEFORE we touch tmux / create_bot /
-    # run_polling — otherwise a second instance would still race the
-    # getUpdates handshake before discovering it can't hold the lock.
+    # PROCESS GATE — the singleton lock has to land BEFORE any network /
+    # getMe / run_polling work: it is the authoritative liveness check
+    # (flock auto-releases on holder death, so "held" ⟺ "a live holder
+    # exists"). The supervisor probes this same lock before launching, so
+    # reaching here with it held is a last-resort race guard, not the
+    # routine path. We YIELD CLEANLY (EXIT_CLEAN) rather than crash:
+    # another healthy instance owns the bot, and the supervisor must back
+    # off quietly instead of restart-promptly.
     global _singleton_lock_handle
     from .utils import ccbot_dir
 
-    _singleton_lock_handle = _acquire_singleton_lock(ccbot_dir() / "ccbot.lock")
+    try:
+        _singleton_lock_handle = _acquire_singleton_lock(ccbot_dir() / "ccbot.lock")
+    except SystemExit:
+        logging.getLogger(__name__).info(
+            "Another healthy ccbot instance holds the singleton lock; yielding cleanly."
+        )
+        sys.exit(EXIT_CLEAN)
 
     logging.getLogger("ccbot").setLevel(logging.DEBUG)
     # AIORateLimiter (max_retries=5) handles retries itself; keep INFO for visibility
@@ -109,7 +148,14 @@ def main() -> None:
     from .bot import create_bot
 
     application = create_bot()
+    # run_polling installs SIGTERM/SIGINT handlers and shuts the
+    # Application down gracefully before returning. When it returns, the
+    # process exits and the OS closes ``_singleton_lock_handle`` — which
+    # releases the flock. restart.sh polls for that release before
+    # launching a replacement (bug A2d), so a clean-shutdown marker in the
+    # log makes the boundary observable between the old and new instance.
     application.run_polling(allowed_updates=["message", "callback_query"])
+    logger.info("Telegram bot stopped; releasing singleton lock and exiting.")
 
 
 if __name__ == "__main__":

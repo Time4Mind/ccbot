@@ -43,6 +43,7 @@ from .notifications import (
     is_card_busy,
     is_card_finalized,
     is_card_in_menu_view,
+    maybe_finalize_stalled,
     refresh_panel,
 )
 
@@ -284,6 +285,33 @@ async def update_status_message(
     # the JSONL signal in that case.
     if pane_busy and sess is not None and is_card_finalized(user_id, sess.id):
         pane_busy = False
+
+    # Stalled-session rescue (bug A4). For the ACTIVE session only: if the
+    # card has a non-terminal tail event but the pane spinner is idle and
+    # no new event has arrived for STALL_FINALIZE_AFTER_SECONDS, the
+    # upstream claude process likely stalled/exited (it may still write
+    # ``last-prompt`` / ``ai-title`` metadata, which transcript_parser
+    # filters out, so the monitor produces no card update). Finalise the
+    # frozen card with a clear note instead of leaving it stuck forever.
+    # Excluded: a still-changing spinner, a waiting interactive UI / kb
+    # prompt, and menu navigation — all valid "idle" states, not stalls.
+    if sess is not None and not is_bg_session:
+        from .notifications import has_pending_kb
+
+        interactive_waiting = (
+            is_interactive_ui(pane_text)
+            or get_interactive_window(user_id) == window_id
+            or has_pending_kb(user_id, sess.id)[0]
+        )
+        await maybe_finalize_stalled(
+            bot,
+            user_id,
+            sess,
+            pane_busy=pane_busy,
+            interactive_waiting=interactive_waiting,
+            in_menu=in_menu,
+        )
+
     if not is_bg_session and not in_menu and (card_busy or pane_busy):
         try:
             await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)

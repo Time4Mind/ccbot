@@ -91,3 +91,42 @@ class TestKbModeRender:
         st.kb_prompt = BOXED_PROMPT
         out = _render_card(_sess(), st, user_id=1)
         assert "/data/adb/service.d/99-ccbot.sh" in out
+
+
+# A normal AskUserQuestion with NO box frame — the long-standing working
+# case (incl. a benign ── divider). The fix must be a strict no-op here.
+NORMAL_PROMPT = (
+    "☐ Which approach?\n"
+    "Pick a migration strategy:\n"
+    "❯ 1. Incremental\n"
+    "  2. Big-bang\n"
+    "─────\n"
+    "  3. Chat about this\n"
+    "Enter to select · ↑/↓ to navigate · Esc to cancel\n"
+)
+
+
+class TestNormalPromptUnchanged:
+    """The box-frame gate: a prompt without frame glyphs renders exactly as
+    before — no sanitization, no code fence. Guards the working case."""
+
+    def test_no_frame_means_no_code_fence(self):
+        st = CardState()
+        st.in_kb_mode = True
+        st.kb_prompt = NORMAL_PROMPT
+        out = _render_card(_sess(), st, user_id=1)
+        # The card chrome (header + the literal "─────" separator) is added
+        # by _render_card; the prompt body itself must NOT be code-fenced.
+        body = out.split("⌨ *Waiting for your input:*\n", 1)[1]
+        assert "```" not in body
+        # ...and the prompt is carried verbatim (incl. its own divider).
+        assert NORMAL_PROMPT in out
+
+    def test_divider_only_does_not_trip_the_gate(self):
+        # A ── divider (U+2500) alone is not a frame → no sanitization.
+        assert "❯ 1. Incremental" in NORMAL_PROMPT  # premise
+        st = CardState()
+        st.in_kb_mode = True
+        st.kb_prompt = NORMAL_PROMPT
+        out = _render_card(_sess(), st, user_id=1)
+        assert "❯ 1. Incremental" in out  # cursor/options untouched

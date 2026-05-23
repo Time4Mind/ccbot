@@ -56,6 +56,7 @@ __all__ = [
     "_card_is_busy",
     "_chunk_final_text",
     "_count_lines",
+    "_duplicate_of_seeded",
     "_estimate_md_v2_size",
     "_extract_expquote_inner",
     "_format_hhmmss",
@@ -1075,6 +1076,35 @@ def _is_stale(state: CardState) -> bool:
     if state.msg_id is None or state.last_event_ts <= 0:
         return False
     return (time.time() - state.last_event_ts) >= STALE_CARD_SECONDS
+
+
+def _duplicate_of_seeded(events: list[Event], candidate: Event) -> bool:
+    """True when ``candidate`` already appears in ``events``.
+
+    Guards the live-append path against double-rendering a turn that a
+    JSONL re-seed already pulled in. When a stale card is wiped and
+    re-seeded (``_update_session_card_locked`` /
+    ``release_card_message`` → ``_ensure_seeded``), the seed re-reads the
+    transcript — which already contains the just-submitted user prompt
+    that triggered this very update — and the same message is then
+    appended again as the live event, rendering the user's message
+    twice.
+
+    Matched on ``(type, started_at, text)``. ``started_at`` is the JSONL
+    timestamp parsed deterministically by ``_parse_timestamp``, so the
+    seeded copy and the live copy of one entry share a bit-identical
+    value while two distinct turns never collide (distinct timestamps).
+    A user legitimately repeating the same text lands a new JSONL entry
+    with a later timestamp, so it is not deduped.
+    """
+    for ev in events:
+        if (
+            ev.type == candidate.type
+            and ev.started_at == candidate.started_at
+            and ev.text == candidate.text
+        ):
+            return True
+    return False
 
 
 def _card_is_busy(state: CardState) -> bool:

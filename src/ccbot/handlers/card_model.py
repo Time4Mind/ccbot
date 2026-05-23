@@ -817,6 +817,37 @@ def render_page(events: list[Event], now: float) -> str:
 # ─── Card composition ─────────────────────────────────────────────────
 
 
+# Box-drawing / block-element glyphs (U+2500–U+259F). Claude Code's
+# AskUserQuestion renders each option's ``preview`` inside a box-drawing
+# frame (``┌ │ ├ ─ …``); captured verbatim into the kb-mode card those
+# borders mangle the body. We strip them on the kb-mode path.
+_BOX_DRAWING_RE = re.compile(r"[─-▟]")
+_BORDER_ONLY_LINE_RE = re.compile(r"^[\s─-▟]*$")
+
+
+def _sanitize_prompt_block(text: str) -> str:
+    """Strip terminal box-drawing borders from a captured interactive prompt.
+
+    Drops border-only lines and removes box-drawing glyphs from content
+    lines (preserving indentation + internal spacing). Collapses 3+ blank
+    lines that the border removal can leave behind.
+    """
+    out: list[str] = []
+    for line in text.splitlines():
+        if _BORDER_ONLY_LINE_RE.match(line):
+            # Keep a single blank as a paragraph break, drop runs.
+            if out and out[-1] != "":
+                out.append("")
+            continue
+        cleaned = _BOX_DRAWING_RE.sub("", line).rstrip()
+        out.append(cleaned)
+    while out and out[0] == "":
+        out.pop(0)
+    while out and out[-1] == "":
+        out.pop()
+    return "\n".join(out)
+
+
 def _render_card(
     sess: Session,
     state: CardState,
@@ -841,7 +872,13 @@ def _render_card(
     # keyboard. The regular event log is BELOW the keyboard (footer'd by
     # the keyboard rather than by switcher/pagination). See Task #41.
     if state.in_kb_mode and state.kb_prompt:
-        parts = [header, "─────", "⌨ *Waiting for your input:*", state.kb_prompt]
+        body = _sanitize_prompt_block(state.kb_prompt)
+        # Render the prompt as a fenced code block so telegramify treats it
+        # as literal monospace: no MarkdownV2 escaping noise, and no
+        # auto-collapse into an expandable blockquote (the "✂ N lines
+        # hidden" artifact). Guard the rare case of a ``` inside the prompt.
+        prompt_part = body if "```" in body else f"```\n{body}\n```"
+        parts = [header, "─────", "⌨ *Waiting for your input:*", prompt_part]
         return "\n".join(parts)
 
     # Budget is in LINES (per user setting ``card_page_lines``).

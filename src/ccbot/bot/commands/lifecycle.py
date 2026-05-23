@@ -101,7 +101,7 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data["_pending_session_name"] = name_arg
     clear_browse_state(context.user_data)
     start_path = str(Path.home())
-    msg_text, keyboard, subdirs = build_directory_browser(start_path)
+    msg_text, keyboard, subdirs = build_directory_browser(start_path, user_id=user.id)
     if context.user_data is not None:
         context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
         context.user_data[BROWSE_PATH_KEY] = start_path

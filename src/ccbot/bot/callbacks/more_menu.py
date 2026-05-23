@@ -62,7 +62,7 @@ async def _emit_new_flow(
     clear_window_picker_state(context.user_data)
     clear_session_picker_state(context.user_data)
     start_path = str(Path.home())
-    msg_text, keyboard, subdirs = build_directory_browser(start_path)
+    msg_text, keyboard, subdirs = build_directory_browser(start_path, user_id=user.id)
     if context.user_data is not None:
         context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
         context.user_data[BROWSE_PATH_KEY] = start_path

@@ -823,6 +823,13 @@ def render_page(events: list[Event], now: float) -> str:
 # borders mangle the body. We strip them on the kb-mode path.
 _BOX_DRAWING_RE = re.compile(r"[─-▟]")
 _BORDER_ONLY_LINE_RE = re.compile(r"^[\s─-▟]*$")
+# Box-drawing FRAME glyphs (verticals + corners + junctions + double-line),
+# EXCLUDING the plain horizontals ─ ━ which show up as benign dividers in
+# otherwise-normal prompts. Their presence is the signal that Claude Code
+# framed the option previews in boxes (the case that mangles the card). A
+# normal prompt — even one carrying a ── divider — matches none of these, so
+# the sanitize/code-fence path stays a strict no-op for the well-behaved case.
+_BOX_FRAME_RE = re.compile(r"[│┃┌-╋═-╬]")
 
 
 def _sanitize_prompt_block(text: str) -> str:
@@ -872,12 +879,20 @@ def _render_card(
     # keyboard. The regular event log is BELOW the keyboard (footer'd by
     # the keyboard rather than by switcher/pagination). See Task #41.
     if state.in_kb_mode and state.kb_prompt:
-        body = _sanitize_prompt_block(state.kb_prompt)
-        # Render the prompt as a fenced code block so telegramify treats it
-        # as literal monospace: no MarkdownV2 escaping noise, and no
-        # auto-collapse into an expandable blockquote (the "✂ N lines
-        # hidden" artifact). Guard the rare case of a ``` inside the prompt.
-        prompt_part = body if "```" in body else f"```\n{body}\n```"
+        raw = state.kb_prompt
+        if _BOX_FRAME_RE.search(raw):
+            # Claude Code framed the option previews in box-drawing boxes
+            # (┌ │ ├ …). Captured verbatim those borders mangle the body and
+            # telegramify collapses the long region into an expandable
+            # blockquote (the "✂ N lines hidden" artifact). Strip the borders
+            # and render as a fenced code block — literal monospace, no
+            # MarkdownV2 escaping, no blockquote collapse. Guard a stray ```.
+            body = _sanitize_prompt_block(raw)
+            prompt_part = body if "```" in body else f"```\n{body}\n```"
+        else:
+            # No box frame → the long-standing well-behaved prompt. Render it
+            # exactly as before so this fix never alters a normal prompt.
+            prompt_part = raw
         parts = [header, "─────", "⌨ *Waiting for your input:*", prompt_part]
         return "\n".join(parts)
 

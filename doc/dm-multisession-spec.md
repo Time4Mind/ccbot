@@ -153,7 +153,10 @@ Published:
 |---|---|
 | `/menu` | Open the inline Menu surface (Sessions / Status / Shot / Archive / Settings). |
 | `/help` | Inline mini-doc with section buttons. |
+| `/history` | Paginated transcript of the active session from the JSONL. |
 | `/done [name]` | Mark goal achieved. Archives with a "completed" tag. |
+
+Forwarded Claude Code pickers (`/model` `/effort` `/compact` `/memory`) are also published when present in `CC_COMMANDS`.
 
 Hidden (typed only):
 
@@ -164,10 +167,9 @@ Hidden (typed only):
 | `/stop` | Send Esc to the active session's tmux window (interrupt current task). |
 | `/archive` | Show archived sessions, paginated, last 0–72h. |
 | `/screenshot` | Snapshot the active session's tmux pane as a PNG. |
-| `/history` | Paginated transcript of the active session from the JSONL. |
 | `/usage` | Live `/usage` modal sample (5h / weekly / Sonnet). |
 | `/health` | Uptime, queue stats, latency, counters. |
-| `/restore-file <msg_id>` | Re-fetch a previously-uploaded inbox file from Telegram. |
+| `/restore-file <msg_id>` | _(Planned — no handler implemented yet.)_ Re-fetch a previously-uploaded inbox file from Telegram. |
 
 The legacy ``/status`` command was retired — Menu → Status surfaces
 the same Anthropic-quota numbers via the dedicated `ccbot-usage` tmux
@@ -358,7 +360,7 @@ Install footprint:
 
 - `ALLOWED_USERS` env var: comma-separated Telegram numeric user ids. Single user expected.
 - Any message from a non-allowed user is silently dropped, no reply.
-- Bot token stored in `BOT_TOKEN` env var.
+- Bot token stored in `TELEGRAM_BOT_TOKEN` env var.
 - No pairing flow. No 2FA. The single allowlist line is the entire auth model.
 
 ---
@@ -369,7 +371,7 @@ Install footprint:
 
 - Systemd unit owns: tmux server, ccbot process, claude processes (children of tmux).
 - Restart policy: `Restart=always`. On reboot, ccbot's auto-recover flow (section 9) handles state.
-- whisper.cpp model is on local disk; `MODEL_PATH=/var/lib/ccbot/models/ggml-medium.bin`.
+- whisper.cpp model is on local disk; `WHISPER_MODEL_PATH=/var/lib/ccbot/models/ggml-medium.bin` (defaults to `$CCBOT_DIR/models/ggml-medium.bin`).
 
 ### Secondary: macOS as ssh client
 
@@ -394,7 +396,7 @@ Install footprint:
 
 ```
 # Auth
-BOT_TOKEN=<telegram bot token>
+TELEGRAM_BOT_TOKEN=<telegram bot token>
 ALLOWED_USERS=<comma-separated tg user ids>
 
 # Storage
@@ -423,7 +425,7 @@ VOICE_BACKEND=auto             # auto | whisper | apple | off
 WHISPER_MODEL_PATH=/var/lib/ccbot/models/ggml-medium.bin
 
 # Claude
-CLAUDE_BIN=claude
+CLAUDE_COMMAND=claude
 CLAUDE_FLAGS=--dangerously-skip-permissions
 IS_SANDBOX=1                   # quiets non-interactive warnings
 ```

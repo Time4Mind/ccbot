@@ -137,8 +137,9 @@ class TestNewPatternDoesNotPoachOtherUIs:
             "  3. Don't ask me again\n"
         )
         result = extract_interactive_content(pane)
-        # Crucial: it must NOT be misclassified as AskUserQuestion.
-        assert result is None or result.name != "AskUserQuestion"
+        # With both framing anchors gone and the ResumeSummary header still
+        # visible, the exclude guard bows the AUQ fallback out → no match.
+        assert result is None
 
     def test_settings_picker_footer_scrolled_off_not_ask_user(self):
         # Same belt-and-suspenders guarantee for the /model picker: its
@@ -151,4 +152,6 @@ class TestNewPatternDoesNotPoachOtherUIs:
             "   3. Haiku                  Haiku 4.5\n"
         )
         result = extract_interactive_content(pane)
-        assert result is None or result.name != "AskUserQuestion"
+        # The "Select model" header excludes the bottom-less AUQ fallback,
+        # and no other pattern matches with the footer gone → no match.
+        assert result is None

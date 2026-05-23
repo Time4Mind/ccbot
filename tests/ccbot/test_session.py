@@ -126,14 +126,9 @@ class TestActiveSessions:
         assert mgr.get_active_session(100) is None
         assert mgr.get_active_window(100) is None
 
-    def test_set_and_clear_active_session(self, mgr: SessionManager) -> None:
-        sess = mgr.create_session(name="x", window_id="@1", workdir="/tmp")
-        mgr.set_active_session(100, sess.id)
-        assert mgr.get_active_session(100) is not None
-        assert mgr.get_active_session(100).id == sess.id  # type: ignore[union-attr]
-        assert mgr.get_active_window(100) == "@1"
-        mgr.clear_active_session(100)
-        assert mgr.get_active_session(100) is None
+    # NOTE: the create→set_active→get_active_window→clear round-trip lives in
+    # test_session_dm.py::TestActiveSessions (test_create_then_active +
+    # test_delete_session). Kept here only the empty-initial-state guard above.
 
 
 # A pane mid-compaction: spinner line above the input chrome separator.

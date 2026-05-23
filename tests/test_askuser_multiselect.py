@@ -118,7 +118,9 @@ class TestNewPatternDoesNotPoachOtherUIs:
             "   3. Haiku                  Haiku 4.5\n"
         )
         result = extract_interactive_content(pane)
-        assert result is None or result.name != "AskUserQuestion"
+        # Unbracketed numbered options + "Select model" header → neither the
+        # checkbox anchor nor the excluded fallback fire → no match.
+        assert result is None
 
     def test_normal_prose_not_interactive(self):
         pane = "Here is a list:\n  1. first thing\n  2. second thing\nDone.\n"

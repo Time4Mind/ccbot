@@ -159,18 +159,25 @@ Bg sessions never push, period.
 
 ## Slash commands (B7)
 
-Published via `setMyCommands` on startup so they appear in the Telegram `/`-menu:
+Only a few commands are published via `setMyCommands` (the Telegram
+`/`-menu, `bot/app.py`); the rest are registered handlers that work
+when typed but stay out of the menu. There is **no** `/list`, `/use`,
+or `/rename` — the inline switcher / Menu → List replace them.
+
+Published:
 
 ```
-/new      Create a new session (with optional name and path)
-/list     List active sessions with state and usage
-/use      Switch active session
-/rename   Rename a session
-/kill     Stop and archive a session immediately
-/stop     Send Esc to interrupt current task in active session
-/done     Mark goal as achieved and archive
-/archive  Browse archived sessions (paginated)
+/menu     Open the inline Menu surface
+/help     Quick guide / inline doc
+/history  Full transcript of the active session
+/done     Mark a session as done
 ```
+
+Plus the forwarded Claude Code pickers `/model` `/effort` `/compact`
+`/memory` when present in `CC_COMMANDS`.
+
+Hidden (registered, typed-only): `/new` `/kill` `/stop` `/archive`
+`/screenshot` `/usage` `/health`.
 
 The legacy ``/status`` command was retired — Menu → Status fetches
 the same /usage modal data via the dedicated ``ccbot-usage`` window.

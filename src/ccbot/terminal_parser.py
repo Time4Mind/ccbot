@@ -329,7 +329,6 @@ def is_interactive_ui(pane_text: str) -> bool:
 #     real busy status (``● Gallivanting… (53s · ↑2.3k tokens)``).
 SPINNER_ONLY = frozenset(["✻", "✽", "✶", "✳", "✢"])
 SPINNER_AMBIGUOUS = frozenset(["●", "·"])
-STATUS_SPINNERS = SPINNER_ONLY | SPINNER_AMBIGUOUS
 
 
 _STATUS_TIME_STATS_RE = re.compile(r"\(\s*\d+(?:m\s*\d+)?\s*[smh]")

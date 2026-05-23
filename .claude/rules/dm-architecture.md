@@ -116,7 +116,7 @@ When the user taps a session button in the main switcher:
 
 1. `transfer_card_to_carrier` pauses the FROM session's card and claims the carrier message_id for the TO session.
 2. `set_active_session(user, target)` flips the routing pointer.
-3. If the TO session has a stashed `bg_status.pending_interactive_ui` *and* the live pane still shows the prompt, the carrier is repainted with the prompt + the regular CB_ASK_* keyboard (`adopt_interactive_msg`). Otherwise the carrier is painted with `send_history` — the full paginated transcript view, with the standard footer ridden along as `extra_rows` so management controls stay reachable.
+3. If the TO session has a stashed `bg_status.pending_interactive_ui` *and* the live pane still shows the prompt, the carrier is claimed as the live card and flipped into kb-mode (`enter_kb_mode`) so the CB_ASK_* keyboard drives the prompt. Otherwise the carrier is painted as the session's live card (`paint_card_on_carrier` — header + paginated body + bg-panel + footer) and receives subsequent claude events in place.
 4. `bg_status.mark_seen` + `prune_seen` drop the just-viewed badge from the panel.
 
 Pagination (`CB_HISTORY_PREV/NEXT`) preserves the original `extra_rows` by stamping `context.user_data['_history_origin']` (`switcher` or `menu_list`) when the history view is first painted; the pagination handler rebuilds the matching footer from this hint. There is no explicit "History" button in the footer — pagination buttons themselves are the navigation affordance, and the user lands on the paginated view via switcher tap, Menu → List, or `/screenshot Back` (both `m` and `l` origins now paint history).

@@ -6,7 +6,6 @@ reply markup is stripped so only the latest message carries the switcher.
 
 Public API:
   build_switcher_keyboard(user_id) -> InlineKeyboardMarkup | None
-  strip_active_switcher(bot, user_id) -> None
   build_session_preview(sess) -> str
 
 State of "where the live switcher currently lives" is held in
@@ -17,8 +16,7 @@ from __future__ import annotations
 
 import logging
 
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import BadRequest
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from ..config import config
 from ..session import Session, session_manager
@@ -123,26 +121,6 @@ def build_switcher_keyboard(
     if include_new:
         rows.append([InlineKeyboardButton("+ new", callback_data=CB_SW_NEW)])
     return InlineKeyboardMarkup(rows)
-
-
-async def strip_active_switcher(bot: Bot, user_id: int) -> None:
-    """Strip the inline keyboard from the user's previously-attached switcher
-    message, if any. Cheap no-op if nothing is tracked.
-    """
-    msg_id = session_manager.get_last_switcher_msg(user_id)
-    if msg_id is None:
-        return
-    try:
-        await bot.edit_message_reply_markup(
-            chat_id=user_id, message_id=msg_id, reply_markup=None
-        )
-    except BadRequest as e:
-        # Most common: message too old, message is not modified.
-        logger.debug("strip_active_switcher: %s", e)
-    except Exception as e:
-        logger.debug("strip_active_switcher unexpected: %s", e)
-    finally:
-        session_manager.clear_last_switcher_msg(user_id)
 
 
 def build_session_preview(

@@ -7,7 +7,6 @@ Provides UIs in Telegram for:
 Key components:
   - DIRS_PER_PAGE: Number of directories shown per page
   - User state keys for tracking browse/picker session
-  - build_window_picker: Build unbound window picker UI
   - build_directory_browser: Build directory browser UI
   - clear_window_picker_state: Clear picker state from user_data
   - clear_browse_state: Clear browsing state from user_data
@@ -35,9 +34,6 @@ from .callback_data import (
     CB_SESSION_NEW,
     CB_SESSION_PAGE,
     CB_SESSION_SELECT,
-    CB_WIN_BIND,
-    CB_WIN_CANCEL,
-    CB_WIN_NEW,
 )
 
 # Directories per page in directory browser
@@ -80,51 +76,6 @@ def clear_session_picker_state(user_data: dict[str, Any] | None) -> None:
     if user_data is not None:
         user_data.pop(STATE_KEY, None)
         user_data.pop(SESSIONS_KEY, None)
-
-
-def build_window_picker(
-    windows: list[tuple[str, str, str]],
-) -> tuple[str, InlineKeyboardMarkup, list[str]]:
-    """Build window picker UI for unbound tmux windows.
-
-    Args:
-        windows: List of (window_id, window_name, cwd) tuples.
-
-    Returns: (text, keyboard, window_ids) where window_ids is the ordered list[Any] for caching.
-    """
-    window_ids = [wid for wid, _, _ in windows]
-
-    lines = [
-        "*Bind to Existing Window*\n",
-        "These windows are running but not bound to any topic.",
-        "Pick one to attach it here, or start a new session.\n",
-    ]
-    for _wid, name, cwd in windows:
-        display_cwd = cwd.replace(str(Path.home()), "~")
-        lines.append(f"• `{name}` — {display_cwd}")
-
-    buttons: list[list[InlineKeyboardButton]] = []
-    for i in range(0, len(windows), 2):
-        row = []
-        for j in range(min(2, len(windows) - i)):
-            name = windows[i + j][1]
-            display = name[:12] + "…" if len(name) > 13 else name
-            row.append(
-                InlineKeyboardButton(
-                    f"🖥 {display}", callback_data=f"{CB_WIN_BIND}{i + j}"
-                )
-            )
-        buttons.append(row)
-
-    buttons.append(
-        [
-            InlineKeyboardButton("➕ New Session", callback_data=CB_WIN_NEW),
-            InlineKeyboardButton("≡ Menu", callback_data=CB_WIN_CANCEL),
-        ]
-    )
-
-    text = "\n".join(lines)
-    return text, InlineKeyboardMarkup(buttons), window_ids
 
 
 def build_directory_browser(

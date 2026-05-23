@@ -140,10 +140,10 @@ Handler modules (handlers/):
   quota_alerts.py     ─ Background /usage modal poll (default 10 min) →
                        5h/weekly band crossings 50/75/90 %
   inbox.py            ─ photo/document inbox under <workdir>/.ccbot-inbox/
-  interactive_ui.py   ─ AskUserQuestion / ExitPlanMode / Permission UI +
-                       adopt_interactive_msg / render_interactive_keyboard
-                       (used by switcher tap to claim the carrier as the
-                       interactive UI for a bg session whose prompt was stashed)
+  interactive_ui.py   ─ AskUserQuestion / ExitPlanMode / Permission UI
+                       (handle_interactive_ui + _build_interactive_keyboard).
+                       A switcher tap surfaces a bg session's stashed prompt
+                       via notifications.enter_kb_mode on the claimed carrier.
   directory_browser.py─ Directory + session picker UI builders
   switcher.py         ─ Inline session-switcher keyboard
   menu.py             ─ Footer / More / Settings keyboard composition;

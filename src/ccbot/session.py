@@ -388,13 +388,6 @@ class SessionManager:
         self.save_state()
         logger.info("Cleared session for window_id %s", window_id)
 
-    @staticmethod
-    def _encode_cwd(cwd: str) -> str:
-        """Backwards-compatible re-export of ``session_claude_io.encode_cwd``."""
-        from . import session_claude_io
-
-        return session_claude_io.encode_cwd(cwd)
-
     async def list_sessions_for_directory(self, cwd: str) -> list[ClaudeSession]:
         """List existing Claude sessions for a directory (newest first, max 10)."""
         from . import session_claude_io
@@ -494,12 +487,6 @@ class SessionManager:
             },
         )
 
-    def clear_active_session(self, user_id: int) -> None:
-        """Drop the active-session pointer for a user (e.g. all sessions archived)."""
-        if user_id in self.active_sessions:
-            del self.active_sessions[user_id]
-            self.save_state()
-
     def list_user_sessions(
         self,
         user_id: int,
@@ -520,12 +507,6 @@ class SessionManager:
     def find_session_by_window(self, window_id: str) -> "Session | None":
         for s in self.sessions.values():
             if s.window_id == window_id and s.state in ("active", "idle"):
-                return s
-        return None
-
-    def find_session_by_claude_id(self, claude_session_id: str) -> "Session | None":
-        for s in self.sessions.values():
-            if s.claude_session_id == claude_session_id:
                 return s
         return None
 
@@ -854,13 +835,6 @@ class SessionManager:
         sess.last_event_at = time.time()
         self.save_state()
 
-    def set_session_goal(self, session_id: str, goal: str) -> None:
-        sess = self.sessions.get(session_id)
-        if not sess:
-            return
-        sess.goal = goal
-        self.save_state()
-
     def set_session_claude_id(self, session_id: str, claude_session_id: str) -> None:
         sess = self.sessions.get(session_id)
         if not sess:
@@ -883,23 +857,6 @@ class SessionManager:
             self.save_state()
 
     # --- Reverse map: claude_session_id -> user(s) via active_sessions ---
-
-    async def find_users_for_claude_session(
-        self,
-        claude_session_id: str,
-    ) -> list[tuple[int, "Session"]]:
-        """Return [(user_id, Session)] for every user whose active session matches.
-
-        Reverse-map of (user_id -> active Session) by claude_session_id.
-        Background sessions of a user are NOT returned here — outbound for those
-        flows through their own per-session live cards (see C7).
-        """
-        out: list[tuple[int, "Session"]] = []
-        for user_id, sid in self.active_sessions.items():
-            sess = self.sessions.get(sid)
-            if sess and sess.claude_session_id == claude_session_id:
-                out.append((user_id, sess))
-        return out
 
     def all_user_sessions_with_claude_id(
         self, claude_session_id: str

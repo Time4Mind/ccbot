@@ -134,13 +134,18 @@ The active session's card body ends with the bg-status panel block (see below). 
 `handlers.bg_status` keeps a per-user, per-session map of:
 
 - `status`: `working` ⏳ / `finished` ✅ / `error` ❌ / `needs_action` ❓
-- `quota_level`: `none` / `green` / `yellow` / `red` — sticky upward, drives `⚠️🟢/🟡/🔴`
+- `quota_level`: `none` / `green` / `yellow` / `red` — **dormant**: the field
+  exists (and is tolerated on deserialize) but nothing currently sets it, so
+  the `⚠️🟢/🟡/🔴` quota glyph does not render. Its driving config
+  (`BG_STATUS_QUOTA_THRESHOLDS`) was removed as dead. (Quota *alerts* —
+  push messages on 5h/weekly band crossings — are a separate, live feature
+  in `handlers/quota_alerts.py`.)
 - `seen`: True once the user tapped the session in the switcher post-finalisation
 - `pending_interactive_ui`: snapshot `(content, ui_name)` for bg sessions that have an AskUserQuestion / ExitPlanMode / permission prompt waiting
 
 `render_panel(user_id, active_session_id)` formats the block appended to the bottom of the active card. `BG_STATUS_MAX` caps visible badges; older rows collapse to `+N more`.
 
-Bg sessions never emit push notifications. Token-threshold crossings flip the quota glyph instead of pushing. The active session's header carries the same glyph when its own quota crosses.
+Bg sessions never emit push notifications.
 
 ### Push notifications
 

@@ -23,6 +23,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from ..session import ClaudeSession
 
 from ..config import config
+from ..i18n import t
 from .callback_data import (
     CB_DIR_CANCEL,
     CB_DIR_CONFIRM,
@@ -79,7 +80,7 @@ def clear_session_picker_state(user_data: dict[str, Any] | None) -> None:
 
 
 def build_directory_browser(
-    current_path: str, page: int = 0
+    current_path: str, page: int = 0, *, user_id: int
 ) -> tuple[str, InlineKeyboardMarkup, list[str]]:
     """Build directory browser UI.
 
@@ -145,16 +146,22 @@ def build_directory_browser(
     action_row: list[InlineKeyboardButton] = []
     # Allow going up unless at filesystem root
     if path != path.parent:
-        action_row.append(InlineKeyboardButton("..", callback_data=CB_DIR_UP))
-    action_row.append(InlineKeyboardButton("Select", callback_data=CB_DIR_CONFIRM))
-    action_row.append(InlineKeyboardButton("≡ Menu", callback_data=CB_DIR_CANCEL))
+        action_row.append(
+            InlineKeyboardButton(t(user_id, "dir.btn.up"), callback_data=CB_DIR_UP)
+        )
+    action_row.append(
+        InlineKeyboardButton(t(user_id, "dir.btn.select"), callback_data=CB_DIR_CONFIRM)
+    )
+    action_row.append(
+        InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_DIR_CANCEL)
+    )
     buttons.append(action_row)
 
     display_path = str(path).replace(str(Path.home()), "~")
-    if not subdirs:
-        text = f"*Select Working Directory*\n\nCurrent: `{display_path}`\n\n_(No subdirectories)_"
-    else:
-        text = f"*Select Working Directory*\n\nCurrent: `{display_path}`\n\nTap a folder to enter, or select current directory"
+    title = t(user_id, "dir.title")
+    current = t(user_id, "dir.current", path=display_path)
+    tail = t(user_id, "dir.empty") if not subdirs else t(user_id, "dir.hint")
+    text = f"{title}\n\n{current}\n\n{tail}"
 
     return text, InlineKeyboardMarkup(buttons), subdirs
 
@@ -183,6 +190,7 @@ def build_session_picker(
     *,
     page: int = 0,
     summary_resolver: Callable[[ClaudeSession], str] | None = None,
+    user_id: int,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build session picker UI for resuming an existing Claude session.
 
@@ -205,9 +213,9 @@ def build_session_picker(
         return text or "untitled"
 
     lines = [
-        "*Resume Session?*",
+        t(user_id, "picker.title"),
         "",
-        f"page {page + 1}/{pages} — {total} session(s) in this directory.",
+        t(user_id, "picker.summary", page=page + 1, pages=pages, total=total),
         "",
     ]
     for n, s in enumerate(chunk, start=1):
@@ -253,12 +261,20 @@ def build_session_picker(
         buttons.append(nav)
 
     buttons.append(
-        [InlineKeyboardButton("🆕 Start fresh", callback_data=CB_SESSION_NEW)]
+        [
+            InlineKeyboardButton(
+                t(user_id, "picker.btn.start_fresh"), callback_data=CB_SESSION_NEW
+            )
+        ]
     )
     buttons.append(
         [
-            InlineKeyboardButton("← Back to dirs", callback_data=CB_SESSION_BACK),
-            InlineKeyboardButton("≡ Menu", callback_data=CB_SESSION_CANCEL),
+            InlineKeyboardButton(
+                t(user_id, "picker.btn.back_to_dirs"), callback_data=CB_SESSION_BACK
+            ),
+            InlineKeyboardButton(
+                t(user_id, "btn.menu"), callback_data=CB_SESSION_CANCEL
+            ),
         ]
     )
 

@@ -130,7 +130,7 @@ Live update of the preview:
 
 - On click: snapshot at click time.
 - After the click, if the previewed session emits new events on the bot side (assistant message, tool call), the preview message is `editMessageText`-updated.
-- Coalesce updates with a base lag of `PREVIEW_LIVE_LAG=4` seconds. Setting `0` disables live updates.
+- Coalesce updates with a base lag from the per-user `live_lag` setting (default 4 seconds). Setting `0` disables live updates.
 
 ### 4.2 Reply-quote (one-shot routing)
 
@@ -403,7 +403,6 @@ ALLOWED_USERS=<comma-separated tg user ids>
 CCBOT_DIR=/var/lib/ccbot
 
 # Sessions
-MAX_SESSIONS=10                # soft cap, warning only
 SESSION_IDLE_TTL=4h            # active -> archived
 ARCHIVE_PURGE_AFTER=14d
 
@@ -414,7 +413,8 @@ QUOTA_ALERT_POLL_INTERVAL=10m  # background poll of /usage modal
 PREVIEW_USER_LINES=4
 PREVIEW_ASSISTANT_LINES=8
 PREVIEW_TOOLS=2
-PREVIEW_LIVE_LAG=4             # seconds; 0 disables live updates
+# Live-card coalescing: per-user `live_lag` setting (default 4s); the live
+# card also uses CARD_EDIT_LAG (default 2.0s).
 
 # Context-fill display (per-session %)
 # Override if the host runs a non-Claude-Code model with a different

@@ -107,6 +107,26 @@ UI_PATTERNS: list[UIPattern] = [
         min_gap=1,
     ),
     UIPattern(
+        # Multi-select AskUserQuestion. Options render as numbered
+        # bracketed checkboxes (``N. [✔]`` / ``N. [ ]``) and the cursor
+        # ``❯`` lives on a SEPARATE ``Submit`` action line — so the moment
+        # the user moves the cursor onto Submit, NO line carries the
+        # ``❯ N.`` signature the patterns above rely on, and with the ☐
+        # header scrolled off the bare-checkbox pattern misses too. That
+        # dropped detection mid-prompt: the kb-mode keyboard vanished and
+        # the stall-rescue misfired. Anchor on signatures that survive a
+        # cursor move: the numbered checkbox option lines (always present)
+        # or the ``❯ Submit`` line, framed by the "Enter to select"
+        # footer. Placed AFTER PermissionPrompt so a numbered Yes/No wins.
+        name="AskUserQuestion",
+        top=(
+            re.compile(r"^\s*❯\s*Submit\b"),
+            re.compile(r"^\s*\d+\.\s*\[[ xX✔✓]\]"),
+        ),
+        bottom=(re.compile(r"^\s*Enter to select"),),
+        min_gap=1,
+    ),
+    UIPattern(
         # Bash command approval
         name="BashApproval",
         top=(
@@ -180,7 +200,13 @@ UI_PATTERNS: list[UIPattern] = [
         # through to AskUserQuestion, which is the safe default for a
         # bare arrow-select with no other signal.
         name="AskUserQuestion",
-        top=(re.compile(r"^\s*❯\s*\d+\.\s+\S"),),
+        top=(
+            re.compile(r"^\s*❯\s*\d+\.\s+\S"),
+            # Multi-select with the footer ALSO scrolled off — only the
+            # checkbox options and/or the ``❯ Submit`` cursor remain.
+            re.compile(r"^\s*❯\s*Submit\b"),
+            re.compile(r"^\s*\d+\.\s*\[[ xX✔✓]\]"),
+        ),
         bottom=(),
         min_gap=1,
         exclude=(

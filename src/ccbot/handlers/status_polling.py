@@ -54,6 +54,18 @@ from .notifications import (
 # Match option lines like "  1. Yes" / " ❯ 2. Yes, and don't ask again".
 _OPTION_LINE_RE = re.compile(r"^[\s❯>]*?(\d+)\.\s+(.+?)\s*$")
 
+# kb-mode teardown debounce. terminal_parser detection over a live TUI
+# flickers: a single redraw frame, a partial pane capture, or the cursor
+# moving onto a ``❯ Submit`` action line (multi-select AskUserQuestion) can
+# drop the match for one poll. Tearing kb-mode down + clearing the pending
+# prompt on that single miss made the keyboard vanish — and let the
+# stall-rescue misfire — while the prompt was still on screen. Require N
+# CONSECUTIVE no-UI polls before clearing, matching exit_kb_mode's stated
+# "double-poll confirm" intent. The streak is reset whenever the prompt is
+# re-detected (``_surface_new_interactive_ui`` → ``enter_kb_mode``).
+KB_CLEAR_CONFIRM_POLLS = 2
+_kb_clear_miss: dict[tuple[int, str], int] = {}
+
 
 def _parse_first_yes_option(pane_text: str) -> str | None:
     """First option line whose label starts with "Yes". Returns its number."""
@@ -220,6 +232,8 @@ async def _surface_new_interactive_ui(
 
         content_obj = extract_interactive_content(pane_text)
         if content_obj is not None:
+            # Prompt re-detected — reset the teardown debounce streak.
+            _kb_clear_miss.pop((user_id, sess.id), None)
             await enter_kb_mode(
                 bot, user_id, sess, content_obj.content, content_obj.name
             )
@@ -254,8 +268,19 @@ async def _reconcile_no_ui_state(
         from .notifications import exit_kb_mode, has_pending_kb
 
         has_prompt, in_kb = has_pending_kb(user_id, sess.id)
+        key = (user_id, sess.id)
         if has_prompt or in_kb:
-            await exit_kb_mode(bot, user_id, sess, clear_pending=True)
+            # Debounce: only tear down after KB_CLEAR_CONFIRM_POLLS
+            # consecutive no-UI polls, so a single flickered detection
+            # frame (cursor on ``❯ Submit``, a redraw) doesn't wipe a
+            # prompt that is still on screen.
+            streak = _kb_clear_miss.get(key, 0) + 1
+            _kb_clear_miss[key] = streak
+            if streak >= KB_CLEAR_CONFIRM_POLLS:
+                _kb_clear_miss.pop(key, None)
+                await exit_kb_mode(bot, user_id, sess, clear_pending=True)
+        else:
+            _kb_clear_miss.pop(key, None)
 
 
 async def _drive_typing_indicator(

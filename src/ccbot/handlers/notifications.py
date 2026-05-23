@@ -70,6 +70,7 @@ from .card_model import (
     _card_is_busy,
     _chunk_final_text,
     _count_lines,
+    _duplicate_of_seeded,
     _estimate_md_v2_size,
     _extract_expquote_inner,
     _format_hhmmss,
@@ -120,6 +121,7 @@ __all__ = [
     "_card_is_busy",
     "_chunk_final_text",
     "_count_lines",
+    "_duplicate_of_seeded",
     "_estimate_md_v2_size",
     "_extract_expquote_inner",
     "_format_hhmmss",
@@ -1396,7 +1398,9 @@ async def update_session_card(
     # tap can catch up; do NOT trigger stale-card resets, overflow
     # continuations, or any rendering.
     if must_buffer:
-        if not replaced:
+        if not replaced and not _duplicate_of_seeded(state.events, new_event):
+            # Same dedup guard as the live path: a prior seed (line ~1371)
+            # may already hold this turn; don't buffer a second copy.
             state.events.append(new_event)
         state.last_event_ts = time.time()
         logger.info(
@@ -1452,7 +1456,11 @@ async def _update_session_card_locked(
         state.seed_attempted = False
         await _ensure_seeded(user_id, sess, state)
 
-    if not replaced:
+    if not replaced and not _duplicate_of_seeded(state.events, new_event):
+        # Dedup guard: if the stale-branch re-seed above (or an earlier
+        # release_card_message wipe) already pulled this turn in from
+        # JSONL, don't append it a second time — otherwise the user's own
+        # message renders twice in the card body.
         state.events.append(new_event)
         # User-action-anchor: when on the latest page, every new event
         # keeps the user there. Done as None (=stick-to-latest) so the
@@ -1915,6 +1923,15 @@ async def repost_card(bot: Bot, user_id: int, sess: Session) -> None:
         await _send_card(bot, user_id, sess, state, text=text)
         state.last_rendered = text
         state.last_edit_ts = time.monotonic()
+        # A freshly (re)posted card is brand new — reset the freshness
+        # clock so the first arriving claude event can't misjudge it as
+        # stale and spawn a SECOND card ~1-2s later (the delete+resend
+        # flicker). ``repost_card`` previously updated last_rendered /
+        # last_edit_ts but left ``last_event_ts`` pinned to the previous
+        # turn; on a card idle >= STALE_CARD_SECONDS that tripped
+        # ``_is_stale`` on the very next event. A repost is itself user
+        # activity, so "now" is the correct freshness stamp.
+        state.last_event_ts = time.time()
         new_msg_id = state.msg_id
     logger.info(
         "repost_card user=%s sess=%s old_msg=%s new_msg=%s events=%d",

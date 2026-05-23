@@ -7,14 +7,12 @@ Backend chosen at runtime via VOICE_BACKEND env var:
   - "apple":  macOS Apple Speech via SFSpeechRecognizer (PyObjC). Falls
               back to whisper.cpp on permission denial / unavailable
               recognizer / missing pyobjc-framework-Speech.
-  - "openai": legacy OpenAI gpt-4o-transcribe HTTP API.
   - "off":    voice messages rejected.
 
-DM-multisession spec section 8 — J4 selected, but the OpenAI path is kept
-for sites that already have an API key configured.
+DM-multisession spec section 8 — J4 selected: transcription is local
+(whisper.cpp / Apple Speech), no third-party API key required.
 
 Public API: transcribe_voice(ogg_data) -> str (raises ValueError on failure).
-close_client() — no-op except for the OpenAI path.
 """
 
 from __future__ import annotations
@@ -25,20 +23,9 @@ import os
 import platform
 import tempfile
 
-import httpx
-
 from .config import config
 
 logger = logging.getLogger(__name__)
-
-_client: httpx.AsyncClient | None = None
-
-
-def _get_client() -> httpx.AsyncClient:
-    global _client
-    if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(timeout=30.0)
-    return _client
 
 
 async def _run(cmd: list[str], stdin: bytes | None = None) -> tuple[int, bytes, bytes]:
@@ -201,24 +188,6 @@ async def _apple_speech_transcribe(ogg_data: bytes) -> str:
             pass
 
 
-async def _openai_transcribe(ogg_data: bytes) -> str:
-    if not config.openai_api_key:
-        raise ValueError("OpenAI backend selected but OPENAI_API_KEY is unset")
-    url = f"{config.openai_base_url.rstrip('/')}/audio/transcriptions"
-    client = _get_client()
-    response = await client.post(
-        url,
-        headers={"Authorization": f"Bearer {config.openai_api_key}"},
-        files={"file": ("voice.ogg", ogg_data, "audio/ogg")},
-        data={"model": "gpt-4o-transcribe"},
-    )
-    response.raise_for_status()
-    text = response.json().get("text", "").strip()
-    if not text:
-        raise ValueError("Empty transcription returned by API")
-    return text
-
-
 async def transcribe_voice(ogg_data: bytes, user_id: int | None = None) -> str:
     """Dispatch to the configured backend; raise ValueError on failure.
 
@@ -242,18 +211,9 @@ async def transcribe_voice(ogg_data: bytes, user_id: int | None = None) -> str:
     if backend == "auto":
         backend = "apple" if platform.system() == "Darwin" else "whisper"
 
-    if backend == "openai":
-        return await _openai_transcribe(ogg_data)
     if backend == "whisper":
         return await _whisper_cpp_transcribe(ogg_data)
     if backend == "apple":
         return await _apple_speech_transcribe(ogg_data)
 
     raise ValueError(f"Unknown VOICE_BACKEND: {backend}")
-
-
-async def close_client() -> None:
-    global _client
-    if _client is not None and not _client.is_closed:
-        await _client.aclose()
-        _client = None

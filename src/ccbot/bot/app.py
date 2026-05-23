@@ -31,7 +31,6 @@ from ..handlers.status_polling import status_poll_loop
 from ..metrics import metrics_flush_loop
 from ..session import session_manager
 from ..session_monitor import NewMessage, SessionMonitor
-from ..transcribe import close_client as close_transcribe_client
 from ._common import CC_COMMANDS
 from .callbacks import callback_handler
 from .commands.info import (
@@ -314,8 +313,6 @@ async def post_shutdown(
     if session_monitor:
         await session_monitor.stop()
         logger.info("Session monitor stopped")
-
-    await close_transcribe_client()
 
 
 def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":

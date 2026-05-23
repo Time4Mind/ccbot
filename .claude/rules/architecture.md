@@ -72,7 +72,7 @@
 
 Additional modules:
   screenshot.py       ─ Terminal text → PNG rendering (ANSI color, font fallback)
-  transcribe.py       ─ Voice-to-text transcription via whisper.cpp / Apple / OpenAI
+  transcribe.py       ─ Voice-to-text transcription via whisper.cpp / Apple Speech
   i18n.py             ─ Per-user UI strings (en / ru / zh)
   naming.py           ─ Haiku-generated session names + readable summaries
   usage.py            ─ Token usage aggregator + per-session token alerts

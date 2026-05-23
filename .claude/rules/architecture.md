@@ -126,7 +126,7 @@ Handler modules (handlers/):
                        auto-approve hook for interactive prompts +
                        bg-window interactive-UI detection (suppress + stash)
   notifications.py    ─ Live card per session + push events + completion +
-                       bg-status panel injection + active-quota glyph in header +
+                       bg-status panel injection +
                        refresh_panel + repost_card (always-repost behaviour:
                        every user-msg replaces the card by a fresh one below)
   bg_status.py        ─ Per-user bg session status map (working/finished/error/

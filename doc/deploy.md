@@ -103,8 +103,6 @@ curl -s --max-time 8 -x "$TG_PROXY_URL" \
 - `VOICE_BACKEND=whisper` → requires `WHISPER_BIN` (default
   `whisper-cli`) and `WHISPER_MODEL_PATH` (default
   `$CCBOT_DIR/models/ggml-medium.bin`, ~1.5GB).
-- `VOICE_BACKEND=openai` → falls back to the legacy gpt-4o-transcribe
-  HTTP path; needs `OPENAI_API_KEY`.
 - `VOICE_BACKEND=off` → reject voice messages.
 
 ## State and disk usage

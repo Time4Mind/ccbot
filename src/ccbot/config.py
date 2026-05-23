@@ -131,12 +131,6 @@ class Config:
             os.getenv("CCBOT_SHOW_HIDDEN_DIRS", "").lower() == "true"
         )
 
-        # OpenAI API for voice message transcription (optional)
-        self.openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
-        self.openai_base_url: str = os.getenv(
-            "OPENAI_BASE_URL", "https://api.openai.com/v1"
-        )
-
         # --- DM multi-session mode ---
         # Sessions
         self.max_sessions: int = int(os.getenv("MAX_SESSIONS", "10"))

@@ -31,7 +31,6 @@ from ..handlers.status_polling import status_poll_loop
 from ..metrics import metrics_flush_loop
 from ..session import session_manager
 from ..session_monitor import NewMessage, SessionMonitor
-from ..transcribe import close_client as close_transcribe_client
 from ._common import CC_COMMANDS
 from .callbacks import callback_handler
 from .commands.info import (
@@ -90,7 +89,6 @@ _conflict_app: "Application[Any, Any, Any, Any, Any, Any] | None" = None
 _status_poll_task: asyncio.Task[None] | None = None
 _card_timer_task: asyncio.Task[None] | None = None
 _quota_alerts_task: asyncio.Task[None] | None = None
-_context_poll_task: asyncio.Task[None] | None = None
 _metrics_flush_task: asyncio.Task[None] | None = None
 
 
@@ -101,7 +99,6 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
         _status_poll_task, \
         _card_timer_task, \
         _quota_alerts_task, \
-        _context_poll_task, \
         _metrics_flush_task, \
         _conflict_app
 
@@ -173,15 +170,11 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     _quota_alerts_task = asyncio.create_task(quota_alerts_loop(application.bot))
     logger.info("Quota alerts task started")
 
-    # Context-poll loop disabled — sending /context to live panes
-    # writes the modal's markdown output INTO the session's JSONL as
-    # a user-turn, which then renders on the live card as a fake
-    # ``[Request interrupted by user] ## Context Usage…`` block AND
-    # eats real tokens from claude's own context window every cycle.
-    # Context % is now computed from JSONL math (input + cache reads
-    # vs. 1M default for Claude 4.x models). See ``usage.context_pct_for_session``.
-    # _context_poll_task = asyncio.create_task(context_poll_loop(application.bot))
-    # logger.info("Context poll task started")
+    # Per-session context % is computed from JSONL math
+    # (usage.context_pct_for_session) — NOT by polling /context into panes.
+    # Polling wrote the modal's markdown into each session's JSONL as a fake
+    # user-turn (polluting the live card + burning tokens), so that path was
+    # removed. See doc/dm-multisession-spec.md §4.6.
 
     _metrics_flush_task = asyncio.create_task(metrics_flush_loop())
     logger.info("Metrics flush task started")
@@ -249,12 +242,7 @@ async def post_shutdown(
     application: "Application[Any, Any, Any, Any, Any, Any]",
 ) -> None:
     """Stop background tasks, flush queues, close HTTP clients."""
-    global \
-        _status_poll_task, \
-        _card_timer_task, \
-        _quota_alerts_task, \
-        _context_poll_task, \
-        _metrics_flush_task
+    global _status_poll_task, _card_timer_task, _quota_alerts_task, _metrics_flush_task
 
     if _status_poll_task:
         _status_poll_task.cancel()
@@ -283,15 +271,6 @@ async def post_shutdown(
         _quota_alerts_task = None
         logger.info("Quota alerts stopped")
 
-    if _context_poll_task:
-        _context_poll_task.cancel()
-        try:
-            await _context_poll_task
-        except asyncio.CancelledError:
-            pass
-        _context_poll_task = None
-        logger.info("Context poll stopped")
-
     if _metrics_flush_task:
         _metrics_flush_task.cancel()
         try:
@@ -314,8 +293,6 @@ async def post_shutdown(
     if session_monitor:
         await session_monitor.stop()
         logger.info("Session monitor stopped")
-
-    await close_transcribe_client()
 
 
 def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":

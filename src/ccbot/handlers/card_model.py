@@ -146,10 +146,6 @@ class Event:
     is_error: bool = False
     image_data: list[tuple[str, bytes]] | None = None  # tool_result images
 
-    @property
-    def is_tool(self) -> bool:
-        return self.type in ("tool_use", "tool_result")
-
 
 @dataclass
 class CardState:

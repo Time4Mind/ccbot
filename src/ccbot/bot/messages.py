@@ -607,14 +607,6 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if config.voice_backend == "off":
         await safe_reply(update.message, "⚠ Voice is disabled (VOICE_BACKEND=off).")
         return
-    if config.voice_backend == "openai" and not config.openai_api_key:
-        await safe_reply(
-            update.message,
-            "⚠ VOICE_BACKEND=openai but OPENAI_API_KEY is unset.\n"
-            "Set the key or switch VOICE_BACKEND to whisper/auto.",
-        )
-        return
-
     wid = active_window(user.id)
     if wid is None:
         await safe_reply(

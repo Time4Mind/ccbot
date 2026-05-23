@@ -53,18 +53,6 @@ def get_interactive_window(user_id: int) -> str | None:
     return _active_interactive_window.get(user_id)
 
 
-def set_interactive_mode(user_id: int, window_id: str) -> None:
-    """Mark a window as the user's currently-shown interactive UI."""
-    logger.debug("Set interactive mode: user=%d, window_id=%s", user_id, window_id)
-    _active_interactive_window[user_id] = window_id
-
-
-def clear_interactive_mode(user_id: int) -> None:
-    """Clear active interactive UI marker for a user (without deleting message)."""
-    logger.debug("Clear interactive mode: user=%d", user_id)
-    _active_interactive_window.pop(user_id, None)
-
-
 def get_interactive_msg_id(user_id: int, window_id: str) -> int | None:
     """Get the interactive message ID for a (user, window) pair."""
     return _interactive_msgs.get((user_id, window_id))
@@ -278,24 +266,3 @@ def clear_interactive_for_window(user_id: int, window_id: str) -> None:
     _interactive_msgs.pop((user_id, window_id), None)
     if _active_interactive_window.get(user_id) == window_id:
         _active_interactive_window.pop(user_id, None)
-
-
-def adopt_interactive_msg(user_id: int, window_id: str, msg_id: int) -> None:
-    """Register an externally-rendered message as the user's interactive UI
-    for ``window_id``. Used by the switcher-tap handler when the carrier
-    message is repurposed to host a bg session's stashed prompt — the
-    subsequent CB_ASK_* callbacks call ``handle_interactive_ui`` which
-    looks up this map to know which message to edit in place.
-    """
-    _interactive_msgs[(user_id, window_id)] = msg_id
-    _active_interactive_window[user_id] = window_id
-
-
-def render_interactive_keyboard(
-    window_id: str, ui_name: str = ""
-) -> InlineKeyboardMarkup:
-    """Public re-export of the keyboard builder — wanted by the switcher
-    tap path so it can paint a bg session's pending prompt without
-    going through ``handle_interactive_ui`` (which would re-capture
-    the pane and lose the snapshot we already took)."""
-    return _build_interactive_keyboard(window_id, ui_name=ui_name)

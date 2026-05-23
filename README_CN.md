@@ -43,7 +43,7 @@ ccbot 让你可以:
 - **基于 hook 的会话跟踪。** Claude Code 的 `SessionStart` hook 写入
   `session_map.json`;监控器轮询它。不依赖进程树检查或 claude SDK。
 - **语音 — 本地优先。** `whisper.cpp`(默认)或 macOS 上通过 PyObjC
-  的 Apple Speech。OpenAI fallback 存在但默认关闭 — 运行不需要 API key。
+  的 Apple Speech — 运行不需要 API key。
 
 完整的设计动机在 `doc/dm-multisession-spec.md`。实现地图在
 `doc/dm-multisession-plan.md`。

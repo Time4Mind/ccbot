@@ -53,8 +53,7 @@ ways that are intentional and not negotiable:
   writes `session_map.json`; the monitor polls it. No reliance on
   process-tree introspection or claude SDK.
 - **Voice transcription is local-first.** `whisper.cpp` (default) or
-  Apple Speech via PyObjC on macOS. The OpenAI fallback exists but is
-  off by default — no API key required to run.
+  Apple Speech via PyObjC on macOS — no API key required to run.
 
 The full design rationale lives in `doc/dm-multisession-spec.md`. The
 implementation map is in `doc/dm-multisession-plan.md`.

@@ -93,25 +93,11 @@ class TestConfigClaudeProjectsPath:
 
 
 @pytest.mark.usefixtures("_base_env")
-class TestConfigOpenAI:
-    def test_openai_defaults(self, monkeypatch):
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
-        cfg = Config()
-        assert cfg.openai_api_key == ""
-        assert cfg.openai_base_url == "https://api.openai.com/v1"
-
-    def test_openai_api_key(self, monkeypatch):
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-123")
-        cfg = Config()
-        assert cfg.openai_api_key == "sk-test-123"
-
-    def test_openai_base_url(self, monkeypatch):
-        monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.example.com/v1")
-        cfg = Config()
-        assert cfg.openai_base_url == "https://proxy.example.com/v1"
-
+class TestSensitiveEnvScrub:
     def test_openai_api_key_scrubbed_from_env(self, monkeypatch):
+        # OPENAI_API_KEY is in SENSITIVE_ENV_VARS, so Config() scrubs it from
+        # the environment — it must not leak to Claude Code subprocesses
+        # spawned via tmux (ccbot itself no longer reads it).
         import os
 
         monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")

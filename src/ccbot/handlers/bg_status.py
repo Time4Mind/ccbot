@@ -97,11 +97,6 @@ def _touch(entry: BgStatus) -> None:
     entry.last_change = time.time()
 
 
-def has_panel_content(user_id: int) -> bool:
-    """True if the user has any bg-status entry worth rendering."""
-    return bool(_bg.get(user_id))
-
-
 def update_status(
     user_id: int,
     session_id: str,

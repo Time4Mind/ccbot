@@ -82,6 +82,10 @@ Additional modules:
   session_recovery.py ─ Startup hygiene: reconcile w/ tmux + resolve stale window IDs
   session_claude_io.py─ Read-only Claude transcript discovery (encode_cwd, list, get)
   transcript_format.py─ Tool-summary + tool-result formatting (was inside TranscriptParser)
+  logging_setup.py    ─ Logging config (level via LOG_LEVEL, JSON via CCBOT_LOG_FORMAT)
+  metrics.py          ─ In-process counters → metrics.json
+  voice_install.py    ─ whisper.cpp auto-installer (binary + ggml model)
+  local_terminal.py   ─ Native-terminal attach (drives the local_terminal* settings)
 
 bot/ package (was bot.py before A1, split per CLAUDE.md size budget):
   __init__.py         ─ Re-exports create_bot, forward_command_handler
@@ -98,9 +102,9 @@ bot/ package (was bot.py before A1, split per CLAUDE.md size budget):
   messages.py         ─ text/voice/photo/document handlers, forward_command_handler,
                        bash !cmd capture
   session_events.py   ─ handle_new_message — claude → TG dispatch
-  commands/lifecycle.py    ─ /new /list /use /rename /kill /done /stop
-                            /menu /archive  (+ archive_session shared helper)
-  commands/info.py         ─ /history /screenshot /usage  (+ emit_*)
+  commands/lifecycle.py    ─ /new /kill /done /stop /menu /archive
+                            (+ archive_session shared helper)
+  commands/info.py         ─ /history /screenshot /usage /health /help (+ emit_*)
   callbacks/__init__.py    ─ Top-level dispatcher; tries each handler in order
   callbacks/dir_browser.py ─ CB_DIR_*, CB_SESSION_*  (+ Haiku summary cache)
   callbacks/window_picker.py ─ CB_WIN_*
@@ -113,6 +117,7 @@ bot/ package (was bot.py before A1, split per CLAUDE.md size budget):
   callbacks/history_pagination.py ─ CB_HISTORY_PREV/NEXT
   callbacks/interactive_ui.py     ─ CB_ASK_*  (Up/Down/Left/Right/Esc/Enter/...)
   callbacks/screenshot_keys.py    ─ CB_SCREENSHOT_REFRESH + CB_KEYS_*
+  callbacks/help.py        ─ CB_HLP_HOME / CB_HLP_SEC (inline /help doc)
 
 Handler modules (handlers/):
   message_sender.py   ─ safe_reply/safe_edit/safe_send + send_with_fallback
@@ -146,6 +151,14 @@ Handler modules (handlers/):
   cleanup.py          ─ Per-window state cleanup on archive
   callback_data.py    ─ Callback data prefix constants
   tg_format.py        ─ Table/code overflow → file attachment
+  card_model.py       ─ Event/CardState dataclasses + render/paginate/seed
+                       helpers (pure model layer split from notifications.py;
+                       notifications.py re-exports its names as a facade)
+  kb_mode.py          ─ kb-mode keyboard builder + pane-capture-to-PNG helper
+  response_builder.py ─ Paginated response builder (display truncation)
+  context_poll.py     ─ Background /context poller — PRESENT but DISABLED;
+                       JSONL math (usage.context_pct_for_session) is the live
+                       path (see bot/app.py)
 
 State files (~/.ccbot/ or $CCBOT_DIR/):
   state.json         ─ window states + display names + read offsets + user
@@ -173,7 +186,7 @@ State files (~/.ccbot/ or $CCBOT_DIR/):
 - **MarkdownV2 with fallback** — All messages go through `safe_reply`/`safe_edit`/`safe_send` which convert via `telegramify-markdown` and fall back to plain text on parse failure.
 - **No truncation at parse layer** — Full content preserved; splitting at send layer respects Telegram's 4096 char limit with expandable quote atomicity.
 - Only sessions registered in `session_map.json` (via hook) are monitored.
-- Notifications delivered to users via active_sessions reverse-map (claude session_id -> user with matching active session). Background sessions render their own per-session live cards.
+- Notifications delivered to users via active_sessions reverse-map (claude session_id -> user with matching active session). Background sessions emit no chat messages of their own; their state surfaces only as a panel row at the bottom of the active session's live card (`handlers.bg_status.render_panel`).
 - **Startup re-resolution** — Window IDs reset on tmux server restart. On startup, `resolve_stale_ids()` matches persisted display names against live windows to re-map IDs. Old state.json files keyed by window name are auto-migrated.
 - **Singleton lock** — `main.py` acquires an exclusive `fcntl.flock(LOCK_EX | LOCK_NB)` on `$CCBOT_DIR/ccbot.lock` before any tmux / bot startup. `FD_CLOEXEC` prevents the lock from leaking into subprocess children. A contending instance hits `OSError`, logs the path, and exits with code 1 — the supervisor's restart-backoff then just waits for the existing instance to die.
 - **Orphan-process hygiene** — `archive_session` and `idle_archive_sweep` follow `tmux kill_window` with `tmux_manager.kill_orphan_claude_processes(claude_session_id)`: pgrep + SIGTERM any `claude --resume <id>` survivors. Catches the rare case where `claude` traps SIGHUP or the bot crashed mid-archive, leaving an orphan writer on the session's JSONL. Self/parent PID guarded.

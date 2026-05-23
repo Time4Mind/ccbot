@@ -1,5 +1,16 @@
 # DM Multi-Session — Implementation Plan
 
+> **Status: COMPLETED & SUPERSEDED — historical record.** The DM
+> multi-session refactor shipped long ago. The `file:line` hotspot map
+> and "files that change" table below target the **pre-PR-#97 monolithic
+> `src/ccbot/bot.py`**, which no longer exists (it is now the `bot/`
+> package), so those line references no longer resolve and the symbols
+> they target (`thread_bindings`, `_get_thread_id`, `on_topic_*`,
+> `unbind_thread`, …) have been fully removed. Kept for provenance only.
+> Authoritative current architecture: `.claude/rules/architecture.md` +
+> `.claude/rules/dm-architecture.md`. The companion `dm-multisession-spec.md`
+> remains the living product spec.
+
 Companion to `dm-multisession-spec.md`. Maps spec sections to concrete diffs, ordered for atomic commits.
 
 Total refactoring scope: ~600–700 lines changed across 6 source modules and 4 test files. Surgical replacement of routing logic, not a rewrite.

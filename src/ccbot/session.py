@@ -739,7 +739,7 @@ class SessionManager:
         "live_lag": 4,  # seconds, see PREVIEW_LIVE_LAG
         "voice": "auto",  # "auto" | "whisper" | "apple" | "off"
         # Day-of-week the Anthropic weekly window resets on. Drives the %/d
-        # burn-rate computation in /status. Values: "mon".."sun".
+        # burn-rate computation in Menu → Status. Values: "mon".."sun".
         "weekly_reset_day": "mon",
         # Auto-approve interactive Yes/No prompts that --dangerously-skip-
         # permissions doesn't already bypass (e.g. WebFetch per-domain

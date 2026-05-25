@@ -21,7 +21,6 @@ import time
 from typing import TYPE_CHECKING
 
 from telegram import Bot
-from telegram.constants import ChatAction
 
 from ..config import config
 from ..session import session_manager
@@ -50,6 +49,7 @@ from .notifications import (
     maybe_finalize_stalled,
     refresh_panel,
 )
+from .typing import fire_typing
 
 # Match option lines like "  1. Yes" / " ❯ 2. Yes, and don't ask again".
 _OPTION_LINE_RE = re.compile(r"^[\s❯>]*?(\d+)\.\s+(.+?)\s*$")
@@ -350,30 +350,16 @@ async def _drive_typing_indicator(
         )
 
     if not is_bg_session and not in_menu and (card_busy or pane_busy):
-        try:
-            await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
-            logger.info(
-                "typing_fired source=status_polling user=%d sess=%s wid=%s "
-                "card_busy=%s pane_busy=%s status=%r",
-                user_id,
-                sess.id if sess else "-",
-                window_id,
-                card_busy,
-                pane_busy,
-                status_line[:40] if status_line else "",
-                extra={
-                    "event": "typing_fired",
-                    "source": "status_polling",
-                    "user_id": user_id,
-                    "session_id": sess.id if sess else None,
-                    "window_id": window_id,
-                    "card_busy": card_busy,
-                    "pane_busy": pane_busy,
-                    "status_line": status_line[:80] if status_line else "",
-                },
-            )
-        except Exception as e:
-            logger.debug("send_chat_action TYPING failed: %s", e)
+        await fire_typing(
+            bot,
+            user_id,
+            "status_polling",
+            session_id=sess.id if sess else None,
+            window_id=window_id,
+            card_busy=card_busy,
+            pane_busy=pane_busy,
+            status_line=status_line[:80] if status_line else "",
+        )
 
 
 async def update_status_message(

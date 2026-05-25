@@ -20,7 +20,6 @@ import logging
 from pathlib import Path
 
 from telegram import Bot
-from telegram.constants import ChatAction
 
 from ..config import config
 from ..handlers import bg_status
@@ -35,6 +34,7 @@ from ..handlers.notifications import (
     refresh_panel,
     update_session_card,
 )
+from ..handlers.typing import fire_typing
 from ..session import session_manager
 from ..session_monitor import NewMessage
 from ..terminal_parser import extract_interactive_content
@@ -96,23 +96,13 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         # once events stop. Bg sessions skip — they don't surface in
         # the chat header.
         if is_active:
-            try:
-                await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
-                logger.info(
-                    "typing_fired source=session_events user=%d sess=%s ctype=%s",
-                    user_id,
-                    sess.id,
-                    msg.content_type,
-                    extra={
-                        "event": "typing_fired",
-                        "source": "session_events",
-                        "user_id": user_id,
-                        "session_id": sess.id,
-                        "content_type": msg.content_type,
-                    },
-                )
-            except Exception as e:
-                logger.debug("send_chat_action TYPING failed: %s", e)
+            await fire_typing(
+                bot,
+                user_id,
+                "session_events",
+                session_id=sess.id,
+                content_type=msg.content_type,
+            )
 
         if not config.show_tool_calls and msg.content_type in (
             "tool_use",

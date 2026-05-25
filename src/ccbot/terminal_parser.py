@@ -333,6 +333,20 @@ SPINNER_AMBIGUOUS = frozenset(["●", "·"])
 
 _STATUS_TIME_STATS_RE = re.compile(r"\(\s*\d+(?:m\s*\d+)?\s*[smh]")
 
+# Post-thinking finishing markers like ``✻ Cogitated for 2m 23s`` or
+# ``✻ Thought for 14s`` use the same spinner glyph as a live status line
+# but are *static* — they sit on the pane indefinitely after a turn
+# closes. A ``claude --resume`` re-renders the previous state, so these
+# lines persist on the pane forever and would otherwise read as
+# "permanently busy" to ``parse_status_line``, locking
+# ``_wait_for_resume_settle`` until its 200s timeout.
+# Discriminator: live status uses present-participle (``Cogitating…``);
+# finishing marker uses past-tense ``<verb> for <time>``.
+_STATUS_FINISHED_RE = re.compile(
+    r"^\S+\s+for\s+\d+(?:\s*m\s*\d+)?\s*[smh]\b",
+    re.IGNORECASE,
+)
+
 
 def parse_status_line(pane_text: str) -> str | None:
     """Extract the Claude Code busy-state status line.
@@ -386,7 +400,13 @@ def parse_status_line(pane_text: str) -> str | None:
             continue
         first = line[0]
         if first in SPINNER_ONLY:
-            return line[1:].strip()
+            rest = line[1:].strip()
+            # Skip static finishing markers (``Cogitated for 2m 23s``)
+            # so they don't read as a permanent busy state — see
+            # ``_STATUS_FINISHED_RE`` doc above.
+            if _STATUS_FINISHED_RE.match(rest):
+                continue
+            return rest
         if first in SPINNER_AMBIGUOUS:
             rest = line[1:].strip()
             if _STATUS_TIME_STATS_RE.search(rest):

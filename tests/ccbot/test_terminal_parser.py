@@ -80,6 +80,33 @@ class TestParseStatusLine:
     def test_uses_fixture(self, sample_pane_status_line: str):
         assert parse_status_line(sample_pane_status_line) == "Reading file src/main.py"
 
+    @pytest.mark.parametrize(
+        "finishing_line",
+        [
+            "✻ Cogitated for 2m 23s",
+            "✻ Thought for 14s",
+            "✻ Cogitated for 5s",
+            "✻ Thought for 1h 12m",
+        ],
+    )
+    def test_skips_finishing_marker(self, finishing_line: str, chrome: str):
+        """Static post-thinking lines (``Cogitated for X`` / ``Thought for X``)
+        re-render forever after ``claude --resume`` and must NOT count as a
+        live status — otherwise ``_wait_for_resume_settle`` reads the pane as
+        permanently busy and the bot freezes for the full timeout.
+        """
+        pane = f"some output\n{finishing_line}\n{chrome}"
+        assert parse_status_line(pane) is None
+
+    def test_finishing_marker_skipped_in_favor_of_live_spinner(
+        self, chrome: str
+    ) -> None:
+        """If a real spinner line sits above the finishing marker, parse it."""
+        pane = f"earlier output\n✻ Thinking…\n✻ Cogitated for 2m 23s\n{chrome}"
+        # ``Cogitated for X`` (nearest to chrome) is skipped; we fall back
+        # to the live ``Thinking…`` line above it.
+        assert parse_status_line(pane) == "Thinking…"
+
 
 # ── extract_interactive_content ──────────────────────────────────────────
 

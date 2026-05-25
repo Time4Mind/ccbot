@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any
 
 from telegram import Bot, Update
-from telegram.constants import ChatAction
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
@@ -53,6 +52,7 @@ from ..handlers.notifications import (
     repost_card,
     resume_card_view,
 )
+from ..handlers.typing import fire_typing
 from ..session_models import Session
 from ..handlers.inbox import save_inbox_file
 from ..markdown_v2 import convert_markdown
@@ -232,18 +232,7 @@ async def forward_command_handler(
     logger.info(
         "Forwarding command %s to window %s (user=%d)", cc_slash, display, user.id
     )
-    await update.message.chat.send_action(ChatAction.TYPING)
-    logger.info(
-        "typing_fired source=forward_command user=%d wid=%s",
-        user.id,
-        wid,
-        extra={
-            "event": "typing_fired",
-            "source": "forward_command",
-            "user_id": user.id,
-            "window_id": wid,
-        },
-    )
+    await fire_typing(context.bot, user.id, "forward_command", window_id=wid)
     if await _intercept_if_pending_ui(context.bot, user.id, wid, update.message):
         return
     sess = session_manager.find_session_by_window(wid)
@@ -380,18 +369,7 @@ async def unsupported_content_handler(
             body_parts.extend(hidden_urls)
         text_to_send = "\n".join(body_parts)
 
-        await msg.chat.send_action(ChatAction.TYPING)
-        logger.info(
-            "typing_fired source=caption_forward user=%d wid=%s",
-            user.id,
-            wid,
-            extra={
-                "event": "typing_fired",
-                "source": "caption_forward",
-                "user_id": user.id,
-                "window_id": wid,
-            },
-        )
+        await fire_typing(context.bot, user.id, "caption_forward", window_id=wid)
         if await _intercept_if_pending_ui(context.bot, user.id, wid, msg):
             return
         sess = session_manager.find_session_by_window(wid)
@@ -445,23 +423,7 @@ async def _forward_inbox_file(
     else:
         rel_path = str(file_path)
     text_to_send = f"{caption}\n\n{rel_path}" if caption.strip() else rel_path
-    try:
-        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-        logger.info(
-            "typing_fired source=inbox_file_forward user=%d wid=%s label=%s",
-            user_id,
-            wid,
-            label,
-            extra={
-                "event": "typing_fired",
-                "source": "inbox_file_forward",
-                "user_id": user_id,
-                "window_id": wid,
-                "label": label,
-            },
-        )
-    except Exception:
-        pass
+    await fire_typing(bot, user_id, "inbox_file_forward", window_id=wid, label=label)
     return await session_manager.send_to_window(wid, text_to_send)
 
 
@@ -638,18 +600,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await safe_reply(update.message, f"⚠ Transcription failed: {e}")
         return
 
-    await update.message.chat.send_action(ChatAction.TYPING)
-    logger.info(
-        "typing_fired source=voice_handler user=%d wid=%s",
-        user.id,
-        wid,
-        extra={
-            "event": "typing_fired",
-            "source": "voice_handler",
-            "user_id": user.id,
-            "window_id": wid,
-        },
-    )
+    await fire_typing(context.bot, user.id, "voice_handler", window_id=wid)
 
     if await _intercept_if_pending_ui(context.bot, user.id, wid, update.message):
         return
@@ -919,24 +870,10 @@ async def _dispatch_text_to_active(
         # its first event (long tool prelude / thinking) and
         # ``status_polling`` won't fire typing until the pane enters
         # the busy-spinner state. Without this early fire the chat
-        # looks frozen.
-        try:
-            await context.bot.send_chat_action(
-                chat_id=user_id, action=ChatAction.TYPING
-            )
-            logger.info(
-                "typing_fired source=text_handler.post_send user=%d wid=%s",
-                user_id,
-                wid,
-                extra={
-                    "event": "typing_fired",
-                    "source": "text_handler.post_send",
-                    "user_id": user_id,
-                    "window_id": wid,
-                },
-            )
-        except Exception:
-            pass
+        # looks frozen. fire_typing throttles to one call per ~4 s
+        # per user — if text_handler already fired Typing a moment
+        # ago, this is a silent no-op (the indicator is still on).
+        await fire_typing(context.bot, user_id, "text_handler.post_send", window_id=wid)
 
         sess = session_manager.find_session_by_window(wid)
         if sess is not None:
@@ -1001,18 +938,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if wid is None:
         return
 
-    await update.message.chat.send_action(ChatAction.TYPING)
-    logger.info(
-        "typing_fired source=text_handler user=%d wid=%s",
-        user.id,
-        wid,
-        extra={
-            "event": "typing_fired",
-            "source": "text_handler",
-            "user_id": user.id,
-            "window_id": wid,
-        },
-    )
+    await fire_typing(context.bot, user.id, "text_handler", window_id=wid)
 
     # New message pushes pane content down — kill any in-flight bash capture.
     cancel_bash_capture(user.id, wid)

@@ -28,9 +28,12 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import aiofiles
+
+if TYPE_CHECKING:
+    from telegram import Bot
 
 from .config import config
 from .session_models import ClaudeSession, Session, SessionState, WindowState
@@ -55,6 +58,12 @@ logger = logging.getLogger(__name__)
 _RESUME_SETTLE_BUSY_GRACE = 6.0  # s to wait for a compaction spinner to appear
 _RESUME_SETTLE_IDLE_STABLE = 4.0  # s the pane must stay idle to count as settled
 _RESUME_SETTLE_POLL = 1.5  # s between pane captures
+# Inter-send gap when the background watcher drains buffered prompts —
+# claude's TUI needs a tick to separate back-to-back Enter submissions.
+_RESUME_SETTLE_DRAIN_GAP = 0.3
+# How often the watcher fires Telegram TYPING while waiting. ~4s matches
+# fire_typing's own throttle and Telegram's ~5s indicator decay.
+_RESUME_SETTLE_TYPING_REFRESH = 4.0
 
 
 def key_matches_window(key: str, window_id: str) -> bool:
@@ -120,11 +129,18 @@ class SessionManager:
     # Value = {"summary": str, "mtime": float, "ts": float}.
     summary_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Window ids that were just `claude --resume`d and may still be
-    # auto-compacting. The first ``send_to_window`` to such a window waits
-    # for the pane to settle before typing (see ``_wait_for_resume_settle``).
+    # auto-compacting. While a window is here, ``send_to_window`` buffers
+    # prompts into ``_pending_sends`` instead of typing them, and a
+    # background task in ``_resume_settle_tasks`` drains the buffer once
+    # the pane settles (see ``_watch_resume_settle``).
     # In-memory only — never persisted; a restart means compaction has long
-    # finished anyway. Discarded on the first settled send.
+    # finished anyway.
     _resuming_windows: set[str] = field(default_factory=set)
+    # Prompts buffered while a window is mid-resume. Drained in arrival
+    # order by ``_watch_resume_settle`` after the pane goes idle.
+    _pending_sends: dict[str, list[str]] = field(default_factory=dict)
+    # Background watcher tasks, one per resuming window.
+    _resume_settle_tasks: dict[str, "asyncio.Task[None]"] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self._load_state()
@@ -879,11 +895,120 @@ class SessionManager:
 
     # --- Tmux helpers ---
 
-    def mark_window_resuming(self, window_id: str) -> None:
-        """Flag a window as freshly ``--resume``d so its first send waits out
-        any auto-compaction (see ``_wait_for_resume_settle``)."""
-        if config.resume_settle_timeout > 0:
+    def mark_window_resuming(
+        self,
+        window_id: str,
+        *,
+        bot: "Bot | None" = None,
+        user_id: int | None = None,
+    ) -> None:
+        """Flag a window as freshly ``--resume``d and spawn the settle watcher.
+
+        Prompts that arrive while the window is flagged are buffered into
+        ``_pending_sends`` by ``send_to_window`` and drained by
+        ``_watch_resume_settle`` once the pane goes idle — the message
+        handler never blocks on the wait. When ``bot``/``user_id`` are
+        supplied, the watcher also keeps Telegram's TYPING indicator alive
+        so the chat doesn't look frozen during a long compaction.
+        """
+        if config.resume_settle_timeout <= 0:
+            return
+        if window_id in self._resuming_windows:
+            return  # already being watched
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Called outside an event loop (e.g. sync test setup) — keep
+            # the flag-only fallback so existing behavior is preserved.
             self._resuming_windows.add(window_id)
+            return
+        self._resuming_windows.add(window_id)
+        self._resume_settle_tasks[window_id] = loop.create_task(
+            self._watch_resume_settle(window_id, bot, user_id),
+            name=f"resume-settle:{window_id}",
+        )
+
+    async def _watch_resume_settle(
+        self,
+        window_id: str,
+        bot: "Bot | None",
+        user_id: int | None,
+    ) -> None:
+        """Background watcher for a resuming window.
+
+        Polls the pane via ``_wait_for_resume_settle`` until it settles
+        (or the configured timeout elapses), then drains anything
+        ``send_to_window`` buffered into ``_pending_sends`` while the
+        gate was up. Concurrently keeps Telegram's TYPING indicator
+        refreshed so the user sees the bot is still working.
+        """
+        stop_typing = asyncio.Event()
+
+        async def _typing_keepalive() -> None:
+            if bot is None or user_id is None:
+                return
+            # Local import — handlers.typing pulls in telegram modules
+            # and ``session`` is imported very early.
+            from .handlers.typing import fire_typing
+
+            while not stop_typing.is_set():
+                try:
+                    await fire_typing(
+                        bot, user_id, "resume_settle", window_id=window_id
+                    )
+                except Exception as e:
+                    logger.debug("resume-settle typing keepalive failed: %s", e)
+                try:
+                    await asyncio.wait_for(
+                        stop_typing.wait(), timeout=_RESUME_SETTLE_TYPING_REFRESH
+                    )
+                except asyncio.TimeoutError:
+                    pass
+
+        keepalive_task = asyncio.create_task(
+            _typing_keepalive(), name=f"resume-settle-typing:{window_id}"
+        )
+        try:
+            settled = await self._wait_for_resume_settle(window_id)
+            logger.info(
+                "resume-settle gate cleared for window %s (settled=%s, background)",
+                window_id,
+                settled,
+            )
+            pending = self._pending_sends.pop(window_id, [])
+            for i, text in enumerate(pending):
+                ok = await tmux_manager.send_keys(window_id, text)
+                if not ok:
+                    logger.warning(
+                        "resume-settle: failed to drain pending send #%d "
+                        "for window %s (text_len=%d)",
+                        i,
+                        window_id,
+                        len(text),
+                    )
+                if i < len(pending) - 1:
+                    await asyncio.sleep(_RESUME_SETTLE_DRAIN_GAP)
+            if pending:
+                logger.info(
+                    "resume-settle: drained %d pending send(s) for window %s",
+                    len(pending),
+                    window_id,
+                )
+        except Exception as e:
+            logger.exception(
+                "resume-settle watcher failed for window %s: %s", window_id, e
+            )
+        finally:
+            stop_typing.set()
+            try:
+                await keepalive_task
+            except Exception:
+                pass
+            self._resuming_windows.discard(window_id)
+            self._resume_settle_tasks.pop(window_id, None)
+            # Belt-and-suspenders: on exception path, drop any prompts
+            # that didn't get drained so they can't leak forever.
+            self._pending_sends.pop(window_id, None)
 
     async def _wait_for_resume_settle(self, window_id: str) -> bool:
         """Block until a just-resumed window is safe to type into.
@@ -931,7 +1056,14 @@ class SessionManager:
         return False
 
     async def send_to_window(self, window_id: str, text: str) -> tuple[bool, str]:
-        """Send text to a tmux window by ID."""
+        """Send text to a tmux window by ID.
+
+        For windows mid-resume (``mark_window_resuming`` was called and
+        the background watcher hasn't settled yet), the text is buffered
+        into ``_pending_sends`` and we return success immediately — the
+        watcher drains the buffer when the pane is ready. This keeps the
+        message handler off the hot path of a 60-200s compaction wait.
+        """
         display = self.get_display_name(window_id)
         logger.debug(
             "send_to_window: window_id=%s (%s), text_len=%d",
@@ -942,16 +1074,17 @@ class SessionManager:
         window = await tmux_manager.find_window_by_id(window_id)
         if not window:
             return False, "Window not found (may have been closed)"
-        # A freshly-resumed window may still be auto-compacting; hold the
-        # first send until the pane settles so the prompt isn't dropped.
         if window_id in self._resuming_windows:
-            settled = await self._wait_for_resume_settle(window_id)
-            self._resuming_windows.discard(window_id)
+            queue = self._pending_sends.setdefault(window_id, [])
+            queue.append(text)
             logger.info(
-                "resume-settle gate cleared for window %s (settled=%s)",
+                "send_to_window buffered: window=%s pending=%d text_len=%d "
+                "(resume in progress)",
                 window_id,
-                settled,
+                len(queue),
+                len(text),
             )
+            return True, f"Queued for {display} (session restoring)"
         success = await tmux_manager.send_keys(window.window_id, text)
         if success:
             return True, f"Sent to {display}"

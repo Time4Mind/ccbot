@@ -306,7 +306,6 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
 
     Returns (success, message).
     """
-    del bot  # unused for now; reserved for future logging
     if sess.state in ("active", "idle"):
         return False, "Session already live"
     workdir = sess.workdir or ""
@@ -321,10 +320,13 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
         return False, message
 
     # A near-limit transcript auto-compacts on resume (60-110s) before it
-    # accepts input. Flag the window so the first message waits the pane out
-    # instead of getting typed into a busy pane and dropped.
+    # accepts input. Flag the window so any prompts that arrive while
+    # we're still compacting buffer into _pending_sends instead of being
+    # typed mid-compaction. The background watcher drains the buffer
+    # once the pane settles AND keeps Telegram TYPING refreshed so the
+    # chat doesn't look frozen during the wait.
     if sess.claude_session_id:
-        session_manager.mark_window_resuming(created_wid)
+        session_manager.mark_window_resuming(created_wid, bot=bot, user_id=user_id)
 
     hook_ok = await session_manager.wait_for_session_map_entry(
         created_wid, timeout=15.0

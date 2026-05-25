@@ -86,10 +86,15 @@ async def create_and_activate_session(
     # SessionStart hook. The hook is confirmed (and the fresh session_id
     # bound) after the paint, before any pending text is forwarded.
     if resume_session_id:
-        # A near-limit transcript auto-compacts on resume (60-110s); flag the
-        # window so the held pending text (and any first message) waits for
-        # the pane to settle instead of being typed mid-compaction and lost.
-        session_manager.mark_window_resuming(created_wid)
+        # A near-limit transcript auto-compacts on resume (60-110s); flag
+        # the window so any prompt that arrives while we're still
+        # compacting buffers into _pending_sends instead of being typed
+        # mid-compaction. The background watcher drains the buffer after
+        # the pane settles AND refreshes Telegram TYPING in the meantime
+        # so the chat doesn't look frozen.
+        session_manager.mark_window_resuming(
+            created_wid, bot=context.bot, user_id=user.id
+        )
         hook_ok = await session_manager.wait_for_session_map_entry(
             created_wid, timeout=15.0
         )

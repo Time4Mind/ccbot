@@ -163,6 +163,9 @@ class TestResumeSettleGate:
     async def test_holds_until_compaction_ends(
         self, mgr: SessionManager, monkeypatch, fast_gate
     ) -> None:
+        """Prompt arriving mid-resume is buffered, then drained once the
+        pane settles. ``send_to_window`` returns immediately (non-blocking)
+        and the background watcher calls ``send_keys`` after settle."""
         calls = {"n": 0}
 
         def cap(_wid):
@@ -173,26 +176,66 @@ class TestResumeSettleGate:
         mgr.mark_window_resuming("@1")
 
         ok, _ = await mgr.send_to_window("@1", "do the thing")
-
+        # Non-blocking: returns success with the prompt buffered, NOT
+        # typed yet — the wait happens in the background watcher.
         assert ok is True
-        # Sent only after the pane went (and stayed) idle.
+        assert mock_tmux.send_keys.await_count == 0
+        assert mgr._pending_sends.get("@1") == ["do the thing"]
+
+        # Wait for the watcher to finish (it polls every 20ms in fast_gate).
+        task = mgr._resume_settle_tasks.get("@1")
+        assert task is not None
+        await task
+
         mock_tmux.send_keys.assert_awaited_once()
         assert calls["n"] >= 3  # saw busy at least twice, then idle
         assert "@1" not in mgr._resuming_windows  # gate cleared
+        assert "@1" not in mgr._pending_sends  # buffer drained
 
     @pytest.mark.asyncio
     async def test_small_session_sends_after_grace(
         self, mgr: SessionManager, monkeypatch, fast_gate
     ) -> None:
-        """Never-busy pane → no compaction → send after the busy grace."""
+        """Never-busy pane → no compaction → buffer drains after busy-grace."""
         mock_tmux = self._mock_tmux(monkeypatch, lambda _w: _IDLE_PANE)
         mgr.mark_window_resuming("@1")
 
         ok, _ = await mgr.send_to_window("@1", "hi")
-
         assert ok is True
+        # Still buffered until the watcher hits busy-grace timeout.
+        assert mock_tmux.send_keys.await_count == 0
+
+        task = mgr._resume_settle_tasks.get("@1")
+        assert task is not None
+        await task
+
         mock_tmux.send_keys.assert_awaited_once()
         assert mock_tmux.capture_pane.await_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_multiple_prompts_buffered_and_drained_in_order(
+        self, mgr: SessionManager, monkeypatch, fast_gate
+    ) -> None:
+        """Several prompts during a resume should drain in arrival order
+        once the pane settles — not get sent concurrently mid-compact."""
+        mock_tmux = self._mock_tmux(monkeypatch, lambda _w: _IDLE_PANE)
+        mgr.mark_window_resuming("@1")
+
+        for text in ("first", "second", "third"):
+            ok, _ = await mgr.send_to_window("@1", text)
+            assert ok is True
+
+        # All three are buffered, nothing typed yet.
+        assert mock_tmux.send_keys.await_count == 0
+        assert mgr._pending_sends["@1"] == ["first", "second", "third"]
+
+        task = mgr._resume_settle_tasks.get("@1")
+        assert task is not None
+        await task
+
+        assert mock_tmux.send_keys.await_count == 3
+        sent_texts = [c.args[1] for c in mock_tmux.send_keys.await_args_list]
+        assert sent_texts == ["first", "second", "third"]
 
     @pytest.mark.asyncio
     async def test_non_resuming_window_sends_immediately(
@@ -212,3 +255,20 @@ class TestResumeSettleGate:
         monkeypatch.setattr(config, "resume_settle_timeout", 0.0)
         mgr.mark_window_resuming("@9")
         assert "@9" not in mgr._resuming_windows
+        assert "@9" not in mgr._resume_settle_tasks
+
+    @pytest.mark.asyncio
+    async def test_mark_resuming_is_idempotent(
+        self, mgr: SessionManager, monkeypatch, fast_gate
+    ) -> None:
+        """Calling ``mark_window_resuming`` twice for the same window doesn't
+        spawn a second watcher (the first claim wins)."""
+        self._mock_tmux(monkeypatch, lambda _w: _IDLE_PANE)
+        mgr.mark_window_resuming("@1")
+        task1 = mgr._resume_settle_tasks.get("@1")
+        mgr.mark_window_resuming("@1")
+        task2 = mgr._resume_settle_tasks.get("@1")
+        assert task1 is task2
+        # Cleanup so we don't leave a dangling task across tests.
+        if task1:
+            await task1

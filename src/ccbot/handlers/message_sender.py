@@ -194,8 +194,11 @@ async def send_photo(
 async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message:
     """Reply with formatting, falling back to plain text on failure."""
     reply_bot = getattr(message, "_bot", None)
-    if reply_bot is not None:
-        rich_msg = await _try_rich_send(reply_bot, message.chat_id, text, kwargs)
+    reply_chat_id = getattr(message, "chat_id", None) or getattr(
+        getattr(message, "chat", None), "id", None
+    )
+    if reply_bot is not None and reply_chat_id is not None:
+        rich_msg = await _try_rich_send(reply_bot, reply_chat_id, text, kwargs)
         if rich_msg is not None:
             return rich_msg
     kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)

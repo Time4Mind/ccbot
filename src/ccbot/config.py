@@ -189,6 +189,14 @@ class Config:
         )
         self.is_sandbox: bool = os.getenv("IS_SANDBOX", "1") not in ("", "0", "false")
 
+        # Bot API 10.1 rich messages (native markdown rendering). When on,
+        # safe_send/safe_reply/safe_edit try sendRichMessage first and fall
+        # back to the MarkdownV2 pipeline on any failure. Kill switch:
+        # CCBOT_RICH_MESSAGES=off.
+        self.rich_messages: bool = os.getenv(
+            "CCBOT_RICH_MESSAGES", "on"
+        ).strip().lower() not in ("off", "0", "false")
+
         # Optional outbound proxy for the Telegram Bot API. Useful when the
         # host is on a network that cannot reach api.telegram.org directly
         # (e.g. RU-blocked IPs). Accepts http://host:port or socks5://host:port.

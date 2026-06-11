@@ -84,6 +84,11 @@ Additional modules:
   transcript_format.py─ Tool-summary + tool-result formatting (was inside TranscriptParser)
   logging_setup.py    ─ Logging config (level via LOG_LEVEL, JSON via CCBOT_LOG_FORMAT)
   metrics.py          ─ In-process counters → metrics.json
+  rich.py             ─ Bot API 10.1 rich messages via raw Bot._post
+                       (sendRichMessage / rich edit; to_rich_markdown
+                       escapes bare < and maps expandable-quote sentinels
+                       to <details>); safe_* try rich first, fall back to
+                       MarkdownV2 (kill switch CCBOT_RICH_MESSAGES=off)
   voice_install.py    ─ whisper.cpp auto-installer (binary + ggml model)
   local_terminal.py   ─ Native-terminal attach (drives the local_terminal* settings)
 

@@ -2,9 +2,12 @@
 
 Spec section 12 (O1): keep the existing `telegramify-markdown` rendering
 pipeline for small content; when a code block exceeds size thresholds, peel
-it out into a downloadable file with a short inline preview. Markdown tables
-that cannot render legibly in TG (more than 3 columns or >60-char width) are
-likewise emitted as `.md` attachments.
+it out into a downloadable file with a short inline preview.
+
+Tables: with rich messages on (`config.rich_messages`, Bot API 10.1) GFM
+tables render natively, so only tables beyond the API's 20-column cap are
+diverted to a PNG attachment. With rich off, the legacy MarkdownV2 limits
+apply (more than 3 columns or >60-char width → PNG).
 
 Public API:
   split_overflow(text) -> FormatResult
@@ -15,12 +18,17 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from ..config import config
+
 # Thresholds — calibrated empirically; overridable via env in a future commit.
 CODE_MAX_LINES = 120
 CODE_MAX_CHARS = 3000
 CODE_PREVIEW_LINES = 30
 TABLE_MAX_COLS = 3
 TABLE_MAX_WIDTH = 60
+# Bot API 10.1 hard cap — 21+ columns is rejected with
+# RICH_MESSAGE_TABLE_COLS_TOO_MANY, so such tables still go out as PNG.
+RICH_TABLE_MAX_COLS = 20
 
 
 @dataclass
@@ -179,7 +187,12 @@ def split_overflow(text: str) -> FormatResult:
         for start, end, slab in reversed(tables):
             cols = _table_cols(slab)
             width = _table_width(slab)
-            if cols <= TABLE_MAX_COLS and width <= TABLE_MAX_WIDTH:
+            if config.rich_messages:
+                # Native rich-table rendering — divert only what the API
+                # itself rejects (> RICH_TABLE_MAX_COLS columns).
+                if cols <= RICH_TABLE_MAX_COLS:
+                    continue
+            elif cols <= TABLE_MAX_COLS and width <= TABLE_MAX_WIDTH:
                 continue
             idx = len(attachments) + 1
             # Store the source markdown — sender will pretty-pad and

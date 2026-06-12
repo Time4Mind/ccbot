@@ -98,6 +98,44 @@ class TestChunkFinalText:
                 f"chunk exceeds byte budget: {_estimate_md_v2_size(c)}"
             )
 
+    def test_table_split_reemits_header(self) -> None:
+        """A GFM table cut across pages re-emits header + separator so
+        every page renders as a valid table (pages 2+ were headerless
+        junk on the phone)."""
+        header = "| name | value |"
+        sep = "|------|-------|"
+        rows = [f"| row{i:02d} | val{i:02d} |" for i in range(40)]
+        text = "\n".join([header, sep, *rows])
+        chunks = _chunk_final_text(text, budget_lines=10)
+        assert len(chunks) >= 2
+        for chunk in chunks:
+            lines = chunk.split("\n")
+            assert lines[0] == header, f"page missing header: {chunk!r}"
+            assert lines[1] == sep, f"page missing separator: {chunk!r}"
+
+    def test_prose_then_table_continuation(self) -> None:
+        prose = "\n".join(f"p{i}" for i in range(8))
+        header = "| a | b |"
+        sep = "|---|---|"
+        rows = [f"| {i} | {i} |" for i in range(30)]
+        text = prose + "\n\n" + "\n".join([header, sep, *rows])
+        chunks = _chunk_final_text(text, budget_lines=10)
+        assert len(chunks) >= 2
+        for chunk in chunks:
+            lines = chunk.split("\n")
+            row_idxs = [i for i, ln in enumerate(lines) if ln.startswith("|")]
+            if row_idxs:
+                first = row_idxs[0]
+                assert lines[first] == header
+                assert lines[first + 1] == sep
+
+    def test_prose_only_gets_no_table_prefix(self) -> None:
+        text = "\n".join(f"plain line {i}" for i in range(40))
+        chunks = _chunk_final_text(text, budget_lines=10)
+        assert len(chunks) >= 2
+        for chunk in chunks:
+            assert "|" not in chunk
+
 
 class TestRechunkOversizedFinalsInplace:
     def test_byte_overflow_triggers_split(self) -> None:

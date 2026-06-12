@@ -114,3 +114,38 @@ class TestSplitMessage:
         for chunk in chunks:
             fence_count = chunk.count("```")
             assert fence_count % 2 == 0, f"Unbalanced fences in: {chunk!r}"
+
+    def test_table_split_reemits_header(self):
+        """A table cut at a chunk boundary re-emits header + separator
+        so each chunk renders as a valid GFM table."""
+        header = "| name | value |"
+        sep = "|------|-------|"
+        rows = [f"| row{i:02d} | data{i:02d} |" for i in range(30)]
+        text = "\n".join([header, sep, *rows])
+        chunks = split_message(text, max_length=120)
+        assert len(chunks) > 1
+        for chunk in chunks:
+            lines = chunk.split("\n")
+            assert lines[0] == header, f"chunk missing header: {chunk!r}"
+            assert lines[1] == sep, f"chunk missing separator: {chunk!r}"
+
+    def test_table_fitting_one_chunk_untouched(self):
+        table = "| a | b |\n|---|---|\n| 1 | 2 |"
+        assert split_message(table, max_length=100) == [table]
+
+    def test_pipe_lines_in_code_block_not_table(self):
+        """`|` lines inside a code fence must not trigger header re-emit."""
+        body = "\n".join("| not | a | table |" for _ in range(10))
+        text = f"```\n{body}\n```"
+        chunks = split_message(text, max_length=80)
+        assert len(chunks) > 1
+        for chunk in chunks:
+            assert chunk.startswith("```"), f"expected fence reopen: {chunk!r}"
+
+    def test_text_after_table_does_not_reemit_header(self):
+        """Once the table ended, later splits must not inject its header."""
+        table = "| a | b |\n|---|---|\n| 1 | 2 |"
+        prose = "\n".join(f"prose line {i}" for i in range(20))
+        chunks = split_message(table + "\n\n" + prose, max_length=80)
+        for chunk in chunks[1:]:
+            assert "| a | b |" not in chunk

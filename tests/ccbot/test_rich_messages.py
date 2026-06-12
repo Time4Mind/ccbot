@@ -65,6 +65,49 @@ class TestToRichMarkdown:
         assert "a&lt;y>c" in out
 
 
+class TestSubWrapTables:
+    def test_cells_wrapped_in_sub(self) -> None:
+        table = "| a | b |\n|---|---|\n| 1 | 2 |"
+        out = rich.to_rich_markdown(table)
+        assert "| <sub>a</sub> | <sub>b</sub> |" in out
+        assert "| <sub>1</sub> | <sub>2</sub> |" in out
+
+    def test_separator_row_untouched(self) -> None:
+        table = "| a | b |\n|:---|---:|\n| 1 | 2 |"
+        out = rich.to_rich_markdown(table)
+        assert "|:---|---:|" in out
+
+    def test_empty_cells_untouched(self) -> None:
+        table = "| a |  |\n|---|---|\n| 1 | 2 |"
+        out = rich.to_rich_markdown(table)
+        assert "| <sub>a</sub> |  |" in out
+
+    def test_already_sub_not_double_wrapped(self) -> None:
+        table = "| <sub>a</sub> | b |\n|---|---|\n| 1 | 2 |"
+        out = rich.to_rich_markdown(table)
+        assert "<sub><sub>" not in out
+
+    def test_inline_formatting_kept_inside_sub(self) -> None:
+        table = "| **bold** | `code` |\n|---|---|\n| x | y |"
+        out = rich.to_rich_markdown(table)
+        assert "| <sub>**bold**</sub> | <sub>`code`</sub> |" in out
+
+    def test_single_pipe_line_not_a_table(self) -> None:
+        text = "| just one line with pipes |\nplain text"
+        out = rich.to_rich_markdown(text)
+        assert "<sub>" not in out
+
+    def test_pipe_lines_inside_code_fence_untouched(self) -> None:
+        text = "```\n| a | b |\n| 1 | 2 |\n```"
+        out = rich.to_rich_markdown(text)
+        assert "<sub>" not in out
+
+    def test_table_after_code_fence_wrapped(self) -> None:
+        text = "```\ncode\n```\n| a | b |\n|---|---|\n| 1 | 2 |"
+        out = rich.to_rich_markdown(text)
+        assert "| <sub>a</sub> | <sub>b</sub> |" in out
+
+
 def _sent_message_json() -> dict[str, Any]:
     return {
         "message_id": 42,
@@ -271,7 +314,8 @@ class TestCardEditRichPath:
         assert len(bot.posts) == 1
         endpoint, data = bot.posts[0]
         assert endpoint == "editMessageText"
-        assert data["rich_message"]["markdown"].startswith("| a | b |")
+        # Table cells get the <sub> font-shrink wrap on the rich path.
+        assert data["rich_message"]["markdown"].startswith("| <sub>a</sub> |")
         assert data["reply_markup"] is markup
         bot.edit_message_text.assert_not_called()  # type: ignore[attr-defined]
 

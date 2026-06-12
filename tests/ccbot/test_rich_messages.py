@@ -198,3 +198,104 @@ class TestSafeEditRichPath:
         target = _FakeMessage(bot)
         await message_sender.safe_edit(target, "hello")
         bot.edit_message_text.assert_called_once()  # type: ignore[attr-defined]
+
+
+class TestTryRichEditRaw:
+    @pytest.mark.asyncio
+    async def test_edit_lands(self, rich_on: None) -> None:
+        bot = _FakeBot(post_result=True)
+        ok = await message_sender.try_rich_edit(bot, 449, 7, "a < b")
+        assert ok is True
+        assert bot.posts == [
+            (
+                "editMessageText",
+                {
+                    "chat_id": 449,
+                    "message_id": 7,
+                    "rich_message": {"markdown": "a &lt; b"},
+                },
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_not_modified_is_success(self, rich_on: None) -> None:
+        from telegram.error import BadRequest
+
+        bot = _FakeBot(post_error=BadRequest("Message is not modified: blah"))
+        assert await message_sender.try_rich_edit(bot, 449, 7, "same") is True
+
+    @pytest.mark.asyncio
+    async def test_error_means_fallback(self, rich_on: None) -> None:
+        bot = _FakeBot(post_error=RuntimeError("boom"))
+        assert await message_sender.try_rich_edit(bot, 449, 7, "x") is False
+
+    @pytest.mark.asyncio
+    async def test_rich_off_means_fallback(self, rich_off: None) -> None:
+        bot = _FakeBot(post_result=True)
+        assert await message_sender.try_rich_edit(bot, 449, 7, "x") is False
+        assert bot.posts == []
+
+    @pytest.mark.asyncio
+    async def test_retry_after_propagates(self, rich_on: None) -> None:
+        from telegram.error import RetryAfter
+
+        bot = _FakeBot(post_error=RetryAfter(3))
+        with pytest.raises(RetryAfter):
+            await message_sender.try_rich_edit(bot, 449, 7, "x")
+
+
+class TestCardEditRichPath:
+    """The live card's in-place edits must go rich-first — otherwise the
+    first edit after a rich _send_card visibly downgrades the card to
+    MarkdownV2 (tables/headings/<details> lose native rendering)."""
+
+    @pytest.mark.asyncio
+    async def test_edit_card_uses_rich(self, rich_on: None) -> None:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        from ccbot.handlers import notifications
+        from ccbot.handlers.card_model import CardState
+
+        bot = _FakeBot(post_result=True)
+        bot.edit_message_text = AsyncMock()  # type: ignore[attr-defined]
+        state = CardState(msg_id=7)
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("x", callback_data="y")]])
+        ok = await notifications._edit_card(  # pyright: ignore[reportPrivateUsage]
+            bot,  # type: ignore[arg-type]
+            449,
+            state,
+            text="| a | b |\n|---|---|\n| 1 | 2 |",
+            reply_markup=markup,
+        )
+        assert ok is True
+        assert len(bot.posts) == 1
+        endpoint, data = bot.posts[0]
+        assert endpoint == "editMessageText"
+        assert data["rich_message"]["markdown"].startswith("| a | b |")
+        assert data["reply_markup"] is markup
+        bot.edit_message_text.assert_not_called()  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_edit_card_falls_back_to_markdownv2(self, rich_on: None) -> None:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        from ccbot.handlers import notifications
+        from ccbot.handlers.card_model import CardState
+
+        bot = _FakeBot(post_error=RuntimeError("boom"))
+        bot.edit_message_text = AsyncMock()  # type: ignore[attr-defined]
+        state = CardState(msg_id=7)
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("x", callback_data="y")]])
+        ok = await notifications._edit_card(  # pyright: ignore[reportPrivateUsage]
+            bot,  # type: ignore[arg-type]
+            449,
+            state,
+            text="hello",
+            reply_markup=markup,
+        )
+        assert ok is True
+        bot.edit_message_text.assert_called_once()  # type: ignore[attr-defined]
+        assert (
+            bot.edit_message_text.call_args.kwargs["parse_mode"]  # type: ignore[attr-defined]
+            == "MarkdownV2"
+        )

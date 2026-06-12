@@ -1141,24 +1141,37 @@ async def _edit_card(
         reply_markup = build_footer_keyboard(
             user_id, screen="main", is_busy=_card_is_busy(state)
         )
-    # Edit through MarkdownV2 with plain-text fallback so the live card
-    # renders **bold**, EXPQUOTE expandable blockquotes, etc. properly.
     from ..markdown_v2 import convert_markdown
-    from .message_sender import NO_LINK_PREVIEW, PARSE_MODE, strip_sentinels
-
-    formatted = convert_markdown(text)
+    from .message_sender import (
+        NO_LINK_PREVIEW,
+        PARSE_MODE,
+        strip_sentinels,
+        try_rich_edit,
+    )
 
     # Photo-mode card: editMessageMedia when pane changed (≤1 per 3s),
-    # else editMessageCaption to refresh just the text.
+    # else editMessageCaption to refresh just the text. Captions have no
+    # rich-message equivalent, so this path stays MarkdownV2.
     if state.is_photo_msg:
         return await _edit_photo_card(
             bot,
             user_id,
             state,
             text=text,
-            formatted=formatted,
+            formatted=convert_markdown(text),
             reply_markup=reply_markup,
         )
+
+    # Rich-first (Bot API 10.1): keeps the card's native rendering (GFM
+    # tables, headings, <details>) consistent with the rich _send_card
+    # path — otherwise the first edit would visibly downgrade the card
+    # to MarkdownV2. On failure (rich off, API error, lost carrier) fall
+    # through to the MarkdownV2 pipeline below, which also owns the
+    # lost-carrier detection.
+    if await try_rich_edit(bot, user_id, state.msg_id, text, reply_markup=reply_markup):
+        return True
+
+    formatted = convert_markdown(text)
 
     try:
         await bot.edit_message_text(

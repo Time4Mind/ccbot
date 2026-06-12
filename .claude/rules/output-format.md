@@ -42,10 +42,28 @@ natively on the phone. Rules that matter:
   blocks, no nested tables inside cells.
 - Column alignment via GFM separators (`:---`, `:---:`, `---:`) works.
 - Keep one table under ~3500 chars so the 4096-per-message split never
-  cuts it in half (limit raise is planned).
-- Headings (`#`–`######`), `---` rules, task lists, footnotes and
-  `<details>` collapsible blocks also render natively — use them
-  instead of emoji-pseudo-headers when structure helps.
+  cuts it in half (a raise to 32k is planned).
+
+## What else renders natively
+
+- Headings `#`–`######`, `---` rules, blockquotes, lists including
+  task lists (`- [x]`) — use real headings instead of
+  emoji-pseudo-headers when structure helps.
+- Inline marks: **bold**, _italic_, ~~strike~~, `code`, ==mark==,
+  ||spoiler||, <sup>sup</sup> / <sub>sub</sub>, <u>underline</u>.
+- Fenced code blocks with language highlighting.
+- `<details><summary>…</summary>…</details>` collapsible blocks.
+- Footnotes `[^id]` and LaTeX math (`$x^2$` / `$$…$$`).
+- Links `[text](url)` — the client shows an alert before opening.
+
+## Response structure
+
+1. Lead with the result (1–2 lines), details after.
+2. Structure the details with `##`/`###` headings, lists, and tables
+   as the content warrants.
+3. Long dumps (logs, full listings) go inside `<details>` blocks
+   instead of flooding the chat.
+4. Don't restate the question; no trailing summary.
 
 ## Writing files for download
 
@@ -68,6 +86,11 @@ push files to the user. Workflow:
   degrades to MarkdownV2 via `telegramify-markdown` automatically.
 - Streaming behaviour — these rules apply to the final assistant
   text, not mid-stream tool calls.
+- Unicode box-drawing tables (`┌─┐`) — still avoid them.
+- Bare HTML outside the supported tags is silently swallowed by the
+  rich parser (`x<y>z` → `xz`). The bot escapes stray `<` itself
+  (`to_rich_markdown`), but don't lean on it.
+- The 4096-char per-message limit (raise to 32k planned).
 
 ## Calibration
 
@@ -79,3 +102,12 @@ becomes either a PNG (image-shaped) or a file (data-shaped) depending
 on intent. With rich messages disabled (`CCBOT_RICH_MESSAGES=off`)
 the legacy MarkdownV2 limits return (`TABLE_MAX_COLS=3`,
 `TABLE_MAX_WIDTH=60`).
+
+Field log:
+
+- 2026-05-06: `•`/`→` lists, emoji headers, inline HTML tags rendered
+  ok; tables of any shape broke. **Obsolete since 2026-06-12.**
+- 2026-06-12: rich messages (Bot API 10.1) verified on a live client —
+  GFM tables ≤ 20 cols, headings, `<details>`, footnotes all render;
+  a 21-column table trips `RICH_MESSAGE_TABLE_COLS_TOO_MANY` and the
+  bot falls back to PNG.

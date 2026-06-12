@@ -43,6 +43,7 @@ from ..handlers.message_sender import (
     NO_LINK_PREVIEW,
     safe_reply,
     send_with_fallback,
+    try_rich_edit,
 )
 from ..handlers.notifications import (
     begin_repost_intent,
@@ -664,7 +665,9 @@ async def _capture_bash_output(
                 sent = await send_with_fallback(bot, chat_id, output)
                 if sent:
                     msg_id = sent.message_id
-            else:
+            # Rich-first so in-place edits keep the same rendering as the
+            # initial send (which goes rich via send_with_fallback).
+            elif not await try_rich_edit(bot, chat_id, msg_id, output):
                 try:
                     await bot.edit_message_text(
                         chat_id=chat_id,

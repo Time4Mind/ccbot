@@ -77,13 +77,46 @@ async def _try_rich_send(
         return None
 
 
-async def _try_rich_edit(target: Any, text: str, kwargs: dict[str, Any]) -> bool:
-    """Attempt a rich edit on a Message/CallbackQuery target.
+async def try_rich_edit(
+    bot: Any,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    *,
+    reply_markup: Any = None,
+) -> bool:
+    """Attempt a Bot API 10.1 rich edit by explicit chat/message ids.
 
     Returns True when the edit landed (or the content was already
     identical — "message is not modified" must NOT trigger the MarkdownV2
     fallback, or an unchanged rich message would get visibly downgraded).
+    False means the caller should fall back to the MarkdownV2 pipeline.
     """
+    if not config.rich_messages:
+        return False
+    try:
+        await rich.edit_rich_message(
+            bot,
+            chat_id,
+            message_id,
+            rich.to_rich_markdown(text),
+            reply_markup=reply_markup,
+        )
+        return True
+    except RetryAfter:
+        raise
+    except BadRequest as e:
+        if "message is not modified" in str(e).lower():
+            return True
+        logger.warning("rich edit failed msg=%s, falling back: %s", message_id, e)
+        return False
+    except Exception as e:
+        logger.warning("rich edit failed msg=%s, falling back: %s", message_id, e)
+        return False
+
+
+async def _try_rich_edit(target: Any, text: str, kwargs: dict[str, Any]) -> bool:
+    """Attempt a rich edit on a Message/CallbackQuery target."""
     if not config.rich_messages:
         return False
     msg_obj = getattr(target, "message", target)
@@ -92,25 +125,9 @@ async def _try_rich_edit(target: Any, text: str, kwargs: dict[str, Any]) -> bool
     bot = getattr(target, "_bot", None) or getattr(msg_obj, "_bot", None)
     if bot is None or chat_id is None or msg_id is None:
         return False
-    try:
-        await rich.edit_rich_message(
-            bot,
-            chat_id,
-            msg_id,
-            rich.to_rich_markdown(text),
-            reply_markup=kwargs.get("reply_markup"),
-        )
-        return True
-    except RetryAfter:
-        raise
-    except BadRequest as e:
-        if "message is not modified" in str(e).lower():
-            return True
-        logger.warning("rich edit failed msg=%s, falling back: %s", msg_id, e)
-        return False
-    except Exception as e:
-        logger.warning("rich edit failed msg=%s, falling back: %s", msg_id, e)
-        return False
+    return await try_rich_edit(
+        bot, chat_id, msg_id, text, reply_markup=kwargs.get("reply_markup")
+    )
 
 
 async def send_with_fallback(

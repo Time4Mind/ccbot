@@ -7,9 +7,11 @@ application-level ``AIORateLimiter``.
 
 Core responsibilities:
   - to_rich_markdown: adapt our internal markdown for the Rich Markdown
-    parser — expandable-quote sentinels become <details> blocks, and bare
+    parser — expandable-quote sentinels become <details> blocks, bare
     ``<`` outside code spans is escaped to ``&lt;`` (the parser silently
-    swallows anything that looks like an unsupported HTML tag).
+    swallows anything that looks like an unsupported HTML tag), and table
+    cells are wrapped in <sub> so native tables render in a smaller font
+    (the API exposes no font-size control; clients draw sub/sup smaller).
   - send_rich_message / edit_rich_message: thin raw-API wrappers returning
     PTB ``Message`` objects.
 
@@ -82,6 +84,55 @@ def _escape_outside_code(text: str) -> str:
     return "".join(out)
 
 
+# A GFM table separator cell: dashes with optional alignment colons.
+_TABLE_SEP_CELL_RE = re.compile(r"^:?-+:?$")
+
+
+def _sub_wrap_row(line: str) -> str:
+    """Wrap each cell of one table row in ``<sub>…</sub>``."""
+    cells = line.strip().strip("|").split("|")
+    if all(_TABLE_SEP_CELL_RE.match(c.strip()) for c in cells if c.strip()):
+        return line  # separator row — keep alignment hints intact
+    wrapped = [
+        f" <sub>{c.strip()}</sub> "
+        if c.strip() and not c.strip().startswith("<sub>")
+        else c
+        for c in cells
+    ]
+    return "|" + "|".join(wrapped) + "|"
+
+
+def _sub_wrap_tables(text: str) -> str:
+    """Shrink native-table font by wrapping cell contents in ``<sub>``.
+
+    Bot API 10.1 offers no font-size control for tables and clients
+    render them uncomfortably large; sub/superscript is the one inline
+    style clients draw smaller. Only runs of >= 2 consecutive ``|``
+    lines outside code fences are treated as tables — mirrors the
+    detection in ``handlers.tg_format._table_rows``.
+    """
+    lines = text.split("\n")
+    out = list(lines)
+    in_fence = False
+    i = 0
+    while i < len(lines):
+        if lines[i].lstrip().startswith("```"):
+            in_fence = not in_fence
+            i += 1
+            continue
+        if not in_fence and lines[i].lstrip().startswith("|"):
+            j = i
+            while j < len(lines) and lines[j].lstrip().startswith("|"):
+                j += 1
+            if j - i >= 2:
+                for k in range(i, j):
+                    out[k] = _sub_wrap_row(lines[k])
+            i = j
+            continue
+        i += 1
+    return "\n".join(out)
+
+
 def _render_details(m: re.Match[str]) -> str:
     """Render an expandable-quote sentinel block as a <details> block."""
     inner = m.group(1).strip()
@@ -94,7 +145,8 @@ def _render_details(m: re.Match[str]) -> str:
 def to_rich_markdown(text: str) -> str:
     """Convert internal markdown to Rich Markdown for ``sendRichMessage``."""
     text = _escape_outside_code(text)
-    return _EXPQUOTE_RE.sub(_render_details, text)
+    text = _EXPQUOTE_RE.sub(_render_details, text)
+    return _sub_wrap_tables(text)
 
 
 def _input_rich_message(markdown: str) -> dict[str, Any]:

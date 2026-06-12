@@ -537,6 +537,31 @@ def _body_trim(body: str, max_lines: int = SPOILER_MAX_LINES) -> str:
 _SENTENCE_END_RE = re.compile(r"[.!?][\s)\]\"»]*\s")
 
 
+def _table_continuation_prefix(chunk: str, remaining: str) -> str:
+    """Header+separator rows to prepend when a cut landed inside a GFM table.
+
+    If ``chunk`` ends with table rows (a trailing run of ``|``-lines whose
+    first two are a header + ``|---|`` separator) and ``remaining`` starts
+    with another table row, the table was split mid-body — the continuation
+    page would render as headerless junk. Returns ``"header\\nsep\\n"`` so
+    the caller can re-emit them; ``""`` when no table was cut.
+    """
+    rem_first = remaining.lstrip("\n").split("\n", 1)[0]
+    if not rem_first.lstrip().startswith("|"):
+        return ""
+    lines = chunk.rstrip("\n").split("\n")
+    i = len(lines)
+    while i > 0 and lines[i - 1].lstrip().startswith("|"):
+        i -= 1
+    run = lines[i:]
+    if len(run) < 2:
+        return ""
+    sep_core = run[1].strip().strip("|").replace("|", "").replace(" ", "")
+    if not sep_core or not set(sep_core) <= {"-", ":"}:
+        return ""
+    return run[0] + "\n" + run[1] + "\n"
+
+
 def _chunk_final_text(
     text: str,
     budget_lines: int = CARD_PAGE_LINES_DEFAULT,
@@ -614,6 +639,13 @@ def _chunk_final_text(
         if chunk:
             chunks.append(chunk)
         remaining = remaining[cut:].lstrip("\n").lstrip(" ")
+        # Cut landed inside a GFM table → re-emit header+separator so the
+        # next page renders as a valid table. Length guard keeps forward
+        # progress (never prepend more than the cut consumed).
+        if chunk:
+            prefix = _table_continuation_prefix(chunk, remaining)
+            if prefix and len(prefix) < cut:
+                remaining = prefix + remaining
     if remaining:
         chunks.append(remaining)
     return chunks

@@ -770,6 +770,7 @@ def transfer_card_to_carrier(
         to_state.pending_edit.cancel()
     to_state.pending_edit = None
     to_state.msg_id = target_message_id
+    session_manager.set_card_msg(user_id, target_message_id)
     # Pause the TO card across the switch window. The caller (CB_SW_USE)
     # will paint history on this message_id next, and then call
     # ``release_card_message`` which clears both ``msg_id`` and
@@ -970,6 +971,7 @@ async def paint_card_on_carrier(
     state.in_menu_view = False
     state.last_rendered = ""
     _register_msg(user_id, carrier_msg_id, sess.id)
+    session_manager.set_card_msg(user_id, carrier_msg_id)
     text = _render_card(sess, state, user_id=user_id)
     keyboard = build_footer_keyboard(
         user_id, screen="main", is_busy=_card_is_busy(state)
@@ -988,6 +990,46 @@ async def paint_card_on_carrier(
             except Exception:
                 pass
         session_manager.set_last_switcher_msg(user_id, carrier_msg_id)
+
+
+async def restore_card(bot: Bot, user_id: int, sess: Session, card_msg_id: int) -> bool:
+    """Repaint a persisted live card in place after a bot restart.
+
+    ``_cards`` is in-memory only, so a restart loses every live card's
+    ``CardState`` and the chat is left with a frozen, orphaned card
+    message. The card's ``message_id`` is persisted per active session
+    (``session_manager.card_msg_id``); on startup we rebuild a fresh
+    ``CardState``, seed the recent transcript from JSONL, and edit the
+    original message in place so the live card resumes on the same
+    message instead of a new one appearing on the next event.
+
+    Returns True if the in-place edit landed. On failure (message
+    deleted by the user, edit rejected) the stale pointer is cleared so
+    the next claude event spawns a fresh card normally.
+    """
+    existing = _cards.get((user_id, sess.id))
+    if existing is not None and existing.msg_id is not None:
+        # A claude event already raced ahead and established a live card
+        # for this session — leave it alone rather than fight it.
+        return True
+    state = _cards.setdefault((user_id, sess.id), CardState())
+    state.msg_id = card_msg_id
+    state.last_rendered = ""
+    await _ensure_seeded(user_id, sess, state)
+    _register_msg(user_id, card_msg_id, sess.id)
+    text = _render_card(sess, state, user_id=user_id)
+    keyboard = build_footer_keyboard(
+        user_id, screen="main", is_busy=_card_is_busy(state)
+    )
+    if await _edit_card(bot, user_id, state, text=text, reply_markup=keyboard):
+        state.last_rendered = text
+        state.last_edit_ts = time.monotonic()
+        return True
+    # The message is gone — drop both the cached state and the persisted
+    # pointer so the next event creates a fresh card cleanly.
+    _cards.pop((user_id, sess.id), None)
+    session_manager.clear_card_msg(user_id)
+    return False
 
 
 async def clear_card(bot: Bot, user_id: int, sess: Session) -> None:
@@ -1113,6 +1155,7 @@ async def _send_card(
     state.msg_id = sent.message_id
     state.last_rendered = text
     _register_msg(user_id, sent.message_id, sess.id)
+    session_manager.set_card_msg(user_id, sent.message_id)
 
 
 async def _edit_card(

@@ -120,6 +120,11 @@ class SessionManager:
     # session switcher for each user. Used to strip stale switchers when a new
     # bot message goes out.
     last_switcher_msg_id: dict[int, int] = field(default_factory=dict)
+    # Telegram message_id of the bot message hosting each user's live card
+    # for their *active* session. Persisted so a bot restart can repaint
+    # the card in place (notifications.restore_card) instead of orphaning
+    # it and starting fresh on the next event. user_id -> message_id.
+    card_msg_id: dict[int, int] = field(default_factory=dict)
     # window_id -> display name (window_name)
     window_display_names: dict[str, str] = field(default_factory=dict)
     # User-scoped UI/runtime preferences (set via the inline ⚙ menu).
@@ -165,6 +170,7 @@ class SessionManager:
             "last_switcher_msg_id": {
                 str(uid): mid for uid, mid in self.last_switcher_msg_id.items()
             },
+            "card_msg_id": {str(uid): mid for uid, mid in self.card_msg_id.items()},
             "window_display_names": self.window_display_names,
             "user_settings": {
                 str(uid): vals for uid, vals in self.user_settings.items()
@@ -213,6 +219,10 @@ class SessionManager:
                     int(uid): int(mid)
                     for uid, mid in state.get("last_switcher_msg_id", {}).items()
                 }
+                self.card_msg_id = {
+                    int(uid): int(mid)
+                    for uid, mid in state.get("card_msg_id", {}).items()
+                }
                 self.window_display_names = state.get("window_display_names", {})
                 self.user_settings = {
                     int(uid): dict(vals)
@@ -243,6 +253,7 @@ class SessionManager:
                 self.active_sessions = {}
                 self.sessions = {}
                 self.last_switcher_msg_id = {}
+                self.card_msg_id = {}
                 self.window_display_names = {}
                 self.user_settings = {}
                 self.summary_cache = {}
@@ -870,6 +881,21 @@ class SessionManager:
     def clear_last_switcher_msg(self, user_id: int) -> None:
         if user_id in self.last_switcher_msg_id:
             del self.last_switcher_msg_id[user_id]
+            self.save_state()
+
+    def get_card_msg(self, user_id: int) -> int | None:
+        return self.card_msg_id.get(user_id)
+
+    def set_card_msg(self, user_id: int, message_id: int) -> None:
+        if self.card_msg_id.get(user_id) == message_id:
+            return
+        self.card_msg_id[user_id] = message_id
+        # Persist eagerly so a restart can repaint the live card in place.
+        self.save_state()
+
+    def clear_card_msg(self, user_id: int) -> None:
+        if user_id in self.card_msg_id:
+            del self.card_msg_id[user_id]
             self.save_state()
 
     # --- Reverse map: claude_session_id -> user(s) via active_sessions ---

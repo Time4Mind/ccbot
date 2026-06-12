@@ -174,19 +174,13 @@ class TestSplitOverflow:
         assert len(r.attachments) == 1
         assert r.attachments[0].kind == "photo"
 
-    def test_rich_mode_diverts_squeezed_long_columns(self, rich_on: None) -> None:
-        """4 long-value columns can't each get ≥15 chars on a phone —
-        the client squeezes them unreadably, so divert to PNG."""
-        cells = ["a long header xx"] * 4
-        header = "| " + " | ".join(cells) + " |"
-        sep = "|" + "|".join("---" for _ in cells) + "|"
-        row = "| " + " | ".join("very long cell value here" for _ in cells) + " |"
-        r = split_overflow(header + "\n" + sep + "\n" + row + "\n")
-        assert len(r.attachments) == 1
-        assert r.attachments[0].kind == "photo"
-
-    def test_rich_mode_keeps_three_long_columns(self, rich_on: None) -> None:
-        cells = ["a long header xx"] * 3
+    @pytest.mark.parametrize("ncols", [3, 4, 8])
+    def test_rich_mode_keeps_long_columns_inline(
+        self, rich_on: None, ncols: int
+    ) -> None:
+        """No fit-to-screen heuristic: anything within the API column cap
+        stays inline regardless of cell width."""
+        cells = ["a long header xx"] * ncols
         header = "| " + " | ".join(cells) + " |"
         sep = "|" + "|".join("---" for _ in cells) + "|"
         row = "| " + " | ".join("very long cell value here" for _ in cells) + " |"

@@ -237,6 +237,36 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     asyncio.create_task(_seed_bg_statuses())
     logger.info("Bg-status seed scheduled")
 
+    # Repaint each user's persisted live card in place. ``_cards`` is
+    # in-memory only, so without this a restart orphans the card message
+    # in chat and a fresh one appears on the next event. ``restore_card``
+    # rebuilds the CardState, seeds the recent transcript, and edits the
+    # original message so the live card resumes on the same message.
+    async def _restore_active_cards() -> None:
+        from ..handlers.notifications import restore_card
+
+        for user_id in config.allowed_users:
+            card_msg_id = session_manager.get_card_msg(user_id)
+            if not card_msg_id:
+                continue
+            active = session_manager.get_active_session(user_id)
+            if active is None:
+                continue
+            try:
+                ok = await restore_card(application.bot, user_id, active, card_msg_id)
+                logger.info(
+                    "Restored live card user=%d session=%s msg=%d ok=%s",
+                    user_id,
+                    active.id,
+                    card_msg_id,
+                    ok,
+                )
+            except Exception as e:
+                logger.debug("restore_card failed for user %d: %s", user_id, e)
+
+    asyncio.create_task(_restore_active_cards())
+    logger.info("Active-card restore scheduled")
+
 
 async def post_shutdown(
     application: "Application[Any, Any, Any, Any, Any, Any]",

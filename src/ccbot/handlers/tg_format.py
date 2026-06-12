@@ -6,10 +6,8 @@ it out into a downloadable file with a short inline preview.
 
 Tables: with rich messages on (`config.rich_messages`, Bot API 10.1) GFM
 tables render natively; diverted to a PNG attachment only when the API
-would reject them (> 20 columns) or when the client-side fit-to-screen
-squeeze would leave long-value columns < RICH_TABLE_MIN_CELL chars wide.
-With rich off, the legacy MarkdownV2 limits apply (more than 3 columns or
->60-char width → PNG).
+would reject them (> 20 columns). With rich off, the legacy MarkdownV2
+limits apply (more than 3 columns or >60-char width → PNG).
 
 Public API:
   split_overflow(text) -> FormatResult
@@ -31,12 +29,6 @@ TABLE_MAX_WIDTH = 60
 # Bot API 10.1 hard cap — 21+ columns is rejected with
 # RICH_MESSAGE_TABLE_COLS_TOO_MANY, so such tables still go out as PNG.
 RICH_TABLE_MAX_COLS = 20
-# Telegram's native table rendering squeezes columns to fit the phone
-# screen; long values become unreadably narrow. If every long-content
-# column can't get at least RICH_TABLE_MIN_CELL chars within the
-# estimated phone fit width, divert the table to a PNG instead.
-RICH_TABLE_MIN_CELL = 15
-RICH_TABLE_FIT_WIDTH = 50
 
 
 @dataclass
@@ -124,36 +116,6 @@ def _table_width(table_text: str) -> int:
     return max((len(line) for line in table_text.splitlines()), default=0)
 
 
-def _rich_table_fits(table_text: str) -> bool:
-    """Will every long-content column survive the client-side squeeze?
-
-    Telegram fits a native table to the phone screen by shrinking
-    columns. Short columns (≤ RICH_TABLE_MIN_CELL chars of content)
-    can't shrink below their content; the leftover width is shared by
-    the long columns. If that share drops below RICH_TABLE_MIN_CELL
-    per long column, the values get squeezed unreadably → render as
-    PNG instead.
-    """
-    rows: list[list[str]] = []
-    for line in table_text.splitlines():
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if all(set(c) <= {"-", ":"} for c in cells):
-            continue  # separator row
-        rows.append(cells)
-    if not rows:
-        return True
-    cols = max(len(r) for r in rows)
-    widths = [
-        max((len(r[c]) for r in rows if c < len(r)), default=0) for c in range(cols)
-    ]
-    long_cols = sum(1 for w in widths if w > RICH_TABLE_MIN_CELL)
-    if not long_cols:
-        return True
-    short_width = sum(w for w in widths if w <= RICH_TABLE_MIN_CELL)
-    avail = RICH_TABLE_FIT_WIDTH - short_width - (cols + 1)
-    return avail / long_cols >= RICH_TABLE_MIN_CELL
-
-
 def pretty_pad_table(md_text: str) -> str:
     """Re-pad markdown-table cells so each column reaches a uniform width.
 
@@ -226,11 +188,9 @@ def split_overflow(text: str) -> FormatResult:
             cols = _table_cols(slab)
             width = _table_width(slab)
             if config.rich_messages:
-                # Native rich-table rendering — divert what the API itself
-                # rejects (> RICH_TABLE_MAX_COLS columns) and tables whose
-                # long-value columns would be squeezed unreadably narrow
-                # by the client's fit-to-screen rendering.
-                if cols <= RICH_TABLE_MAX_COLS and _rich_table_fits(slab):
+                # Native rich-table rendering — divert only what the API
+                # itself rejects (> RICH_TABLE_MAX_COLS columns).
+                if cols <= RICH_TABLE_MAX_COLS:
                     continue
             elif cols <= TABLE_MAX_COLS and width <= TABLE_MAX_WIDTH:
                 continue

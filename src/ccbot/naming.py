@@ -64,9 +64,15 @@ _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
 
 
 _PROMPT_TEMPLATE = (
-    "Generate a 2-3 word kebab-case name (lowercase, hyphenated) for a "
-    "coding session about: {seed}\nReply with only the name, no quotes."
+    "Generate a 2 word kebab-case name (lowercase, hyphenated, exactly two "
+    "words) for a coding session about: {seed}\nReply with only the name, "
+    "no quotes."
 )
+
+
+# Hard cap on auto-name word count (hyphen-separated tokens). The prompt
+# already asks Haiku for two words, but models drift — this enforces it.
+_MAX_NAME_WORDS = 2
 
 
 # Env vars that mark "we're being invoked from inside a Claude Code
@@ -140,6 +146,9 @@ def _sanitize(text: str) -> str:
     first_line = first_line.lower()
     first_line = re.sub(r"[^a-z0-9-]+", "-", first_line)
     first_line = re.sub(r"-+", "-", first_line).strip("-")
+    # Cap to the first N hyphen-separated words (default 2).
+    if first_line:
+        first_line = "-".join(first_line.split("-")[:_MAX_NAME_WORDS])
     if _NAME_RE.match(first_line):
         return first_line
     return ""

@@ -244,11 +244,15 @@ async def build_archive_page(
             # ran Restore). Without it the row reads identical to a
             # clean archive and the recovery-skipped fact is invisible.
             lost_tag = " _(lost)_" if sess.was_lost else ""
-            # ``idx\.`` (escaped period) — without the backslash the rich
-            # parser treats every row as a fresh ordered-list item and
-            # Telegram renumbers from 1 on every page, so page-2 buttons
-            # labelled 6-10 end up next to body rows labelled 1-5.
-            line = f"{idx}\\. {label} *{display_name}*{lost_tag} — {age}"
+            # ``**N.**`` bold-wraps the index so the line starts with ``*``
+            # rather than a digit — CommonMark won't parse it as a fresh
+            # ordered-list item per row. (The 2-space-indented blurb /
+            # workdir / goal continuations are shy of the 3-space margin
+            # CommonMark needs to keep a row's content INSIDE its list
+            # item, so each ``N.`` row became its own one-item list and
+            # Telegram renumbered every list from 1 — page-2 buttons
+            # labelled 6-10 lined up next to body rows labelled 1-5.)
+            line = f"**{idx}.** {label} *{display_name}*{lost_tag} — {age}"
             blurb = blurbs.get(sess.id) or ""
             if blurb:
                 line += f"\n  {blurb}"

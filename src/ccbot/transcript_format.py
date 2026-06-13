@@ -33,14 +33,6 @@ logger = logging.getLogger(__name__)
 # expandable blockquote.
 EXPANDABLE_QUOTE_START = "\x02EXPQUOTE_START\x02"
 EXPANDABLE_QUOTE_END = "\x02EXPQUOTE_END\x02"
-# Variant for the "head visible + tail hidden" layout — the wrapped
-# text is ONLY the tail, the visible head sits outside the sentinels.
-# Differs from the plain expandable-quote in the render targets: rich
-# emits ``<details><summary>▼</summary>{tail}</details>`` so the
-# summary is a tiny non-bold-y icon instead of repeating the head;
-# markdown_v2 emits ``>line\n>line\n||`` on tail only.
-EXPANDABLE_TAIL_START = "\x02EXPTAIL_START\x02"
-EXPANDABLE_TAIL_END = "\x02EXPTAIL_END\x02"
 
 # Cap the length of the inline tool-summary tail (e.g. the file path
 # after `Read(...)`). Longer summaries get truncated with an ellipsis.
@@ -212,21 +204,6 @@ def extract_tool_result_images(
 def format_expandable_quote(text: str) -> str:
     """Wrap text with sentinel markers for downstream MarkdownV2 conversion."""
     return f"{EXPANDABLE_QUOTE_START}{text}{EXPANDABLE_QUOTE_END}"
-
-
-def format_expandable_tail(head: str, tail: str) -> str:
-    """Emit ``head…`` visible followed by a collapsible block holding ``tail``.
-
-    Unlike :func:`format_expandable_quote`, the visible head sits
-    OUTSIDE the spoiler — when the user taps to expand, they see the
-    continuation only, not the head again. The rich renderer keeps the
-    summary as a plain ``▼`` glyph (so the bold-summary default barely
-    shows); the MarkdownV2 renderer emits a tail-only expandable
-    blockquote (``>tail||``).
-    """
-    if not tail:
-        return head
-    return f"{head}…{EXPANDABLE_TAIL_START}{tail}{EXPANDABLE_TAIL_END}"
 
 
 def format_tool_result_text(

@@ -101,20 +101,10 @@ def convert_markdown_tables(text: str) -> str:
     return "\n".join(result)
 
 
-# Both sentinel pairs (full-body + tail-only) in one alternation —
-# segmentation in ``convert_markdown`` walks the text once and dispatches
-# each match to the right renderer (preserves their original ordering
-# when both kinds appear in the same source).
-_EXPBLOCK_RE = re.compile(
-    "(?:"
-    + re.escape(TranscriptParser.EXPANDABLE_QUOTE_START)
+_EXPQUOTE_RE = re.compile(
+    re.escape(TranscriptParser.EXPANDABLE_QUOTE_START)
     + r"[\s\S]*?"
     + re.escape(TranscriptParser.EXPANDABLE_QUOTE_END)
-    + ")|(?:"
-    + re.escape(TranscriptParser.EXPANDABLE_TAIL_START)
-    + r"[\s\S]*?"
-    + re.escape(TranscriptParser.EXPANDABLE_TAIL_END)
-    + ")"
 )
 
 # Characters that must be escaped in Telegram MarkdownV2 plain text
@@ -250,12 +240,11 @@ def convert_markdown(text: str) -> str:
     # Convert markdown tables to card-style format before telegramify
     text = convert_markdown_tables(text)
 
-    # Extract expandable blocks (either full-body or tail-only) before
-    # telegramify processes the rest. Using the combined regex preserves
-    # the original ordering when both kinds appear in the same text.
-    segments: list[tuple[bool, str]] = []  # (is_block, content)
+    # Extract expandable-quote blocks before telegramify processes the
+    # rest — telegramify mangles the >…|| syntax otherwise.
+    segments: list[tuple[bool, str]] = []  # (is_quote, content)
     last_end = 0
-    for m in _EXPBLOCK_RE.finditer(text):
+    for m in _EXPQUOTE_RE.finditer(text):
         if m.start() > last_end:
             segments.append((False, text[last_end : m.start()]))
         segments.append((True, m.group(0)))
@@ -267,26 +256,14 @@ def convert_markdown(text: str) -> str:
         return _markdownify(text)
 
     parts: list[str] = []
-    for is_block, segment in segments:
-        if is_block:
-            parts.append(_render_expandable_block_match(segment))
+    for is_quote, segment in segments:
+        if is_quote:
+            inner = segment[
+                len(TranscriptParser.EXPANDABLE_QUOTE_START) : -len(
+                    TranscriptParser.EXPANDABLE_QUOTE_END
+                )
+            ]
+            parts.append(_quote_lines(inner))
         else:
             parts.append(_markdownify(segment))
     return "".join(parts)
-
-
-def _render_expandable_block_match(segment: str) -> str:
-    """Render one matched expandable-block segment (either sentinel pair)."""
-    if segment.startswith(TranscriptParser.EXPANDABLE_TAIL_START):
-        inner = segment[
-            len(TranscriptParser.EXPANDABLE_TAIL_START) : -len(
-                TranscriptParser.EXPANDABLE_TAIL_END
-            )
-        ]
-        return "\n" + _quote_lines(inner)
-    inner = segment[
-        len(TranscriptParser.EXPANDABLE_QUOTE_START) : -len(
-            TranscriptParser.EXPANDABLE_QUOTE_END
-        )
-    ]
-    return _quote_lines(inner)

@@ -22,8 +22,6 @@ from . import transcript_format
 from .transcript_format import (
     EXPANDABLE_QUOTE_END,
     EXPANDABLE_QUOTE_START,
-    EXPANDABLE_TAIL_END,
-    EXPANDABLE_TAIL_START,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,8 +91,6 @@ class TranscriptParser:
     # reach in via TranscriptParser (markdown_v2, message_sender).
     EXPANDABLE_QUOTE_START = EXPANDABLE_QUOTE_START
     EXPANDABLE_QUOTE_END = EXPANDABLE_QUOTE_END
-    EXPANDABLE_TAIL_START = EXPANDABLE_TAIL_START
-    EXPANDABLE_TAIL_END = EXPANDABLE_TAIL_END
 
     @staticmethod
     def parse_line(line: str) -> dict[str, Any] | None:

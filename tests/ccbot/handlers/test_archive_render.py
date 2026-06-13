@@ -387,13 +387,10 @@ class TestSystemUiTextFilter:
         assert not _RE_SYSTEM_UI_TEXT.match(text), f"false positive on: {text!r}"
 
 
-class TestExpandableTailBlurb:
-    """``_format_blurb`` lays out the visible head (cut on a word
-    boundary, ending in ``…``) outside the spoiler, then puts ONLY the
-    continuation inside the ``EXPANDABLE_TAIL`` block — so taps reveal
-    new content, not a repeat of what the user already read. The
-    rendering target is Telegram's expandable blockquote (not the
-    blur-style ``||spoiler||``)."""
+class TestFormatBlurb:
+    """``_format_blurb`` caps the combined blurb at ``_BLURB_TOTAL_BUDGET``
+    chars on a whole-word boundary — no spoiler, no expandable block,
+    just plain text with a trailing ``…`` when content overflows."""
 
     def test_short_single_message_verbatim(self) -> None:
         from ccbot.handlers.archive import _format_blurb
@@ -405,53 +402,59 @@ class TestExpandableTailBlurb:
 
         assert _format_blurb([]) == ""
 
-    def test_multi_message_head_visible_tail_only_in_spoiler(self) -> None:
+    def test_three_messages_fit_under_budget_all_kept(self) -> None:
         from ccbot.handlers.archive import _format_blurb
-        from ccbot.transcript_format import (
-            EXPANDABLE_TAIL_END,
-            EXPANDABLE_TAIL_START,
-        )
 
         out = _format_blurb(["first ask", "second ask", "third ask"])
-        # Head + ellipsis + tail-only sentinel block, in that order.
-        assert out.startswith("first ask…")
-        assert EXPANDABLE_TAIL_START in out
-        assert out.endswith(EXPANDABLE_TAIL_END)
-        body = out.split(EXPANDABLE_TAIL_START, 1)[1].rsplit(EXPANDABLE_TAIL_END, 1)[0]
-        # The continuation must NOT contain the head — that was the
-        # whole point of moving to the tail-only sentinel.
-        assert "first ask" not in body
-        assert "second ask" in body
-        assert "third ask" in body
-        # No blur-style inline spoiler.
+        assert out == "first ask  \nsecond ask  \nthird ask"
+        # No spoiler / sentinel / blur leftover.
+        assert "\x02" not in out
         assert "||" not in out
+        assert "…" not in out
 
-    def test_long_single_message_breaks_at_word(self) -> None:
-        from ccbot.handlers.archive import _BLURB_HEAD_LEN, _format_blurb
-        from ccbot.transcript_format import (
-            EXPANDABLE_TAIL_END,
-            EXPANDABLE_TAIL_START,
-        )
+    def test_overflow_truncates_first_message_at_word_boundary(self) -> None:
+        from ccbot.handlers.archive import _BLURB_TOTAL_BUDGET, _format_blurb
 
         long_msg = (
             "Investigate the auth-middleware refresh-token rotation "
             "regression that crept in last week — reproduce on staging "
-            "and confirm the fix locally before opening a PR."
+            "and confirm the fix locally before opening a PR after the "
+            "follow-up review with the platform team."
         )
-        assert len(long_msg) > _BLURB_HEAD_LEN
+        assert len(long_msg) > _BLURB_TOTAL_BUDGET
         out = _format_blurb([long_msg])
-        head_with_ellipsis, _ = out.split(EXPANDABLE_TAIL_START, 1)
-        # Head ends in ``…``, never mid-character.
-        assert head_with_ellipsis.endswith("…")
-        head = head_with_ellipsis[:-1]
-        assert len(head) <= _BLURB_HEAD_LEN
+        assert out.endswith("…")
+        # Stays under the budget (excluding the trailing ``…``).
+        assert len(out) <= _BLURB_TOTAL_BUDGET + 1
+        head = out[:-1]
+        # Word-boundary: no trailing space, head is a prefix of the
+        # original, and the cut lands ON a space in the source.
         assert not head.endswith(" ")
-        # Continuation under the spoiler holds the rest of the message
-        # and never repeats the head.
-        body = out.split(EXPANDABLE_TAIL_START, 1)[1].rsplit(EXPANDABLE_TAIL_END, 1)[0]
-        assert head not in body
-        # Together, head + tail still reconstructs the original.
-        assert head + " " + body == long_msg or head + body == long_msg
+        assert long_msg.startswith(head)
+        assert long_msg[len(head)] == " "
+
+    def test_overflow_drops_later_messages_keeps_first_whole(self) -> None:
+        from ccbot.handlers.archive import _BLURB_TOTAL_BUDGET, _format_blurb
+
+        first = "a" * (_BLURB_TOTAL_BUDGET - 10)  # fits whole
+        second = "b" * 30  # would overshoot
+        out = _format_blurb([first, second])
+        # First message kept whole, no ellipsis, second dropped.
+        assert out == first
+        assert "…" not in out
+
+    def test_two_short_messages_third_dropped_if_over(self) -> None:
+        from ccbot.handlers.archive import _BLURB_TOTAL_BUDGET, _format_blurb
+
+        first = "x" * 60
+        second = "y" * 60  # +3 separator → 123 ≤ 140
+        third = "z" * 30  # +3 separator → 156 > 140 → dropped
+        assert len(first) + 3 + len(second) <= _BLURB_TOTAL_BUDGET
+        assert len(first) + 3 + len(second) + 3 + len(third) > _BLURB_TOTAL_BUDGET
+        out = _format_blurb([first, second, third])
+        assert first in out
+        assert second in out
+        assert third not in out
 
 
 class TestDedupConsecutiveMessages:

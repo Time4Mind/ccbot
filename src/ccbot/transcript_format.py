@@ -33,6 +33,17 @@ logger = logging.getLogger(__name__)
 # expandable blockquote.
 EXPANDABLE_QUOTE_START = "\x02EXPQUOTE_START\x02"
 EXPANDABLE_QUOTE_END = "\x02EXPQUOTE_END\x02"
+# Variant for the "head IS the spoiler label" layout used by
+# tool_use / tool_result / thinking events in the live card. The
+# wrapped text has the form ``head\x1Fbody`` — the rich renderer
+# pulls ``head`` into ``<summary>`` and emits ``body`` (without the
+# head) as the ``<details>`` body so a tap reveals only the new
+# content. The MarkdownV2 renderer emits a single expandable
+# blockquote with ``head`` as the first ``>`` line and ``body`` as
+# the subsequent quoted lines.
+EXPANDABLE_HEADED_START = "\x02EXPHEADED_START\x02"
+EXPANDABLE_HEADED_END = "\x02EXPHEADED_END\x02"
+EXPANDABLE_HEADED_SEP = "\x1f"
 
 # Cap the length of the inline tool-summary tail (e.g. the file path
 # after `Read(...)`). Longer summaries get truncated with an ellipsis.
@@ -204,6 +215,24 @@ def extract_tool_result_images(
 def format_expandable_quote(text: str) -> str:
     """Wrap text with sentinel markers for downstream MarkdownV2 conversion."""
     return f"{EXPANDABLE_QUOTE_START}{text}{EXPANDABLE_QUOTE_END}"
+
+
+def format_expandable_with_head(head: str, body: str) -> str:
+    """Emit a "head + collapsible body" pair as a single expandable block.
+
+    ``head`` becomes the spoiler label (visible in the collapsed state,
+    shown as the rich-message ``<summary>`` or the first ``>`` line of
+    the MarkdownV2 expandable blockquote). ``body`` is the hidden
+    continuation — in the rich path it's the ``<details>`` body WITHOUT
+    a repeat of ``head``; in the MarkdownV2 path it lands as the
+    subsequent ``>`` lines under the quote.
+    """
+    if not body:
+        return head
+    return (
+        f"{EXPANDABLE_HEADED_START}{head}{EXPANDABLE_HEADED_SEP}{body}"
+        f"{EXPANDABLE_HEADED_END}"
+    )
 
 
 def format_tool_result_text(

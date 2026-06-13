@@ -107,6 +107,27 @@ _EXPQUOTE_RE = re.compile(
     + re.escape(TranscriptParser.EXPANDABLE_QUOTE_END)
 )
 
+_EXPHEADED_RE = re.compile(
+    re.escape(TranscriptParser.EXPANDABLE_HEADED_START)
+    + r"[\s\S]*?"
+    + re.escape(TranscriptParser.EXPANDABLE_HEADED_END)
+)
+
+# Both sentinel pairs (plain expandable + headed) in one alternation —
+# segmentation in ``convert_markdown`` walks the text once and dispatches
+# each match to the right renderer (preserves their original ordering).
+_EXPBLOCK_RE = re.compile(
+    "(?:"
+    + re.escape(TranscriptParser.EXPANDABLE_QUOTE_START)
+    + r"[\s\S]*?"
+    + re.escape(TranscriptParser.EXPANDABLE_QUOTE_END)
+    + ")|(?:"
+    + re.escape(TranscriptParser.EXPANDABLE_HEADED_START)
+    + r"[\s\S]*?"
+    + re.escape(TranscriptParser.EXPANDABLE_HEADED_END)
+    + ")"
+)
+
 # Characters that must be escaped in Telegram MarkdownV2 plain text
 _MDV2_ESCAPE_RE = re.compile(r"([_*\[\]()~`>#+\-=|{}.!\\])")
 
@@ -240,11 +261,13 @@ def convert_markdown(text: str) -> str:
     # Convert markdown tables to card-style format before telegramify
     text = convert_markdown_tables(text)
 
-    # Extract expandable-quote blocks before telegramify processes the
-    # rest — telegramify mangles the >…|| syntax otherwise.
-    segments: list[tuple[bool, str]] = []  # (is_quote, content)
+    # Extract expandable blocks (either plain or headed) before
+    # telegramify processes the rest — telegramify mangles the >…||
+    # syntax otherwise. Combined regex preserves the original ordering
+    # when both kinds appear in the same source.
+    segments: list[tuple[bool, str]] = []  # (is_block, content)
     last_end = 0
-    for m in _EXPQUOTE_RE.finditer(text):
+    for m in _EXPBLOCK_RE.finditer(text):
         if m.start() > last_end:
             segments.append((False, text[last_end : m.start()]))
         segments.append((True, m.group(0)))
@@ -256,14 +279,33 @@ def convert_markdown(text: str) -> str:
         return _markdownify(text)
 
     parts: list[str] = []
-    for is_quote, segment in segments:
-        if is_quote:
-            inner = segment[
-                len(TranscriptParser.EXPANDABLE_QUOTE_START) : -len(
-                    TranscriptParser.EXPANDABLE_QUOTE_END
-                )
-            ]
-            parts.append(_quote_lines(inner))
+    for is_block, segment in segments:
+        if is_block:
+            parts.append(_render_expandable_block(segment))
         else:
             parts.append(_markdownify(segment))
     return "".join(parts)
+
+
+def _render_expandable_block(segment: str) -> str:
+    """Dispatch a matched expandable-block segment to its renderer."""
+    if segment.startswith(TranscriptParser.EXPANDABLE_HEADED_START):
+        payload = segment[
+            len(TranscriptParser.EXPANDABLE_HEADED_START) : -len(
+                TranscriptParser.EXPANDABLE_HEADED_END
+            )
+        ]
+        head, sep, body = payload.partition(TranscriptParser.EXPANDABLE_HEADED_SEP)
+        if not sep:
+            # Malformed — render as plain expandable.
+            return _quote_lines(payload)
+        # Telegram expandable blockquote: head goes on the first ``>``
+        # line, body lines follow. Collapsed view shows just the head.
+        joined = head + "\n" + body if body else head
+        return _quote_lines(joined)
+    inner = segment[
+        len(TranscriptParser.EXPANDABLE_QUOTE_START) : -len(
+            TranscriptParser.EXPANDABLE_QUOTE_END
+        )
+    ]
+    return _quote_lines(inner)

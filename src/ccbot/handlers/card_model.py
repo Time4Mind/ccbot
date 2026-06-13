@@ -651,20 +651,40 @@ def _chunk_final_text(
     return chunks
 
 
-def _spoiler_body(body: str) -> str:
-    """Wrap ``body`` in EXPQUOTE_START/END so MarkdownV2 conversion turns
-    it into an expandable blockquote.
+def _trimmed_body(body: str) -> str:
+    """Trim and home-path-clean a tool / thinking body so it's safe to
+    drop into a spoiler block. Returns empty when there's nothing left
+    to show."""
+    return _body_trim(_strip_for_card(body))
 
-    Trims to ``SPOILER_MAX_LINES`` first, drops the home-path noise,
-    keeps MarkdownV2 markers (``**bold**`` etc.) intact — they get
-    properly rendered by ``convert_markdown`` at send time.
+
+def _spoiler_body(body: str) -> str:
+    """Legacy plain-expandable wrapper kept for callers (tests, the
+    notifications re-export) that don't pair a head with the body.
+
+    ``render_event`` itself moved to :func:`_headed_block` so the tool
+    event line becomes the spoiler label instead of sitting on its own
+    above a plain spoiler. New code shouldn't call this directly.
     """
     from ..transcript_format import format_expandable_quote
 
-    trimmed = _body_trim(_strip_for_card(body))
+    trimmed = _trimmed_body(body)
     if not trimmed:
         return ""
     return format_expandable_quote(trimmed)
+
+
+def _headed_block(head: str, body: str) -> str:
+    """Return ``head`` if there's no body, else wrap ``(head, body)``
+    in the ``EXPANDABLE_HEADED`` sentinel so the rich renderer makes
+    ``head`` the spoiler label and ``body`` the collapsible content
+    (without repeating the head)."""
+    from ..transcript_format import format_expandable_with_head
+
+    trimmed = _trimmed_body(body)
+    if not trimmed:
+        return head
+    return format_expandable_with_head(head, trimmed)
 
 
 def render_event(event: Event, *, in_flight: bool, now: float) -> str:
@@ -681,9 +701,7 @@ def render_event(event: Event, *, in_flight: bool, now: float) -> str:
         return f"👤 {event.text}"
 
     if event.type == "thinking":
-        head = f"∴ thinking{marker}"
-        body = _spoiler_body(event.body)
-        return f"{head}\n{body}" if body else head
+        return _headed_block(f"∴ thinking{marker}", event.body)
 
     if event.type == "tool_use":
         if event.is_error:
@@ -692,16 +710,12 @@ def render_event(event: Event, *, in_flight: bool, now: float) -> str:
             glyph = "▷"
         else:
             glyph = "✓"
-        head = f"{glyph} {event.text}{marker}"
-        body = _spoiler_body(event.body)
-        return f"{head}\n{body}" if body else head
+        return _headed_block(f"{glyph} {event.text}{marker}", event.body)
 
     if event.type == "tool_result":
         # Fallback when the matching tool_use Event isn't found (parser
         # race / restart). Render as a standalone row.
-        head = f"✓ {event.text}{marker}"
-        body = _spoiler_body(event.body)
-        return f"{head}\n{body}" if body else head
+        return _headed_block(f"✓ {event.text}{marker}", event.body)
 
     if event.type in ("text", "final_text", "error"):
         # Mid-stream / final / error — inline, no glyph.

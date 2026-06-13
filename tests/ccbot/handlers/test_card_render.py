@@ -73,6 +73,57 @@ class TestToolHeadAndSpoiler:
         assert "Output 5 lines" in ev.text
 
 
+class TestHeadedBlock:
+    """``_headed_block`` wraps the (head, body) pair in the
+    ``EXPANDABLE_HEADED`` sentinel so the tool / thinking event line
+    BECOMES the spoiler label — collapsed view shows just the head with
+    a chevron, expanded view shows the body without repeating the head."""
+
+    def test_no_body_returns_plain_head(self) -> None:
+        from ccbot.handlers.card_model import _headed_block
+
+        assert _headed_block("✓ Bash · Output 3 lines · 22:47", "") == (
+            "✓ Bash · Output 3 lines · 22:47"
+        )
+
+    def test_with_body_wraps_in_headed_sentinel(self) -> None:
+        from ccbot.handlers.card_model import _headed_block
+        from ccbot.transcript_format import (
+            EXPANDABLE_HEADED_END,
+            EXPANDABLE_HEADED_SEP,
+            EXPANDABLE_HEADED_START,
+        )
+
+        head = "✓ Bash · Output 3 lines · 22:47"
+        body = "grep -n '^class' file.py\n13:def foo\n19:def bar"
+        out = _headed_block(head, body)
+        assert out.startswith(EXPANDABLE_HEADED_START)
+        assert out.endswith(EXPANDABLE_HEADED_END)
+        # Payload is ``head\x1fbody``.
+        payload = out[len(EXPANDABLE_HEADED_START) : -len(EXPANDABLE_HEADED_END)]
+        sep_head, sep, sep_body = payload.partition(EXPANDABLE_HEADED_SEP)
+        assert sep == EXPANDABLE_HEADED_SEP
+        assert sep_head == head
+        # Body present, without a repeat of head.
+        assert head not in sep_body
+        assert "grep -n" in sep_body
+        assert "13:def foo" in sep_body
+
+    def test_rich_renders_head_as_summary_body_only(self) -> None:
+        from ccbot.handlers.card_model import _headed_block
+        from ccbot.rich import to_rich_markdown
+
+        head = "✓ Bash · Output 3 lines · 22:47"
+        body = "grep -n '^class' file.py"
+        rich = to_rich_markdown(_headed_block(head, body))
+        # ``<summary>`` carries the head, ``<details>`` body is the
+        # body content WITHOUT the head repeated.
+        assert f"<summary>{head}</summary>" in rich
+        details_body = rich.split("</summary>", 1)[1].split("</details>", 1)[0]
+        assert head not in details_body
+        assert "grep -n" in details_body
+
+
 class TestSpoilerBody:
     def test_empty_body_returns_empty(self) -> None:
         assert _spoiler_body("") == ""

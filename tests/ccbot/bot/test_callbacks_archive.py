@@ -61,9 +61,7 @@ class TestArchiveAllToggle:
         """Two full pages of 72h-aged sessions + a few older → tapping
         '14d' opens the page where the 3-14d sessions begin (page 2)."""
         # 72h-aged: 2 full pages worth.
-        recent = [
-            _make_archived(i, age_hours=1.0) for i in range(PAGE_SIZE * 2)
-        ]
+        recent = [_make_archived(i, age_hours=1.0) for i in range(PAGE_SIZE * 2)]
         # 3-14d-aged: 3 entries.
         older = [_make_archived(PAGE_SIZE * 2 + i, age_hours=96.0) for i in range(3)]
 
@@ -72,11 +70,7 @@ class TestArchiveAllToggle:
             # once inside ``build_archive_page``. Honour the cap.
             cutoff = max_age_seconds or float("inf")
             now = time.time()
-            return [
-                s
-                for s in [*recent, *older]
-                if (now - s.archived_at) <= cutoff
-            ]
+            return [s for s in [*recent, *older] if (now - s.archived_at) <= cutoff]
 
         with (
             patch.object(
@@ -133,9 +127,7 @@ class TestArchiveAllToggle:
         """When the 72h window is empty (everything is older), expanding
         to 14d puts the user on page 0 — the older entries ARE the only
         content, so no skip is needed."""
-        older_only = [
-            _make_archived(i, age_hours=120.0) for i in range(PAGE_SIZE + 1)
-        ]
+        older_only = [_make_archived(i, age_hours=120.0) for i in range(PAGE_SIZE + 1)]
 
         def _list_archived(*, max_age_seconds=None):
             cutoff = max_age_seconds or float("inf")

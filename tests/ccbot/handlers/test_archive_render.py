@@ -99,9 +99,9 @@ class TestArchivePageNumbering:
             user_id=1,
         )
         labels = [btn.text for row in kb.inline_keyboard for btn in row]
-        # Page-2 buttons are labelled 6-10 with the plain dot.
-        assert any(lbl.startswith("6. ") for lbl in labels)
-        assert any(lbl.startswith("10. ") for lbl in labels)
+        # Page-2 buttons cover indices PAGE_SIZE+1 … PAGE_SIZE*2.
+        assert any(lbl.startswith(f"{PAGE_SIZE + 1}. ") for lbl in labels)
+        assert any(lbl.startswith(f"{PAGE_SIZE * 2}. ") for lbl in labels)
 
 
 class TestArchivePageLineBreaks:

@@ -735,9 +735,19 @@ def paginate_events(events: list[Event]) -> list[list[Event]]:
     return pages if pages else [[]]
 
 
-# render_page joins events with "\n\n\n" (3 newlines = 2 blank lines visually).
-# Account for the joiner when summing per-event line counts in sub-pagination.
-_JOINER_LINES = 2
+# Inter-event joiner — sandwiches a non-breaking-space paragraph
+# between events so CommonMark/MarkdownV2 render a TWO-paragraph gap
+# (a single blank line is what consecutive ``\n\n\n`` collapsed to,
+# which the user found too tight between thinking / tool / text blocks).
+# Using `` `` (instead of HTML ``<br>``) keeps the gap consistent
+# across the rich-message path AND the MarkdownV2 fallback — ``<br>``
+# isn't in ``_html_inline_to_markdown``'s whitelist so it would leak
+# as a literal ``<br>`` to chat in the fallback path.
+_EVENT_JOINER = "\n\n \n\n"
+# Account for the joiner when summing per-event line counts in
+# sub-pagination — ``_EVENT_JOINER`` contains 4 ``\n`` chars + 1
+# whitespace char, which adds 3 logical lines between any two events.
+_JOINER_LINES = 3
 
 
 def _split_page_by_budget(page: list[Event], budget_lines: int) -> list[list[Event]]:
@@ -777,9 +787,10 @@ def _split_page_by_budget(page: list[Event], budget_lines: int) -> list[list[Eve
     current: list[Event] = []
     current_lines = 0
     current_bytes = 0
-    # Two ASCII newlines between events at the byte level (render_page
-    # joins with "\n\n\n" but MD-V2 escape doesn't touch \n itself).
-    _JOINER_BYTES = 3
+    # Joiner byte cost = 4 ``\n`` (1 byte each) + 1 `` `` (2 bytes
+    # UTF-8). MD-V2 escape doesn't touch any of these so the
+    # post-conversion size matches the source.
+    _JOINER_BYTES = len(_EVENT_JOINER.encode("utf-8"))
     for ev in page:
         rendered_ev = render_event(ev, in_flight=False, now=now)
         ev_lines = _count_lines(rendered_ev)
@@ -833,17 +844,17 @@ def _resolved_page_idx(state: CardState, total_pages: int) -> int:
 def render_page(events: list[Event], now: float) -> str:
     """Render the events of one page into a single body string.
 
-    Events are separated by ``\\n\\n\\n`` (two blank lines in the
-    rendered MarkdownV2 source). Telegram swallows one blank row after
-    a closing expandable blockquote ``||``, so a single ``\\n\\n``
-    collapses to zero visible gap and the page reads as a wall of text.
-    Two empty lines survive as exactly one visible blank row between
-    tool/thinking blocks — the gap the user actually needs.
+    Events are joined by ``_EVENT_JOINER`` — a non-breaking-space
+    paragraph wedged between two paragraph breaks. CommonMark / Telegram
+    rich would otherwise collapse two consecutive blank rows into a
+    single one, but a paragraph that contains a ``\\u00a0`` survives
+    trimming and gives the user a visibly larger gap between thinking,
+    tool_use and tool_result blocks.
     """
     parts: list[str] = []
     for i, ev in enumerate(events):
         parts.append(render_event(ev, in_flight=_is_in_flight(ev, events, i), now=now))
-    return "\n\n\n".join(parts)
+    return _EVENT_JOINER.join(parts)
 
 
 # ─── Card composition ─────────────────────────────────────────────────

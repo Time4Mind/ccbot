@@ -35,15 +35,19 @@ from .callback_data import (
 )
 from .cleanup import clear_session_state
 
-# Per-session blurb cache — keyed by claude_session_id. The blurb is a
-# short "what was this session about" snippet pulled from the JSONL
-# (first ``type=summary`` row, else the first user message). Archived
-# JSONLs don't grow, so a single lookup is enough for the session's
-# lifetime in archive. The dict is bounded by the number of archived
-# sessions on this host — fine to keep in memory.
-_BLURB_CACHE: dict[str, str] = {}
-# A "few words more" than a one-liner — leaves headroom for ~12-15
-# English / ~8-10 Cyrillic words before the ellipsis.
+# Per-session blurb cache — keyed by claude_session_id. The cached
+# tuple holds *both* candidate sources: Claude Code's own
+# ``"type":"ai-title"`` summary (always English) and the session's first
+# real user message (whatever language the user typed). At render time
+# we pick by the user's UI language: ``en`` → ai-title, anything else →
+# first user message. Caching both lets the user flip languages without
+# rescanning the JSONL. Archived JSONLs are append-frozen so a single
+# scan is enough for the session's lifetime in archive.
+_BLURB_CACHE: dict[str, tuple[str, str]] = {}
+# Visible head before the spoiler kicks in. ~12-15 English / ~8-10
+# Cyrillic words land inside this budget; the rest of the message goes
+# into an inline ``||spoiler||`` tail (tap to reveal) instead of the
+# old ellipsis truncation.
 _BLURB_MAX_LEN = 96
 
 # Claude Code injects its own "user" messages — local-command caveats,
@@ -72,10 +76,16 @@ def _shorten_workdir(path: str) -> str:
 
 
 def _trim_blurb(text: str) -> str:
-    """Compact a JSONL summary or first user message into one short line.
+    """Compact a blurb candidate into one short line.
 
     Strips markdown noise (backticks, leading bullets), collapses
-    whitespace, and clamps to ``_BLURB_MAX_LEN`` chars with an ellipsis.
+    whitespace, and — when the cleaned text exceeds ``_BLURB_MAX_LEN``
+    — hides the overflow inside a Telegram inline spoiler
+    (``||tail||``) so the reader can tap to reveal the rest. Pure
+    truncation (the old ``…`` ellipsis) silently lost content.
+
+    Existing ``||`` runs in the source are escaped so we can't open or
+    close the spoiler in the wrong place.
     """
     if not text:
         return ""
@@ -88,43 +98,61 @@ def _trim_blurb(text: str) -> str:
         head, _, rest = cleaned.partition(" ")
         cleaned = rest if rest else head
     cleaned = cleaned.strip("` ")
+    # Neutralise any naturally-occurring ``||`` runs in the source —
+    # they'd otherwise open / close our outer spoiler in the wrong
+    # place. A single space between the pipes kills the delimiter
+    # without dropping content. Telegram's rich parser doesn't honour
+    # backslash escapes the way CommonMark does (verified live on PR
+    # #112 — a stray ``\.`` leaked the backslash visibly), so we don't
+    # rely on ``\|\|`` either.
+    cleaned = cleaned.replace("||", "| |")
     if len(cleaned) <= _BLURB_MAX_LEN:
         return cleaned
-    return cleaned[: _BLURB_MAX_LEN - 1].rstrip() + "…"
+    # Prefer a word boundary close to the budget so we don't split
+    # mid-word ("Посмотри что за дан||ные здесь есть…").
+    cut = cleaned.rfind(" ", 0, _BLURB_MAX_LEN)
+    if cut < _BLURB_MAX_LEN - 24:
+        cut = _BLURB_MAX_LEN
+    head = cleaned[:cut].rstrip()
+    tail = cleaned[cut:].lstrip()
+    if not tail:
+        return head
+    return f"{head}||{tail}||"
 
 
-async def _archive_blurb(sess: Session) -> str:
-    """Return a short "what was this session about" line for an archived
-    session. Reads at most the first few JSONL entries — bails out as
-    soon as it has a summary or a user message. Cached forever per
-    ``claude_session_id`` (archived JSONLs are append-frozen).
+async def _scan_blurb_sources(sess: Session) -> tuple[str, str]:
+    """Walk the JSONL once and pull both blurb candidates.
+
+    Returns ``(ai_title, first_user_msg)`` — either field can be empty.
+    The ``"ai-title"`` row Claude Code itself emits is always English and
+    drives the en-locale path; the first real user message is the
+    fallback (and the preferred source for ru/zh users when Haiku
+    translation is unavailable).
     """
     sid = sess.claude_session_id
     if not sid or not sess.workdir:
-        return ""
-    cached = _BLURB_CACHE.get(sid)
-    if cached is not None:
-        return cached
+        return "", ""
     fp = build_session_file_path(sid, sess.workdir)
     if fp is None or not fp.exists():
         pattern = f"*/{sid}.jsonl"
         matches = list(config.claude_projects_path.glob(pattern))
         if not matches:
-            _BLURB_CACHE[sid] = ""
-            return ""
+            return "", ""
         fp = matches[0]
 
-    summary = ""
+    ai_title = ""
     first_user_msg = ""
     scanned = 0
     try:
         async with aiofiles.open(fp, "r", encoding="utf-8") as f:
             async for line in f:
                 scanned += 1
-                # 40-line cap: a summary row, when present, is at the
-                # top; the first user message is also near the top.
-                # Bail out instead of walking the whole JSONL.
-                if scanned > 40:
+                # ai-title typically lands around line 5-10 (first
+                # assistant turn). 60-line cap leaves headroom for a
+                # bigger system-prompt prelude before bailing out.
+                if scanned > 60:
+                    break
+                if ai_title and first_user_msg:
                     break
                 line = line.strip()
                 if not line:
@@ -133,11 +161,11 @@ async def _archive_blurb(sess: Session) -> str:
                     data = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if data.get("type") == "summary":
-                    s = data.get("summary", "")
-                    if s:
-                        summary = s
-                        break
+                if not ai_title and data.get("type") == "ai-title":
+                    candidate = (data.get("aiTitle") or "").strip()
+                    if candidate:
+                        ai_title = candidate
+                        continue
                 if not first_user_msg and TranscriptParser.is_user_message(data):
                     parsed = TranscriptParser.parse_message(data)
                     if parsed and parsed.text.strip():
@@ -152,12 +180,69 @@ async def _archive_blurb(sess: Session) -> str:
                             first_user_msg = candidate
     except OSError as e:
         logger.debug("archive blurb read failed for %s: %s", fp, e)
-        _BLURB_CACHE[sid] = ""
-        return ""
+        return "", ""
 
-    blurb = _trim_blurb(summary or first_user_msg)
-    _BLURB_CACHE[sid] = blurb
-    return blurb
+    return ai_title, first_user_msg
+
+
+async def _archive_blurb(sess: Session, user_id: int) -> str:
+    """Return a localised "what was this session about" line.
+
+    Source picked by the user's UI language:
+
+    * ``en`` — the ``ai-title`` row Claude Code itself emits (also
+      English, ~5-8 words, on-topic).
+    * Anything else — same ``ai-title`` translated by a one-shot Haiku
+      call when ``haiku_naming`` is on, falling back to the first user
+      message verbatim. Translations are persisted in ``state.json``
+      under ``archive_blurb_translations`` so a bot restart never pays
+      for the same Haiku call twice.
+
+    JSONL scan and translation are guarded by per-source caches.
+    """
+    sid = sess.claude_session_id
+    if not sid:
+        return ""
+    cached = _BLURB_CACHE.get(sid)
+    if cached is None:
+        cached = await _scan_blurb_sources(sess)
+        _BLURB_CACHE[sid] = cached
+    ai_title, first_user_msg = cached
+
+    settings = session_manager.get_user_settings(user_id)
+    lang = str(settings.get("language", "en") or "en")
+    haiku_on = bool(settings.get("haiku_naming", True))
+
+    if lang == "en":
+        return _trim_blurb(ai_title or first_user_msg)
+
+    if ai_title and haiku_on:
+        translated = session_manager.get_archive_blurb_translation(sid, lang)
+        if translated is None:
+            from ..naming import translate_to
+
+            try:
+                translated = await translate_to(ai_title, lang)
+            except Exception as e:
+                logger.debug("ai-title translate failed for %s: %s", sid, e)
+                translated = None
+            if translated:
+                session_manager.set_archive_blurb_translation(sid, lang, translated)
+        if translated:
+            return _trim_blurb(translated)
+
+    # Fallback: the user's own words. Already in their language.
+    return _trim_blurb(first_user_msg or ai_title)
+
+
+def _display_name(sess: Session) -> str:
+    """Human-readable form of ``sess.name`` — Haiku produces kebab-case
+    (``archive-pagination-fix``); for the body row and the inline
+    button label we render it with spaces (``archive pagination fix``)
+    so it reads as a natural phrase. Directory-derived names
+    (``workdir-2``) pass through the same transform without harm.
+    """
+    return (sess.name or sess.id).replace("-", " ")
 
 
 logger = logging.getLogger(__name__)
@@ -214,12 +299,13 @@ async def build_archive_page(
     chunk = sessions[start : start + PAGE_SIZE]
 
     # Precompute blurbs for the chunk. Most calls hit the in-memory
-    # cache (archived JSONLs don't change); cold paths read at most
-    # ~40 lines per JSONL. Fan-out kept tiny by PAGE_SIZE=5.
+    # cache (archived JSONLs don't change) or the persisted translation
+    # cache; cold paths walk the JSONL once and may fire one Haiku
+    # translate call. Fan-out kept tiny by PAGE_SIZE=6.
     blurbs: dict[str, str] = {}
     for sess in chunk:
         try:
-            blurbs[sess.id] = await _archive_blurb(sess)
+            blurbs[sess.id] = await _archive_blurb(sess, user_id)
         except Exception as e:
             logger.debug("archive blurb fetch failed for %s: %s", sess.id, e)
             blurbs[sess.id] = ""
@@ -238,7 +324,7 @@ async def build_archive_page(
             label = "✓" if sess.state == "completed" else "·"
             ts = sess.archived_at or sess.last_event_at
             age = _format_age(user_id, ts) if ts else "?"
-            display_name = sess.name or sess.id
+            display_name = _display_name(sess)
             # ``(lost)`` tag for sessions that hit the lost state before
             # archival (tmux window vanished externally; user never
             # ran Restore). Without it the row reads identical to a
@@ -268,10 +354,9 @@ async def build_archive_page(
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
     for idx, sess in enumerate(chunk, start=start + 1):
-        name = sess.name or sess.id
         row.append(
             InlineKeyboardButton(
-                f"{idx}. {name}",
+                f"{idx}. {_display_name(sess)}",
                 callback_data=f"{CB_ARC_INSPECT}{sess.id}"[:64],
             )
         )

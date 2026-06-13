@@ -153,3 +153,236 @@ class TestArchivePageLineBreaks:
         # ``\n  `` (line-start + 2 spaces of content) is the old pattern;
         # the new layout uses ``  \n`` (trailing spaces before the break).
         assert "\n  " not in text
+
+
+class TestDisplayName:
+    def test_kebab_renders_as_spaces(self) -> None:
+        from ccbot.handlers.archive import _display_name
+
+        sess = Session(
+            id="abcd",
+            name="archive-pagination-fix",
+            state="archived",
+        )
+        assert _display_name(sess) == "archive pagination fix"
+
+    def test_fallback_to_id_when_no_name(self) -> None:
+        from ccbot.handlers.archive import _display_name
+
+        sess = Session(id="abcd1234", name="", state="archived")
+        assert _display_name(sess) == "abcd1234"
+
+    def test_directory_name_passes_through_with_spaces(self) -> None:
+        from ccbot.handlers.archive import _display_name
+
+        sess = Session(id="abcd", name="workdir-6", state="archived")
+        # ``-N`` collision suffix becomes ``workdir 6`` — still readable.
+        assert _display_name(sess) == "workdir 6"
+
+
+class TestTrimBlurbSpoiler:
+    def test_short_unchanged(self) -> None:
+        from ccbot.handlers.archive import _trim_blurb
+
+        assert _trim_blurb("simple short blurb") == "simple short blurb"
+
+    def test_collapses_whitespace(self) -> None:
+        from ccbot.handlers.archive import _trim_blurb
+
+        assert _trim_blurb("line1\n\nline2   line3") == "line1 line2 line3"
+
+    def test_overflow_wraps_tail_in_spoiler(self) -> None:
+        from ccbot.handlers.archive import _BLURB_MAX_LEN, _trim_blurb
+
+        text = "a " * 80  # well over the budget
+        out = _trim_blurb(text)
+        assert "||" in out
+        # Head + spoiler markers + escaped tail — but never an ellipsis.
+        assert "…" not in out
+        # Spoiler markers balanced.
+        assert out.count("||") == 2
+        head, _sep, _rest = out.partition("||")
+        assert len(head) <= _BLURB_MAX_LEN
+
+    def test_existing_double_pipe_neutralised(self) -> None:
+        """A bare ``||`` in the source must not close our spoiler early —
+        we neutralise it by inserting a space (``| |``) before any
+        spoiler logic runs."""
+        from ccbot.handlers.archive import _trim_blurb
+
+        text = (
+            "Investigate the ||sneaky|| spoiler sequence inside a much "
+            "longer-than-the-budget user message that runs and runs and runs."
+        )
+        out = _trim_blurb(text)
+        # The original ``||sneaky||`` is now ``| |sneaky| |``.
+        assert "||sneaky||" not in out
+        assert "| |sneaky| |" in out
+        # Exactly one outer spoiler wraps the tail — ``||`` count is 2.
+        assert out.count("||") == 2
+        assert out.endswith("||")
+
+    def test_drops_leading_slash_command(self) -> None:
+        from ccbot.handlers.archive import _trim_blurb
+
+        assert _trim_blurb("/resume real ask").startswith("real ask")
+
+
+class TestArchiveBlurbLocalization:
+    """``_archive_blurb`` picks a source by UI language and caches Haiku
+    translations forever so a bot restart never pays twice."""
+
+    @pytest.fixture(autouse=True)
+    def reset_blurb_cache(self):
+        from ccbot.handlers import archive
+
+        archive._BLURB_CACHE.clear()
+        yield
+        archive._BLURB_CACHE.clear()
+
+    @pytest.mark.asyncio
+    async def test_en_uses_ai_title_verbatim(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ccbot.handlers import archive
+
+        sess = Session(
+            id="s1",
+            name="",
+            state="archived",
+            claude_session_id="cs-1",
+            workdir="/tmp/x",
+        )
+        monkeypatch.setattr(
+            archive,
+            "_scan_blurb_sources",
+            _fake_scan(("Research and fix Telegram markdown", "")),
+        )
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_user_settings",
+            lambda _uid: {"language": "en", "haiku_naming": True},
+        )
+        out = await archive._archive_blurb(sess, user_id=1)
+        assert out == "Research and fix Telegram markdown"
+
+    @pytest.mark.asyncio
+    async def test_ru_translates_via_haiku_and_caches(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import AsyncMock
+
+        from ccbot.handlers import archive
+
+        sess = Session(
+            id="s2",
+            name="",
+            state="archived",
+            claude_session_id="cs-2",
+            workdir="/tmp/x",
+        )
+        monkeypatch.setattr(
+            archive,
+            "_scan_blurb_sources",
+            _fake_scan(("Research and fix Telegram markdown", "")),
+        )
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_user_settings",
+            lambda _uid: {"language": "ru", "haiku_naming": True},
+        )
+        # No cached translation yet.
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_archive_blurb_translation",
+            lambda _sid, _lang: None,
+        )
+        set_calls: list[tuple[str, str, str]] = []
+        monkeypatch.setattr(
+            archive.session_manager,
+            "set_archive_blurb_translation",
+            lambda sid, lang, val: set_calls.append((sid, lang, val)),
+        )
+        translate = AsyncMock(return_value="Исследовать и починить Telegram markdown")
+        monkeypatch.setattr("ccbot.naming.translate_to", translate)
+
+        out = await archive._archive_blurb(sess, user_id=1)
+        assert out == "Исследовать и починить Telegram markdown"
+        translate.assert_awaited_once()
+        assert set_calls == [("cs-2", "ru", "Исследовать и починить Telegram markdown")]
+
+    @pytest.mark.asyncio
+    async def test_ru_uses_cached_translation_without_haiku(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import AsyncMock
+
+        from ccbot.handlers import archive
+
+        sess = Session(
+            id="s3",
+            name="",
+            state="archived",
+            claude_session_id="cs-3",
+            workdir="/tmp/x",
+        )
+        monkeypatch.setattr(
+            archive,
+            "_scan_blurb_sources",
+            _fake_scan(("Some English title", "")),
+        )
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_user_settings",
+            lambda _uid: {"language": "ru", "haiku_naming": True},
+        )
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_archive_blurb_translation",
+            lambda _sid, _lang: "Уже переведённый заголовок",
+        )
+        translate = AsyncMock()
+        monkeypatch.setattr("ccbot.naming.translate_to", translate)
+
+        out = await archive._archive_blurb(sess, user_id=1)
+        assert out == "Уже переведённый заголовок"
+        translate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_ru_haiku_off_falls_back_to_user_message(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import AsyncMock
+
+        from ccbot.handlers import archive
+
+        sess = Session(
+            id="s4",
+            name="",
+            state="archived",
+            claude_session_id="cs-4",
+            workdir="/tmp/x",
+        )
+        monkeypatch.setattr(
+            archive,
+            "_scan_blurb_sources",
+            _fake_scan(("English ai-title", "Найди баги в коде")),
+        )
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_user_settings",
+            lambda _uid: {"language": "ru", "haiku_naming": False},
+        )
+        translate = AsyncMock()
+        monkeypatch.setattr("ccbot.naming.translate_to", translate)
+
+        out = await archive._archive_blurb(sess, user_id=1)
+        assert out == "Найди баги в коде"
+        translate.assert_not_awaited()
+
+
+def _fake_scan(value: tuple[str, str]):
+    async def _scan(_sess):
+        return value
+
+    return _scan

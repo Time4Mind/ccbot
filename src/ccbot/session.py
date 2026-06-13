@@ -133,6 +133,12 @@ class SessionManager:
     # Cached short summaries for ClaudeSession picker. Key = claude session id.
     # Value = {"summary": str, "mtime": float, "ts": float}.
     summary_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Per-claude-session translation cache for /archive blurbs. Once Haiku
+    # has produced a translation of the ``ai-title`` into a given UI
+    # language, persist it forever — archived sessions don't change, and
+    # paying for the same translation again across bot restarts would
+    # be silly. Shape: ``{claude_session_id: {lang_code: translated}}``.
+    archive_blurb_translations: dict[str, dict[str, str]] = field(default_factory=dict)
     # Window ids that were just `claude --resume`d and may still be
     # auto-compacting. While a window is here, ``send_to_window`` buffers
     # prompts into ``_pending_sends`` instead of typing them, and a
@@ -176,6 +182,7 @@ class SessionManager:
                 str(uid): vals for uid, vals in self.user_settings.items()
             },
             "summary_cache": self.summary_cache,
+            "archive_blurb_translations": self.archive_blurb_translations,
             "bg_status": bg_status.serialize_per_user(),
         }
         atomic_write_json(config.state_file, state)
@@ -229,6 +236,13 @@ class SessionManager:
                     for uid, vals in state.get("user_settings", {}).items()
                 }
                 self.summary_cache = dict(state.get("summary_cache", {}))
+                self.archive_blurb_translations = {
+                    sid: dict(per_lang)
+                    for sid, per_lang in state.get(
+                        "archive_blurb_translations", {}
+                    ).items()
+                    if isinstance(per_lang, dict)
+                }
 
                 # Late import — handlers package imports session_manager.
                 from .handlers import bg_status
@@ -257,6 +271,7 @@ class SessionManager:
                 self.window_display_names = {}
                 self.user_settings = {}
                 self.summary_cache = {}
+                self.archive_blurb_translations = {}
 
     async def reconcile_sessions_with_tmux(self) -> int:
         """Mark sessions whose tmux window vanished as ``lost``."""
@@ -850,6 +865,28 @@ class SessionManager:
             "mtime": file_mtime,
             "ts": time.time(),
         }
+        self.save_state()
+
+    def get_archive_blurb_translation(
+        self, claude_session_id: str, lang: str
+    ) -> str | None:
+        """Look up the Haiku-translated ``ai-title`` for one (sid, lang) pair."""
+        entry = self.archive_blurb_translations.get(claude_session_id)
+        if not entry:
+            return None
+        return entry.get(lang) or None
+
+    def set_archive_blurb_translation(
+        self, claude_session_id: str, lang: str, translated: str
+    ) -> None:
+        """Persist a Haiku translation forever (archived JSONLs don't change).
+
+        Skips empty inputs so a failed Haiku call doesn't poison the cache.
+        """
+        if not claude_session_id or not lang or not translated:
+            return
+        bucket = self.archive_blurb_translations.setdefault(claude_session_id, {})
+        bucket[lang] = translated
         self.save_state()
 
     def rename_session(self, session_id: str, new_name: str) -> None:

@@ -163,7 +163,7 @@ async def _archive_blurb(sess: Session) -> str:
 logger = logging.getLogger(__name__)
 
 # How many archived sessions to render per /archive page.
-PAGE_SIZE = 5
+PAGE_SIZE = 6
 
 # Default lookback window for /archive (0-72h). /archive --all extends this.
 DEFAULT_LOOKBACK_SECONDS = 72 * 3600
@@ -262,8 +262,8 @@ async def build_archive_page(
                 parts.append(f"_{sess.goal}_")
             body.append("  \n".join(parts))
 
-    # One button per session, paired up two-per-row (PAGE_SIZE=5 gives
-    # 2+2+1). Each button's label carries the matching number so the
+    # One button per session, paired up two-per-row (PAGE_SIZE=6 gives
+    # 2+2+2). Each button's label carries the matching number so the
     # body line and button line up visually.
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []

@@ -43,6 +43,7 @@ from .callback_data import (
     CB_ST_APPROVE,
     CB_ST_BACK,
     CB_ST_BGNOTIFY,
+    CB_ST_HAIKU,
     CB_ST_CAT,
     CB_ST_CHIST,
     CB_ST_PAGESIZE,
@@ -85,6 +86,7 @@ Screen = Literal[
     "settings_bg_notify_finished",
     "settings_bg_notify_error",
     "settings_bg_notify_needs_action",
+    "settings_haiku",
 ]
 
 # Group key -> (label translation key, sub-screen name, settings-dict key)
@@ -147,6 +149,12 @@ _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
         "settings_bg_notify_needs_action",
         "bg_notify_needs_action",
     ),
+    (
+        "haiku_naming",
+        "settings.group.haiku_naming",
+        "settings_haiku",
+        "haiku_naming",
+    ),
 )
 
 
@@ -190,7 +198,7 @@ SETTINGS_CATEGORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "settings.cat.behavior",
         "settings_cat_behavior",
-        ("auto_approve", "language"),
+        ("auto_approve", "haiku_naming", "language"),
     ),
 )
 
@@ -401,6 +409,8 @@ def _format_setting_value(user_id: int, value_key: str, cur: object) -> str:
     if value_key == "card_inline_screenshots":
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
     if value_key in ("bg_notify_finished", "bg_notify_error", "bg_notify_needs_action"):
+        return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
+    if value_key == "haiku_naming":
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
     return str(cur) if cur is not None else "?"
 
@@ -670,6 +680,34 @@ def _settings_screens_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     ]
 
 
+def _settings_haiku_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
+    """Haiku auto-rename on/off toggle.
+
+    When *off*, new sessions keep the directory-basename name forever
+    (``workdir``, ``workdir-2``, ...). When *on*, a one-shot Haiku call
+    on the first user message ≥20 chars renames the session to a 1-3
+    word kebab-case summary.
+    """
+    cur = bool(session_manager.get_user_settings(user_id).get("haiku_naming", True))
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(t(user_id, "screens.on"), cur),
+                callback_data=f"{CB_ST_HAIKU}on",
+            ),
+            InlineKeyboardButton(
+                _highlight(t(user_id, "screens.off"), not cur),
+                callback_data=f"{CB_ST_HAIKU}off",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"), callback_data=_parent_cat_cb("haiku_naming")
+            )
+        ],
+    ]
+
+
 def _settings_bg_notify_grid(
     user_id: int, key: str, back_to: str
 ) -> list[list[InlineKeyboardButton]]:
@@ -841,6 +879,8 @@ def build_footer_keyboard(
                 user_id, "bg_notify_needs_action", "settings_cat_notifications"
             )
         )
+    elif screen == "settings_haiku":
+        rows.extend(_settings_haiku_grid(user_id))
     else:
         # In-card pagination row at the very top — [◀] [N/M] [▶].
         # ``N/M`` taps jump to the default-focus page (latest answer).
@@ -929,6 +969,7 @@ _GROUP_TEXT_KEYS: dict[str, str] = {
     "settings_bg_notify_finished": "settings.bg_notify.finished.body",
     "settings_bg_notify_error": "settings.bg_notify.error.body",
     "settings_bg_notify_needs_action": "settings.bg_notify.needs_action.body",
+    "settings_haiku": "settings.haiku.body",
 }
 
 

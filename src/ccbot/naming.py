@@ -22,11 +22,42 @@ import asyncio
 import logging
 import os
 import re
+from pathlib import Path
 
 from .config import config
 from .session import session_manager
 
 logger = logging.getLogger(__name__)
+
+
+_DIR_SUFFIX_RE = re.compile(r"-\d+$")
+
+
+def _looks_default_name(name: str, workdir: str) -> bool:
+    """True when ``name`` still matches the directory-basename pattern
+    used at session creation (``basename`` or ``basename-N``).
+
+    The trigger guard in ``maybe_auto_name`` was historically
+    ``name.startswith("session-")``, which never matched real sessions
+    (the code never produces a ``session-N`` placeholder — tmux always
+    gives the window the cwd's basename). So Haiku auto-naming silently
+    never fired. Pinning the guard to the actual default pattern keeps
+    manually-renamed sessions (``/rename``, ``/new <name>``) intact
+    while letting Haiku take over the cwd-derived ones.
+    """
+    if not name:
+        return True
+    if not workdir:
+        return False
+    base = Path(workdir).name
+    if not base:
+        return False
+    if name == base:
+        return True
+    # ``basename-N`` collision suffix from ``tmux_manager.create_window``.
+    if name.startswith(f"{base}-") and _DIR_SUFFIX_RE.search(name[len(base) :]):
+        return True
+    return False
 
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
@@ -143,19 +174,28 @@ async def generate_name(seed_text: str) -> str | None:
     return name
 
 
-async def maybe_auto_name(session_id: str, seed_text: str) -> None:
+async def maybe_auto_name(
+    session_id: str, seed_text: str, user_id: int | None = None
+) -> None:
     """Trigger an auto-name attempt if appropriate. Fire-and-forget safe.
 
     Conditions:
-      - Session.name is empty or starts with "session-".
-      - Session not already auto-named (state.json idempotency).
+      - User's ``haiku_naming`` setting is ON (when ``user_id`` is given).
+      - Session.name still matches the directory-basename pattern
+        (``basename`` or ``basename-N``) — never overwrites a manual
+        rename.
+      - Session not already auto-named this session (re-entrancy guard).
     """
     sess = session_manager.get_session(session_id)
     if sess is None:
         return
-    name = sess.name or ""
-    looks_default = (not name) or name.startswith("session-")
-    if not looks_default:
+
+    if user_id is not None:
+        settings = session_manager.get_user_settings(user_id)
+        if not settings.get("haiku_naming", True):
+            return
+
+    if not _looks_default_name(sess.name or "", sess.workdir or ""):
         return
 
     # Use a cheap inline marker on the Session to avoid double-firing.

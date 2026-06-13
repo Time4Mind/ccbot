@@ -19,6 +19,7 @@ from ...handlers.callback_data import (
     CB_ST_PAGESIZE,
     CB_ST_SCREENS,
     CB_ST_GRP,
+    CB_ST_HAIKU,
     CB_ST_LAG,
     CB_ST_LANG,
     CB_ST_LCLAUDE,
@@ -294,6 +295,7 @@ async def handle(
         CB_ST_PAGESIZE,
         CB_ST_SCREENS,
         CB_ST_BGNOTIFY,
+        CB_ST_HAIKU,
     )
     if not any(data.startswith(p) for p in setter_prefixes):
         return False
@@ -399,6 +401,11 @@ async def handle(
             session_manager.update_user_setting(user.id, key, sval == "on")
         short = key.removeprefix("bg_notify_")
         screen_name = cast(Screen, f"settings_bg_notify_{short}")
+    elif data.startswith(CB_ST_HAIKU):
+        sval = data[len(CB_ST_HAIKU) :]
+        if sval in ("on", "off"):
+            session_manager.update_user_setting(user.id, "haiku_naming", sval == "on")
+        screen_name = "settings_haiku"
 
     text = render_settings_group_text(user.id, screen_name)
     keyboard = build_footer_keyboard(user.id, screen=screen_name)

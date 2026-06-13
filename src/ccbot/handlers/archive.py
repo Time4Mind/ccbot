@@ -27,7 +27,7 @@ from ..i18n import t
 from ..session import Session, session_manager
 from ..session_claude_io import build_session_file_path
 from ..tmux_manager import tmux_manager
-from ..transcript_format import format_expandable_quote
+from ..transcript_format import format_expandable_tail
 from ..transcript_parser import TranscriptParser
 from .callback_data import (
     CB_ARC_ALL,
@@ -114,52 +114,49 @@ def _clean_user_msg(text: str) -> str:
     return cleaned.strip("` ")
 
 
-def _layout_blurb_lines(messages: list[str]) -> list[str]:
-    """Split the accumulated user messages into ``\\n``-delimited lines so
-    that the first line stays under ``_BLURB_HEAD_LEN`` chars.
+def _split_head_tail(first: str) -> tuple[str, str]:
+    """Cut ``first`` on a whole-word boundary near ``_BLURB_HEAD_LEN``.
 
-    When the first message alone exceeds the head budget, we wrap it at
-    the nearest word boundary and push the remainder onto a second line.
-    Subsequent messages stay on their own lines. Returning a list (not a
-    pre-joined string) lets the caller decide whether to fold the lines
-    into an expandable-quote block or to emit them flat.
+    Returns ``(head, tail)``; ``tail`` is empty when the whole message
+    fits inside the head budget. The cut never lands mid-word — we scan
+    back from the budget to the previous space, and only fall back to a
+    hard cut at the budget if no plausible word boundary exists in the
+    last 24 chars (very long URLs / single-word messages).
     """
-    if not messages:
-        return []
-    lines: list[str] = []
-    first = messages[0]
     if len(first) <= _BLURB_HEAD_LEN:
-        lines.append(first)
-    else:
-        cut = first.rfind(" ", 0, _BLURB_HEAD_LEN)
-        if cut < _BLURB_HEAD_LEN - 24:
-            cut = _BLURB_HEAD_LEN
-        lines.append(first[:cut].rstrip())
-        rest = first[cut:].lstrip()
-        if rest:
-            lines.append(rest)
-    lines.extend(m for m in messages[1:] if m)
-    return lines
+        return first, ""
+    cut = first.rfind(" ", 0, _BLURB_HEAD_LEN)
+    if cut < _BLURB_HEAD_LEN - 24:
+        cut = _BLURB_HEAD_LEN
+    return first[:cut].rstrip(), first[cut:].lstrip()
 
 
 def _format_blurb(messages: list[str]) -> str:
-    """Lay out ``messages`` into a blurb, wrapping overflow in an
-    expandable-quote block.
+    """Lay out ``messages`` into a blurb.
 
-    Short single-message case → emit the message verbatim. Otherwise the
-    first line stays as the visible preview and the whole content is
-    wrapped via :func:`format_expandable_quote`, which both ``rich.py``
-    and ``markdown_v2.py`` map to Telegram's native expandable-blockquote
-    (``>line\\n>line\\n||`` in MarkdownV2; ``<details>`` in rich
-    messages) — quote-styled, tap-to-reveal, NOT the blur-style
-    ``||spoiler||``.
+    * One short message that fits in the head budget → emit verbatim.
+    * Otherwise: the visible head is the first message clipped at a
+      word boundary plus ``…``, and the hidden continuation (rest of
+      the first message + later messages) lives inside an
+      ``EXPANDABLE_TAIL`` sentinel block — which ``rich.py`` renders as
+      ``<details><summary>▼</summary>{tail}</details>`` (icon-only
+      summary, so the bold-summary default barely shows) and
+      ``markdown_v2.py`` renders as a tail-only expandable blockquote
+      (``>line\\n||``). Both are tap-to-reveal, NOT the blur-style
+      ``||spoiler||``.
     """
-    lines = _layout_blurb_lines(messages)
-    if not lines:
+    if not messages:
         return ""
-    if len(lines) == 1:
-        return lines[0]
-    return format_expandable_quote("\n".join(lines))
+    first = messages[0]
+    head, head_tail = _split_head_tail(first)
+    later = messages[1:]
+    if not head_tail and not later:
+        return head
+    tail_parts: list[str] = []
+    if head_tail:
+        tail_parts.append(head_tail)
+    tail_parts.extend(later)
+    return format_expandable_tail(head, "\n".join(tail_parts))
 
 
 async def _collect_user_messages(sess: Session) -> str:
@@ -222,6 +219,13 @@ async def _collect_user_messages(sess: Session) -> str:
                     continue
                 cleaned = _clean_user_msg(raw)
                 if not cleaned:
+                    continue
+                # Drop a consecutive duplicate — when the user re-sends
+                # the same prompt (typical "didn't go through" double
+                # tap), the blurb shouldn't echo it twice. Only the
+                # immediately-previous message counts; a later repeat
+                # of an earlier message stays.
+                if messages and cleaned == messages[-1]:
                     continue
                 # First message: always include whole. Subsequent ones:
                 # only if they still fit under the cumulative budget.

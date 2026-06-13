@@ -979,11 +979,19 @@ def _render_card(
     # bottom of the card body, just above the bg-status panel.
     # See ``set_card_context_pct``.
     if state.context_pct is not None:
+        # Same `` ``-paragraph trick used by ``_EVENT_JOINER``:
+        # CommonMark collapses consecutive blank lines into one
+        # paragraph break, but a paragraph that contains a
+        # non-breaking space survives — visibly DOUBLES the gap above
+        # the ``context: N%`` row so it doesn't read glued onto the
+        # last body event.
+        parts.append(" ")
         parts.append(f"context: {state.context_pct}%")
     if panel:
         # The panel carries its own ``─── фон ───`` label-separator
         # (pivot #39 feedback: previously the bg-row glued to the last
-        # body line).
+        # body line). Same nbsp-paragraph trick to widen the gap.
+        parts.append(" ")
         parts.append(panel)
     # Paragraph-break join (``\n\n``) — single ``\n`` is a CommonMark
     # soft break that the rich parser collapses to a space, glueing

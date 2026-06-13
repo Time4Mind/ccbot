@@ -41,20 +41,17 @@ logger = logging.getLogger(__name__)
 def _budget_for_model(model: str) -> int:
     """Per-model context-window denominator in tokens.
 
-    Sourced from Anthropic's published model card (docs.claude.com,
-    May 2026). Only Opus 4.6 / 4.7 and Sonnet 4.6 ship with 1M
-    context — earlier 4.x and all 3.x stay at 200k. Unknown / empty
-    model names default to 200k.
+    Default is 1M — current Claude model families (Opus 4.x, Sonnet 4.x)
+    ship with the extended window. The only family that stays on 200k is
+    Haiku (4.5 and earlier), so we route any model name containing
+    ``haiku`` to the 200k bucket and let everything else fall through
+    to 1M. Unknown / empty model names default to 1M.
     """
     if not model:
-        return 200_000
-    m = model.lower()
-    # 1M-context models (current + legacy).
-    if m.startswith(("claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6")):
         return 1_000_000
-    # Everything else — Opus 4.5 / 4.1 / 4.0, Sonnet 4.5 / 4.0,
-    # Haiku 4.5, all 3.x — is 200k.
-    return 200_000
+    if "haiku" in model.lower():
+        return 200_000
+    return 1_000_000
 
 
 @dataclass
@@ -122,8 +119,7 @@ async def context_pct_for_session(sess: Session) -> int | None:
     "Full context size" = ``input_tokens + cache_creation_input_tokens
     + cache_read_input_tokens`` of the most recent assistant message.
     The model name is read from that same message and routed through
-    :func:`_budget_for_model` so Claude 4.x sessions use the 1M
-    denominator instead of the public 200k.
+    :func:`_budget_for_model` — 200k for Haiku, 1M for everything else.
     """
     if not sess.claude_session_id or not sess.workdir:
         return None

@@ -244,24 +244,23 @@ async def build_archive_page(
             # ran Restore). Without it the row reads identical to a
             # clean archive and the recovery-skipped fact is invisible.
             lost_tag = " _(lost)_" if sess.was_lost else ""
-            # ``**N.**`` bold-wraps the index so the line starts with ``*``
-            # rather than a digit — CommonMark won't parse it as a fresh
-            # ordered-list item per row. (The 2-space-indented blurb /
-            # workdir / goal continuations are shy of the 3-space margin
-            # CommonMark needs to keep a row's content INSIDE its list
-            # item, so each ``N.`` row became its own one-item list and
-            # Telegram renumbered every list from 1 — page-2 buttons
-            # labelled 6-10 lined up next to body rows labelled 1-5.)
-            line = f"**{idx}.** {label} *{display_name}*{lost_tag} — {age}"
+            # Bold-wrap the index AND join sub-lines with ``  \n`` (hard
+            # line break in CommonMark — two trailing spaces before the
+            # newline). Without the hard break the rich parser treats
+            # each row's blurb / workdir / goal as a soft break and
+            # collapses the whole page into one wall-of-text paragraph.
+            parts: list[str] = [
+                f"**{idx}.** {label} *{display_name}*{lost_tag} — {age}"
+            ]
             blurb = blurbs.get(sess.id) or ""
             if blurb:
-                line += f"\n  {blurb}"
+                parts.append(blurb)
             wd = _shorten_workdir(sess.workdir) if sess.workdir else ""
             if wd:
-                line += f"\n  `{wd}`"
+                parts.append(f"`{wd}`")
             if sess.goal:
-                line += f"\n  _{sess.goal}_"
-            body.append(line)
+                parts.append(f"_{sess.goal}_")
+            body.append("  \n".join(parts))
 
     # One button per session, paired up two-per-row (PAGE_SIZE=5 gives
     # 2+2+1). Each button's label carries the matching number so the
@@ -304,7 +303,10 @@ async def build_archive_page(
             [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=back_callback)]
         )
 
-    text = "\n".join([header, ""] + body)
+    # Paragraph break (blank line) between the header, the page counter
+    # and every session row — so the rich parser renders them as
+    # separate blocks instead of one run-on paragraph.
+    text = "\n\n".join([header, *body])
     return text, InlineKeyboardMarkup(rows)
 
 

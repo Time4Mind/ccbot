@@ -7,9 +7,12 @@ CommonMark renderer as a fresh ordered-list item per row (the
 Telegram then renumbered every item from 1, so on page 2 the inline
 buttons labelled 6-10 lined up next to body rows showing 1-5.
 
-Escaping the dot (``N\\.``) keeps the source index visible literally
-and stops the list-parse / renumber chain. The body must remain
-parse-safe across pages.
+Bold-wrapping the index (``**N.**``) shifts the line start from a digit
+to ``*``, which CommonMark can't read as an ordered-list marker — the
+list-parse / renumber chain doesn't even start. (A backslash escape
+``N\\.`` would also break the marker syntactically, but Telegram's
+rich parser doesn't honour the escape and leaks the backslash to the
+chat — verified live on PR #112.)
 """
 
 from __future__ import annotations
@@ -53,9 +56,10 @@ def many_archived():
 
 class TestArchivePageNumbering:
     @pytest.mark.asyncio
-    async def test_page2_indices_escape_the_dot(self, many_archived) -> None:
-        """Page-2 rows must carry ``6\\. ... 10\\.`` so the rich parser
-        can't reflow them into a new ordered list starting at 1."""
+    async def test_page2_indices_bold_wrapped(self, many_archived) -> None:
+        """Page-2 rows must carry ``**6.** ... **10.**`` so the line
+        starts with ``*`` rather than a digit — CommonMark can't read
+        it as an ordered-list marker and Telegram can't renumber it."""
         text, _ = await build_archive_page(
             page=1,
             lookback_seconds=None,
@@ -63,11 +67,16 @@ class TestArchivePageNumbering:
             user_id=1,
         )
         for idx in range(PAGE_SIZE + 1, PAGE_SIZE * 2 + 1):
-            assert f"{idx}\\. " in text, f"row {idx} missing escaped dot"
-            assert f"\n{idx}. " not in text, f"row {idx} kept the bare dot"
+            assert f"**{idx}.** " in text, f"row {idx} missing bold wrap"
+            # Bare ``N. `` at line start would re-trigger the list parse.
+            assert f"\n{idx}. " not in text, f"row {idx} kept a bare dot"
+        # And no leaked backslashes from the prior escape attempt.
+        assert "\\." not in text
 
     @pytest.mark.asyncio
-    async def test_page1_also_escapes_for_consistency(self, many_archived) -> None:
+    async def test_page1_also_bold_wrapped_for_consistency(
+        self, many_archived
+    ) -> None:
         text, _ = await build_archive_page(
             page=0,
             lookback_seconds=None,
@@ -75,7 +84,7 @@ class TestArchivePageNumbering:
             user_id=1,
         )
         for idx in range(1, PAGE_SIZE + 1):
-            assert f"{idx}\\. " in text
+            assert f"**{idx}.** " in text
 
     @pytest.mark.asyncio
     async def test_button_labels_keep_plain_dot(self, many_archived) -> None:

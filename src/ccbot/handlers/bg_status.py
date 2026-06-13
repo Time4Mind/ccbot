@@ -296,7 +296,11 @@ def render_panel(user_id: int, *, active_session_id: str = "") -> str:
     block = ["─── фон ───", *visible]
     if extra > 0:
         block.append(f"… +{extra} more")
-    return "\n".join(block)
+    # Hard line break (two trailing spaces + ``\n``) — single ``\n`` is
+    # a soft break in CommonMark and the rich parser collapses the
+    # whole panel onto one line ("─── фон ─── ⬛ session-name …"
+    # instead of header on its own row above each badge).
+    return "  \n".join(block)
 
 
 # --- Persistence helpers (called from SessionManager.save/load_state) ---

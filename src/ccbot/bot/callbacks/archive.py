@@ -98,8 +98,22 @@ async def handle(
         new = not _show_all(context)
         if context.user_data is not None:
             context.user_data["_arc_show_all"] = new
+        # When expanding 72h → 14d, the *new* content is the
+        # 3-14d-aged sessions appended to the END of the list (newest-
+        # first sort). Landing on page 0 would re-show the same
+        # 72h-aged sessions the user just saw, hiding the older
+        # entries that motivated the expand tap. Skip forward to the
+        # page where the previously-hidden sessions start.
+        page = 0
+        if new:
+            from ...handlers.archive import PAGE_SIZE
+
+            sessions_72h = session_manager.list_archived(
+                max_age_seconds=DEFAULT_LOOKBACK_SECONDS
+            )
+            page = len(sessions_72h) // PAGE_SIZE
         text, keyboard = await build_archive_page(
-            page=0,
+            page=page,
             lookback_seconds=_lookback(new),
             show_all=new,
             user_id=user.id,

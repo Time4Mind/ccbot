@@ -968,16 +968,17 @@ def _render_card(
     # bottom of the card body, just above the bg-status panel.
     # See ``set_card_context_pct``.
     if state.context_pct is not None:
-        parts.append("")
         parts.append(f"context: {state.context_pct}%")
     if panel:
-        # Explicit gap before the bg-status panel so it reads as a
-        # distinct block from the active-session body. The panel itself
-        # carries its own ``─── фон ───`` label-separator (pivot #39
-        # feedback: previously the bg-row glued to the last body line).
-        parts.append("")
+        # The panel carries its own ``─── фон ───`` label-separator
+        # (pivot #39 feedback: previously the bg-row glued to the last
+        # body line).
         parts.append(panel)
-    return "\n".join(parts)
+    # Paragraph-break join (``\n\n``) — single ``\n`` is a CommonMark
+    # soft break that the rich parser collapses to a space, glueing
+    # ``header ───── body ───── footer`` onto one row instead of each
+    # on its own line. Same trap we hit in /archive and the bg-panel.
+    return "\n\n".join(parts)
 
 
 def _count_lines(text: str) -> int:

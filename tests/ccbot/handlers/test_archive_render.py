@@ -222,8 +222,11 @@ class TestArchiveBlurbCollectsUserMessages:
         from ccbot.handlers import archive
 
         sess = Session(
-            id="s1", name="", state="archived",
-            claude_session_id="cs-1", workdir="/tmp/x",
+            id="s1",
+            name="",
+            state="archived",
+            claude_session_id="cs-1",
+            workdir="/tmp/x",
         )
         monkeypatch.setattr(
             archive,
@@ -236,22 +239,23 @@ class TestArchiveBlurbCollectsUserMessages:
         assert "third ask" in out
 
     @pytest.mark.asyncio
-    async def test_no_haiku_no_spoiler(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_no_haiku_no_spoiler(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Blurb is the user's verbatim words — no ``||spoiler||`` marks,
         no ``…``, no translation."""
         from ccbot.handlers import archive
 
         sess = Session(
-            id="s2", name="", state="archived",
-            claude_session_id="cs-2", workdir="/tmp/x",
+            id="s2",
+            name="",
+            state="archived",
+            claude_session_id="cs-2",
+            workdir="/tmp/x",
         )
-        verbatim = (
-            "Найди баги в auth.py — особенно вокруг refresh-token rotation"
-        )
+        verbatim = "Найди баги в auth.py — особенно вокруг refresh-token rotation"
         monkeypatch.setattr(
-            archive, "_collect_user_messages", _fake_collect(verbatim),
+            archive,
+            "_collect_user_messages",
+            _fake_collect(verbatim),
         )
         out = await archive._archive_blurb(sess)
         assert out == verbatim
@@ -265,8 +269,11 @@ class TestArchiveBlurbCollectsUserMessages:
         from ccbot.handlers import archive
 
         sess = Session(
-            id="s3", name="", state="archived",
-            claude_session_id="cs-3", workdir="/tmp/x",
+            id="s3",
+            name="",
+            state="archived",
+            claude_session_id="cs-3",
+            workdir="/tmp/x",
         )
         # Pre-seed the cache.
         archive._BLURB_CACHE["cs-3"] = "cached-from-disk"
@@ -290,14 +297,19 @@ class TestArchiveBlurbCollectsUserMessages:
         from ccbot.handlers import archive
 
         sess = Session(
-            id="s4", name="", state="archived",
-            claude_session_id="cs-4", workdir="/tmp/x",
+            id="s4",
+            name="",
+            state="archived",
+            claude_session_id="cs-4",
+            workdir="/tmp/x",
         )
         # Simulate what ``_collect_user_messages`` would return for one
         # very long message — included whole, no follow-up messages.
         long_msg = "a" * 600
         monkeypatch.setattr(
-            archive, "_collect_user_messages", _fake_collect(long_msg),
+            archive,
+            "_collect_user_messages",
+            _fake_collect(long_msg),
         )
         out = await archive._archive_blurb(sess)
         assert out == long_msg

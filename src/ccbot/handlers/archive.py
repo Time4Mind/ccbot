@@ -27,6 +27,7 @@ from ..i18n import t
 from ..session import Session, session_manager
 from ..session_claude_io import build_session_file_path
 from ..tmux_manager import tmux_manager
+from ..transcript_format import format_expandable_quote
 from ..transcript_parser import TranscriptParser
 from .callback_data import (
     CB_ARC_ALL,
@@ -49,6 +50,10 @@ _BLURB_TOTAL_BUDGET = 240
 # row short for chatty intros ("hi" / "go" / "do it") that wouldn't hit
 # the byte budget on their own.
 _BLURB_MAX_MESSAGES = 3
+# Length of the visible head shown before the expandable-quote tap-to-
+# expand kicks in. ~12-15 English / ~8-10 Cyrillic words fit before
+# the row starts to dominate the archive page on phone.
+_BLURB_HEAD_LEN = 96
 
 # Claude Code injects its own "user" messages — local-command caveats,
 # system reminders, bash plumbing chrome — alongside the genuine user
@@ -58,6 +63,23 @@ _BLURB_MAX_MESSAGES = 3
 # attribute lint warning).
 _RE_INJECTED_USER_MSG = re.compile(
     r"<(bash-input|bash-stdout|bash-stderr|local-command-caveat|system-reminder)"
+)
+# Claude Code also writes "user"-typed JSONL rows for its own UI events:
+# ``[Request interrupted by user]`` after a Ctrl-C, slash-command echos
+# (``Set model to …``, ``Set effort to …``, ``Compacted``, ``Cleared``,
+# ``Memory updated``, ``Memory file …``), and bracket-only status
+# markers (``[Resumed]``, ``[2-hour limit reached …]``). These look
+# like the user typed them but they're CLI chrome — don't let them
+# leak into the archive blurb.
+_RE_SYSTEM_UI_TEXT = re.compile(
+    r"^\s*(?:"
+    r"\[[^\]\n]+\]\s*$"  # whole message is one bracketed marker
+    r"|Set (?:model|effort|thinking) to\b"
+    r"|Compact(?:ed|ing)\b"
+    r"|Cleared\b"
+    r"|Memory (?:updated|file)\b"
+    r")",
+    re.IGNORECASE,
 )
 
 
@@ -92,6 +114,54 @@ def _clean_user_msg(text: str) -> str:
     return cleaned.strip("` ")
 
 
+def _layout_blurb_lines(messages: list[str]) -> list[str]:
+    """Split the accumulated user messages into ``\\n``-delimited lines so
+    that the first line stays under ``_BLURB_HEAD_LEN`` chars.
+
+    When the first message alone exceeds the head budget, we wrap it at
+    the nearest word boundary and push the remainder onto a second line.
+    Subsequent messages stay on their own lines. Returning a list (not a
+    pre-joined string) lets the caller decide whether to fold the lines
+    into an expandable-quote block or to emit them flat.
+    """
+    if not messages:
+        return []
+    lines: list[str] = []
+    first = messages[0]
+    if len(first) <= _BLURB_HEAD_LEN:
+        lines.append(first)
+    else:
+        cut = first.rfind(" ", 0, _BLURB_HEAD_LEN)
+        if cut < _BLURB_HEAD_LEN - 24:
+            cut = _BLURB_HEAD_LEN
+        lines.append(first[:cut].rstrip())
+        rest = first[cut:].lstrip()
+        if rest:
+            lines.append(rest)
+    lines.extend(m for m in messages[1:] if m)
+    return lines
+
+
+def _format_blurb(messages: list[str]) -> str:
+    """Lay out ``messages`` into a blurb, wrapping overflow in an
+    expandable-quote block.
+
+    Short single-message case → emit the message verbatim. Otherwise the
+    first line stays as the visible preview and the whole content is
+    wrapped via :func:`format_expandable_quote`, which both ``rich.py``
+    and ``markdown_v2.py`` map to Telegram's native expandable-blockquote
+    (``>line\\n>line\\n||`` in MarkdownV2; ``<details>`` in rich
+    messages) — quote-styled, tap-to-reveal, NOT the blur-style
+    ``||spoiler||``.
+    """
+    lines = _layout_blurb_lines(messages)
+    if not lines:
+        return ""
+    if len(lines) == 1:
+        return lines[0]
+    return format_expandable_quote("\n".join(lines))
+
+
 async def _collect_user_messages(sess: Session) -> str:
     """Walk the JSONL and assemble a blurb from the first 1-3 real user
     messages.
@@ -99,13 +169,13 @@ async def _collect_user_messages(sess: Session) -> str:
     Stops accumulating as soon as the next message would push the
     combined length past ``_BLURB_TOTAL_BUDGET`` — but the *first*
     message is always included whole, even if it alone exceeds the
-    budget (the user's own words trump the soft cap). Messages are
-    joined with ``  \\n`` so each one renders on its own line in the
-    rich-message body.
+    budget (the user's own words trump the soft cap). Overflow lands in
+    an expandable-quote block so the visible row stays compact.
 
     Skips Claude Code's wrapper user-messages (``<system-reminder>``,
-    ``<local-command-caveat>``, bash chrome) — these are CLI plumbing,
-    not actual user prompts.
+    ``<local-command-caveat>``, bash chrome) and its own UI events
+    (``[Request interrupted by user]``, ``Set model to …``, etc.) —
+    these are CLI plumbing, not actual user prompts.
     """
     sid = sess.claude_session_id
     if not sid or not sess.workdir:
@@ -148,6 +218,8 @@ async def _collect_user_messages(sess: Session) -> str:
                 raw = parsed.text.strip()
                 if _RE_INJECTED_USER_MSG.search(raw):
                     continue
+                if _RE_SYSTEM_UI_TEXT.match(raw):
+                    continue
                 cleaned = _clean_user_msg(raw)
                 if not cleaned:
                     continue
@@ -161,16 +233,17 @@ async def _collect_user_messages(sess: Session) -> str:
         logger.debug("archive blurb read failed for %s: %s", fp, e)
         return ""
 
-    return "  \n".join(messages)
+    return _format_blurb(messages)
 
 
 async def _archive_blurb(sess: Session) -> str:
     """Return the "what was this session about" line for an archived row.
 
     Source: the user's own first 1-3 messages from the JSONL transcript,
-    concatenated until the soft length budget bites. No Haiku, no
-    ai-title pickup, no spoiler hide — just the user's verbatim words
-    in their own language. Cached forever per claude-session-id.
+    laid out so the first line stays under ``_BLURB_HEAD_LEN`` chars;
+    overflow folds into an expandable-quote block (tap to reveal). No
+    Haiku, no ai-title pickup — just the user's verbatim words in their
+    own language. Cached forever per claude-session-id.
     """
     sid = sess.claude_session_id
     if not sid:

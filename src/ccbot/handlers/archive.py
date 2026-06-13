@@ -27,7 +27,6 @@ from ..i18n import t
 from ..session import Session, session_manager
 from ..session_claude_io import build_session_file_path
 from ..tmux_manager import tmux_manager
-from ..transcript_format import format_expandable_tail
 from ..transcript_parser import TranscriptParser
 from .callback_data import (
     CB_ARC_ALL,
@@ -41,19 +40,15 @@ from .cleanup import clear_session_state
 # soft length budget kicks in. Archived JSONLs are append-frozen so a
 # single scan covers the session's lifetime in archive.
 _BLURB_CACHE: dict[str, str] = {}
-# Soft cumulative budget across the blurb's combined user messages.
-# We greedily include whole messages until adding the next one would
-# push past the budget; the first message is always included whole
-# even if it's longer (the user's own words trump the budget).
-_BLURB_TOTAL_BUDGET = 240
+# Hard character cap on the combined blurb (all included messages
+# plus their hard-break separators). When the first message alone
+# exceeds this, it gets truncated with ``…`` on a word boundary;
+# subsequent messages are skipped if including them would overshoot.
+_BLURB_TOTAL_BUDGET = 140
 # Hard cap on how many user messages can land in one blurb. Keeps the
 # row short for chatty intros ("hi" / "go" / "do it") that wouldn't hit
 # the byte budget on their own.
 _BLURB_MAX_MESSAGES = 3
-# Length of the visible head shown before the expandable-quote tap-to-
-# expand kicks in. ~12-15 English / ~8-10 Cyrillic words fit before
-# the row starts to dominate the archive page on phone.
-_BLURB_HEAD_LEN = 96
 
 # Visible divider between session rows on a page. Unicode box-drawing
 # chars render the same in rich, MarkdownV2 fallback and plain text;
@@ -120,49 +115,48 @@ def _clean_user_msg(text: str) -> str:
     return cleaned.strip("` ")
 
 
-def _split_head_tail(first: str) -> tuple[str, str]:
-    """Cut ``first`` on a whole-word boundary near ``_BLURB_HEAD_LEN``.
+def _truncate_at_word(text: str, budget: int) -> str:
+    """Clip ``text`` to ``budget`` chars on the nearest whole-word
+    boundary, appending ``…``.
 
-    Returns ``(head, tail)``; ``tail`` is empty when the whole message
-    fits inside the head budget. The cut never lands mid-word — we scan
-    back from the budget to the previous space, and only fall back to a
-    hard cut at the budget if no plausible word boundary exists in the
-    last 24 chars (very long URLs / single-word messages).
+    Scans back from the budget to the previous space; falls back to a
+    hard cut only if no plausible word boundary exists in the last 24
+    chars (very long URLs / single-word messages).
     """
-    if len(first) <= _BLURB_HEAD_LEN:
-        return first, ""
-    cut = first.rfind(" ", 0, _BLURB_HEAD_LEN)
-    if cut < _BLURB_HEAD_LEN - 24:
-        cut = _BLURB_HEAD_LEN
-    return first[:cut].rstrip(), first[cut:].lstrip()
+    if len(text) <= budget:
+        return text
+    cut = text.rfind(" ", 0, budget)
+    if cut < budget - 24:
+        cut = budget
+    return text[:cut].rstrip() + "…"
 
 
 def _format_blurb(messages: list[str]) -> str:
-    """Lay out ``messages`` into a blurb.
+    """Lay out ``messages`` into a blurb capped at ``_BLURB_TOTAL_BUDGET``
+    chars.
 
-    * One short message that fits in the head budget → emit verbatim.
-    * Otherwise: the visible head is the first message clipped at a
-      word boundary plus ``…``, and the hidden continuation (rest of
-      the first message + later messages) lives inside an
-      ``EXPANDABLE_TAIL`` sentinel block — which ``rich.py`` renders as
-      ``<details><summary>▼</summary>{tail}</details>`` (icon-only
-      summary, so the bold-summary default barely shows) and
-      ``markdown_v2.py`` renders as a tail-only expandable blockquote
-      (``>line\\n||``). Both are tap-to-reveal, NOT the blur-style
-      ``||spoiler||``.
+    * No messages → empty string.
+    * First message alone exceeds the cap → truncated at a word
+      boundary with ``…``. Subsequent messages are dropped.
+    * First message fits → include later messages one by one as long as
+      the running total stays under the cap. Joined with ``  \\n`` so
+      each one renders on its own line in the rich-message body.
     """
     if not messages:
         return ""
     first = messages[0]
-    head, head_tail = _split_head_tail(first)
-    later = messages[1:]
-    if not head_tail and not later:
-        return head
-    tail_parts: list[str] = []
-    if head_tail:
-        tail_parts.append(head_tail)
-    tail_parts.extend(later)
-    return format_expandable_tail(head, "\n".join(tail_parts))
+    if len(first) > _BLURB_TOTAL_BUDGET:
+        return _truncate_at_word(first, _BLURB_TOTAL_BUDGET)
+    out: list[str] = [first]
+    total = len(first)
+    sep = "  \n"
+    for msg in messages[1:]:
+        # Account for the hard-break separator we'll glue in front.
+        if total + len(sep) + len(msg) > _BLURB_TOTAL_BUDGET:
+            break
+        out.append(msg)
+        total += len(sep) + len(msg)
+    return sep.join(out)
 
 
 async def _collect_user_messages(sess: Session) -> str:

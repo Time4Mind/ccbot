@@ -158,9 +158,9 @@ class TestArchivePageLineBreaks:
         assert f"\n\n{_SESSION_DIVIDER}\n\n" in text
         # The page-counter line is NOT followed by a divider (only
         # session rows are).
-        assert (
-            text.split("**1.**", 1)[0].count(_SESSION_DIVIDER) == 0
-        ), "divider leaked above the first row"
+        assert text.split("**1.**", 1)[0].count(_SESSION_DIVIDER) == 0, (
+            "divider leaked above the first row"
+        )
 
     @pytest.mark.asyncio
     async def test_no_two_space_indent_remains(self, many_archived) -> None:

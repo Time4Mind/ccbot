@@ -409,12 +409,11 @@ def _build_event(msg: NewMessage) -> Event:
     if msg.content_type == "tool_use":
         name, args, _summary, content = _split_tool_text(raw_body)
         # Card head shows ONLY the tool name (e.g. "Bash" / "Read") —
-        # args (the command / file path) go under the spoiler so they
-        # don't dominate the head line. body = args + content, args
-        # first so the user sees the command on first spoiler line.
-        spoiler_body = args
-        if content:
-            spoiler_body = f"{spoiler_body}\n{content}" if args else content
+        # args / content go under the spoiler. Bash args get a fenced
+        # ``bash`` block, other tools' args land in an inline ``code``
+        # span; Read/Write content picks a language from the file
+        # extension; Edit content goes through ``diff``.
+        spoiler_body = _build_tool_spoiler_body(name, args, content)
         return Event(
             type="tool_use",
             text=_trim(name, 80),
@@ -426,13 +425,12 @@ def _build_event(msg: NewMessage) -> Event:
     if msg.content_type == "tool_result":
         name, args, summary, content = _split_tool_text(raw_body)
         # Head: just the tool name + summary inline (e.g. "Edit · Added
-        # 12 lines"). args goes under spoiler with content.
+        # 12 lines"). args / content go through the same syntax-
+        # highlight pipeline as tool_use.
         head_with_summary = (
             f"{name} · {summary}" if (name and summary) else name or summary
         )
-        spoiler_body = args
-        if content:
-            spoiler_body = f"{spoiler_body}\n{content}" if args else content
+        spoiler_body = _build_tool_spoiler_body(name, args, content)
         return Event(
             type="tool_result",
             text=_trim(head_with_summary, 120),
@@ -656,6 +654,101 @@ def _trimmed_body(body: str) -> str:
     drop into a spoiler block. Returns empty when there's nothing left
     to show."""
     return _body_trim(_strip_for_card(body))
+
+
+# File-extension → language hint for syntax-highlighted fenced code
+# blocks inside a tool's spoiler body. Telegram's rich-message rendering
+# accepts these as the info string after ```` ``` ````.
+_EXT_TO_LANG: dict[str, str] = {
+    "py": "python",
+    "ts": "typescript",
+    "tsx": "tsx",
+    "js": "javascript",
+    "jsx": "jsx",
+    "go": "go",
+    "rs": "rust",
+    "java": "java",
+    "kt": "kotlin",
+    "json": "json",
+    "yaml": "yaml",
+    "yml": "yaml",
+    "toml": "toml",
+    "md": "markdown",
+    "sql": "sql",
+    "html": "html",
+    "css": "css",
+    "scss": "scss",
+    "sh": "bash",
+    "bash": "bash",
+    "zsh": "bash",
+    "c": "c",
+    "cpp": "cpp",
+    "h": "c",
+    "hpp": "cpp",
+    "rb": "ruby",
+    "php": "php",
+    "swift": "swift",
+    "lua": "lua",
+    "xml": "xml",
+}
+
+
+def _lang_for_path(path: str) -> str:
+    """Pick a syntax-highlight language hint from a file path's extension.
+
+    Returns an empty string when the extension is unknown / absent —
+    callers should fall back to a no-language fenced block (still
+    monospace, just no highlighting).
+    """
+    if not path:
+        return ""
+    basename = path.rsplit("/", 1)[-1]
+    if basename == "Dockerfile" or basename.lower().endswith(".dockerfile"):
+        return "dockerfile"
+    if "." not in basename:
+        return ""
+    ext = basename.rsplit(".", 1)[-1].lower()
+    return _EXT_TO_LANG.get(ext, "")
+
+
+def _format_tool_args(tool_name: str, args: str) -> str:
+    """Wrap a tool's args (command / path / pattern / URL) for visual
+    contrast inside the spoiler body — Bash gets a ``bash`` fenced
+    block (syntax highlighting), everything else gets an inline
+    ``code`` span.
+    """
+    if not args:
+        return ""
+    if tool_name == "Bash":
+        return f"```bash\n{args}\n```"
+    return f"`{args}`"
+
+
+def _format_tool_content(tool_name: str, args: str, content: str) -> str:
+    """Wrap a tool's content block (file body / diff) when it's actual
+    code — Read/Write content gets a fenced block in the file's
+    language, Edit content gets a ``diff`` block. Bash stdout, Grep
+    matches, WebFetch / WebSearch text are NOT code and stay plain.
+    """
+    if not content:
+        return ""
+    if tool_name in ("Read", "Write"):
+        lang = _lang_for_path(args)
+        return f"```{lang}\n{content}\n```" if lang else f"```\n{content}\n```"
+    if tool_name == "Edit":
+        return f"```diff\n{content}\n```"
+    return content
+
+
+def _build_tool_spoiler_body(tool_name: str, args: str, content: str) -> str:
+    """Assemble the spoiler body for a tool event — args first
+    (highlighted), then content (highlighted when it's code)."""
+    parts: list[str] = []
+    if args:
+        parts.append(_format_tool_args(tool_name, args))
+    if content:
+        parts.append(_format_tool_content(tool_name, args, content))
+    return "\n".join(parts)
 
 
 def _spoiler_body(body: str) -> str:

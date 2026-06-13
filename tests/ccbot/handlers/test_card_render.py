@@ -73,6 +73,97 @@ class TestToolHeadAndSpoiler:
         assert "Output 5 lines" in ev.text
 
 
+class TestSyntaxHighlightedToolBody:
+    """``_build_tool_spoiler_body`` wraps the command / path / pattern
+    AND the content in language-tagged fenced blocks so Telegram applies
+    syntax highlighting inside the spoiler. The tool event line (the
+    spoiler header) stays plain text."""
+
+    def test_bash_command_wrapped_in_bash_fence(self) -> None:
+        from ccbot.handlers.card_model import _build_tool_spoiler_body
+
+        out = _build_tool_spoiler_body("Bash", "grep -n '^def' file.py", "")
+        assert out == "```bash\ngrep -n '^def' file.py\n```"
+
+    def test_bash_command_plus_output_keeps_output_plain(self) -> None:
+        from ccbot.handlers.card_model import _build_tool_spoiler_body
+
+        out = _build_tool_spoiler_body("Bash", "ls -la", "total 8\nfoo.py")
+        assert out.startswith("```bash\nls -la\n```")
+        # Output stays plain — not a code block.
+        assert "total 8\nfoo.py" in out
+        assert out.count("```") == 2  # only the bash fence
+
+    def test_read_content_picks_language_from_path_extension(self) -> None:
+        from ccbot.handlers.card_model import _build_tool_spoiler_body
+
+        out = _build_tool_spoiler_body(
+            "Read", "src/ccbot/handlers/foo.py", "def bar():\n    return 1"
+        )
+        # Path inline-code'd, content in python-fenced block.
+        assert "`src/ccbot/handlers/foo.py`" in out
+        assert "```python\ndef bar():\n    return 1\n```" in out
+
+    def test_read_unknown_extension_falls_back_to_plain_fence(self) -> None:
+        from ccbot.handlers.card_model import _build_tool_spoiler_body
+
+        out = _build_tool_spoiler_body(
+            "Read", "data/blob.xyz", "raw bytes here"
+        )
+        # No language hint, just monospace fence.
+        assert "```\nraw bytes here\n```" in out
+
+    def test_write_uses_typescript_for_ts_files(self) -> None:
+        from ccbot.handlers.card_model import _build_tool_spoiler_body
+
+        out = _build_tool_spoiler_body(
+            "Write", "src/app.ts", "const x: number = 1;"
+        )
+        assert "```typescript\nconst x: number = 1;\n```" in out
+
+    def test_edit_content_uses_diff_block(self) -> None:
+        from ccbot.handlers.card_model import _build_tool_spoiler_body
+
+        out = _build_tool_spoiler_body(
+            "Edit", "src/foo.py", "- old()\n+ new()"
+        )
+        assert "```diff\n- old()\n+ new()\n```" in out
+
+    def test_grep_pattern_inline_code_matches_plain(self) -> None:
+        from ccbot.handlers.card_model import _build_tool_spoiler_body
+
+        out = _build_tool_spoiler_body(
+            "Grep", "^class\\s", "foo.py:13:class Bar:\nbaz.py:7:class Baz:"
+        )
+        assert "`^class\\s`" in out
+        # Matches stay plain.
+        assert "foo.py:13:class Bar:" in out
+        assert "```" not in out.split("`^class")[1].split("`", 2)[1]
+
+    def test_dockerfile_recognised(self) -> None:
+        from ccbot.handlers.card_model import _lang_for_path
+
+        assert _lang_for_path("/repo/Dockerfile") == "dockerfile"
+        assert _lang_for_path("dev.dockerfile") == "dockerfile"
+
+    def test_path_extension_map(self) -> None:
+        from ccbot.handlers.card_model import _lang_for_path
+
+        assert _lang_for_path("a.py") == "python"
+        assert _lang_for_path("a.ts") == "typescript"
+        assert _lang_for_path("a.tsx") == "tsx"
+        assert _lang_for_path("a.js") == "javascript"
+        assert _lang_for_path("a.go") == "go"
+        assert _lang_for_path("a.rs") == "rust"
+        assert _lang_for_path("a.json") == "json"
+        assert _lang_for_path("a.yaml") == "yaml"
+        assert _lang_for_path("a.yml") == "yaml"
+        assert _lang_for_path("a.sql") == "sql"
+        assert _lang_for_path("a.sh") == "bash"
+        assert _lang_for_path("nope") == ""
+        assert _lang_for_path("") == ""
+
+
 class TestHeadedBlock:
     """``_headed_block`` wraps the (head, body) pair in the
     ``EXPANDABLE_HEADED`` sentinel so the tool / thinking event line

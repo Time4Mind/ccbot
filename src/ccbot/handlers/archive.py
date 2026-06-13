@@ -244,7 +244,11 @@ async def build_archive_page(
             # ran Restore). Without it the row reads identical to a
             # clean archive and the recovery-skipped fact is invisible.
             lost_tag = " _(lost)_" if sess.was_lost else ""
-            line = f"{idx}. {label} *{display_name}*{lost_tag} — {age}"
+            # ``idx\.`` (escaped period) — without the backslash the rich
+            # parser treats every row as a fresh ordered-list item and
+            # Telegram renumbers from 1 on every page, so page-2 buttons
+            # labelled 6-10 end up next to body rows labelled 1-5.
+            line = f"{idx}\\. {label} *{display_name}*{lost_tag} — {age}"
             blurb = blurbs.get(sess.id) or ""
             if blurb:
                 line += f"\n  {blurb}"

@@ -320,3 +320,122 @@ def _fake_collect(value: str):
         return value
 
     return _collect
+
+
+class TestSystemUiTextFilter:
+    """``_collect_user_messages`` must skip Claude Code's own UI events
+    (Ctrl-C marker, slash-command echos) — they look like user messages
+    in the JSONL but they aren't actual prompts."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "[Request interrupted by user]",
+            "[Resumed]",
+            "[2-hour limit reached · resets 11pm]",
+            "Set model to Opus 4.7 (1M context) (default)",
+            "Set effort to medium",
+            "Set thinking to extended",
+            "Compacted",
+            "Compacting…",
+            "Cleared",
+            "Memory updated",
+            "Memory file written",
+        ],
+    )
+    def test_recognised_as_system(self, text: str) -> None:
+        from ccbot.handlers.archive import _RE_SYSTEM_UI_TEXT
+
+        assert _RE_SYSTEM_UI_TEXT.match(text), f"missed system marker: {text!r}"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "set up the workflow",  # not "Set model to …"
+            "memory of last week",  # "Memory" but not the UI marker
+            "[brackets at start] but trailing prose",  # not whole-message bracket
+            "Compactify the README",  # not "Compacted" / "Compacting"
+            "Найди баги в auth.py",
+        ],
+    )
+    def test_real_prompts_pass(self, text: str) -> None:
+        from ccbot.handlers.archive import _RE_SYSTEM_UI_TEXT
+
+        assert not _RE_SYSTEM_UI_TEXT.match(text), f"false positive on: {text!r}"
+
+
+class TestExpandableBlurb:
+    """``_format_blurb`` folds overflow into Telegram's native
+    expandable-blockquote (``format_expandable_quote`` sentinels) — NOT
+    the inline ``||spoiler||`` blur, which the user explicitly rejected."""
+
+    def test_short_single_message_verbatim(self) -> None:
+        from ccbot.handlers.archive import _format_blurb
+
+        assert _format_blurb(["short prompt"]) == "short prompt"
+
+    def test_empty_returns_empty(self) -> None:
+        from ccbot.handlers.archive import _format_blurb
+
+        assert _format_blurb([]) == ""
+
+    def test_multi_message_wrapped_in_expandable_quote(self) -> None:
+        from ccbot.handlers.archive import _format_blurb
+        from ccbot.transcript_format import (
+            EXPANDABLE_QUOTE_END,
+            EXPANDABLE_QUOTE_START,
+        )
+
+        out = _format_blurb(["first ask", "second ask", "third ask"])
+        assert out.startswith(EXPANDABLE_QUOTE_START)
+        assert out.endswith(EXPANDABLE_QUOTE_END)
+        # No blur-style inline spoiler.
+        assert "||" not in out
+        # All three messages must be inside the body.
+        body = out[len(EXPANDABLE_QUOTE_START) : -len(EXPANDABLE_QUOTE_END)]
+        assert "first ask" in body
+        assert "second ask" in body
+        assert "third ask" in body
+
+    def test_long_single_message_wraps_with_visible_head(self) -> None:
+        from ccbot.handlers.archive import (
+            _BLURB_HEAD_LEN,
+            _format_blurb,
+            _layout_blurb_lines,
+        )
+        from ccbot.transcript_format import (
+            EXPANDABLE_QUOTE_END,
+            EXPANDABLE_QUOTE_START,
+        )
+
+        long_msg = " ".join(["word"] * 60)  # ~300 chars, plenty over head
+        lines = _layout_blurb_lines([long_msg])
+        # First line must fit under the head budget.
+        assert lines and len(lines[0]) <= _BLURB_HEAD_LEN
+        out = _format_blurb([long_msg])
+        # Wrapped in expandable quote (collapsed: head, expanded: full).
+        assert out.startswith(EXPANDABLE_QUOTE_START)
+        assert out.endswith(EXPANDABLE_QUOTE_END)
+        # Body holds the full message broken across at least two lines.
+        body = out[len(EXPANDABLE_QUOTE_START) : -len(EXPANDABLE_QUOTE_END)]
+        assert "\n" in body
+
+    def test_long_message_first_line_breaks_at_word_boundary(self) -> None:
+        """The visible head should never split mid-word."""
+        from ccbot.handlers.archive import _BLURB_HEAD_LEN, _layout_blurb_lines
+
+        long_msg = (
+            "Investigate the auth-middleware refresh-token rotation "
+            "regression that crept in last week — reproduce on staging "
+            "and confirm the fix locally before opening a PR."
+        )
+        assert len(long_msg) > _BLURB_HEAD_LEN
+        lines = _layout_blurb_lines([long_msg])
+        assert len(lines) >= 2
+        # First line ends on a word, not mid-character.
+        head = lines[0]
+        assert len(head) <= _BLURB_HEAD_LEN
+        assert not head.endswith(" ")
+        # The cut sits on a space in the original.
+        assert long_msg.startswith(head)
+        assert long_msg[len(head)] == " "

@@ -150,7 +150,8 @@ def _sanitize(text: str) -> str:
     if first_line:
         first_line = "-".join(first_line.split("-")[:_MAX_NAME_WORDS])
     if _NAME_RE.match(first_line):
-        return first_line
+        # Display names use spaces; the regex validates the kebab form.
+        return first_line.replace("-", " ")
     return ""
 
 

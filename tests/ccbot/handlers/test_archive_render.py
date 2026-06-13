@@ -1,18 +1,23 @@
 """Regression tests for ``build_archive_page`` body formatting.
 
-The leading ``N.`` on each row used to be parsed by the rich-message
-CommonMark renderer as a fresh ordered-list item per row (the
-2-space-indented blurb / workdir / goal continuations are shy of the
-3-space margin CommonMark requires, so each item ended its own list).
-Telegram then renumbered every item from 1, so on page 2 the inline
-buttons labelled 6-10 lined up next to body rows showing 1-5.
+Two CommonMark traps fired in sequence under the rich-message renderer:
 
-Bold-wrapping the index (``**N.**``) shifts the line start from a digit
-to ``*``, which CommonMark can't read as an ordered-list marker — the
-list-parse / renumber chain doesn't even start. (A backslash escape
-``N\\.`` would also break the marker syntactically, but Telegram's
-rich parser doesn't honour the escape and leaks the backslash to the
-chat — verified live on PR #112.)
+1. Single ``\\n`` between rows / sub-rows is a *soft* line break in
+   CommonMark — the renderer collapses it to a space, so the whole
+   page came out as one wall-of-text paragraph (verified live, see
+   the 2026-06-13 phone screenshot at .ccbot-inbox/1781353376-…).
+   The fix is paragraph breaks ``\\n\\n`` between rows and hard
+   breaks ``  \\n`` (two trailing spaces) within a row's sub-lines.
+
+2. A bare ``N.`` at line start would be parsed as a fresh ordered-list
+   marker per row (the 2-space-indented continuations are shy of the
+   3-space margin CommonMark needs), and Telegram would renumber each
+   list from 1 — page-2 buttons labelled 6-10 next to body rows 1-5.
+   Wrapping the index in ``**N.**`` shifts the line start from a digit
+   to ``*`` so the marker can't trigger. (A backslash escape ``N\\.``
+   would do the same job, but Telegram's rich parser doesn't honour
+   the escape and leaks the backslash to the chat — verified live on
+   PR #112.)
 """
 
 from __future__ import annotations
@@ -48,7 +53,7 @@ def many_archived():
         ),
         patch(
             "ccbot.handlers.archive._archive_blurb",
-            return_value="",
+            return_value="a short blurb for the row",
         ),
     ):
         yield sessions
@@ -97,3 +102,54 @@ class TestArchivePageNumbering:
         # Page-2 buttons are labelled 6-10 with the plain dot.
         assert any(lbl.startswith("6. ") for lbl in labels)
         assert any(lbl.startswith("10. ") for lbl in labels)
+
+
+class TestArchivePageLineBreaks:
+    @pytest.mark.asyncio
+    async def test_rows_separated_by_paragraph_break(self, many_archived) -> None:
+        """Rows must be separated by a blank line — single ``\\n`` is a
+        soft break and CommonMark collapses the entire page into one
+        run-on paragraph (the 2026-06-13 phone-screenshot bug)."""
+        text, _ = await build_archive_page(
+            page=0,
+            lookback_seconds=None,
+            show_all=True,
+            user_id=1,
+        )
+        # Each row's leading marker must be preceded by ``\n\n``.
+        for idx in range(1, PAGE_SIZE + 1):
+            marker = f"**{idx}.**"
+            assert marker in text
+            pos = text.index(marker)
+            assert text[pos - 2 : pos] == "\n\n", (
+                f"row {idx} not preceded by a paragraph break"
+            )
+
+    @pytest.mark.asyncio
+    async def test_sublines_use_hard_break(self, many_archived) -> None:
+        """Within a row, sub-lines (blurb / workdir / goal) join with
+        ``  \\n`` — two trailing spaces force a hard line break in
+        CommonMark, instead of the soft break that collapses to a space."""
+        text, _ = await build_archive_page(
+            page=0,
+            lookback_seconds=None,
+            show_all=True,
+            user_id=1,
+        )
+        # At least one hard break per row (we seeded a blurb and a workdir).
+        assert text.count("  \n") >= PAGE_SIZE
+
+    @pytest.mark.asyncio
+    async def test_no_two_space_indent_remains(self, many_archived) -> None:
+        """The old MD V2-era 2-space indent on sub-lines is gone — leading
+        whitespace inside a paragraph would render as literal spaces in
+        the rich parser, not as visual indent."""
+        text, _ = await build_archive_page(
+            page=0,
+            lookback_seconds=None,
+            show_all=True,
+            user_id=1,
+        )
+        # ``\n  `` (line-start + 2 spaces of content) is the old pattern;
+        # the new layout uses ``  \n`` (trailing spaces before the break).
+        assert "\n  " not in text

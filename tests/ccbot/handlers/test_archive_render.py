@@ -364,10 +364,13 @@ class TestSystemUiTextFilter:
         assert not _RE_SYSTEM_UI_TEXT.match(text), f"false positive on: {text!r}"
 
 
-class TestExpandableBlurb:
-    """``_format_blurb`` folds overflow into Telegram's native
-    expandable-blockquote (``format_expandable_quote`` sentinels) — NOT
-    the inline ``||spoiler||`` blur, which the user explicitly rejected."""
+class TestExpandableTailBlurb:
+    """``_format_blurb`` lays out the visible head (cut on a word
+    boundary, ending in ``…``) outside the spoiler, then puts ONLY the
+    continuation inside the ``EXPANDABLE_TAIL`` block — so taps reveal
+    new content, not a repeat of what the user already read. The
+    rendering target is Telegram's expandable blockquote (not the
+    blur-style ``||spoiler||``)."""
 
     def test_short_single_message_verbatim(self) -> None:
         from ccbot.handlers.archive import _format_blurb
@@ -379,50 +382,33 @@ class TestExpandableBlurb:
 
         assert _format_blurb([]) == ""
 
-    def test_multi_message_wrapped_in_expandable_quote(self) -> None:
+    def test_multi_message_head_visible_tail_only_in_spoiler(self) -> None:
         from ccbot.handlers.archive import _format_blurb
         from ccbot.transcript_format import (
-            EXPANDABLE_QUOTE_END,
-            EXPANDABLE_QUOTE_START,
+            EXPANDABLE_TAIL_END,
+            EXPANDABLE_TAIL_START,
         )
 
         out = _format_blurb(["first ask", "second ask", "third ask"])
-        assert out.startswith(EXPANDABLE_QUOTE_START)
-        assert out.endswith(EXPANDABLE_QUOTE_END)
-        # No blur-style inline spoiler.
-        assert "||" not in out
-        # All three messages must be inside the body.
-        body = out[len(EXPANDABLE_QUOTE_START) : -len(EXPANDABLE_QUOTE_END)]
-        assert "first ask" in body
+        # Head + ellipsis + tail-only sentinel block, in that order.
+        assert out.startswith("first ask…")
+        assert EXPANDABLE_TAIL_START in out
+        assert out.endswith(EXPANDABLE_TAIL_END)
+        body = out.split(EXPANDABLE_TAIL_START, 1)[1].rsplit(EXPANDABLE_TAIL_END, 1)[0]
+        # The continuation must NOT contain the head — that was the
+        # whole point of moving to the tail-only sentinel.
+        assert "first ask" not in body
         assert "second ask" in body
         assert "third ask" in body
+        # No blur-style inline spoiler.
+        assert "||" not in out
 
-    def test_long_single_message_wraps_with_visible_head(self) -> None:
-        from ccbot.handlers.archive import (
-            _BLURB_HEAD_LEN,
-            _format_blurb,
-            _layout_blurb_lines,
-        )
+    def test_long_single_message_breaks_at_word(self) -> None:
+        from ccbot.handlers.archive import _BLURB_HEAD_LEN, _format_blurb
         from ccbot.transcript_format import (
-            EXPANDABLE_QUOTE_END,
-            EXPANDABLE_QUOTE_START,
+            EXPANDABLE_TAIL_END,
+            EXPANDABLE_TAIL_START,
         )
-
-        long_msg = " ".join(["word"] * 60)  # ~300 chars, plenty over head
-        lines = _layout_blurb_lines([long_msg])
-        # First line must fit under the head budget.
-        assert lines and len(lines[0]) <= _BLURB_HEAD_LEN
-        out = _format_blurb([long_msg])
-        # Wrapped in expandable quote (collapsed: head, expanded: full).
-        assert out.startswith(EXPANDABLE_QUOTE_START)
-        assert out.endswith(EXPANDABLE_QUOTE_END)
-        # Body holds the full message broken across at least two lines.
-        body = out[len(EXPANDABLE_QUOTE_START) : -len(EXPANDABLE_QUOTE_END)]
-        assert "\n" in body
-
-    def test_long_message_first_line_breaks_at_word_boundary(self) -> None:
-        """The visible head should never split mid-word."""
-        from ccbot.handlers.archive import _BLURB_HEAD_LEN, _layout_blurb_lines
 
         long_msg = (
             "Investigate the auth-middleware refresh-token rotation "
@@ -430,12 +416,105 @@ class TestExpandableBlurb:
             "and confirm the fix locally before opening a PR."
         )
         assert len(long_msg) > _BLURB_HEAD_LEN
-        lines = _layout_blurb_lines([long_msg])
-        assert len(lines) >= 2
-        # First line ends on a word, not mid-character.
-        head = lines[0]
+        out = _format_blurb([long_msg])
+        head_with_ellipsis, _ = out.split(EXPANDABLE_TAIL_START, 1)
+        # Head ends in ``…``, never mid-character.
+        assert head_with_ellipsis.endswith("…")
+        head = head_with_ellipsis[:-1]
         assert len(head) <= _BLURB_HEAD_LEN
         assert not head.endswith(" ")
-        # The cut sits on a space in the original.
-        assert long_msg.startswith(head)
-        assert long_msg[len(head)] == " "
+        # Continuation under the spoiler holds the rest of the message
+        # and never repeats the head.
+        body = out.split(EXPANDABLE_TAIL_START, 1)[1].rsplit(EXPANDABLE_TAIL_END, 1)[0]
+        assert head not in body
+        # Together, head + tail still reconstructs the original.
+        assert head + " " + body == long_msg or head + body == long_msg
+
+
+class TestDedupConsecutiveMessages:
+    """``_collect_user_messages`` drops a user message when it equals the
+    immediately-previous one (typical double-tap). Later repeats of an
+    earlier message stay — only the back-to-back case is suppressed."""
+
+    @staticmethod
+    def _write_jsonl(tmp_path, messages_in_order: list[str]) -> "object":
+        """Synthesize a minimal JSONL with the given user messages, plus
+        the project-hash-encoded directory layout ``build_session_file_path``
+        expects."""
+        import json
+
+        from ccbot.session_claude_io import encode_cwd
+
+        sid = "deadbeef-feed-face-cafe-0123456789ab"
+        cwd = "/tmp/x"
+        project_dir = tmp_path / encode_cwd(cwd)
+        project_dir.mkdir(parents=True, exist_ok=True)
+        fp = project_dir / f"{sid}.jsonl"
+        with fp.open("w", encoding="utf-8") as f:
+            for msg in messages_in_order:
+                row = {
+                    "type": "user",
+                    "message": {"role": "user", "content": msg},
+                    "uuid": f"u-{msg[:8]}",
+                    "sessionId": sid,
+                    "userType": "external",
+                }
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return sid
+
+    @pytest.fixture(autouse=True)
+    def reset_blurb_cache(self):
+        from ccbot.handlers import archive
+
+        archive._BLURB_CACHE.clear()
+        yield
+        archive._BLURB_CACHE.clear()
+
+    @pytest.mark.asyncio
+    async def test_consecutive_duplicates_dropped(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ccbot.handlers import archive
+
+        sid = self._write_jsonl(
+            tmp_path,
+            ["First ask", "First ask", "Second ask"],
+        )
+        monkeypatch.setattr(archive.config, "claude_projects_path", tmp_path)
+        sess = Session(
+            id="x",
+            name="",
+            state="archived",
+            workdir="/tmp/x",
+            claude_session_id=sid,
+        )
+        out = await archive._collect_user_messages(sess)
+        # Both messages survive de-dup, but the duplicate of "First ask"
+        # is suppressed — "First ask" appears once.
+        assert "First ask" in out
+        assert "Second ask" in out
+        assert out.count("First ask") == 1
+
+    @pytest.mark.asyncio
+    async def test_non_consecutive_repeat_stays(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ccbot.handlers import archive
+
+        sid = self._write_jsonl(
+            tmp_path,
+            ["msg A", "msg B", "msg A"],
+        )
+        monkeypatch.setattr(archive.config, "claude_projects_path", tmp_path)
+        sess = Session(
+            id="x",
+            name="",
+            state="archived",
+            workdir="/tmp/x",
+            claude_session_id=sid,
+        )
+        out = await archive._collect_user_messages(sess)
+        # ``msg A`` appears at positions 1 and 3 with ``msg B`` between
+        # them — the second occurrence isn't adjacent so it stays.
+        assert out.count("msg A") == 2
+        assert "msg B" in out

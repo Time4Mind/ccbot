@@ -101,10 +101,20 @@ def convert_markdown_tables(text: str) -> str:
     return "\n".join(result)
 
 
-_EXPQUOTE_RE = re.compile(
-    re.escape(TranscriptParser.EXPANDABLE_QUOTE_START)
-    + r"([\s\S]*?)"
+# Both sentinel pairs (full-body + tail-only) in one alternation —
+# segmentation in ``convert_markdown`` walks the text once and dispatches
+# each match to the right renderer (preserves their original ordering
+# when both kinds appear in the same source).
+_EXPBLOCK_RE = re.compile(
+    "(?:"
+    + re.escape(TranscriptParser.EXPANDABLE_QUOTE_START)
+    + r"[\s\S]*?"
     + re.escape(TranscriptParser.EXPANDABLE_QUOTE_END)
+    + ")|(?:"
+    + re.escape(TranscriptParser.EXPANDABLE_TAIL_START)
+    + r"[\s\S]*?"
+    + re.escape(TranscriptParser.EXPANDABLE_TAIL_END)
+    + ")"
 )
 
 # Characters that must be escaped in Telegram MarkdownV2 plain text
@@ -121,16 +131,15 @@ def _escape_mdv2(text: str) -> str:
 _EXPQUOTE_MAX_RENDERED = 3800
 
 
-def _render_expandable_quote(m: re.Match[str]) -> str:
-    """Render an expandable blockquote block in raw MarkdownV2.
+def _quote_lines(inner: str) -> str:
+    """Render a piece of inner text as a MarkdownV2 expandable blockquote.
 
-    Truncates the rendered output to _EXPQUOTE_MAX_RENDERED chars
-    to ensure the final message fits within Telegram's 4096 limit.
+    Truncates output to ``_EXPQUOTE_MAX_RENDERED`` chars so we stay
+    inside Telegram's 4096-char message budget no matter what the
+    caller shoves in.
     """
-    inner = m.group(1)
     escaped = _escape_mdv2(inner)
     lines = escaped.split("\n")
-    # Build quoted lines, truncating if needed to stay within budget
     built: list[str] = []
     total_len = 0
     suffix = "\n>… \\(truncated\\)||"
@@ -140,7 +149,6 @@ def _render_expandable_quote(m: re.Match[str]) -> str:
         # +1 for ">" prefix, +1 for "\n" separator
         line_cost = 1 + len(line) + 1
         if total_len + line_cost > budget:
-            # Try to fit a partial line
             remaining = budget - total_len - 2  # -2 for ">" and "\n"
             if remaining > 20:
                 built.append(f">{line[:remaining]}")
@@ -242,10 +250,12 @@ def convert_markdown(text: str) -> str:
     # Convert markdown tables to card-style format before telegramify
     text = convert_markdown_tables(text)
 
-    # Extract expandable quote blocks before telegramify
-    segments: list[tuple[bool, str]] = []  # (is_quote, content)
+    # Extract expandable blocks (either full-body or tail-only) before
+    # telegramify processes the rest. Using the combined regex preserves
+    # the original ordering when both kinds appear in the same text.
+    segments: list[tuple[bool, str]] = []  # (is_block, content)
     last_end = 0
-    for m in _EXPQUOTE_RE.finditer(text):
+    for m in _EXPBLOCK_RE.finditer(text):
         if m.start() > last_end:
             segments.append((False, text[last_end : m.start()]))
         segments.append((True, m.group(0)))
@@ -257,9 +267,26 @@ def convert_markdown(text: str) -> str:
         return _markdownify(text)
 
     parts: list[str] = []
-    for is_quote, segment in segments:
-        if is_quote:
-            parts.append(_EXPQUOTE_RE.sub(_render_expandable_quote, segment))
+    for is_block, segment in segments:
+        if is_block:
+            parts.append(_render_expandable_block_match(segment))
         else:
             parts.append(_markdownify(segment))
     return "".join(parts)
+
+
+def _render_expandable_block_match(segment: str) -> str:
+    """Render one matched expandable-block segment (either sentinel pair)."""
+    if segment.startswith(TranscriptParser.EXPANDABLE_TAIL_START):
+        inner = segment[
+            len(TranscriptParser.EXPANDABLE_TAIL_START) : -len(
+                TranscriptParser.EXPANDABLE_TAIL_END
+            )
+        ]
+        return "\n" + _quote_lines(inner)
+    inner = segment[
+        len(TranscriptParser.EXPANDABLE_QUOTE_START) : -len(
+            TranscriptParser.EXPANDABLE_QUOTE_END
+        )
+    ]
+    return _quote_lines(inner)

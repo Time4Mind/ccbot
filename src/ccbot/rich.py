@@ -24,7 +24,12 @@ from typing import Any, cast
 from telegram import InlineKeyboardMarkup, Message
 from telegram.ext import ExtBot
 
-from .transcript_format import EXPANDABLE_QUOTE_END, EXPANDABLE_QUOTE_START
+from .transcript_format import (
+    EXPANDABLE_QUOTE_END,
+    EXPANDABLE_QUOTE_START,
+    EXPANDABLE_TAIL_END,
+    EXPANDABLE_TAIL_START,
+)
 
 # Rich messages cap (Bot API 10.1): 32768 UTF-8 chars of text.
 RICH_MAX_CHARS = 32768
@@ -51,6 +56,10 @@ _ALLOWED_TAG_RE = re.compile(
 
 _EXPQUOTE_RE = re.compile(
     re.escape(EXPANDABLE_QUOTE_START) + r"([\s\S]*?)" + re.escape(EXPANDABLE_QUOTE_END)
+)
+
+_EXPTAIL_RE = re.compile(
+    re.escape(EXPANDABLE_TAIL_START) + r"([\s\S]*?)" + re.escape(EXPANDABLE_TAIL_END)
 )
 
 _SUMMARY_MAX = 64
@@ -142,10 +151,26 @@ def _render_details(m: re.Match[str]) -> str:
     return f"\n<details><summary>{first}</summary>\n\n{inner}\n\n</details>\n"
 
 
+def _render_details_tail(m: re.Match[str]) -> str:
+    """Render the tail-only sentinel as a ``<details>`` with an icon-only
+    summary.
+
+    The visible ``head…`` sits in the surrounding markdown (the caller
+    placed it BEFORE the sentinel block), so we don't repeat it inside
+    the collapsible. ``<summary>▼</summary>`` keeps the bold-summary
+    default to a single glyph the user barely notices.
+    """
+    body = m.group(1).strip()
+    if not body:
+        return ""
+    return f"\n<details><summary>▼</summary>\n\n{body}\n\n</details>\n"
+
+
 def to_rich_markdown(text: str) -> str:
     """Convert internal markdown to Rich Markdown for ``sendRichMessage``."""
     text = _escape_outside_code(text)
     text = _EXPQUOTE_RE.sub(_render_details, text)
+    text = _EXPTAIL_RE.sub(_render_details_tail, text)
     return _sub_wrap_tables(text)
 
 

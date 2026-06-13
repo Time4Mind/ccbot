@@ -18,23 +18,23 @@ class TestSanitize:
     @pytest.mark.parametrize(
         "raw,expected",
         [
-            ("frontend-redesign", "frontend-redesign"),
-            ("FRONTEND REDESIGN", "frontend-redesign"),
-            ("auth_backend!!", "auth-backend"),
-            ("  scrape-linkedin  ", "scrape-linkedin"),
-            ("`linkedin-scraper`", "linkedin-scraper"),
-            ('"my session"', "my-session"),
+            ("frontend-redesign", "frontend redesign"),
+            ("FRONTEND REDESIGN", "frontend redesign"),
+            ("auth_backend!!", "auth backend"),
+            ("  scrape-linkedin  ", "scrape linkedin"),
+            ("`linkedin-scraper`", "linkedin scraper"),
+            ('"my session"', "my session"),
             ("ok\nextra fluff", "ok"),
             # Word-count cap: 3+ words truncate to the first two.
-            ("auth-backend-refactor", "auth-backend"),
-            ("one-two-three-four", "one-two"),
+            ("auth-backend-refactor", "auth backend"),
+            ("one-two-three-four", "one two"),
         ],
     )
     def test_normal_inputs(self, raw: str, expected: str) -> None:
         assert _sanitize(raw) == expected
 
     def test_caps_at_two_words(self) -> None:
-        assert _sanitize("scrape-linkedin-profiles-fast") == "scrape-linkedin"
+        assert _sanitize("scrape-linkedin-profiles-fast") == "scrape linkedin"
 
     def test_too_long_rejected(self) -> None:
         # Output regex caps at 32 chars total.
@@ -48,7 +48,7 @@ class TestSanitize:
         assert _sanitize("123-abc") == ""
 
     def test_double_dashes_collapsed(self) -> None:
-        assert _sanitize("foo----bar") == "foo-bar"
+        assert _sanitize("foo----bar") == "foo bar"
 
 
 class TestBuildNamingEnv:

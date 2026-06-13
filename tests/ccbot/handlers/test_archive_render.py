@@ -140,6 +140,29 @@ class TestArchivePageLineBreaks:
         assert text.count("  \n") >= PAGE_SIZE
 
     @pytest.mark.asyncio
+    async def test_session_divider_between_rows(self, many_archived) -> None:
+        """Each consecutive pair of session rows must be separated by
+        the visible Unicode divider, not just a blank line."""
+        from ccbot.handlers.archive import _SESSION_DIVIDER
+
+        text, _ = await build_archive_page(
+            page=0,
+            lookback_seconds=None,
+            show_all=True,
+            user_id=1,
+        )
+        # One divider between every adjacent pair on the page.
+        assert text.count(_SESSION_DIVIDER) == PAGE_SIZE - 1
+        # Divider is wrapped in blank lines so it renders as its own
+        # block in CommonMark/MD V2.
+        assert f"\n\n{_SESSION_DIVIDER}\n\n" in text
+        # The page-counter line is NOT followed by a divider (only
+        # session rows are).
+        assert text.split("**1.**", 1)[0].count(_SESSION_DIVIDER) == 0, (
+            "divider leaked above the first row"
+        )
+
+    @pytest.mark.asyncio
     async def test_no_two_space_indent_remains(self, many_archived) -> None:
         """The old MD V2-era 2-space indent on sub-lines is gone — leading
         whitespace inside a paragraph would render as literal spaces in

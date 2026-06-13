@@ -174,56 +174,6 @@ async def generate_name(seed_text: str) -> str | None:
     return name
 
 
-_TRANSLATE_PROMPT_TEMPLATE = (
-    "Translate the following short title into {target_lang} as a single "
-    "concise phrase (don't add quotes, don't transliterate technical "
-    "terms, keep it natural and under 12 words): {text}\n"
-    "Reply with only the translation."
-)
-
-# Maps the bot's UI-language codes to a phrase Haiku understands.
-_TARGET_LANG_LABEL: dict[str, str] = {
-    "ru": "Russian (русский)",
-    "zh": "Chinese (中文, simplified)",
-    "en": "English",
-}
-
-
-async def translate_to(text: str, lang: str) -> str | None:
-    """Run a one-shot Haiku call to translate ``text`` into ``lang``.
-
-    ``lang`` is one of the UI-language codes (``en``/``ru``/``zh``).
-    Returns ``None`` on failure (network, missing CLI, malformed output);
-    callers should fall back to the source text.
-    """
-    text = (text or "").strip().replace("\n", " ")[:240]
-    if not text:
-        return None
-    target_label = _TARGET_LANG_LABEL.get(lang)
-    if not target_label:
-        return None
-    claude_bin = config.claude_command or "claude"
-    prompt = _TRANSLATE_PROMPT_TEMPLATE.format(target_lang=target_label, text=text)
-    raw = await _run(
-        claude_bin,
-        "--model",
-        "haiku",
-        "--print",
-        prompt,
-        timeout=30.0,
-        env=_build_naming_env(),
-    )
-    if raw is None:
-        return None
-    translated = raw.strip().strip("'\"`")
-    # Defensive: drop a leading "Translation:" prefix if the model
-    # ignored the instruction. Single-line only.
-    translated = translated.splitlines()[0] if translated else ""
-    if not translated:
-        return None
-    return translated
-
-
 async def maybe_auto_name(
     session_id: str, seed_text: str, user_id: int | None = None
 ) -> None:

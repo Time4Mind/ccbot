@@ -180,57 +180,32 @@ class TestDisplayName:
         assert _display_name(sess) == "workdir 6"
 
 
-class TestTrimBlurbSpoiler:
-    def test_short_unchanged(self) -> None:
-        from ccbot.handlers.archive import _trim_blurb
-
-        assert _trim_blurb("simple short blurb") == "simple short blurb"
-
+class TestCleanUserMsg:
     def test_collapses_whitespace(self) -> None:
-        from ccbot.handlers.archive import _trim_blurb
+        from ccbot.handlers.archive import _clean_user_msg
 
-        assert _trim_blurb("line1\n\nline2   line3") == "line1 line2 line3"
-
-    def test_overflow_wraps_tail_in_spoiler(self) -> None:
-        from ccbot.handlers.archive import _BLURB_MAX_LEN, _trim_blurb
-
-        text = "a " * 80  # well over the budget
-        out = _trim_blurb(text)
-        assert "||" in out
-        # Head + spoiler markers + escaped tail — but never an ellipsis.
-        assert "…" not in out
-        # Spoiler markers balanced.
-        assert out.count("||") == 2
-        head, _sep, _rest = out.partition("||")
-        assert len(head) <= _BLURB_MAX_LEN
-
-    def test_existing_double_pipe_neutralised(self) -> None:
-        """A bare ``||`` in the source must not close our spoiler early —
-        we neutralise it by inserting a space (``| |``) before any
-        spoiler logic runs."""
-        from ccbot.handlers.archive import _trim_blurb
-
-        text = (
-            "Investigate the ||sneaky|| spoiler sequence inside a much "
-            "longer-than-the-budget user message that runs and runs and runs."
-        )
-        out = _trim_blurb(text)
-        # The original ``||sneaky||`` is now ``| |sneaky| |``.
-        assert "||sneaky||" not in out
-        assert "| |sneaky| |" in out
-        # Exactly one outer spoiler wraps the tail — ``||`` count is 2.
-        assert out.count("||") == 2
-        assert out.endswith("||")
+        assert _clean_user_msg("line1\n\nline2   line3") == "line1 line2 line3"
 
     def test_drops_leading_slash_command(self) -> None:
-        from ccbot.handlers.archive import _trim_blurb
+        from ccbot.handlers.archive import _clean_user_msg
 
-        assert _trim_blurb("/resume real ask").startswith("real ask")
+        assert _clean_user_msg("/resume real ask") == "real ask"
+
+    def test_strips_backticks_and_spaces(self) -> None:
+        from ccbot.handlers.archive import _clean_user_msg
+
+        assert _clean_user_msg("` something `") == "something"
+
+    def test_does_not_truncate(self) -> None:
+        from ccbot.handlers.archive import _clean_user_msg
+
+        long_text = "a" * 500
+        assert _clean_user_msg(long_text) == long_text
 
 
-class TestArchiveBlurbLocalization:
-    """``_archive_blurb`` picks a source by UI language and caches Haiku
-    translations forever so a bot restart never pays twice."""
+class TestArchiveBlurbCollectsUserMessages:
+    """``_archive_blurb`` reads the first 1-3 user messages from the
+    JSONL, accumulating until the soft budget bites."""
 
     @pytest.fixture(autouse=True)
     def reset_blurb_cache(self):
@@ -241,148 +216,95 @@ class TestArchiveBlurbLocalization:
         archive._BLURB_CACHE.clear()
 
     @pytest.mark.asyncio
-    async def test_en_uses_ai_title_verbatim(
+    async def test_three_short_messages_all_included(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from ccbot.handlers import archive
 
         sess = Session(
-            id="s1",
-            name="",
-            state="archived",
-            claude_session_id="cs-1",
-            workdir="/tmp/x",
+            id="s1", name="", state="archived",
+            claude_session_id="cs-1", workdir="/tmp/x",
         )
         monkeypatch.setattr(
             archive,
-            "_scan_blurb_sources",
-            _fake_scan(("Research and fix Telegram markdown", "")),
+            "_collect_user_messages",
+            _fake_collect("first ask  \nsecond ask  \nthird ask"),
         )
-        monkeypatch.setattr(
-            archive.session_manager,
-            "get_user_settings",
-            lambda _uid: {"language": "en", "haiku_naming": True},
-        )
-        out = await archive._archive_blurb(sess, user_id=1)
-        assert out == "Research and fix Telegram markdown"
+        out = await archive._archive_blurb(sess)
+        assert "first ask" in out
+        assert "second ask" in out
+        assert "third ask" in out
 
     @pytest.mark.asyncio
-    async def test_ru_translates_via_haiku_and_caches(
+    async def test_no_haiku_no_spoiler(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from unittest.mock import AsyncMock
-
+        """Blurb is the user's verbatim words — no ``||spoiler||`` marks,
+        no ``…``, no translation."""
         from ccbot.handlers import archive
 
         sess = Session(
-            id="s2",
-            name="",
-            state="archived",
-            claude_session_id="cs-2",
-            workdir="/tmp/x",
+            id="s2", name="", state="archived",
+            claude_session_id="cs-2", workdir="/tmp/x",
+        )
+        verbatim = (
+            "Найди баги в auth.py — особенно вокруг refresh-token rotation"
         )
         monkeypatch.setattr(
-            archive,
-            "_scan_blurb_sources",
-            _fake_scan(("Research and fix Telegram markdown", "")),
+            archive, "_collect_user_messages", _fake_collect(verbatim),
         )
-        monkeypatch.setattr(
-            archive.session_manager,
-            "get_user_settings",
-            lambda _uid: {"language": "ru", "haiku_naming": True},
-        )
-        # No cached translation yet.
-        monkeypatch.setattr(
-            archive.session_manager,
-            "get_archive_blurb_translation",
-            lambda _sid, _lang: None,
-        )
-        set_calls: list[tuple[str, str, str]] = []
-        monkeypatch.setattr(
-            archive.session_manager,
-            "set_archive_blurb_translation",
-            lambda sid, lang, val: set_calls.append((sid, lang, val)),
-        )
-        translate = AsyncMock(return_value="Исследовать и починить Telegram markdown")
-        monkeypatch.setattr("ccbot.naming.translate_to", translate)
-
-        out = await archive._archive_blurb(sess, user_id=1)
-        assert out == "Исследовать и починить Telegram markdown"
-        translate.assert_awaited_once()
-        assert set_calls == [("cs-2", "ru", "Исследовать и починить Telegram markdown")]
+        out = await archive._archive_blurb(sess)
+        assert out == verbatim
+        assert "||" not in out
+        assert "…" not in out
 
     @pytest.mark.asyncio
-    async def test_ru_uses_cached_translation_without_haiku(
+    async def test_cache_hit_skips_jsonl_scan(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from unittest.mock import AsyncMock
-
         from ccbot.handlers import archive
 
         sess = Session(
-            id="s3",
-            name="",
-            state="archived",
-            claude_session_id="cs-3",
-            workdir="/tmp/x",
+            id="s3", name="", state="archived",
+            claude_session_id="cs-3", workdir="/tmp/x",
         )
-        monkeypatch.setattr(
-            archive,
-            "_scan_blurb_sources",
-            _fake_scan(("Some English title", "")),
-        )
-        monkeypatch.setattr(
-            archive.session_manager,
-            "get_user_settings",
-            lambda _uid: {"language": "ru", "haiku_naming": True},
-        )
-        monkeypatch.setattr(
-            archive.session_manager,
-            "get_archive_blurb_translation",
-            lambda _sid, _lang: "Уже переведённый заголовок",
-        )
-        translate = AsyncMock()
-        monkeypatch.setattr("ccbot.naming.translate_to", translate)
+        # Pre-seed the cache.
+        archive._BLURB_CACHE["cs-3"] = "cached-from-disk"
+        calls: list[Session] = []
 
-        out = await archive._archive_blurb(sess, user_id=1)
-        assert out == "Уже переведённый заголовок"
-        translate.assert_not_awaited()
+        async def _should_not_fire(s: Session) -> str:
+            calls.append(s)
+            return "live-scan"
+
+        monkeypatch.setattr(archive, "_collect_user_messages", _should_not_fire)
+        out = await archive._archive_blurb(sess)
+        assert out == "cached-from-disk"
+        assert calls == []
 
     @pytest.mark.asyncio
-    async def test_ru_haiku_off_falls_back_to_user_message(
+    async def test_long_first_message_included_whole(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from unittest.mock import AsyncMock
-
+        """A single first message that already exceeds the soft budget
+        is still emitted whole — the user's own words trump truncation."""
         from ccbot.handlers import archive
 
         sess = Session(
-            id="s4",
-            name="",
-            state="archived",
-            claude_session_id="cs-4",
-            workdir="/tmp/x",
+            id="s4", name="", state="archived",
+            claude_session_id="cs-4", workdir="/tmp/x",
         )
+        # Simulate what ``_collect_user_messages`` would return for one
+        # very long message — included whole, no follow-up messages.
+        long_msg = "a" * 600
         monkeypatch.setattr(
-            archive,
-            "_scan_blurb_sources",
-            _fake_scan(("English ai-title", "Найди баги в коде")),
+            archive, "_collect_user_messages", _fake_collect(long_msg),
         )
-        monkeypatch.setattr(
-            archive.session_manager,
-            "get_user_settings",
-            lambda _uid: {"language": "ru", "haiku_naming": False},
-        )
-        translate = AsyncMock()
-        monkeypatch.setattr("ccbot.naming.translate_to", translate)
-
-        out = await archive._archive_blurb(sess, user_id=1)
-        assert out == "Найди баги в коде"
-        translate.assert_not_awaited()
+        out = await archive._archive_blurb(sess)
+        assert out == long_msg
 
 
-def _fake_scan(value: tuple[str, str]):
-    async def _scan(_sess):
+def _fake_collect(value: str):
+    async def _collect(_sess):
         return value
 
-    return _scan
+    return _collect

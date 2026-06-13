@@ -20,6 +20,9 @@ from typing import Any
 
 from . import transcript_format
 from .transcript_format import (
+    EXPANDABLE_HEADED_END,
+    EXPANDABLE_HEADED_SEP,
+    EXPANDABLE_HEADED_START,
     EXPANDABLE_QUOTE_END,
     EXPANDABLE_QUOTE_START,
 )
@@ -91,6 +94,9 @@ class TranscriptParser:
     # reach in via TranscriptParser (markdown_v2, message_sender).
     EXPANDABLE_QUOTE_START = EXPANDABLE_QUOTE_START
     EXPANDABLE_QUOTE_END = EXPANDABLE_QUOTE_END
+    EXPANDABLE_HEADED_START = EXPANDABLE_HEADED_START
+    EXPANDABLE_HEADED_END = EXPANDABLE_HEADED_END
+    EXPANDABLE_HEADED_SEP = EXPANDABLE_HEADED_SEP
 
     @staticmethod
     def parse_line(line: str) -> dict[str, Any] | None:

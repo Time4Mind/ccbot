@@ -25,6 +25,9 @@ from telegram import InlineKeyboardMarkup, Message
 from telegram.ext import ExtBot
 
 from .transcript_format import (
+    EXPANDABLE_HEADED_END,
+    EXPANDABLE_HEADED_SEP,
+    EXPANDABLE_HEADED_START,
     EXPANDABLE_QUOTE_END,
     EXPANDABLE_QUOTE_START,
 )
@@ -54,6 +57,12 @@ _ALLOWED_TAG_RE = re.compile(
 
 _EXPQUOTE_RE = re.compile(
     re.escape(EXPANDABLE_QUOTE_START) + r"([\s\S]*?)" + re.escape(EXPANDABLE_QUOTE_END)
+)
+
+_EXPHEADED_RE = re.compile(
+    re.escape(EXPANDABLE_HEADED_START)
+    + r"([\s\S]*?)"
+    + re.escape(EXPANDABLE_HEADED_END)
 )
 
 _SUMMARY_MAX = 64
@@ -145,9 +154,26 @@ def _render_details(m: re.Match[str]) -> str:
     return f"\n<details><summary>{first}</summary>\n\n{inner}\n\n</details>\n"
 
 
+def _render_details_headed(m: re.Match[str]) -> str:
+    """Render the ``EXPANDABLE_HEADED`` sentinel as a ``<details>`` block
+    with the explicit head as ``<summary>`` and the body WITHOUT a
+    repeat of the head.
+    """
+    payload = m.group(1)
+    head, _sep, body = payload.partition(EXPANDABLE_HEADED_SEP)
+    head = head.strip() or "…"
+    if len(head) > _SUMMARY_MAX:
+        head = head[: _SUMMARY_MAX - 1] + "…"
+    body = body.strip()
+    if not body:
+        return head
+    return f"\n<details><summary>{head}</summary>\n\n{body}\n\n</details>\n"
+
+
 def to_rich_markdown(text: str) -> str:
     """Convert internal markdown to Rich Markdown for ``sendRichMessage``."""
     text = _escape_outside_code(text)
+    text = _EXPHEADED_RE.sub(_render_details_headed, text)
     text = _EXPQUOTE_RE.sub(_render_details, text)
     return _sub_wrap_tables(text)
 

@@ -88,3 +88,42 @@ class TestParseSessionUsage:
     async def test_missing_file_returns_empty(self, tmp_path: Path) -> None:
         turns = await parse_session_usage(tmp_path / "nope.jsonl")
         assert turns == []
+
+
+class TestBudgetForModel:
+    """Per-model context-window denominator. Default is 1M; Haiku
+    family (the only modern one that still ships with 200k) is the
+    sole exception."""
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-haiku-4-5-20251001",
+            "claude-haiku-4-5",
+            "claude-haiku-3-5",
+            "Claude-Haiku-4-5",  # case-insensitive
+            "anthropic/claude-haiku-4-5",
+        ],
+    )
+    def test_haiku_models_use_200k(self, model: str) -> None:
+        from ccbot.usage import _budget_for_model
+
+        assert _budget_for_model(model) == 200_000
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-opus-4-7",
+            "claude-opus-4-6",
+            "claude-opus-4-5",
+            "claude-sonnet-4-6",
+            "claude-sonnet-4-5",
+            "claude-3-5-sonnet-20241022",
+            "",  # empty → default 1M
+            "unknown-model",
+        ],
+    )
+    def test_non_haiku_models_use_1m(self, model: str) -> None:
+        from ccbot.usage import _budget_for_model
+
+        assert _budget_for_model(model) == 1_000_000

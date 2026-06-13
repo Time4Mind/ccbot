@@ -107,26 +107,20 @@ class TestSyntaxHighlightedToolBody:
     def test_read_unknown_extension_falls_back_to_plain_fence(self) -> None:
         from ccbot.handlers.card_model import _build_tool_spoiler_body
 
-        out = _build_tool_spoiler_body(
-            "Read", "data/blob.xyz", "raw bytes here"
-        )
+        out = _build_tool_spoiler_body("Read", "data/blob.xyz", "raw bytes here")
         # No language hint, just monospace fence.
         assert "```\nraw bytes here\n```" in out
 
     def test_write_uses_typescript_for_ts_files(self) -> None:
         from ccbot.handlers.card_model import _build_tool_spoiler_body
 
-        out = _build_tool_spoiler_body(
-            "Write", "src/app.ts", "const x: number = 1;"
-        )
+        out = _build_tool_spoiler_body("Write", "src/app.ts", "const x: number = 1;")
         assert "```typescript\nconst x: number = 1;\n```" in out
 
     def test_edit_content_uses_diff_block(self) -> None:
         from ccbot.handlers.card_model import _build_tool_spoiler_body
 
-        out = _build_tool_spoiler_body(
-            "Edit", "src/foo.py", "- old()\n+ new()"
-        )
+        out = _build_tool_spoiler_body("Edit", "src/foo.py", "- old()\n+ new()")
         assert "```diff\n- old()\n+ new()\n```" in out
 
     def test_grep_pattern_inline_code_matches_plain(self) -> None:

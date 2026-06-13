@@ -55,6 +55,12 @@ _BLURB_MAX_MESSAGES = 3
 # the row starts to dominate the archive page on phone.
 _BLURB_HEAD_LEN = 96
 
+# Visible divider between session rows on a page. Unicode box-drawing
+# chars render the same in rich, MarkdownV2 fallback and plain text;
+# the CommonMark ``---`` thematic break would render as a true ``<hr>``
+# under rich but degrade to escaped ``\-\-\-`` in the MarkdownV2 path.
+_SESSION_DIVIDER = "─────"
+
 # Claude Code injects its own "user" messages — local-command caveats,
 # system reminders, bash plumbing chrome — alongside the genuine user
 # prompt. Skipping these when sniffing the first real message keeps the
@@ -413,10 +419,18 @@ async def build_archive_page(
             [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=back_callback)]
         )
 
-    # Paragraph break (blank line) between the header, the page counter
-    # and every session row — so the rich parser renders them as
-    # separate blocks instead of one run-on paragraph.
-    text = "\n\n".join([header, *body])
+    # Paragraph break between header / page counter / sessions block;
+    # session rows themselves are separated by the more visible
+    # ``_SESSION_DIVIDER`` so the boundary between two sessions is
+    # easy to spot on the phone (a blank line alone was easy to miss
+    # in a list of long blurbs).
+    if total == 0:
+        text = "\n\n".join([header, *body])
+    else:
+        page_line = body[0]
+        session_rows = body[1:]
+        sessions_block = f"\n\n{_SESSION_DIVIDER}\n\n".join(session_rows)
+        text = "\n\n".join(p for p in (header, page_line, sessions_block) if p)
     return text, InlineKeyboardMarkup(rows)
 
 

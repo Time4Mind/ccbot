@@ -25,10 +25,16 @@ class TestSanitize:
             ("`linkedin-scraper`", "linkedin-scraper"),
             ('"my session"', "my-session"),
             ("ok\nextra fluff", "ok"),
+            # Word-count cap: 3+ words truncate to the first two.
+            ("auth-backend-refactor", "auth-backend"),
+            ("one-two-three-four", "one-two"),
         ],
     )
     def test_normal_inputs(self, raw: str, expected: str) -> None:
         assert _sanitize(raw) == expected
+
+    def test_caps_at_two_words(self) -> None:
+        assert _sanitize("scrape-linkedin-profiles-fast") == "scrape-linkedin"
 
     def test_too_long_rejected(self) -> None:
         # Output regex caps at 32 chars total.

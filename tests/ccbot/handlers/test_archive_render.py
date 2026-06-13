@@ -74,9 +74,7 @@ class TestArchivePageNumbering:
         assert "\\." not in text
 
     @pytest.mark.asyncio
-    async def test_page1_also_bold_wrapped_for_consistency(
-        self, many_archived
-    ) -> None:
+    async def test_page1_also_bold_wrapped_for_consistency(self, many_archived) -> None:
         text, _ = await build_archive_page(
             page=0,
             lookback_seconds=None,

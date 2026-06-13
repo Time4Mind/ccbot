@@ -881,9 +881,12 @@ async def _dispatch_text_to_active(
         sess = session_manager.find_session_by_window(wid)
         if sess is not None:
             session_manager.touch_session(sess.id)
-            looks_default = (not sess.name) or sess.name.startswith("session-")
-            if looks_default and len(text) >= 50:
-                asyncio.create_task(maybe_auto_name(sess.id, text))
+            # ``maybe_auto_name`` honours the user's ``haiku_naming``
+            # setting and the directory-basename guard internally — we
+            # only need to gate the call on a non-trivial seed (Haiku
+            # can't summarise "hi" / "ok" into anything useful).
+            if len(text) >= 20:
+                asyncio.create_task(maybe_auto_name(sess.id, text, user_id))
 
         _maybe_start_bash_capture(context.bot, user_id, wid, text)
 

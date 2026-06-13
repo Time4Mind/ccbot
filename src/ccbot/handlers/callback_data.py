@@ -105,6 +105,7 @@ CB_ST_PAGESIZE = "st:psz:"  # st:psz:<15|30|50|100>  max page size in lines
 CB_ST_SCREENS = "st:scr:"  # st:scr:<on|off>  inline screenshots toggle
 CB_ST_CAT = "st:cat:"  # st:cat:<screen_name>  open settings category sub-screen
 CB_ST_BGNOTIFY = "st:bgn:"  # st:bgn:<key>:<on|off>  bg-notification toggles
+CB_ST_HAIKU = "st:hk:"  # st:hk:<on|off>  Haiku auto-rename of new sessions
 CB_ST_VOICE_INSTALL_GO = "st:vi:go"  # confirm whisper.cpp auto-install
 CB_ST_VOICE_INSTALL_NO = "st:vi:no"  # dismiss whisper.cpp install prompt
 CB_ST_BACK = "st:back"  # back to Menu

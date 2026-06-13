@@ -258,6 +258,19 @@ _EN: dict[str, str] = {
         "Otherwise only the ❓ badge in the bg-panel signals it — easy "
         "to miss."
     ),
+    "settings.group.haiku_naming": "Haiku session names",
+    "settings.haiku.body": (
+        "*Haiku session names*\n\n"
+        "When *on*, every new session is renamed after the first user "
+        "message ≥20 chars via a one-shot Haiku call — yields a 1-3 "
+        "word kebab-case summary of the session's intent "
+        "(``token-budget-alerts``, ``archive-pagination-fix``). Cost "
+        "~50 tokens per new session, charged to the Max x20 "
+        "subscription. Manually-renamed sessions (``/rename``, ``/new "
+        "<name>``) are never overwritten.\n\n"
+        "When *off*, sessions keep the directory-basename name forever "
+        "(``workdir``, ``workdir-2``, ``ccbot``). Zero token cost."
+    ),
     # Settings categories (top-level Settings is now a category selector).
     "settings.cat.card": "🃏 Card / view",
     "settings.cat.notifications": "🔔 Notifications",
@@ -280,7 +293,8 @@ _EN: dict[str, str] = {
         "Native Terminal / iTerm window attached to each new session."
     ),
     "settings.cat.behavior.body": (
-        "*Behavior & language*\n\nAuto-approve interactive prompts; UI language."
+        "*Behavior & language*\n\n"
+        "Auto-approve interactive prompts; Haiku session names; UI language."
     ),
     # Settings group: pop a native Terminal/iTerm window per new session
     "settings.group.local_terminal": "Local terminal",
@@ -626,6 +640,19 @@ _RU: dict[str, str] = {
         "показывает AskUserQuestion / ExitPlanMode / Permission промпт.\n"
         "Иначе только ❓ бейдж в bg-panel — легко пропустить."
     ),
+    "settings.group.haiku_naming": "Имена сессий через Haiku",
+    "settings.haiku.body": (
+        "*Имена сессий через Haiku*\n\n"
+        "При *on* каждая новая сессия переименовывается после первого\n"
+        "пользовательского сообщения ≥20 символов одноразовым\n"
+        "вызовом Haiku — 1-3 слова в kebab-case о сути сессии\n"
+        "(``token-budget-alerts``, ``archive-pagination-fix``).\n"
+        "Цена ~50 токенов за сессию, списывается с Max x20.\n"
+        "Сессии, переименованные вручную (``/rename``,\n"
+        "``/new <name>``), никогда не перетираются.\n\n"
+        "При *off* имя навсегда остаётся basename'ом директории\n"
+        "(``workdir``, ``workdir-2``, ``ccbot``). Нулевой расход токенов."
+    ),
     "settings.cat.card": "🃏 Карточка / вид",
     "settings.cat.notifications": "🔔 Уведомления",
     "settings.cat.voice": "🎙 Голос",
@@ -644,7 +671,8 @@ _RU: dict[str, str] = {
         "*Локальный терминал*\n\nНативное Terminal / iTerm окно к tmux."
     ),
     "settings.cat.behavior.body": (
-        "*Поведение и язык*\n\nАвто-Yes на промпты; язык интерфейса."
+        "*Поведение и язык*\n\n"
+        "Авто-Yes на промпты; авто-имя сессии через Haiku; язык интерфейса."
     ),
     "settings.group.local_terminal": "Локальный терминал",
     "settings.local.body": (

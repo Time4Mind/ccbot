@@ -913,16 +913,25 @@ class SessionManager:
         """Return [(user_id, Session)] including non-active sessions for that claude id.
 
         Used to drive background-session live-card edits even when the session
-        is not active for any user. The user_id is best-effort and currently
-        always equals the bot's single allowed user (DM mode).
+        is not active for any user.
+
+        The session pool is global (shared workspace), so a claude event is
+        fanned out to **every** allowed user — each gets their own live card /
+        panel in their own DM. With a single allowed user (the common case)
+        this collapses to one (user_id, Session) per match, identical to the
+        previous single-user behaviour. Users are sorted for deterministic
+        ordering.
         """
         if not config.allowed_users:
             return []
-        # In v0.1 we model a single user; pick the deterministic minimum.
-        user_id = min(config.allowed_users)
+        matched = [
+            sess
+            for sess in self.sessions.values()
+            if sess.claude_session_id == claude_session_id
+        ]
         out: list[tuple[int, "Session"]] = []
-        for sess in self.sessions.values():
-            if sess.claude_session_id == claude_session_id:
+        for user_id in sorted(config.allowed_users):
+            for sess in matched:
                 out.append((user_id, sess))
         return out
 

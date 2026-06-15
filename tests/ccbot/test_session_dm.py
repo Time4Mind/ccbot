@@ -2,6 +2,7 @@
 
 import pytest
 
+from ccbot.config import config
 from ccbot.session import Session, SessionManager
 
 
@@ -93,3 +94,37 @@ class TestActiveSessions:
         ids = {s.id for s in recent}
         assert sess2.id in ids
         assert sess1.id not in ids
+
+
+class TestClaudeIdFanOut:
+    """all_user_sessions_with_claude_id fans a claude event to every allowed
+    user (shared workspace). Single-user collapses to the prior behaviour."""
+
+    def test_single_user_one_target(self, mgr: SessionManager, monkeypatch) -> None:
+        monkeypatch.setattr(config, "allowed_users", {100})
+        sess = mgr.create_session(name="x", window_id="@1", workdir="/tmp")
+        sess.claude_session_id = "uuid-1"
+        out = mgr.all_user_sessions_with_claude_id("uuid-1")
+        assert out == [(100, sess)]
+
+    def test_two_users_fan_out(self, mgr: SessionManager, monkeypatch) -> None:
+        monkeypatch.setattr(config, "allowed_users", {100, 200})
+        sess = mgr.create_session(name="x", window_id="@1", workdir="/tmp")
+        sess.claude_session_id = "uuid-1"
+        out = mgr.all_user_sessions_with_claude_id("uuid-1")
+        # Both users receive the event, deterministic (sorted) order.
+        assert out == [(100, sess), (200, sess)]
+
+    def test_no_match_returns_empty(self, mgr: SessionManager, monkeypatch) -> None:
+        monkeypatch.setattr(config, "allowed_users", {100, 200})
+        sess = mgr.create_session(name="x", window_id="@1", workdir="/tmp")
+        sess.claude_session_id = "uuid-1"
+        assert mgr.all_user_sessions_with_claude_id("other") == []
+
+    def test_no_allowed_users_returns_empty(
+        self, mgr: SessionManager, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(config, "allowed_users", set())
+        sess = mgr.create_session(name="x", window_id="@1", workdir="/tmp")
+        sess.claude_session_id = "uuid-1"
+        assert mgr.all_user_sessions_with_claude_id("uuid-1") == []

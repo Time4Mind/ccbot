@@ -7,7 +7,9 @@ import pytest
 from ccbot.naming import (
     _build_naming_env,
     _looks_default_name,
+    _looks_like_refusal,
     _sanitize,
+    generate_name,
     maybe_auto_name,
 )
 from ccbot.session import session_manager
@@ -49,6 +51,63 @@ class TestSanitize:
 
     def test_double_dashes_collapsed(self) -> None:
         assert _sanitize("foo----bar") == "foo bar"
+
+
+class TestLooksLikeRefusal:
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "I cannot help with that.",
+            "I can't generate a name for that request.",
+            "I won't do that.",
+            "I'm unable to help.",
+            "I am unable to assist with this.",
+            "Sorry, I can't help.",
+            "I apologize, but I cannot help.",
+            "Unfortunately, I can't generate a name for this.",
+            "As an AI, I cannot help with that.",
+            "As a language model, I'm unable to do that.",
+            "  I CANNOT do that.  ",
+        ],
+    )
+    def test_detected(self, raw: str) -> None:
+        assert _looks_like_refusal(raw) is True
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "frontend-redesign",
+            "auth-backend",
+            "scrape-linkedin",
+            "icannot-handler",  # word "icannot" without space is a real name, not refusal
+            "",
+        ],
+    )
+    def test_not_refusal(self, raw: str) -> None:
+        assert _looks_like_refusal(raw) is False
+
+
+class TestGenerateName:
+    @pytest.mark.asyncio
+    async def test_refusal_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The bug that motivated this filter: Haiku refused, "I cannot
+        # help…" survived sanitize as "i cannot", and the session got
+        # renamed to that. Now generate_name should bail before sanitize.
+        async def fake_run(*_a, **_kw):
+            return "I cannot help with that request."
+
+        monkeypatch.setattr("ccbot.naming._run", fake_run)
+        assert await generate_name("anything") is None
+
+    @pytest.mark.asyncio
+    async def test_happy_path_returns_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_run(*_a, **_kw):
+            return "token-budget-alerts"
+
+        monkeypatch.setattr("ccbot.naming._run", fake_run)
+        assert await generate_name("investigate token budget alerts") == "token budget"
 
 
 class TestBuildNamingEnv:

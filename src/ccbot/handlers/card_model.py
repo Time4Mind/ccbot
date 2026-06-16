@@ -1040,11 +1040,20 @@ def _render_card(
             body = _sanitize_prompt_block(raw)
             prompt_part = body if "```" in body else f"```\n{body}\n```"
         else:
-            # No box frame → the long-standing well-behaved prompt. Render it
-            # exactly as before so this fix never alters a normal prompt.
-            prompt_part = raw
+            # A captured pane is plain text with single ``\n`` between
+            # rows. In the rich-message parser that is a CommonMark soft
+            # break — adjacent rows collapse into one paragraph and a
+            # numbered prompt ("1. A\n2. B\n3. C") renders as
+            # "1. A 2. B 3. C" on a single line. Use the
+            # two-trailing-spaces hard-break trick (same fix as the
+            # /archive list, see ``handlers/archive.py``) so each pane
+            # row stays on its own visual row.
+            prompt_part = "  \n".join(raw.splitlines())
         parts = [header, "─────", "⌨ *Waiting for your input:*", prompt_part]
-        return "\n".join(parts)
+        # Paragraph-break join (same trap the bottom of this function
+        # already handles): single ``\n`` between header / separator /
+        # title would let the rich parser glue them onto one line.
+        return "\n\n".join(parts)
 
     # Budget is in LINES (per user setting ``card_page_lines``).
     line_budget = _resolve_line_budget(user_id)

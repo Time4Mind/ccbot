@@ -107,8 +107,11 @@ NORMAL_PROMPT = (
 
 
 class TestNormalPromptUnchanged:
-    """The box-frame gate: a prompt without frame glyphs renders exactly as
-    before — no sanitization, no code fence. Guards the working case."""
+    """The box-frame gate: a prompt without frame glyphs is NOT wrapped
+    in a code fence. Its content survives the render verbatim — but
+    internal single ``\\n`` are upgraded to CommonMark hard breaks
+    (``  \\n``) so numbered options don't collapse into one paragraph
+    when the rich parser treats single ``\\n`` as a soft break."""
 
     def test_no_frame_means_no_code_fence(self):
         st = CardState()
@@ -117,10 +120,12 @@ class TestNormalPromptUnchanged:
         out = _render_card(_sess(), st, user_id=1)
         # The card chrome (header + the literal "─────" separator) is added
         # by _render_card; the prompt body itself must NOT be code-fenced.
-        body = out.split("⌨ *Waiting for your input:*\n", 1)[1]
+        body = out.split("⌨ *Waiting for your input:*", 1)[1]
         assert "```" not in body
-        # ...and the prompt is carried verbatim (incl. its own divider).
-        assert NORMAL_PROMPT in out
+        # Every non-blank pane row survives intact, just on its own line.
+        for line in NORMAL_PROMPT.splitlines():
+            if line.strip():
+                assert line in out
 
     def test_divider_only_does_not_trip_the_gate(self):
         # A ── divider (U+2500) alone is not a frame → no sanitization.
@@ -130,3 +135,47 @@ class TestNormalPromptUnchanged:
         st.kb_prompt = NORMAL_PROMPT
         out = _render_card(_sess(), st, user_id=1)
         assert "❯ 1. Incremental" in out  # cursor/options untouched
+
+
+class TestHardLineBreaks:
+    """Numbered options used to collapse into one paragraph because the
+    rich parser reads single ``\\n`` as a soft break. Regression guard:
+    each pane row must be followed by a CommonMark hard break (``  \\n``)
+    so it stays on its own visual row in Telegram."""
+
+    def test_numbered_options_get_hard_breaks(self):
+        st = CardState()
+        st.in_kb_mode = True
+        st.kb_prompt = "What do you want to do?\n1. Option A\n2. Option B\n3. Option C"
+        out = _render_card(_sess(), st, user_id=1)
+        # Every row except the last gets two trailing spaces + newline.
+        assert "What do you want to do?  \n" in out
+        assert "1. Option A  \n" in out
+        assert "2. Option B  \n" in out
+        # Last row has no following hard break by construction (join);
+        # the outer ``\n\n`` join handles the gap to anything below.
+        assert "3. Option C" in out
+
+    def test_outer_parts_separated_by_paragraph_break(self):
+        # header / "─────" / "⌨ Waiting…" / prompt are joined with
+        # ``\n\n`` so the rich parser doesn't glue them onto one row.
+        st = CardState()
+        st.in_kb_mode = True
+        st.kb_prompt = "Pick one:\n1. A\n2. B"
+        out = _render_card(_sess(), st, user_id=1)
+        # Header followed by paragraph break, then divider, then the
+        # waiting-for-input title each on their own paragraph.
+        assert "\n\n─────\n\n⌨ *Waiting for your input:*\n\n" in out
+
+    def test_box_frame_path_unaffected(self):
+        # Code-fenced rendering preserves whitespace natively; the
+        # hard-break trick must NOT be applied there (would inject the
+        # spaces INTO the code block).
+        st = CardState()
+        st.in_kb_mode = True
+        st.kb_prompt = BOXED_PROMPT
+        out = _render_card(_sess(), st, user_id=1)
+        # Inside a code fence we never want "  \n" (visible whitespace).
+        body_after_fence = out.split("```", 1)[1]
+        body_inside = body_after_fence.split("```", 1)[0]
+        assert "  \n" not in body_inside

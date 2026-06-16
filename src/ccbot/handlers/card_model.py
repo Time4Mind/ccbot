@@ -981,6 +981,82 @@ _BORDER_ONLY_LINE_RE = re.compile(r"^[\s─-▟]*$")
 # the sanitize/code-fence path stays a strict no-op for the well-behaved case.
 _BOX_FRAME_RE = re.compile(r"[│┃┌-╋═-╬]")
 
+# Numbered-option row in an AskUserQuestion / picker pane. Tolerates the
+# common cursor markers (``> `` / ``❯ ``) and arbitrary leading whitespace
+# (Claude Code uses ``  2.`` to align the non-cursor rows under the
+# cursor row). Anchors to the start of the line so prose like
+# ``Step 1.`` never trips it.
+_NUMBERED_OPTION_RE = re.compile(r"^\s*[>❯▶]?\s*\d+\.\s")
+
+# Source-level horizontal rule the generated ``─────`` separators
+# already cover. Drop these during formatting so a verbatim divider
+# line in the pane (e.g. NORMAL_PROMPT in the regression tests) doesn't
+# show up as ``─────  ─────  ─────`` once we add ours.
+_RULE_LINE_RE = re.compile(r"^[─\-=_]{3,}$")
+
+
+_KB_BLOCK_SEPARATOR = "\n\n─────\n\n"
+_KB_PARAGRAPH_SEPARATOR = "\n\n"
+_KB_HARD_BREAK_JOIN = "  \n"
+
+
+def _format_kb_prompt(raw: str) -> str:
+    """Render a captured AskUserQuestion / picker pane as kb-mode body.
+
+    Numbered options (``1. Foo``, ``❯ 2. Bar``) become their own blocks
+    separated by a ``─────`` rule — same archive-style split used in
+    ``handlers/archive.py`` for the session list. The header / hint
+    chrome around the options keeps a hard-break join so wrapping prose
+    stays readable on the phone.
+
+    Pure prompts with no numbered options (ExitPlanMode, plain
+    confirmations) fall back to the cheap paragraph+hard-break join —
+    no spurious dividers.
+    """
+    paragraphs: list[list[str]] = []
+    current: list[str] = []
+
+    def _flush() -> None:
+        if current:
+            paragraphs.append(current.copy())
+            current.clear()
+
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            _flush()
+            continue
+        if _RULE_LINE_RE.match(stripped):
+            # Source rule lines are absorbed by the generated dividers
+            # — surviving as content would double up the separator.
+            _flush()
+            continue
+        current.append(line)
+    _flush()
+
+    if not paragraphs:
+        return ""
+
+    # Re-split each paragraph at numbered-option boundaries so every
+    # option ends up as its own block (and gets its own ─── divider).
+    refined: list[list[str]] = []
+    for para in paragraphs:
+        buf: list[str] = []
+        for line in para:
+            if _NUMBERED_OPTION_RE.match(line):
+                if buf:
+                    refined.append(buf)
+                    buf = []
+                refined.append([line])
+            else:
+                buf.append(line)
+        if buf:
+            refined.append(buf)
+
+    has_options = any(_NUMBERED_OPTION_RE.match(p[0]) for p in refined if p)
+    sep = _KB_BLOCK_SEPARATOR if has_options else _KB_PARAGRAPH_SEPARATOR
+    return sep.join(_KB_HARD_BREAK_JOIN.join(p) for p in refined)
+
 
 def _sanitize_prompt_block(text: str) -> str:
     """Strip terminal box-drawing borders from a captured interactive prompt.
@@ -1040,15 +1116,13 @@ def _render_card(
             body = _sanitize_prompt_block(raw)
             prompt_part = body if "```" in body else f"```\n{body}\n```"
         else:
-            # A captured pane is plain text with single ``\n`` between
-            # rows. In the rich-message parser that is a CommonMark soft
-            # break — adjacent rows collapse into one paragraph and a
-            # numbered prompt ("1. A\n2. B\n3. C") renders as
-            # "1. A 2. B 3. C" on a single line. Use the
-            # two-trailing-spaces hard-break trick (same fix as the
-            # /archive list, see ``handlers/archive.py``) so each pane
-            # row stays on its own visual row.
-            prompt_part = "  \n".join(raw.splitlines())
+            # Format pane lines into explicit blocks: each numbered
+            # option ("1. Foo", "❯ 2. Bar") gets its own ─── divider
+            # — same archive-style split as ``handlers/archive.py``'s
+            # session list. Non-option prompts (ExitPlanMode and the
+            # like) fall back to hard-break-only join so wrapping
+            # prose stays one paragraph. See ``_format_kb_prompt``.
+            prompt_part = _format_kb_prompt(raw)
         parts = [header, "─────", "⌨ *Waiting for your input:*", prompt_part]
         # Paragraph-break join (same trap the bottom of this function
         # already handles): single ``\n`` between header / separator /

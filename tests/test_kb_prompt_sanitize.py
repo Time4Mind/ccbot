@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from ccbot.handlers.card_model import (
     CardState,
+    _format_kb_prompt,
     _render_card,
     _sanitize_prompt_block,
 )
@@ -137,25 +138,83 @@ class TestNormalPromptUnchanged:
         assert "❯ 1. Incremental" in out  # cursor/options untouched
 
 
-class TestHardLineBreaks:
+class TestNumberedOptionsSplit:
     """Numbered options used to collapse into one paragraph because the
-    rich parser reads single ``\\n`` as a soft break. Regression guard:
-    each pane row must be followed by a CommonMark hard break (``  \\n``)
-    so it stays on its own visual row in Telegram."""
+    rich parser reads single ``\\n`` as a soft break. The kb-mode body
+    now splits each numbered option into its own archive-style block
+    separated by a ``─────`` rule — same affordance the /archive list
+    uses between sessions."""
 
-    def test_numbered_options_get_hard_breaks(self):
-        st = CardState()
-        st.in_kb_mode = True
-        st.kb_prompt = "What do you want to do?\n1. Option A\n2. Option B\n3. Option C"
-        out = _render_card(_sess(), st, user_id=1)
-        # Every row except the last gets two trailing spaces + newline.
-        assert "What do you want to do?  \n" in out
-        assert "1. Option A  \n" in out
-        assert "2. Option B  \n" in out
-        # Last row has no following hard break by construction (join);
-        # the outer ``\n\n`` join handles the gap to anything below.
-        assert "3. Option C" in out
+    def test_each_option_in_its_own_block(self):
+        # Three numbered options + lead-in description → four blocks,
+        # joined by the divider so the boundary is visually explicit.
+        body = _format_kb_prompt(
+            "What do you want to do?\n1. Option A\n2. Option B\n3. Option C"
+        )
+        assert "What do you want to do?\n\n─────\n\n1. Option A" in body
+        assert "1. Option A\n\n─────\n\n2. Option B" in body
+        assert "2. Option B\n\n─────\n\n3. Option C" in body
 
+    def test_cursor_marker_still_matches(self):
+        # ``❯ 1.`` (and ``> 1.``) — Claude Code marks the active option
+        # with a cursor glyph. Must trip the option pattern too.
+        body = _format_kb_prompt("Pick:\n❯ 1. Yes\n  2. No")
+        assert "Pick:\n\n─────\n\n❯ 1. Yes" in body
+        assert "❯ 1. Yes\n\n─────\n\n  2. No" in body
+
+    def test_hint_lines_after_options_get_their_own_block(self):
+        # Hints under the option list (model picker case): once the
+        # numbered run ends, the trailing hint paragraph is its own
+        # block too — separated from the last option by the divider.
+        body = _format_kb_prompt(
+            "Select model\n"
+            "Switch between Claude models.\n"
+            "> 1. Default\n"
+            "2. Sonnet\n"
+            "3. Haiku\n"
+            "Enter to confirm · Esc to exit"
+        )
+        # Hints are joined with hard break (kept as one paragraph)…
+        assert "3. Haiku\n\n─────\n\nEnter to confirm · Esc to exit" in body
+
+    def test_source_rule_line_absorbed(self):
+        # NORMAL_PROMPT carries its own ``─────`` divider. The generated
+        # dividers replace its role — the source rule line must be
+        # dropped so the output doesn't end up with consecutive
+        # ``─────`` blocks.
+        body = _format_kb_prompt(NORMAL_PROMPT)
+        # No "─────\n\n─────" double rule anywhere in the body.
+        assert "─────\n\n─────" not in body
+        # …but the cursor row and the trailing options still made it.
+        assert "❯ 1. Incremental" in body
+        assert "  2. Big-bang" in body
+        assert "  3. Chat about this" in body
+
+
+class TestPromptWithoutOptions:
+    """ExitPlanMode and plain confirmations have no numbered options.
+    Those must NOT get the divider treatment — only paragraph + hard-
+    break joins, otherwise the prose gets chopped into fake blocks."""
+
+    def test_no_divider_when_no_options(self):
+        body = _format_kb_prompt(
+            "Ready to start?\nI will modify the schema and re-run migrations."
+        )
+        # No archive-style separator anywhere.
+        assert "─────" not in body
+        # Hard-break preserved within the paragraph.
+        assert "Ready to start?  \nI will modify the schema" in body
+
+    def test_blank_line_becomes_paragraph_break(self):
+        body = _format_kb_prompt("Plan:\n\n- Step 1\n- Step 2\n\nReady?")
+        assert "Plan:\n\n- Step 1" in body
+        assert "- Step 2\n\nReady?" in body
+
+    def test_empty_prompt(self):
+        assert _format_kb_prompt("") == ""
+
+
+class TestKbModeRenderIntegration:
     def test_outer_parts_separated_by_paragraph_break(self):
         # header / "─────" / "⌨ Waiting…" / prompt are joined with
         # ``\n\n`` so the rich parser doesn't glue them onto one row.
@@ -163,19 +222,18 @@ class TestHardLineBreaks:
         st.in_kb_mode = True
         st.kb_prompt = "Pick one:\n1. A\n2. B"
         out = _render_card(_sess(), st, user_id=1)
-        # Header followed by paragraph break, then divider, then the
-        # waiting-for-input title each on their own paragraph.
         assert "\n\n─────\n\n⌨ *Waiting for your input:*\n\n" in out
 
     def test_box_frame_path_unaffected(self):
         # Code-fenced rendering preserves whitespace natively; the
-        # hard-break trick must NOT be applied there (would inject the
-        # spaces INTO the code block).
+        # divider/hard-break tricks must NOT be applied there (would
+        # inject the spaces / dividers INTO the code block).
         st = CardState()
         st.in_kb_mode = True
         st.kb_prompt = BOXED_PROMPT
         out = _render_card(_sess(), st, user_id=1)
-        # Inside a code fence we never want "  \n" (visible whitespace).
         body_after_fence = out.split("```", 1)[1]
         body_inside = body_after_fence.split("```", 1)[0]
         assert "  \n" not in body_inside
+        # The split-by-divider helper must not touch box-frame paths.
+        assert "─────" not in body_inside

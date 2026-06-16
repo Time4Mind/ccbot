@@ -70,6 +70,41 @@ _PROMPT_TEMPLATE = (
 )
 
 
+# Refusal openers Haiku sometimes returns instead of a name (most often
+# when the seed mentions a real person, sensitive context, or otherwise
+# trips a safety reflex). Sanitization happily reduces "I cannot help
+# with that." → "i-cannot" → "i cannot", which passes the kebab-case
+# regex and ends up as the session's display name. Reject these at the
+# raw-output layer so naming falls back to the directory basename.
+_REFUSAL_PREFIXES = (
+    "i cannot",
+    "i can't",
+    "i can not",
+    "i won't",
+    "i will not",
+    "i'm unable",
+    "i am unable",
+    "i'm not able",
+    "i am not able",
+    "i'm sorry",
+    "i am sorry",
+    "i apologize",
+    "i refuse",
+    "sorry",
+    "unfortunately",
+    "as an ai",
+    "as a language model",
+)
+
+
+def _looks_like_refusal(raw: str) -> bool:
+    """True when Haiku's reply opens with a known refusal phrase."""
+    if not raw:
+        return False
+    head = raw.strip().lower()
+    return any(head.startswith(p) for p in _REFUSAL_PREFIXES)
+
+
 # Hard cap on auto-name word count (hyphen-separated tokens). The prompt
 # already asks Haiku for two words, but models drift — this enforces it.
 _MAX_NAME_WORDS = 2
@@ -176,6 +211,9 @@ async def generate_name(seed_text: str) -> str | None:
         env=_build_naming_env(),
     )
     if raw is None:
+        return None
+    if _looks_like_refusal(raw):
+        logger.debug("naming: rejected refusal output: %r", raw[:80])
         return None
     name = _sanitize(raw)
     if not name:

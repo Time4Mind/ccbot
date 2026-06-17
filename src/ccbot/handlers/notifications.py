@@ -576,6 +576,31 @@ def reset_card(user_id: int, session_id: str) -> None:
     _cards.pop((user_id, session_id), None)
 
 
+def _recover_from_false_stall(state: CardState) -> None:
+    """Wipe the live-card binding after a false-positive stall_finalize.
+
+    Set when a genuine assistant turn lands AFTER
+    ``maybe_finalize_stalled`` armed ``state.stall_finalized``. Clears
+    msg_id / events / pagination so the next render path goes through
+    ``_send_card`` (fresh message below the stalled stub) rather than
+    ``_edit_card`` (silent edit of the now-finalized card). The stalled
+    stub stays in chat history with its STALL_NOTE — we don't rewrite
+    it; the recovery message appears as a fresh card with
+    ``is_continuation=True`` so the header carries the ``…continued``
+    marker.
+    """
+    if state.pending_edit is not None and not state.pending_edit.done():
+        state.pending_edit.cancel()
+    state.pending_edit = None
+    state.msg_id = None
+    state.events = []
+    state.current_page_idx = None
+    state.is_continuation = True
+    state.last_rendered = ""
+    state.seed_attempted = False
+    state.stall_finalized = False
+
+
 async def cancel_pending_card_edits(timeout: float = 2.0) -> None:
     """Cancel + drain every deferred ``_edit_card`` task across all cards.
 
@@ -1498,6 +1523,12 @@ async def _update_session_card_locked(
     new_event: Event,
     replaced: bool,
 ) -> None:
+    # Recover from a prior false-positive stall_finalize. Wipe the card
+    # binding so this real assistant turn lands on a fresh message
+    # below the stalled stub instead of being silently edited into it.
+    if state.stall_finalized:
+        _recover_from_false_stall(state)
+        await _ensure_seeded(user_id, sess, state)
     # Trigger: long pause → fresh card.
     if _is_stale(state):
         state.msg_id = None
@@ -1619,6 +1650,14 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     ``paginate_events``.
     """
     state = get_card_state(user_id, sess)
+    # Recover from a prior false-positive stall_finalize: wipe the card
+    # binding so this real answer spawns a fresh card below the stalled
+    # stub. Must run before ``_ensure_seeded`` so the seed targets the
+    # cleared events list. NOT triggered by ``maybe_finalize_stalled``'s
+    # own call into ``finalize_task`` — the flag is set only AFTER that
+    # path returns.
+    if state.stall_finalized:
+        _recover_from_false_stall(state)
     # First event after a bot restart: seed JSONL history before
     # appending the final answer so the user sees their context.
     await _ensure_seeded(user_id, sess, state)
@@ -1850,7 +1889,16 @@ def is_card_busy(user_id: int, session_id: str) -> bool:
 # True and this never fires during long thinking / a slow tool. We only
 # trip when the spinner is gone or frozen AND no new renderable event
 # arrived for this long — i.e. the subprocess produced nothing.
+#
+# Two-tier threshold by tail event type. Tools legitimately run for
+# minutes (slow Bash, CHYT, Map-Reduce, network) and Claude routinely
+# spends a comparable amount of time reasoning after the last tool
+# result before emitting the final assistant turn — both produce a
+# silent JSONL tail of ``tool_use``. Pre-textual silence (``text`` /
+# ``thinking`` tail) is rarer and more suspicious because Claude is
+# mid-emit, so the original threshold still applies there.
 STALL_FINALIZE_AFTER_SECONDS = 90.0
+STALL_FINALIZE_TOOL_USE_SECONDS = 300.0
 
 # Note appended to the card when a stall is detected. Card-body strings
 # in this module are not localized (header / "context:" / "goal:" are
@@ -1906,30 +1954,46 @@ async def maybe_finalize_stalled(
     if state.in_menu_view or state.in_kb_mode:
         return False
     # Already finalized — nothing frozen to rescue.
-    if state.events[-1].type in ("final_text", "error"):
+    tail_type = state.events[-1].type
+    if tail_type in ("final_text", "error"):
         return False
     if state.last_event_ts <= 0:
         return False
     when = now if now is not None else time.time()
-    if (when - state.last_event_ts) < STALL_FINALIZE_AFTER_SECONDS:
+    threshold = (
+        STALL_FINALIZE_TOOL_USE_SECONDS
+        if tail_type == "tool_use"
+        else STALL_FINALIZE_AFTER_SECONDS
+    )
+    if (when - state.last_event_ts) < threshold:
         return False
     logger.warning(
-        "stall_finalize user=%d sess=%s wid=%s idle=%.0fs tail=%s",
+        "stall_finalize user=%d sess=%s wid=%s idle=%.0fs tail=%s threshold=%.0fs",
         user_id,
         sess.id,
         sess.window_id,
         when - state.last_event_ts,
-        state.events[-1].type,
+        tail_type,
+        threshold,
         extra={
             "event": "stall_finalize",
             "user_id": user_id,
             "session_id": sess.id,
             "window_id": sess.window_id,
             "idle_seconds": round(when - state.last_event_ts),
-            "tail_type": state.events[-1].type,
+            "tail_type": tail_type,
+            "threshold_seconds": round(threshold),
         },
     )
     await finalize_task(bot, user_id, sess, STALL_NOTE)
+    # Arm the false-positive recovery: if a real assistant turn arrives
+    # after this, the next ``update_session_card`` / ``finalize_task``
+    # spawns a fresh card below the stalled stub instead of silently
+    # editing it. ``finalize_task`` already ran and re-fetched ``state``,
+    # so re-read from ``_cards`` to set the flag on the same instance.
+    post_state = _cards.get((user_id, sess.id))
+    if post_state is not None:
+        post_state.stall_finalized = True
     return True
 
 

@@ -200,6 +200,14 @@ class CardState:
     # transcript still spans many turn-pages. ``/clear`` leaves it True:
     # that is an intentional wipe-to-zero.
     seed_attempted: bool = False
+    # Stall-recovery flag. Set by ``maybe_finalize_stalled`` after it
+    # appends the STALL_NOTE final_text. If the stall was a false positive
+    # (a genuine assistant turn arrives after), the next
+    # ``update_session_card`` / ``finalize_task`` wipes the card binding
+    # and lets ``_send_card`` spawn a fresh message below the stalled
+    # stub — so the recovered answer is visible instead of being silently
+    # edited into a card the user has scrolled past or marked complete.
+    stall_finalized: bool = False
 
 
 def _trim(s: str, limit: int = 200) -> str:

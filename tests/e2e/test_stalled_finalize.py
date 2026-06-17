@@ -21,6 +21,7 @@ import pytest
 from ccbot.handlers import notifications
 from ccbot.handlers.notifications import (
     STALL_FINALIZE_AFTER_SECONDS,
+    STALL_FINALIZE_TOOL_USE_SECONDS,
     STALL_NOTE,
     CardState,
     Event,
@@ -41,11 +42,16 @@ IDLE_PANE = "user@host:~/proj$ \n"
 
 def _seed_frozen_card(*, tail_type: str = "tool_use") -> CardState:
     """Install an active-session card whose tail is non-terminal and whose
-    last event is older than the stall threshold."""
+    last event is older than the per-tail-type stall threshold."""
+    threshold = (
+        STALL_FINALIZE_TOOL_USE_SECONDS
+        if tail_type == "tool_use"
+        else STALL_FINALIZE_AFTER_SECONDS
+    )
     now = time.time()
     state = CardState()
     state.msg_id = 7777
-    state.last_event_ts = now - (STALL_FINALIZE_AFTER_SECONDS + 30)
+    state.last_event_ts = now - (threshold + 30)
     state.last_edit_ts = 0.0
     state.events = [
         Event(type="user_msg", text="do the long thing", started_at=now - 200),

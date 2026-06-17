@@ -26,6 +26,7 @@ import pytest
 from ccbot.handlers import notifications
 from ccbot.handlers.notifications import (
     STALL_FINALIZE_AFTER_SECONDS,
+    STALL_FINALIZE_TOOL_USE_SECONDS,
     STALL_NOTE,
     CardState,
     Event,
@@ -118,9 +119,16 @@ class TestStallFires:
     @pytest.mark.asyncio
     async def test_tool_use_tail_finalizes(self, stub_finalize):
         """A tool_use whose result never came is also a stall fingerprint
-        once the pane has been idle long enough."""
+        once the pane has been idle long enough — but the threshold is
+        the longer ``STALL_FINALIZE_TOOL_USE_SECONDS`` because slow tools
+        and post-tool reasoning are legitimately silent for minutes."""
         user_id, sess = 42, _make_sess()
-        _seed_card(user_id, sess, tail_type="tool_use")
+        _seed_card(
+            user_id,
+            sess,
+            tail_type="tool_use",
+            age_seconds=STALL_FINALIZE_TOOL_USE_SECONDS + 30,
+        )
 
         fired = await maybe_finalize_stalled(
             AsyncMock(),
@@ -133,6 +141,73 @@ class TestStallFires:
 
         assert fired is True
         assert len(stub_finalize) == 1
+
+    @pytest.mark.asyncio
+    async def test_tool_use_within_extended_threshold_no_fire(self, stub_finalize):
+        """A tool_use tail idle for ``STALL_FINALIZE_AFTER_SECONDS`` but
+        under ``STALL_FINALIZE_TOOL_USE_SECONDS`` must NOT finalize — this
+        is the metrics-debug regression: Claude was reasoning ~96 s after
+        the last tool_use before emitting the final answer, which the
+        old single-threshold policy treated as a stall."""
+        user_id, sess = 42, _make_sess()
+        _seed_card(
+            user_id,
+            sess,
+            tail_type="tool_use",
+            age_seconds=STALL_FINALIZE_AFTER_SECONDS + 30,
+        )
+
+        fired = await maybe_finalize_stalled(
+            AsyncMock(),
+            user_id,
+            sess,
+            pane_busy=False,
+            interactive_waiting=False,
+            in_menu=False,
+        )
+
+        assert fired is False
+        assert stub_finalize == []
+
+    @pytest.mark.asyncio
+    async def test_stall_arms_recovery_flag(self, monkeypatch):
+        """After ``finalize_task`` lands the STALL_NOTE, the card state
+        must carry ``stall_finalized=True`` so the next genuine assistant
+        turn spawns a fresh card instead of silently editing the stub."""
+
+        # Real ``finalize_task`` replacement that mirrors the actual
+        # contract: append a ``final_text`` Event so the post-call check
+        # sees a terminal tail (defensive — recovery flag is set after
+        # finalize returns, irrespective of internals).
+        async def _fake_finalize(bot, user_id, sess, final_text):  # type: ignore[no-untyped-def]
+            st = _cards.get((user_id, sess.id))
+            if st is not None:
+                st.events.append(
+                    Event(type="final_text", text=final_text, started_at=time.time())
+                )
+
+        monkeypatch.setattr(notifications, "finalize_task", _fake_finalize)
+
+        user_id, sess = 42, _make_sess()
+        state = _seed_card(
+            user_id,
+            sess,
+            tail_type="tool_use",
+            age_seconds=STALL_FINALIZE_TOOL_USE_SECONDS + 30,
+        )
+        assert state.stall_finalized is False
+
+        fired = await maybe_finalize_stalled(
+            AsyncMock(),
+            user_id,
+            sess,
+            pane_busy=False,
+            interactive_waiting=False,
+            in_menu=False,
+        )
+
+        assert fired is True
+        assert _cards[(user_id, sess.id)].stall_finalized is True
 
 
 # ── Negative: the trigger must stay quiet ─────────────────────────────

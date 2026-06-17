@@ -80,6 +80,21 @@ _conflict_first_seen: float | None = None
 # repetition is pure noise.
 _last_network_err_text: str | None = None
 
+# Sustained network outage ⇒ the silent twin of the Conflict storm. The
+# long-poll getUpdates keeps raising NetworkError/TimedOut and the bot can
+# stay alive-but-deaf, NOT recovering even after the upstream returns (a
+# wedged half-open poll socket). So once network errors persist CONTIGUOUSLY
+# longer than ``NETWORK_MAX_SECONDS`` we exit, exactly like the Conflict
+# path, letting Docker's ``restart: unless-stopped`` respawn a clean instance
+# that opens a fresh getUpdates connection. Contiguity is judged by
+# ``NETWORK_GAP_SECONDS``: a quiet gap longer than that proves a poll
+# succeeded in between (recovery), so the outage clock restarts — sporadic
+# blips on a healthy idle bot never accumulate toward the threshold.
+NETWORK_MAX_SECONDS = 180.0
+NETWORK_GAP_SECONDS = 45.0
+_network_first_seen: float | None = None
+_network_last_seen: float | None = None
+
 
 # Module-globals owned by the lifecycle hooks.
 session_monitor: SessionMonitor | None = None
@@ -420,6 +435,7 @@ async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> 
       traceback AND whatever update / chat context we can extract.
     """
     global _conflict_streak, _conflict_first_seen, _last_network_err_text
+    global _network_first_seen, _network_last_seen
 
     err = context.error
     if isinstance(err, Conflict):
@@ -450,12 +466,34 @@ async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> 
     _conflict_first_seen = None
 
     if isinstance(err, (NetworkError, TimedOut)):
+        now = time.monotonic()
+        # A quiet gap longer than NETWORK_GAP_SECONDS means a getUpdates
+        # poll succeeded in between: the prior outage recovered, so reset
+        # the outage clock instead of carrying stale elapsed time forward.
+        if _network_last_seen is None or now - _network_last_seen > NETWORK_GAP_SECONDS:
+            _network_first_seen = now
+        _network_last_seen = now
+        # _network_first_seen is always set in tandem with _network_last_seen
+        # above; the fallback only satisfies the type checker on the
+        # first-ever call (elapsed=0 is the correct fresh-start value anyway).
+        first_seen = _network_first_seen if _network_first_seen is not None else now
+        elapsed = now - first_seen
         text = f"transient network error: {err}"
         if text != _last_network_err_text:
             logger.info("%s", text)
             _last_network_err_text = text
+        if elapsed >= NETWORK_MAX_SECONDS:
+            logger.critical(
+                "Sustained getUpdates network failure (%.0fs, no successful "
+                "poll) — long-poll not recovering. Exiting so the supervisor "
+                "restarts a clean instance.",
+                elapsed,
+            )
+            _terminate_for_sustained_conflict()
         return
     _last_network_err_text = None
+    _network_first_seen = None
+    _network_last_seen = None
     if isinstance(err, RetryAfter):
         logger.info("Telegram RetryAfter: %s", err)
         return

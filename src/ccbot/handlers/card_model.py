@@ -1058,6 +1058,34 @@ def _format_kb_prompt(raw: str) -> str:
     return sep.join(_KB_HARD_BREAK_JOIN.join(p) for p in refined)
 
 
+def _rule_between_options(body: str) -> str:
+    """Splice a ``─────`` rule before each numbered option (after the first).
+
+    Used by the box-frame branch of ``_render_card``. That branch renders
+    the de-framed prompt inside a code fence, which suppresses MarkdownV2 —
+    so options can't be separated by markup the way the frameless path does.
+    Instead we splice literal ``─────`` rule lines between options; inside
+    the fence they render as plain monospace dividers, giving the same
+    archive-style separation without re-introducing the blockquote-collapse
+    the fence exists to prevent.
+
+    Each option keeps its trailing preview/description lines (they ride with
+    the option until the next numbered row). Pre-existing source rule lines
+    are dropped so separators never double up.
+    """
+    out: list[str] = []
+    seen_option = False
+    for line in body.splitlines():
+        if _RULE_LINE_RE.match(line.strip()):
+            continue  # absorbed by the generated rules
+        if _NUMBERED_OPTION_RE.match(line):
+            if seen_option:
+                out.append("─────")
+            seen_option = True
+        out.append(line)
+    return "\n".join(out)
+
+
 def _sanitize_prompt_block(text: str) -> str:
     """Strip terminal box-drawing borders from a captured interactive prompt.
 
@@ -1114,6 +1142,10 @@ def _render_card(
             # and render as a fenced code block — literal monospace, no
             # MarkdownV2 escaping, no blockquote collapse. Guard a stray ```.
             body = _sanitize_prompt_block(raw)
+            # Splice ───── rules between numbered options so they're visibly
+            # separated inside the fence (which suppresses MarkdownV2, so the
+            # frameless path's markup dividers can't apply here).
+            body = _rule_between_options(body)
             prompt_part = body if "```" in body else f"```\n{body}\n```"
         else:
             # Format pane lines into explicit blocks: each numbered

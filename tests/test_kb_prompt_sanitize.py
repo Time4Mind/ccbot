@@ -93,6 +93,21 @@ class TestKbModeRender:
         out = _render_card(_sess(), st, user_id=1)
         assert "/data/adb/service.d/99-ccbot.sh" in out
 
+    def test_options_separated_by_divider(self):
+        # Even inside the fenced box-frame body, numbered options are split
+        # by a literal ───── rule (the fence suppresses MarkdownV2, so the
+        # frameless path's markup dividers can't apply). The rule precedes
+        # options 2 and 3 only — option 1 keeps its trailing preview line and
+        # gets no leading divider → exactly two dividers in the prompt body.
+        st = CardState()
+        st.in_kb_mode = True
+        st.kb_prompt = BOXED_PROMPT
+        out = _render_card(_sess(), st, user_id=1)
+        body = out.split("⌨ *Waiting for your input:*", 1)[1]
+        assert "─────\n2. Termux:Boot" in body
+        assert "─────\n3. Оба слоя" in body
+        assert body.count("─────") == 2
+
 
 # A normal AskUserQuestion with NO box frame — the long-standing working
 # case (incl. a benign ── divider). The fix must be a strict no-op here.
@@ -224,10 +239,13 @@ class TestKbModeRenderIntegration:
         out = _render_card(_sess(), st, user_id=1)
         assert "\n\n─────\n\n⌨ *Waiting for your input:*\n\n" in out
 
-    def test_box_frame_path_unaffected(self):
-        # Code-fenced rendering preserves whitespace natively; the
-        # divider/hard-break tricks must NOT be applied there (would
-        # inject the spaces / dividers INTO the code block).
+    def test_box_frame_path_no_hard_breaks(self):
+        # Code-fenced rendering preserves whitespace natively, so the
+        # frameless path's CommonMark hard-break trick (``  \n``) must NOT
+        # leak into the fence — it would surface as literal trailing spaces
+        # in the monospace block. Option ``─────`` dividers DO apply here
+        # (see TestKbModeRender.test_options_separated_by_divider); they're
+        # plain ``\n``-joined rule lines, no hard breaks.
         st = CardState()
         st.in_kb_mode = True
         st.kb_prompt = BOXED_PROMPT
@@ -235,5 +253,3 @@ class TestKbModeRenderIntegration:
         body_after_fence = out.split("```", 1)[1]
         body_inside = body_after_fence.split("```", 1)[0]
         assert "  \n" not in body_inside
-        # The split-by-divider helper must not touch box-frame paths.
-        assert "─────" not in body_inside

@@ -459,19 +459,53 @@ async def _seed_events_from_jsonl(
     return events
 
 
+def _transcript_mtime(sess: Session) -> float:
+    """Return the mtime (epoch seconds) of the session's JSONL transcript,
+    or -1.0 if the path can't be resolved / the file is missing.
+
+    Cheap (single ``stat``) — used by ``_ensure_seeded`` to gate empty-seed
+    retries on a restored session without re-parsing the whole transcript.
+    """
+    if not sess.window_id:
+        return -1.0
+    from ..session_claude_io import build_session_file_path
+
+    state = session_manager.get_window_state(sess.window_id)
+    if not state.session_id or not state.cwd:
+        return -1.0
+    fp = build_session_file_path(state.session_id, state.cwd)
+    if fp is None:
+        return -1.0
+    try:
+        return fp.stat().st_mtime
+    except OSError:
+        return -1.0
+
+
 async def _ensure_seeded(user_id: int, sess: Session, state: CardState) -> None:
     """Seed ``state.events`` from JSONL on first access after restart.
 
-    No-op when events already exist or when seeding has been attempted
-    before for this state. Idempotent — ``state.seed_attempted`` guards
-    against repeated JSONL reads. A wipe site that wants a re-seed clears
-    ``seed_attempted`` (see ``CardState.seed_attempted``).
+    No-op when events already exist. Latches ``seed_attempted`` only on a
+    *successful* (non-empty) seed: a freshly restored (``claude --resume``)
+    session builds its card before claude has flushed the resumed transcript
+    to disk, so an early read returns [] — latching then would block the
+    seed forever and the history would never reach the card. An empty read
+    instead leaves the flag clear and retries on a later event, gated on the
+    transcript mtime advancing (``state.seed_mtime``) so a burst of events
+    during the resume window doesn't re-parse a multi-MB JSONL each time. A
+    wipe site that wants a re-seed clears ``seed_attempted`` + ``seed_mtime``
+    (see ``CardState.seed_attempted``).
     """
     if state.events:
         return
     if state.seed_attempted:
         return
-    state.seed_attempted = True
+    mtime = _transcript_mtime(sess)
+    if mtime >= 0.0 and mtime == state.seed_mtime:
+        # Nothing new on disk since the last empty attempt — skip the
+        # re-parse and wait for the transcript to grow.
+        return
+    state.seed_mtime = mtime
     # User-settable depth — Settings → Card history (10/20/50/100).
     try:
         max_turns = int(
@@ -484,6 +518,7 @@ async def _ensure_seeded(user_id: int, sess: Session, state: CardState) -> None:
     seeded = await _seed_events_from_jsonl(sess, max_turns=max_turns)
     if seeded:
         state.events = seeded
+        state.seed_attempted = True
         logger.info(
             "card_seeded user=%d sess=%s events=%d",
             user_id,
@@ -598,6 +633,7 @@ def _recover_from_false_stall(state: CardState) -> None:
     state.is_continuation = True
     state.last_rendered = ""
     state.seed_attempted = False
+    state.seed_mtime = -1.0
     state.stall_finalized = False
 
 
@@ -902,6 +938,7 @@ def release_card_message(user_id: int, session_id: str) -> None:
     # to re-seed so its footer page counter reflects the real recent
     # turn-history instead of collapsing to ``1/1``.
     state.seed_attempted = False
+    state.seed_mtime = -1.0
     logger.info(
         "card_release user=%d sess=%s",
         user_id,
@@ -1541,6 +1578,7 @@ async def _update_session_card_locked(
         # at a time and the footer page counter shows ``1/1`` until a
         # second turn completes — even though the transcript is long.
         state.seed_attempted = False
+        state.seed_mtime = -1.0
         await _ensure_seeded(user_id, sess, state)
 
     if not replaced and not _duplicate_of_seeded(state.events, new_event):

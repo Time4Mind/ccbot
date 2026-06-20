@@ -200,6 +200,15 @@ class CardState:
     # transcript still spans many turn-pages. ``/clear`` leaves it True:
     # that is an intentional wipe-to-zero.
     seed_attempted: bool = False
+    # Transcript mtime (epoch seconds) at the last *empty* seed attempt, or
+    # -1.0 if never attempted. A freshly restored (``claude --resume``)
+    # session creates its card before claude has flushed the resumed
+    # transcript, so an early seed reads [] and must retry on a later event.
+    # ``_ensure_seeded`` only re-parses the (possibly multi-MB) JSONL once
+    # this advances, so a burst of events during the resume window costs one
+    # stat() each, not a full re-parse. Reset alongside ``seed_attempted``
+    # at the non-destructive re-seed sites.
+    seed_mtime: float = -1.0
     # Stall-recovery flag. Set by ``maybe_finalize_stalled`` after it
     # appends the STALL_NOTE final_text. If the stall was a false positive
     # (a genuine assistant turn arrives after), the next

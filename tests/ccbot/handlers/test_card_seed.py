@@ -104,25 +104,119 @@ class TestEnsureSeededIdempotent:
         assert called["path"] == 0  # no JSONL read because events present
         assert len(state.events) == 1  # untouched
 
-    async def test_seed_attempted_only_once(self, monkeypatch) -> None:
+    async def test_successful_seed_latches(self, tmp_path: Path, monkeypatch) -> None:
+        # A non-empty seed sets ``seed_attempted`` so later calls short-out.
         import ccbot.session_claude_io as scio
         from ccbot.session import Session, session_manager
 
-        ws = session_manager.get_window_state("@seed-once")
+        jsonl = tmp_path / "session.jsonl"
+        _write_jsonl(
+            jsonl,
+            [
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "hi"},
+                    "timestamp": "2026-05-15T09:00:00Z",
+                },
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "ok"}],
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                    },
+                    "timestamp": "2026-05-15T09:00:01Z",
+                },
+            ],
+        )
+        ws = session_manager.get_window_state("@seed-latch")
         ws.session_id = "sess-uuid"
         ws.cwd = "/some/dir"
-        called = {"path": 0}
-
-        def _bp(_sid, _cwd):
-            called["path"] += 1
-            return Path("/nonexistent-seed.jsonl")  # not exists → empty seed
-
-        monkeypatch.setattr(scio, "build_session_file_path", _bp)
+        monkeypatch.setattr(scio, "build_session_file_path", lambda _s, _c: jsonl)
         state = CardState()
-        sess = Session(id="x", name="y", window_id="@seed-once")
+        sess = Session(id="x", name="y", window_id="@seed-latch")
+        await _ensure_seeded(1, sess, state)
+        assert len(state.events) >= 1
+        assert state.seed_attempted is True
+
+    async def test_empty_seed_not_latched_retries_when_transcript_lands(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # Regression: a restored (``claude --resume``) session builds its
+        # card before claude has flushed the resumed transcript. The early
+        # read returns [] — it must NOT latch ``seed_attempted``, so that a
+        # later event (once the transcript is on disk) seeds the history.
+        import ccbot.session_claude_io as scio
+        from ccbot.session import Session, session_manager
+
+        ws = session_manager.get_window_state("@seed-restore")
+        ws.session_id = "sess-uuid"
+        ws.cwd = "/some/dir"
+        jsonl = tmp_path / "resumed.jsonl"  # not flushed yet
+        monkeypatch.setattr(scio, "build_session_file_path", lambda _s, _c: jsonl)
+        state = CardState()
+        sess = Session(id="x", name="y", window_id="@seed-restore")
+
+        # 1) transcript missing → empty seed, not latched.
+        await _ensure_seeded(1, sess, state)
+        assert state.events == []
+        assert state.seed_attempted is False
+
+        # 2) claude flushes the resumed transcript.
+        _write_jsonl(
+            jsonl,
+            [
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "earlier turn"},
+                    "timestamp": "2026-05-15T09:00:00Z",
+                },
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "earlier reply"}],
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 10, "output_tokens": 5},
+                    },
+                    "timestamp": "2026-05-15T09:00:01Z",
+                },
+            ],
+        )
+
+        # 3) next event re-seeds (mtime advanced) → history lands + latches.
+        await _ensure_seeded(1, sess, state)
+        assert len(state.events) >= 1
+        assert state.seed_attempted is True
+
+    async def test_unchanged_empty_transcript_not_reparsed(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # An existing but content-less transcript yields []; the mtime gate
+        # must suppress re-parsing it on every event until it changes.
+        import ccbot.handlers.notifications as notif
+        import ccbot.session_claude_io as scio
+        from ccbot.session import Session, session_manager
+
+        ws = session_manager.get_window_state("@seed-gate")
+        ws.session_id = "sess-uuid"
+        ws.cwd = "/some/dir"
+        f = tmp_path / "empty.jsonl"
+        f.write_text("")  # exists, empty → empty seed
+        monkeypatch.setattr(scio, "build_session_file_path", lambda _s, _c: f)
+        calls = {"n": 0}
+
+        async def _spy(_sess, max_turns=0):
+            calls["n"] += 1
+            return []
+
+        monkeypatch.setattr(notif, "_seed_events_from_jsonl", _spy)
+        state = CardState()
+        sess = Session(id="x", name="y", window_id="@seed-gate")
         await _ensure_seeded(1, sess, state)
         await _ensure_seeded(1, sess, state)
         await _ensure_seeded(1, sess, state)
-        # Even with three calls, the path resolver fires exactly once —
-        # guarded by ``state.seed_attempted``.
-        assert called["path"] == 1
+        # mtime never advanced → parsed exactly once; never latched.
+        assert calls["n"] == 1
+        assert state.seed_attempted is False

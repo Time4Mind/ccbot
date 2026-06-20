@@ -73,6 +73,30 @@ async def _capture_with_scrollback(wid: str) -> str | None:
     return None
 
 
+async def _clear_pane_history(wid: str) -> None:
+    """Drop the pane's scrollback buffer.
+
+    ``_capture_with_scrollback`` reads ~100 lines back, which can still
+    contain a PREVIOUS ``/usage`` render. After a weekly reset that stale
+    render shows last week's high percentage (e.g. 78%) while the live
+    week is ~2% — and the parser, walking both, can surface the stale
+    value and fire a phantom quota alert. Clearing history before each
+    read guarantees the parse only sees the fresh modal.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tmux",
+            "clear-history",
+            "-t",
+            wid,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.communicate()
+    except Exception as e:
+        logger.debug("clear_pane_history failed: %s", e)
+
+
 async def _poll_usage_modal(wid: str) -> object | None:
     """Send /usage, poll the pane for quota rows, dismiss with Escape.
 
@@ -83,7 +107,10 @@ async def _poll_usage_modal(wid: str) -> object | None:
     value that later updated under us (observed: bot showed 43%
     while the modal had since stabilised at 45%). Now we require
     TWO consecutive captures with identical session / week / week-
-    Sonnet percentages before we trust the read.
+    Sonnet percentages before we trust the read. If the modal never
+    settles within the budget we return ``None`` (caller treats it as
+    "unavailable") rather than publishing an unsettled / stale frame —
+    that was firing phantom quota alerts.
     """
     from ..terminal_parser import extract_usage_breakdown, parse_usage_output
 
@@ -91,6 +118,11 @@ async def _poll_usage_modal(wid: str) -> object | None:
     resolved = False
     last_triple: tuple[int | None, int | None, int | None] | None = None
     try:
+        # Dismiss any leftover modal / feedback prompt so /usage opens
+        # fresh, and drop stale scrollback so a previous (pre-reset)
+        # render can't be parsed as the current week.
+        await tmux_manager.send_keys(wid, "Escape", enter=False, literal=False)
+        await _clear_pane_history(wid)
         await tmux_manager.send_keys(wid, "/usage")
         for _ in range(60):  # 60 × 200 ms = 12 s
             await asyncio.sleep(0.2)
@@ -121,11 +153,12 @@ async def _poll_usage_modal(wid: str) -> object | None:
     except Exception as e:
         logger.debug("fetch_claude_usage: tmux failed: %s", e)
         return None
-    # If we ran out of polls before two-agreement, still return the
-    # last seen result rather than nothing — better a 1-step-stale
-    # value than the "unavailable" empty state. The 12-s budget should
-    # normally be plenty for the modal to settle.
-    return info if (resolved or info is not None) else None
+    # Only publish a SETTLED read (two consecutive agreeing captures). An
+    # unsettled frame — a transitional value, or a stale pre-reset render
+    # lingering in scrollback — was being published and tripping phantom
+    # quota-threshold alerts. A missed poll (None) is harmless; the loop
+    # retries on the next cadence.
+    return info if resolved else None
 
 
 async def fetch_claude_usage() -> object | None:

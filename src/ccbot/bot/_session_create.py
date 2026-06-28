@@ -11,16 +11,19 @@ Lives in its own module so ``messages.py`` stays under the 600-LOC line.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from telegram.ext import ContextTypes
 
+from ..handlers.directory_browser import take_pending_text
 from ..handlers.message_sender import safe_edit, safe_send
 from ..handlers.notifications import (
     detach_paused_cards_at_message,
     paint_card_on_carrier,
 )
 from ..local_terminal import open_terminal_for_window
+from ..naming import maybe_auto_name
 from ..session import session_manager
 from ..tmux_manager import tmux_manager
 
@@ -165,16 +168,17 @@ async def create_and_activate_session(
         if ws.session_id and not sess.claude_session_id:
             session_manager.set_session_claude_id(sess.id, ws.session_id)
 
-    # Forward any pending text held while the picker was up.
-    pending_text = context.user_data.get("_pending_text") if context.user_data else None
+    # Forward any pending text held while the picker was up. ``take_pending_text``
+    # drops a stale stash (older than PENDING_TEXT_TTL_S) so a message typed
+    # hours ago against a since-gone session can never be injected here — the
+    # 2026-06-28 "medical insurance" misroute.
+    pending_text = take_pending_text(context.user_data)
     if pending_text:
         logger.debug(
             "Forwarding pending text to window %s (len=%d)",
             created_wname,
             len(pending_text),
         )
-        if context.user_data is not None:
-            context.user_data.pop("_pending_text", None)
         send_ok, send_msg = await session_manager.send_to_window(
             created_wid, pending_text
         )
@@ -184,4 +188,12 @@ async def create_and_activate_session(
                 context.bot,
                 user.id,
                 f"❌ Failed to send pending message: {send_msg}",
+            )
+        elif len(pending_text) >= 20:
+            # Name the session from its actual first human message (this
+            # pending text), not from whatever inbound happens to land
+            # first. ``maybe_auto_name`` is one-shot (re-entrancy guard),
+            # so a later message can't override it.
+            asyncio.create_task(
+                maybe_auto_name(sess.id, pending_text, getattr(user, "id", None))
             )

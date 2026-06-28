@@ -85,8 +85,11 @@ async def test_text_with_no_active_session_opens_dir_browser(fake_tmux, fake_bot
     await text_handler(update, ctx)
 
     assert fake_tmux.sent == []
-    # The pending text is held for forwarding after session creation.
-    assert ctx.user_data.get("_pending_text") == "hello there"
+    # The pending text is held (timestamped) for forwarding after session
+    # creation; ``take_pending_text`` reads it back with a freshness guard.
+    from ccbot.handlers.directory_browser import take_pending_text
+
+    assert take_pending_text(ctx.user_data) == "hello there"
 
 
 @pytest.mark.asyncio

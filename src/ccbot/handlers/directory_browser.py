@@ -12,6 +12,7 @@ Key components:
   - clear_browse_state: Clear browsing state from user_data
 """
 
+import logging
 import os
 import time
 from collections.abc import Callable
@@ -54,6 +55,65 @@ UNBOUND_WINDOWS_KEY = "unbound_windows"  # Cache of (name, cwd) tuples
 STATE_SELECTING_SESSION = "selecting_session"
 SESSIONS_KEY = "cached_sessions"  # Cache of ClaudeSession list[Any]
 SESSIONS_PAGE_KEY = "sessions_page"  # current page index in session picker
+
+logger = logging.getLogger(__name__)
+
+# Pending-text stash: a message the user typed while no active session
+# existed is held in user_data until a session is created, then forwarded.
+PENDING_TEXT_KEY = "_pending_text"
+
+# Max age before a stashed pending message is treated as abandoned.
+# context.user_data lives in memory and is NOT cleared between messages —
+# only a bot restart wipes it. Without an expiry a stash can survive for
+# hours and then be injected into an unrelated session created much later
+# (the 2026-06-28 "medical insurance" misroute: a 01:05 message resurfaced
+# in a 10:34 session). 10 min is generous for a browser/picker flow yet
+# kills any multi-hour leak.
+PENDING_TEXT_TTL_S = 600.0
+
+
+def stash_pending_text(user_data: dict[str, Any] | None, text: str) -> None:
+    """Hold the user's text while a directory/session picker is up.
+
+    Stamped with a timestamp so ``take_pending_text`` can reject a stale
+    stash. See ``PENDING_TEXT_TTL_S``.
+    """
+    if user_data is not None:
+        user_data[PENDING_TEXT_KEY] = {"text": text, "ts": time.time()}
+
+
+def take_pending_text(
+    user_data: dict[str, Any] | None, max_age_s: float | None = PENDING_TEXT_TTL_S
+) -> str | None:
+    """Pop the stashed pending text, returning it only if still fresh.
+
+    Always clears the slot (a leaked stash must never re-fire). Returns
+    None when absent, empty, or older than ``max_age_s``. Tolerates the
+    legacy bare-string format (treated as fresh) for state in flight
+    across a deploy.
+    """
+    if not user_data:
+        return None
+    raw = user_data.pop(PENDING_TEXT_KEY, None)
+    if raw is None:
+        return None
+    if isinstance(raw, str):  # legacy pre-TTL format
+        return raw or None
+    if not isinstance(raw, dict):
+        return None
+    text = raw.get("text")
+    if not text:
+        return None
+    age = time.time() - float(raw.get("ts", 0.0))
+    if max_age_s is not None and age > max_age_s:
+        logger.info(
+            "Dropping stale pending text (age=%.0fs > %.0fs, len=%d)",
+            age,
+            max_age_s,
+            len(text),
+        )
+        return None
+    return text
 
 
 def clear_browse_state(user_data: dict[str, Any] | None) -> None:

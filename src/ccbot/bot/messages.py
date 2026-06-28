@@ -34,6 +34,7 @@ from ..handlers.directory_browser import (
     STATE_SELECTING_SESSION,
     STATE_SELECTING_WINDOW,
     build_directory_browser,
+    stash_pending_text,
 )
 from ..handlers.interactive_ui import (
     get_interactive_window,
@@ -776,7 +777,7 @@ async def _resolve_active_window(
             context.user_data[BROWSE_PATH_KEY] = start_path
             context.user_data[BROWSE_PAGE_KEY] = 0
             context.user_data[BROWSE_DIRS_KEY] = subdirs
-            context.user_data["_pending_text"] = text
+            stash_pending_text(context.user_data, text)
         await safe_reply(update.message, msg_text, reply_markup=keyboard)
         return None
 

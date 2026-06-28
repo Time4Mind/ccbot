@@ -24,6 +24,7 @@ from ...handlers.directory_browser import (
     UNBOUND_WINDOWS_KEY,
     build_directory_browser,
     clear_window_picker_state,
+    take_pending_text,
 )
 from ...handlers.message_sender import safe_edit, safe_send
 from ...session import session_manager
@@ -77,11 +78,7 @@ async def handle(
 
         await safe_edit(query, f"✅ Bound to window `{display}`")
 
-        pending_text = (
-            context.user_data.get("_pending_text") if context.user_data else None
-        )
-        if context.user_data is not None:
-            context.user_data.pop("_pending_text", None)
+        pending_text = take_pending_text(context.user_data)
         if pending_text:
             send_ok, send_msg = await session_manager.send_to_window(
                 selected_wid, pending_text

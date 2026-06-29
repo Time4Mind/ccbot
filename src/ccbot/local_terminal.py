@@ -167,10 +167,17 @@ def _build_tmux_command(window_id: str) -> str:
     some macOS versions) Terminal.app's ``do script`` exec ``X``
     *without* a shell wrapper, so ``\\;``, ``||``, and ``;`` lose
     their shell semantics. Wrapping in ``bash -c`` makes the operator
-    semantics explicit. The trailing ``exec ${SHELL:-bash} -l`` keeps
-    the window open after the user detaches. ``tmux`` is invoked by
-    absolute path because iTerm's bash inherits a stripped PATH on
-    macOS.
+    semantics explicit. ``tmux`` is invoked by absolute path because
+    iTerm's bash inherits a stripped PATH on macOS.
+
+    The trailing ``exec ${SHELL:-bash} -l`` is *conditional*: it only
+    runs while the per-window group session is still alive. On a manual
+    detach (``Ctrl-b d``) the group survives, so the shell stays and
+    scrollback is preserved. On a session kill ``kill_window`` tears the
+    group down (see ``tmux_manager._kill_grouped_session_for_window``),
+    so ``has-session`` fails, the wrapper exits cleanly, and the host
+    terminal closes the now-orphaned tab instead of leaving it as a bare
+    login shell.
     """
     session_name = config.tmux_session_name
     session_q = shlex.quote(session_name)
@@ -179,11 +186,13 @@ def _build_tmux_command(window_id: str) -> str:
     group_q = shlex.quote(group)
     target_q = shlex.quote(f"{group}:{window_id}")
     # Each tmux call is independent — failure of one (e.g. group already
-    # exists) does not abort the chain. The trailing exec always runs.
+    # exists) does not abort the chain. The trailing exec runs only if the
+    # group still exists after attach returns (detach, not kill).
     inner = (
         f"{tmux_bin} new-session -d -t {session_q} -s {group_q} 2>/dev/null; "
         f"{tmux_bin} select-window -t {target_q} 2>/dev/null; "
         f"{tmux_bin} attach-session -t {group_q}; "
+        f"{tmux_bin} has-session -t {group_q} 2>/dev/null && "
         f"exec ${{SHELL:-bash}} -l"
     )
     return f"bash -c {shlex.quote(inner)}"
@@ -204,7 +213,11 @@ def _build_linux_shell_cmd(window_id: str) -> str:
 
     The trailing ``exec bash -i`` keeps the window open after the user
     detaches from tmux (otherwise the window would snap shut and the
-    user would lose terminal scrollback).
+    user would lose terminal scrollback). It is *conditional* on the
+    group session still existing: a manual detach leaves it alive (keep
+    the shell), but a session kill tears the group down (see
+    ``tmux_manager._kill_grouped_session_for_window``), so the wrapper
+    exits and the emulator closes the orphaned tab.
     """
     session = shlex.quote(config.tmux_session_name)
     group = group_session_name(window_id)
@@ -214,7 +227,7 @@ def _build_linux_shell_cmd(window_id: str) -> str:
         f"tmux new-session -d -t {session} -s {group_q} 2>/dev/null; "
         f"tmux select-window -t {target_q} 2>/dev/null; "
         f"tmux attach-session -t {group_q}; "
-        "exec bash -i"
+        f"tmux has-session -t {group_q} 2>/dev/null && exec bash -i"
     )
 
 

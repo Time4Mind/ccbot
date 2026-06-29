@@ -70,6 +70,19 @@ class TestBuildTmuxCommand:
         cmd = _build_tmux_command("@1")
         assert "exec ${SHELL:-bash} -l" in cmd
 
+    def test_exec_guarded_by_has_session(self) -> None:
+        """The tail shell is conditional: it only runs while the group
+        session is still alive (manual detach). On a session kill the
+        group is gone, ``has-session`` fails, and the wrapper exits so
+        the host terminal closes the orphaned tab instead of leaving a
+        bare login shell."""
+        cmd = _build_tmux_command("@5")
+        assert "has-session -t" in cmd
+        # The guard must short-circuit the exec — ``&&`` immediately
+        # before it.
+        idx = cmd.index("has-session")
+        assert "&& exec ${SHELL:-bash} -l" in cmd[idx:]
+
     def test_wrapped_in_bash_c_for_shell_semantics(self) -> None:
         """Without `bash -c`, iTerm/Terminal.app exec the command without
         a shell — ``;`` loses meaning, the chain falls apart."""
@@ -123,6 +136,15 @@ class TestLinuxTemplates:
         assert "select-window -t" in cmd
         assert "attach-session -t" in cmd
         assert "exec bash -i" in cmd
+
+    def test_linux_exec_guarded_by_has_session(self) -> None:
+        """Linux mirrors macOS: the tail shell only survives a manual
+        detach (group still alive). On kill the group is torn down so
+        ``has-session`` fails and the emulator closes the tab."""
+        cmd = _build_linux_shell_cmd("@7")
+        assert "has-session -t" in cmd
+        idx = cmd.index("has-session")
+        assert "&& exec bash -i" in cmd[idx:]
 
     def test_expand_linux_template_returns_argv(self) -> None:
         argv = _expand_linux_template("gnome-terminal -- bash -c {shell}", "@5")

@@ -66,6 +66,28 @@ _OPTION_LINE_RE = re.compile(r"^[\s❯>]*?(\d+)\.\s+(.+?)\s*$")
 KB_CLEAR_CONFIRM_POLLS = 2
 _kb_clear_miss: dict[tuple[int, str], int] = {}
 
+# Auto-approve escalation. ``auto_approve=on`` sends the ``N. Yes`` digit +
+# Enter into the pane, but the number-key shortcut does NOT clear every
+# blocking prompt — a sub-agent (``Agent``/``Task``) WebFetch/WebSearch
+# approval doesn't accept the top-level hotkey, so the keystroke lands on a
+# busy REPL and the prompt survives. Without a cap, the poller re-fires the
+# same auto-Yes every cycle forever AND (because ``_maybe_auto_approve``
+# returns True each time) it permanently shadows the kb-mode / bg-status
+# surface — leaving the session wedged with no manual escape hatch.
+#
+# Verification is cross-poll: each poll compares the prompt's signature to
+# the last one we auto-approved. Same signature next poll ⇒ the previous
+# keystroke did NOT clear it. After AUTO_APPROVE_MAX_ATTEMPTS consecutive
+# no-progress attempts on an identical prompt we STOP auto-approving and
+# return False, letting the caller surface the kb-mode keyboard (active
+# session) or the ❓ bg-status badge (background) so the user can drive it
+# by hand. A genuinely different prompt (new domain / file) has a different
+# signature ⇒ the counter resets, so normal one-shot approvals are
+# untouched.
+AUTO_APPROVE_MAX_ATTEMPTS = 3
+# (user_id, window_id) -> (prompt_signature, consecutive_attempts)
+_auto_approve_attempts: dict[tuple[int, str], tuple[str, int]] = {}
+
 
 def _parse_first_yes_option(pane_text: str) -> str | None:
     """First option line whose label starts with "Yes". Returns its number."""
@@ -78,11 +100,33 @@ def _parse_first_yes_option(pane_text: str) -> str | None:
     return None
 
 
+def _auto_approve_signature(pane_text: str) -> str:
+    """Stable identity of the on-screen prompt for attempt-tracking.
+
+    Prefers the extracted prompt body + name so distinct prompts (a
+    different fetch domain, a different file) don't share a counter, while
+    redraws of the SAME (spinner-free) permission dialog collapse to one
+    signature. Falls back to the numbered option block when extraction
+    returns None.
+    """
+    content = extract_interactive_content(pane_text)
+    if content is not None:
+        return f"{content.name}\x1f{content.content}"
+    opts = [
+        f"{m.group(1)}.{m.group(2)}"
+        for line in pane_text.splitlines()
+        if (m := _OPTION_LINE_RE.match(line))
+    ]
+    return "\n".join(opts)
+
+
 async def _maybe_auto_approve(user_id: int, window_id: str, pane_text: str) -> bool:
     """Auto-Yes on the in-pane Yes/No prompt when the user opted in.
 
     Returns True iff a key was sent — caller should then skip surfacing the
-    UI to TG.
+    UI to TG. Returns False (letting the caller surface the manual keyboard)
+    when the same prompt has survived ``AUTO_APPROVE_MAX_ATTEMPTS`` auto-Yes
+    keystrokes without clearing — see ``_auto_approve_attempts``.
     """
     mode = session_manager.get_user_settings(user_id).get("auto_approve", "off")
     if mode != "on":
@@ -90,15 +134,36 @@ async def _maybe_auto_approve(user_id: int, window_id: str, pane_text: str) -> b
     digit = _parse_first_yes_option(pane_text)
     if digit is None:
         return False
+
+    key = (user_id, window_id)
+    sig = _auto_approve_signature(pane_text)
+    prev_sig, attempts = _auto_approve_attempts.get(key, ("", 0))
+    attempts = attempts + 1 if sig == prev_sig else 1
+    if attempts > AUTO_APPROVE_MAX_ATTEMPTS:
+        # Give up: the prompt isn't responding to the auto-Yes hotkey.
+        # Keep the entry so we stay escalated (return False) until the
+        # prompt clears and ``_reconcile_no_ui_state`` pops the counter.
+        _auto_approve_attempts[key] = (sig, attempts)
+        logger.warning(
+            "auto_approve giving up after %d attempts (prompt not clearing) "
+            "for user=%d window=%s — surfacing manual keyboard",
+            AUTO_APPROVE_MAX_ATTEMPTS,
+            user_id,
+            window_id,
+        )
+        return False
+
     # Number-key shortcut: typing the digit picks the option, Enter submits.
     try:
         await tmux_manager.send_keys(window_id, digit, enter=True)
     except Exception as e:
         logger.debug("auto_approve send_keys failed: %s", e)
         return False
+    _auto_approve_attempts[key] = (sig, attempts)
     logger.info(
-        "Auto-approved interactive prompt (opt=%s) for user=%d window=%s",
+        "Auto-approved interactive prompt (opt=%s, attempt=%d) for user=%d window=%s",
         digit,
+        attempts,
         user_id,
         window_id,
     )
@@ -245,6 +310,7 @@ async def _surface_new_interactive_ui(
 async def _reconcile_no_ui_state(
     bot: Bot,
     user_id: int,
+    window_id: str,
     pane_text: str,
     sess: "Session | None",
     is_bg_session: bool,
@@ -254,10 +320,18 @@ async def _reconcile_no_ui_state(
     Clears a stale bg-session ❓ stash and flips the active card out of a
     dismissed slash-command kb-mode picker.
     """
+    no_ui = not is_interactive_ui(pane_text)
+
+    # The prompt is gone — reset the auto-approve escalation counter so the
+    # NEXT prompt on this window starts fresh (and a prior "gave up" state
+    # doesn't immediately re-escalate an unrelated future prompt).
+    if no_ui:
+        _auto_approve_attempts.pop((user_id, window_id), None)
+
     # No interactive UI on this pane right now. If we previously stashed
     # one for a bg session (e.g. claude dismissed the prompt without our
     # input), clear it so the ❓ badge doesn't lie.
-    if is_bg_session and sess is not None and not is_interactive_ui(pane_text):
+    if is_bg_session and sess is not None and no_ui:
         if bg_status.clear_pending_ui(user_id, sess.id):
             await refresh_panel(bot, user_id)
 
@@ -418,7 +492,9 @@ async def update_status_message(
         ):
             return
 
-    await _reconcile_no_ui_state(bot, user_id, pane_text, sess, is_bg_session)
+    await _reconcile_no_ui_state(
+        bot, user_id, window_id, pane_text, sess, is_bg_session
+    )
 
     await _drive_typing_indicator(
         bot, user_id, window_id, pane_text, sess, is_bg_session

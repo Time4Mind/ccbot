@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 import time
 from typing import Any
 
@@ -95,6 +96,53 @@ NETWORK_GAP_SECONDS = 45.0
 _network_first_seen: float | None = None
 _network_last_seen: float | None = None
 
+# Liveness watchdog — the safety net above assumes the getUpdates coroutine
+# eventually RAISES something. It doesn't always: a VPN-pipeline exit
+# rotation (a mandatory background job on the host; it ticks every 5 min
+# and actually swaps the egress server every few days) can tear down the
+# proxy's upstream mid-long-poll and leave the read wedged with NO
+# exception ever surfacing. Observed 2026-07-06: both bots went
+# alive-but-deaf for ~30h with zero further log lines — the NetworkError
+# counter above never moved because it never saw an error to accumulate.
+# A cheap heartbeat task proves the event loop is still scheduling
+# coroutines; the check itself runs on a SEPARATE OS thread, because if
+# the event loop is the thing that's actually stuck, an asyncio-scheduled
+# timeout would never fire either.
+LIVENESS_TICK_SECONDS = 15.0
+LIVENESS_MAX_STALE_SECONDS = 90.0
+_last_heartbeat: float = 0.0
+
+
+async def _heartbeat_loop() -> None:
+    """Cheap proof of forward progress: tick a shared timestamp."""
+    global _last_heartbeat
+    while True:
+        _last_heartbeat = time.monotonic()
+        await asyncio.sleep(LIVENESS_TICK_SECONDS)
+
+
+def _liveness_watchdog_tick() -> None:
+    """One check: force-exit if the heartbeat has gone stale too long.
+
+    Split out from the sleep loop so tests can call it directly.
+    """
+    stale = time.monotonic() - _last_heartbeat
+    if stale > LIVENESS_MAX_STALE_SECONDS:
+        logger.critical(
+            "Event loop unresponsive for %.0fs (no heartbeat) — forcing "
+            "exit so the supervisor restarts a clean instance.",
+            stale,
+        )
+        _terminate_for_sustained_conflict()
+
+
+def _liveness_watchdog_loop() -> None:
+    """Runs on its own OS thread, deliberately NOT asyncio — it must keep
+    working even if the event loop itself is what's wedged."""
+    while True:
+        time.sleep(LIVENESS_TICK_SECONDS)
+        _liveness_watchdog_tick()
+
 
 # Module-globals owned by the lifecycle hooks.
 session_monitor: SessionMonitor | None = None
@@ -105,6 +153,7 @@ _status_poll_task: asyncio.Task[None] | None = None
 _card_timer_task: asyncio.Task[None] | None = None
 _quota_alerts_task: asyncio.Task[None] | None = None
 _metrics_flush_task: asyncio.Task[None] | None = None
+_heartbeat_task: asyncio.Task[None] | None = None
 
 
 async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") -> None:
@@ -115,6 +164,8 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
         _card_timer_task, \
         _quota_alerts_task, \
         _metrics_flush_task, \
+        _heartbeat_task, \
+        _last_heartbeat, \
         _conflict_app
 
     # Reachable from ``_error_handler`` for the sustained-Conflict exit
@@ -193,6 +244,16 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
 
     _metrics_flush_task = asyncio.create_task(metrics_flush_loop())
     logger.info("Metrics flush task started")
+
+    _last_heartbeat = time.monotonic()
+    _heartbeat_task = asyncio.create_task(_heartbeat_loop())
+    threading.Thread(
+        target=_liveness_watchdog_loop, daemon=True, name="ccbot-liveness-watchdog"
+    ).start()
+    logger.info(
+        "Liveness watchdog started (stale>%.0fs triggers exit)",
+        LIVENESS_MAX_STALE_SECONDS,
+    )
 
     # Pre-warm the history-page cache for every active/idle session so
     # the user's first switcher tap after a restart doesn't pay the
@@ -287,7 +348,12 @@ async def post_shutdown(
     application: "Application[Any, Any, Any, Any, Any, Any]",
 ) -> None:
     """Stop background tasks, flush queues, close HTTP clients."""
-    global _status_poll_task, _card_timer_task, _quota_alerts_task, _metrics_flush_task
+    global \
+        _status_poll_task, \
+        _card_timer_task, \
+        _quota_alerts_task, \
+        _metrics_flush_task, \
+        _heartbeat_task
 
     if _status_poll_task:
         _status_poll_task.cancel()
@@ -324,6 +390,15 @@ async def post_shutdown(
             pass
         _metrics_flush_task = None
         logger.info("Metrics flush stopped")
+
+    if _heartbeat_task:
+        _heartbeat_task.cancel()
+        try:
+            await _heartbeat_task
+        except asyncio.CancelledError:
+            pass
+        _heartbeat_task = None
+        logger.info("Liveness heartbeat stopped")
 
     # Drain anything spawned by the handlers BEFORE we stop the
     # session monitor — both helpers do real I/O (history JSONL reads,

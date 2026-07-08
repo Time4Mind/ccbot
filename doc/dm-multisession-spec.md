@@ -313,7 +313,9 @@ Token usage is read from Claude Code transcripts on disk:
 
 ### Outbound
 
-- The bot can send a file from a session via the existing `send_file` MCP tool (already in upstream). No change.
+- A session hands the user a file by placing it at `<workdir>/.ccbot-outbox/<filename>` (write elsewhere, then `mv` into place — atomic rename, so a sweep never sees a half-written file).
+- `outbox_sweep` (`handlers/outbox.py`) polls every session's outbox dir every `OUTBOX_SWEEP_INTERVAL`s (3s), delivers each settled file to every allowed user — image extensions via `send_photo`, everything else via `send_document` — then deletes it on success.
+- No MCP tool involved; Claude just needs to know the convention (documented for it via the container's `~/.claude/CLAUDE.md`, keyed off `CCBOT_INTERFACE=telegram` the same way output-format guidance is).
 
 ---
 

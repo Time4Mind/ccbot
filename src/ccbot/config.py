@@ -183,6 +183,10 @@ class Config:
         self.inbox_ttl_hours: float = float(os.getenv("INBOX_TTL_HOURS", "24"))
         self.inbox_dirname: str = os.getenv("CCBOT_INBOX_DIRNAME", ".ccbot-inbox")
 
+        # Outbound file delivery — a session drops a file here, the bot
+        # ships it to every allowed user and removes it. See handlers/outbox.py.
+        self.outbox_dirname: str = os.getenv("CCBOT_OUTBOX_DIRNAME", ".ccbot-outbox")
+
         # Claude flags
         self.claude_flags: str = os.getenv(
             "CLAUDE_FLAGS", "--dangerously-skip-permissions"

@@ -37,6 +37,7 @@ from . import bg_status
 from .archive import idle_archive_sweep, purge_sweep
 from .cleanup import clear_session_state
 from .inbox import inbox_sweep
+from .outbox import outbox_sweep
 from .interactive_ui import (
     clear_interactive_msg,
     get_interactive_window,
@@ -234,6 +235,9 @@ def _pane_status_is_changing(user_id: int, key_suffix: str, status_line: str) ->
 ARCHIVE_SWEEP_INTERVAL = 60.0
 # Archive-purge sweep cadence (seconds).
 PURGE_SWEEP_INTERVAL = 3600.0
+# Outbound-file sweep cadence (seconds) — kept short so a file a session
+# drops in its outbox feels like it was sent immediately.
+OUTBOX_SWEEP_INTERVAL = 3.0
 
 
 async def _resolve_existing_interactive(
@@ -537,6 +541,7 @@ async def status_poll_loop(bot: Bot) -> None:
     logger.info("Status polling started (interval: %ss)", STATUS_POLL_INTERVAL)
     last_archive_sweep = 0.0
     last_purge_sweep = 0.0
+    last_outbox_sweep = 0.0
     while True:
         try:
             now = time.monotonic()
@@ -549,6 +554,15 @@ async def status_poll_loop(bot: Bot) -> None:
                         await idle_archive_sweep(bot, user_id)
                     except Exception as e:
                         logger.debug("idle_archive_sweep error: %s", e)
+
+            # Outbound-file sweep — deliver anything a session dropped in
+            # its .ccbot-outbox/ since the last pass.
+            if now - last_outbox_sweep >= OUTBOX_SWEEP_INTERVAL:
+                last_outbox_sweep = now
+                try:
+                    await outbox_sweep(bot)
+                except Exception as e:
+                    logger.debug("outbox_sweep error: %s", e)
 
             # Long-archive purge sweep.
             if now - last_purge_sweep >= PURGE_SWEEP_INTERVAL:

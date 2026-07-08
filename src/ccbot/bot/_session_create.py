@@ -61,7 +61,7 @@ async def create_and_activate_session(
         detach_paused_cards_at_message(user.id, query.message.message_id)
 
     success, message, created_wname, created_wid = await tmux_manager.create_window(
-        selected_path, resume_session_id=resume_session_id
+        selected_path, resume_session_id=resume_session_id, owner_user_id=user.id
     )
     if not success:
         await safe_edit(query, f"❌ {message}")

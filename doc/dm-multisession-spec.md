@@ -313,8 +313,8 @@ Token usage is read from Claude Code transcripts on disk:
 
 ### Outbound
 
-- A session hands the user a file by placing it at `<workdir>/.ccbot-outbox/<filename>` (write elsewhere, then `mv` into place — atomic rename, so a sweep never sees a half-written file).
-- `outbox_sweep` (`handlers/outbox.py`) polls every session's outbox dir every `OUTBOX_SWEEP_INTERVAL`s (3s), delivers each settled file to every allowed user — image extensions via `send_photo`, everything else via `send_document` — then deletes it on success.
+- On-demand, not polled: a session hands the user a file by running `ccbot send-file <path> [--caption TEXT]` (`send_file.py`) directly — no drop directory, no delay. Image extensions go out via `send_photo`, everything else via `send_document`; the command prints a pass/fail line per target chat so the invoking tool call carries real feedback back to Claude.
+- Target chat resolution: `--chat-id` override > `$CCBOT_CHAT_ID` (exported by `tmux_manager.create_window` at spawn time from the Telegram user who created/owns the session — see `owner_user_id`) > broadcast to every `ALLOWED_USERS` entry (used for windows with no single owner, e.g. the internal usage-check window).
 - No MCP tool involved; Claude just needs to know the convention (documented for it via the container's `~/.claude/CLAUDE.md`, keyed off `CCBOT_INTERFACE=telegram` the same way output-format guidance is).
 
 ---

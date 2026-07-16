@@ -67,13 +67,18 @@ KB_CLEAR_CONFIRM_POLLS = 2
 _kb_clear_miss: dict[tuple[int, str], int] = {}
 
 # Auto-approve escalation. ``auto_approve=on`` sends the ``N. Yes`` digit +
-# Enter into the pane, but the number-key shortcut does NOT clear every
-# blocking prompt — a sub-agent (``Agent``/``Task``) WebFetch/WebSearch
-# approval doesn't accept the top-level hotkey, so the keystroke lands on a
-# busy REPL and the prompt survives. Without a cap, the poller re-fires the
-# same auto-Yes every cycle forever AND (because ``_maybe_auto_approve``
-# returns True each time) it permanently shadows the kb-mode / bg-status
-# surface — leaving the session wedged with no manual escape hatch.
+# Enter into the pane. We prefer the *durable* Yes option (``… during this
+# session`` / ``… don't ask again`` / ``allow all …``) over the one-shot
+# ``Yes`` — see ``_parse_best_yes_option`` — so a single keystroke clears a
+# whole storm of same-scope prompts (e.g. a sub-agent reading N files from a
+# directory raises one dialog per file; granting the directory once ends it).
+# The counter below is the safety net for the residual case the digit still
+# does NOT clear: a sub-agent (``Agent``/``Task``) prompt that doesn't accept
+# the top-level hotkey, so the keystroke lands on a busy REPL and the prompt
+# survives. Without a cap, the poller re-fires the same auto-Yes every cycle
+# forever AND (because ``_maybe_auto_approve`` returns True each time) it
+# permanently shadows the kb-mode / bg-status surface — leaving the session
+# wedged with no manual escape hatch.
 #
 # Verification is cross-poll: each poll compares the prompt's signature to
 # the last one we auto-approved. Same signature next poll ⇒ the previous
@@ -89,15 +94,41 @@ AUTO_APPROVE_MAX_ATTEMPTS = 3
 _auto_approve_attempts: dict[tuple[int, str], tuple[str, int]] = {}
 
 
-def _parse_first_yes_option(pane_text: str) -> str | None:
-    """First option line whose label starts with "Yes". Returns its number."""
+# A *durable* Yes label — approving it once suppresses the whole storm of
+# follow-up prompts of the same scope: a directory-scoped read grant, a
+# ``don't ask again`` for a command/domain, an allow-all-edits-this-session.
+# Preferring these over the one-shot "Yes" turns a per-file whack-a-mole into
+# a single approval, so the read-storm that used to trip the escalation
+# counter (a distinct file each poll behind an identical-looking dialog)
+# never recurs — the second read in that scope no longer prompts.
+_DURABLE_YES_RE = re.compile(
+    r"during this session|don'?t ask again|allow all|always allow|for the rest of",
+    re.IGNORECASE,
+)
+
+
+def _parse_best_yes_option(pane_text: str) -> str | None:
+    """Number of the Yes option to auto-select.
+
+    Prefers a *durable* Yes ("… during this session" / "… don't ask again" /
+    "allow all …") over the one-shot "Yes" so a single keystroke clears a
+    whole storm of same-scope prompts. Falls back to the first plain Yes when
+    no durable variant is offered (e.g. ExitPlanMode's two Yes rows, neither
+    of which is a scope grant).
+    """
+    first_yes: str | None = None
     for raw in pane_text.splitlines():
         m = _OPTION_LINE_RE.match(raw)
         if not m:
             continue
-        if m.group(2).lower().startswith("yes"):
-            return m.group(1)
-    return None
+        num, label = m.group(1), m.group(2)
+        if not label.lower().startswith("yes"):
+            continue
+        if first_yes is None:
+            first_yes = num
+        if _DURABLE_YES_RE.search(label):
+            return num
+    return first_yes
 
 
 def _auto_approve_signature(pane_text: str) -> str:
@@ -131,7 +162,7 @@ async def _maybe_auto_approve(user_id: int, window_id: str, pane_text: str) -> b
     mode = session_manager.get_user_settings(user_id).get("auto_approve", "off")
     if mode != "on":
         return False
-    digit = _parse_first_yes_option(pane_text)
+    digit = _parse_best_yes_option(pane_text)
     if digit is None:
         return False
 

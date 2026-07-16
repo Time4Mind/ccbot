@@ -25,6 +25,7 @@ from ccbot.handlers.status_polling import (
     _auto_approve_attempts,
     _kb_clear_miss,
     _maybe_auto_approve,
+    _parse_best_yes_option,
     _reconcile_no_ui_state,
     _surface_new_interactive_ui,
 )
@@ -251,3 +252,49 @@ async def test_auto_approve_counter_resets_when_prompt_clears():
 
         # A fresh prompt gets auto-approved again (not instantly escalated).
         assert await _maybe_auto_approve(1, "@1", _YESNO_PANE) is True
+
+
+# --- durable-Yes preference (variant 2) -----------------------------------
+
+_READ_PANE = (
+    "  Read(/tmp/tickets/CHARGERANLT-1158.md)\n"
+    "  Do you want to proceed?\n"
+    "❯ 1. Yes\n"
+    "  2. Yes, allow reading from tickets/ during this session\n"
+    "  3. No\n"
+)
+
+_PLANMODE_PANE = (
+    "  Ready to code?\n"
+    "❯ 1. Yes, and auto-accept edits\n"
+    "  2. Yes, and manually approve edits\n"
+    "  3. No, keep planning\n"
+)
+
+_BASH_PANE = (
+    "  Bash(pytest -q)\n"
+    "  Do you want to proceed?\n"
+    "❯ 1. Yes\n"
+    "  2. Yes, and don't ask again for pytest commands in /repo\n"
+    "  3. No\n"
+)
+
+
+def test_parse_best_yes_prefers_directory_grant():
+    """A read prompt offering a session-scoped grant picks that (opt 2), not
+    the one-shot Yes (opt 1) — one keystroke ends the per-file storm."""
+    assert _parse_best_yes_option(_READ_PANE) == "2"
+
+
+def test_parse_best_yes_prefers_dont_ask_again():
+    assert _parse_best_yes_option(_BASH_PANE) == "2"
+
+
+def test_parse_best_yes_falls_back_to_first_yes():
+    """When no option is a durable scope grant (ExitPlanMode's two Yes rows),
+    fall back to the first Yes — unchanged behaviour, no regression."""
+    assert _parse_best_yes_option(_PLANMODE_PANE) == "1"
+
+
+def test_parse_best_yes_none_without_yes_option():
+    assert _parse_best_yes_option("  1. No\n  2. Cancel\n") is None

@@ -23,7 +23,6 @@ from telegram import Bot, Update
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
-from ..config import config
 from ..handlers.cleanup import clear_session_state
 from ..handlers.directory_browser import (
     BROWSE_DIRS_KEY,
@@ -66,7 +65,7 @@ from ..terminal_parser import (
     is_interactive_ui,
 )
 from ..tmux_manager import tmux_manager
-from ..transcribe import transcribe_voice
+from ..transcribe import resolve_voice_backend, transcribe_voice
 from ..utils import ccbot_dir
 from ._common import active_window, is_user_allowed
 
@@ -568,8 +567,8 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not update.message or not update.message.voice:
         return
 
-    if config.voice_backend == "off":
-        await safe_reply(update.message, "⚠ Voice is disabled (VOICE_BACKEND=off).")
+    if resolve_voice_backend(user.id) == "off":
+        await safe_reply(update.message, "⚠ Voice is disabled (voice backend = off).")
         return
     wid = active_window(user.id)
     if wid is None:

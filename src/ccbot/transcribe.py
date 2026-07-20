@@ -87,6 +87,9 @@ async def _whisper_cpp_transcribe(ogg_data: bytes) -> str:
             tmp_path,
             "-nt",  # no timestamps
             "-otxt",  # write a .txt next to the input
+            "-l",
+            "auto",  # auto-detect language; whisper-cli defaults to "en",
+            # which would force Russian speech through English recognition.
         ]
         code, stdout, stderr = await _run(cmd)
         if code != 0:
@@ -118,15 +121,37 @@ def _apple_speech_sync(wav_path: str, timeout: float = 30.0) -> str | None:
     would freeze the bot.
     """
     try:
-        from Foundation import NSURL  # type: ignore[import-not-found]
-        from Speech import (  # type: ignore[import-not-found]
-            SFSpeechRecognizer,
-            SFSpeechURLRecognitionRequest,
-        )
+        from Foundation import NSURL  # type: ignore
+        from Speech import SFSpeechRecognizer, SFSpeechURLRecognitionRequest  # type: ignore
     except ImportError:
         return None
 
     import threading
+
+    # macOS gates speech recognition behind a TCC authorization the
+    # process must explicitly request. isAvailable() can read True while
+    # the status is still notDetermined, so skipping this leaves the
+    # recognitionTask to fail silently — the exact reason the Apple
+    # backend "didn't work" from the launchd daemon (a different
+    # responsible process than the terminal that was already granted).
+    # 0 notDetermined · 1 denied · 2 restricted · 3 authorized.
+    status = SFSpeechRecognizer.authorizationStatus()
+    if status == 0:
+        auth_done = threading.Event()
+
+        def _auth_cb(new_status: int) -> None:
+            auth_done.set()
+
+        SFSpeechRecognizer.requestAuthorization_(_auth_cb)
+        auth_done.wait(timeout=10.0)
+        status = SFSpeechRecognizer.authorizationStatus()
+    if status != 3:
+        logger.info(
+            "Apple Speech not authorized (status=%s); "
+            "grant Speech Recognition to the bot process or use whisper",
+            status,
+        )
+        return None
 
     rec = SFSpeechRecognizer.alloc().init()
     if rec is None or not rec.isAvailable():
@@ -188,14 +213,20 @@ async def _apple_speech_transcribe(ogg_data: bytes) -> str:
             pass
 
 
-async def transcribe_voice(ogg_data: bytes, user_id: int | None = None) -> str:
-    """Dispatch to the configured backend; raise ValueError on failure.
+def resolve_voice_backend(user_id: int | None = None) -> str:
+    """Resolve the effective voice backend for a user.
 
-    Backend resolution order:
+    Resolution order:
       1. Per-user setting (`voice` key in user_settings) when `user_id` given
          and the value isn't `auto` (auto means "follow the env default").
       2. Env-var `VOICE_BACKEND` (config.voice_backend).
-      3. Platform fallback when the resolved value is `auto`.
+      3. Platform fallback when the resolved value is `auto` (Apple on
+         Darwin, whisper elsewhere).
+
+    Returns one of: `whisper`, `apple`, `off`. Shared by the voice
+    handler's enable-check and `transcribe_voice` so a per-user override
+    (e.g. `apple`) is honoured even when the global env is `off` — the
+    global value is only a default, not a hard gate.
     """
     backend = (config.voice_backend or "auto").lower()
     if user_id is not None:
@@ -206,10 +237,16 @@ async def transcribe_voice(ogg_data: bytes, user_id: int | None = None) -> str:
         ).lower()
         if per_user and per_user != "auto":
             backend = per_user
-    if backend == "off":
-        raise ValueError("Voice backend is disabled")
     if backend == "auto":
         backend = "apple" if platform.system() == "Darwin" else "whisper"
+    return backend
+
+
+async def transcribe_voice(ogg_data: bytes, user_id: int | None = None) -> str:
+    """Dispatch to the configured backend; raise ValueError on failure."""
+    backend = resolve_voice_backend(user_id)
+    if backend == "off":
+        raise ValueError("Voice backend is disabled")
 
     if backend == "whisper":
         return await _whisper_cpp_transcribe(ogg_data)

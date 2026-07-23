@@ -24,14 +24,72 @@ USAGE_WINDOW_NAME = "ccbot-usage"
 _usage_window_lock = asyncio.Lock()
 
 
+async def _confirm_trust_dialog_if_present(wid: str) -> None:
+    """Accept Claude Code's folder-trust gate if it's blocking startup.
+
+    The usage window launches ``claude`` in ``~`` (the home dir), which is
+    typically NOT in Claude Code's trusted-folder list — and unlike a normal
+    session (started under an already-trusted parent such as
+    ``~/pet_projects``), ``~`` has no trusted ancestor to inherit from. So
+    claude opens on the "Is this a project you trust?" gate instead of its
+    prompt, and ``--dangerously-skip-permissions`` does NOT bypass it.
+
+    Left unhandled, the first thing ``_poll_usage_modal`` does — send
+    ``Escape`` to clear a leftover modal — reads as the gate's "Esc to
+    cancel", dropping claude to a bare shell. ``/usage`` then goes to zsh,
+    nothing parses, and Status shows "unavailable". Here we detect the gate
+    and confirm it (option 1 is preselected; Enter accepts) so claude
+    reaches its prompt.
+    """
+    for _ in range(12):  # ~6s budget for claude to paint the gate / prompt
+        pane = await _capture_with_scrollback(wid)
+        if pane:
+            if "trust this folder" in pane or "Is this a project you" in pane:
+                await tmux_manager.send_keys(wid, "Enter", enter=False, literal=False)
+                await asyncio.sleep(3.0)
+                return
+            if "? for shortcuts" in pane:
+                return  # already at the prompt, no gate
+        await asyncio.sleep(0.5)
+
+
+async def _warm_usage_window(wid: str) -> None:
+    """Make one throwaway API turn so ``/usage`` can populate.
+
+    A freshly-launched Claude Code process that has never completed an
+    API turn returns "Error: Failed to load usage data" for the ``/usage``
+    modal — the quota endpoint only populates once the session has talked
+    to the API at least once (verified: a cold instance fails for 40s+
+    straight, then loads instantly after a single real turn). The
+    dedicated usage window otherwise ONLY ever runs ``/usage`` (a UI-only
+    modal), so without this it stays cold for its whole life and Status
+    never loads. One tiny turn per window creation warms it; the window is
+    long-lived (survives bot restarts), so the cost is paid once.
+    """
+    try:
+        await tmux_manager.send_keys(wid, "respond with exactly: ok")
+        await asyncio.sleep(1.0)  # let the turn start
+        for _ in range(24):  # up to ~12s for the API round-trip to finish
+            await asyncio.sleep(0.5)
+            pane = await _capture_with_scrollback(wid)
+            if pane and "esc to interrupt" not in pane:
+                return
+    except Exception as e:
+        logger.debug("warm_usage_window failed: %s", e)
+
+
 async def _ensure_usage_window() -> str | None:
     """Find or lazily create the long-lived ccbot-usage window.
 
     Survives bot restarts (tmux server is the source of truth). On first
-    creation we wait ~4s for Claude to reach its prompt before returning.
+    creation we wait ~4s for Claude to reach its prompt, clear the
+    folder-trust gate if it's showing (so the subsequent poll doesn't
+    Escape-cancel claude into a bare shell), then warm the instance with
+    one throwaway turn so ``/usage`` can actually load.
     """
     w = await tmux_manager.find_window_by_name(USAGE_WINDOW_NAME)
     if w:
+        await _confirm_trust_dialog_if_present(w.window_id)
         return w.window_id
     home = str(Path.home())
     success, message, _wname, wid = await tmux_manager.create_window(
@@ -41,6 +99,8 @@ async def _ensure_usage_window() -> str | None:
         logger.debug("ensure_usage_window: create failed: %s", message)
         return None
     await asyncio.sleep(4.0)
+    await _confirm_trust_dialog_if_present(wid)
+    await _warm_usage_window(wid)
     return wid
 
 

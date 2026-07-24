@@ -455,7 +455,15 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     )
     application.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     application.add_handler(MessageHandler(filters.Document.ALL, document_handler))
-    application.add_handler(MessageHandler(filters.VOICE, voice_handler))
+    # block=False: whisper.cpp transcription can take many seconds.
+    # concurrent_updates defaults to 1 (process_update awaits each
+    # update's handler in full before fetching the next), so a blocking
+    # voice_handler stalls EVERY other inbound update — including the
+    # user's own next text message — for the whole transcription. The
+    # session-pinning guarantee (wid captured before the slow await) is
+    # a local-variable snapshot, not a side effect of serialized
+    # dispatch, so running this handler as its own task is safe.
+    application.add_handler(MessageHandler(filters.VOICE, voice_handler, block=False))
     # Catch-all: non-text content (stickers, video, etc.).
     application.add_handler(
         MessageHandler(

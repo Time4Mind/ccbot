@@ -606,20 +606,30 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # switch afterwards can't redirect this voice message.
     await fire_typing(context.bot, user.id, "voice_handler.received", window_id=wid)
 
-    # Same reaction text gets: the live card reposts as a new message
-    # right away, not only once the text is known. voice_pending adds a
-    # header line so the reposted card visibly shows "voice received,
-    # already bound here" using the normal card surface — no separate
-    # reply. Skipped for an orphan window (no Session record).
+    # Same immediate reaction text gets: the live card updates right
+    # away, not only once the text is known. voice_pending adds a header
+    # line so the card visibly shows "voice received, already bound
+    # here". Edited IN PLACE via resume_card_view only — NOT repost_card
+    # (which force-deletes + resends as a new message every call). Two
+    # voice messages landing close together, possibly in different
+    # sessions, both call repost_card concurrently; repost_card's strip-
+    # then-set update of the per-USER (not per-session) switcher-carrier
+    # pointer (session_manager.last_switcher_msg_id) can then race across
+    # the two _card_lock-independent sessions, letting an older repost's
+    # "set" overwrite a newer one's and desync which message the
+    # switcher keyboard is actually still on. resume_card_view's edit
+    # path never touches that pointer, so no race — the final
+    # _dispatch_text_to_active repost_card at the end of the flow still
+    # provides one genuine "new message" per voice, just not two.
+    # Skipped for an orphan window (no Session record).
     sess = session_manager.find_session_by_window(wid)
     card_state = get_card_state(user.id, sess) if sess is not None else None
     if sess is not None and card_state is not None:
         card_state.voice_pending = True
         try:
             await resume_card_view(context.bot, user.id, sess)
-            await repost_card(context.bot, user.id, sess)
         except Exception as e:
-            logger.debug("voice-pending card repost failed: %s", e)
+            logger.debug("voice-pending card update failed: %s", e)
 
     voice_file = await update.message.voice.get_file()
     ogg_data = bytes(await voice_file.download_as_bytearray())

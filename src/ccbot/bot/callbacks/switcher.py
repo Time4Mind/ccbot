@@ -78,13 +78,27 @@ async def handle(
         # Pausing FROM + claiming TO keeps everything on the same carrier.
         old_active = session_manager.get_active_session(user.id)
         old_active_id = old_active.id if old_active is not None else None
+        orphan_msg_id: int | None = None
         if query.message is not None:
-            transfer_card_to_carrier(
+            orphan_msg_id = transfer_card_to_carrier(
                 user.id,
                 old_active_id,
                 target_id,
                 query.message.message_id,
             )
+        # The TO session already had a live card on a DIFFERENT message
+        # (typical after a voice message pinned to it finished landing
+        # while the user was elsewhere). It just lost ownership to the
+        # carrier, so nothing will ever edit it again — strip its
+        # keyboard, otherwise the chat keeps two tappable switchers and
+        # the next tap repaints whichever one the user happened to hit.
+        if orphan_msg_id is not None:
+            try:
+                await context.bot.edit_message_reply_markup(
+                    chat_id=user.id, message_id=orphan_msg_id, reply_markup=None
+                )
+            except Exception as e:
+                logger.debug("orphan switcher strip failed: %s", e)
 
         session_manager.set_active_session(user.id, target_id)
 

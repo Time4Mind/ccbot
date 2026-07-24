@@ -47,10 +47,13 @@ from ..handlers.message_sender import (
 )
 from ..handlers.notifications import (
     begin_repost_intent,
+    card_is_below,
     end_repost_intent,
     enter_kb_mode,
     get_card_state,
+    is_active_for_user,
     lookup_session_for_message,
+    refresh_panel,
     repost_card,
     resume_card_view,
 )
@@ -606,30 +609,28 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # switch afterwards can't redirect this voice message.
     await fire_typing(context.bot, user.id, "voice_handler.received", window_id=wid)
 
-    # Same immediate reaction text gets: the live card updates right
-    # away, not only once the text is known. voice_pending adds a header
-    # line so the card visibly shows "voice received, already bound
-    # here". Edited IN PLACE via resume_card_view only — NOT repost_card
-    # (which force-deletes + resends as a new message every call). Two
-    # voice messages landing close together, possibly in different
-    # sessions, both call repost_card concurrently; repost_card's strip-
-    # then-set update of the per-USER (not per-session) switcher-carrier
-    # pointer (session_manager.last_switcher_msg_id) can then race across
-    # the two _card_lock-independent sessions, letting an older repost's
-    # "set" overwrite a newer one's and desync which message the
-    # switcher keyboard is actually still on. resume_card_view's edit
-    # path never touches that pointer, so no race — the final
-    # _dispatch_text_to_active repost_card at the end of the flow still
-    # provides one genuine "new message" per voice, just not two.
+    # Same immediate reaction a typed message gets: the live card is
+    # REPOSTED as a fresh message right now, below the voice the user
+    # just sent — not edited in place. An in-place edit lands on a card
+    # that sits ABOVE the voice message, which the user never sees; the
+    # symptom was 35-50 s of apparent dead air while whisper ran (they
+    # re-recorded, switched sessions, assumed it was broken).
+    # ``voice_pending`` adds a header line so the reposted card says
+    # "voice received, already bound here".
+    #
+    # The cross-session repost race that made an earlier revision back
+    # this out is handled properly now: ``_send_card`` serializes spawns
+    # per user and strips every other card's keyboard, so two reposts
+    # can no longer desync which message carries the live switcher.
     # Skipped for an orphan window (no Session record).
     sess = session_manager.find_session_by_window(wid)
     card_state = get_card_state(user.id, sess) if sess is not None else None
     if sess is not None and card_state is not None:
         card_state.voice_pending = True
         try:
-            await resume_card_view(context.bot, user.id, sess)
+            await repost_card(context.bot, user.id, sess)
         except Exception as e:
-            logger.debug("voice-pending card update failed: %s", e)
+            logger.debug("voice-pending card repost failed: %s", e)
 
     voice_file = await update.message.voice.get_file()
     ogg_data = bytes(await voice_file.download_as_bytearray())
@@ -653,7 +654,14 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if card_state is not None:
         card_state.voice_pending = False
 
-    await fire_typing(context.bot, user.id, "voice_handler.transcribed", window_id=wid)
+    # Typing is a chat-level indicator, so it only makes sense while the
+    # pinned session is still the one the user is looking at. If they
+    # switched away during transcription, the text still goes to the
+    # pinned pane but must stay invisible in chat.
+    if sess is not None and is_active_for_user(user.id, sess):
+        await fire_typing(
+            context.bot, user.id, "voice_handler.transcribed", window_id=wid
+        )
     cancel_bash_capture(user.id, wid)
 
     if await _intercept_if_pending_ui(context.bot, user.id, wid, update.message):
@@ -866,31 +874,38 @@ async def _dispatch_text_to_active(
     wid: str,
     text: str,
 ) -> None:
-    """Send the user's text to the active session's pane and run the
-    post-send bookkeeping under the repost-intent bracket.
+    """Send the user's text to ``wid``'s pane and run the post-send
+    bookkeeping under the repost-intent bracket.
 
-    Mirrors the original inline flow exactly: resume the card view + arm
+    Card handling is gated on the target session still being the user's
+    ACTIVE one. A voice message pins its window at receipt, so by the
+    time whisper returns the user may well have switched elsewhere — the
+    text still goes to the pinned pane (that is the entire point of
+    pinning), but the session is a *background* one now, and background
+    sessions never post their own chat messages. Doing otherwise dropped
+    a bg session's card as the newest message in the chat and handed it
+    the live switcher, which is what made a later switcher tap appear to
+    edit "the previous message".
+
+    Active path mirrors the original flow: resume the card view + arm
     repost-intent (so concurrent ``update_session_card`` events buffer
     rather than spawning a second card), send the keystrokes, fire the
     early typing indicator, touch + auto-name the session, spawn any
-    ``!cmd`` capture, drive a pending interactive UI, and finally repost
-    the live card below the user's message. The try/finally always clears
-    the repost-intent flag even on an early return.
+    ``!cmd`` capture, drive a pending interactive UI, and finally put the
+    live card below the user's message. The try/finally always clears the
+    repost-intent flag even on an early return.
     """
     assert update.message is not None
     import time as _time
 
     from .. import metrics
-    from ..handlers.notifications import (
-        begin_repost_intent,
-        end_repost_intent,
-        resume_card_view,
-    )
+    from ..handlers import bg_status
 
     # If the user typed while looking at a Menu / sub-screen on this
     # session's card, drop the pause so incoming events render again.
     sess = session_manager.find_session_by_window(wid)
-    if sess is not None:
+    owns_card = sess is not None and is_active_for_user(user_id, sess)
+    if owns_card and sess is not None:
         await resume_card_view(context.bot, user_id, sess)
         # Lock spawning out from under us before sending keystrokes —
         # claude can emit the first event of its reply within
@@ -908,7 +923,7 @@ async def _dispatch_text_to_active(
     # clears the repost-intent flag — without this, an early return
     # below leaves the flag set forever and the live card stays silent
     # for that session until the bot restarts.
-    intent_sess_id = sess.id if sess is not None else None
+    intent_sess_id = sess.id if (owns_card and sess is not None) else None
     try:
         _t0 = _time.time()
         success, message = await session_manager.send_to_window(wid, text)
@@ -927,7 +942,10 @@ async def _dispatch_text_to_active(
         # looks frozen. fire_typing throttles to one call per ~4 s
         # per user — if text_handler already fired Typing a moment
         # ago, this is a silent no-op (the indicator is still on).
-        await fire_typing(context.bot, user_id, "text_handler.post_send", window_id=wid)
+        if owns_card:
+            await fire_typing(
+                context.bot, user_id, "text_handler.post_send", window_id=wid
+            )
 
         sess = session_manager.find_session_by_window(wid)
         if sess is not None:
@@ -941,20 +959,42 @@ async def _dispatch_text_to_active(
 
         _maybe_start_bash_capture(context.bot, user_id, wid, text)
 
-        interactive_window = get_interactive_window(user_id)
-        if interactive_window and interactive_window == wid:
-            await asyncio.sleep(0.2)
-            await handle_interactive_ui(context.bot, user_id, wid)
+        if owns_card:
+            interactive_window = get_interactive_window(user_id)
+            if interactive_window and interactive_window == wid:
+                await asyncio.sleep(0.2)
+                await handle_interactive_ui(context.bot, user_id, wid)
 
-        # Always repost the live card below the user's message (the
-        # card_position setting was ripped out — repost is the single
+        if sess is None:
+            return
+
+        if not owns_card:
+            # Background session (voice pinned here, user moved on).
+            # Its only chat surface is a row in the active card's
+            # bg-status panel — no card, no push, no switcher steal.
+            if bg_status.update_status(user_id, sess.id, "working"):
+                try:
+                    await refresh_panel(context.bot, user_id)
+                except Exception as e:
+                    logger.debug("refresh_panel after bg dispatch failed: %s", e)
+            return
+
+        # Put the live card below the user's message (the card_position
+        # setting was ripped out — always-in-front is the single
         # canonical behaviour). Any events claude emitted between
         # send_to_window and here were buffered into state.events by
         # update_session_card (it saw the repost-intent flag and held
-        # off rendering); they drain into the freshly-reposted card.
-        if sess is not None:
-            from ..handlers.notifications import repost_card
-
+        # off rendering); they drain into the card on the next render.
+        if card_is_below(user_id, sess.id, update.message.message_id):
+            # The card is already in front of this message — the voice
+            # flow reposted it at receipt. Repost again and the user
+            # gets two cards' worth of churn for one voice; an in-place
+            # edit is enough to drain the buffer and drop the 🎙 marker.
+            try:
+                await resume_card_view(context.bot, user_id, sess)
+            except Exception as e:
+                logger.debug("card repaint failed: %s", e)
+        else:
             try:
                 await repost_card(context.bot, user_id, sess)
             except Exception as e:

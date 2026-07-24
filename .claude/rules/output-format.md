@@ -36,6 +36,11 @@ equals `telegram`.
 Write normal GFM tables; the bot's rich-message path renders them
 natively on the phone. Rules that matter:
 
+- **Blank line before the table.** A table is a block — its header
+  row can't interrupt a paragraph. `Заголовок:\n| a | b |` (single
+  `\n`) folds the label and the rows into one paragraph and the pipes
+  render literally. Always put an empty line between any preceding text
+  and the first `| … |` row.
 - **≤ 20 columns** (API hard cap; 21+ → the bot diverts to PNG).
 - Cells take **inline formatting only**: bold / italic / `code` /
   ~~strike~~ / ==mark== / спойлер / <sup>sup</sup> — no lists, no code

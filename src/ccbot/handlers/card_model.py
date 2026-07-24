@@ -217,6 +217,13 @@ class CardState:
     # stub — so the recovered answer is visible instead of being silently
     # edited into a card the user has scrolled past or marked complete.
     stall_finalized: bool = False
+    # Set by voice_handler right when a voice message is pinned to this
+    # session, before download/transcribe (which can take many seconds).
+    # Rendered as a header line so an immediate repost_card shows "yes,
+    # your voice landed here" using the normal card surface instead of a
+    # separate reply message. Cleared once the transcribed text is
+    # actually dispatched (or transcription fails).
+    voice_pending: bool = False
 
 
 def _trim(s: str, limit: int = 200) -> str:
@@ -1145,6 +1152,8 @@ def _render_card(
     header = f"{emoji} *{name_part}* · {state_label}{cont_marker}{ts_suffix}"
     if sess.goal:
         header += f"\ngoal: {sess.goal}"
+    if state.voice_pending:
+        header += "\n🎙 voice message received — transcribing…"
 
     # kb-mode view: card msg shows the interactive prompt content + kb
     # keyboard. The regular event log is BELOW the keyboard (footer'd by

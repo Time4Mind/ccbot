@@ -511,6 +511,7 @@ class TmuxManager:
         window_name: str | None = None,
         start_claude: bool = True,
         resume_session_id: str | None = None,
+        owner_user_id: int | None = None,
     ) -> tuple[bool, str, str, str]:
         """Create a new tmux window and optionally start Claude Code.
 
@@ -519,6 +520,10 @@ class TmuxManager:
             window_name: Optional window name (defaults to directory name)
             start_claude: Whether to start claude command
             resume_session_id: If set, append --resume <id> to claude command
+            owner_user_id: Telegram user_id that created this session, if
+                known — exported as ``CCBOT_CHAT_ID`` so ``ccbot send-file``
+                (and Claude generally) knows which chat owns this session
+                without needing an explicit ``--chat-id``.
 
         Returns:
             Tuple of (success, message, window_name, window_id)
@@ -577,6 +582,10 @@ class TmuxManager:
                             env_prefix += (
                                 f" CCBOT_HOST={shlex.quote(config.host_label)}"
                             )
+                        if owner_user_id is not None:
+                            # Lets ``ccbot send-file`` target the right
+                            # chat with no argument needed.
+                            env_prefix += f" CCBOT_CHAT_ID={owner_user_id}"
                         if config.is_sandbox:
                             cmd = f"IS_SANDBOX=1 {env_prefix} {cmd}"
                         else:

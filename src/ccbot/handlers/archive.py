@@ -443,6 +443,7 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
     success, message, created_wname, created_wid = await tmux_manager.create_window(
         workdir,
         resume_session_id=sess.claude_session_id or None,
+        owner_user_id=user_id,
     )
     if not success:
         return False, message

@@ -313,7 +313,9 @@ Token usage is read from Claude Code transcripts on disk:
 
 ### Outbound
 
-- The bot can send a file from a session via the existing `send_file` MCP tool (already in upstream). No change.
+- On-demand, not polled: a session hands the user a file by running `ccbot send-file <path> [--caption TEXT]` (`send_file.py`) directly — no drop directory, no delay. Image extensions go out via `send_photo`, everything else via `send_document`; the command prints a pass/fail line per target chat so the invoking tool call carries real feedback back to Claude.
+- Target chat resolution: `--chat-id` override > `$CCBOT_CHAT_ID` (exported by `tmux_manager.create_window` at spawn time from the Telegram user who created/owns the session — see `owner_user_id`) > broadcast to every `ALLOWED_USERS` entry (used for windows with no single owner, e.g. the internal usage-check window).
+- No MCP tool involved; Claude just needs to know the convention (documented for it via the container's `~/.claude/CLAUDE.md`, keyed off `CCBOT_INTERFACE=telegram` the same way output-format guidance is).
 
 ---
 

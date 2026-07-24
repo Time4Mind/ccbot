@@ -588,6 +588,13 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
+    # wid is pinned NOW, before the slow download/transcribe steps — a
+    # switch afterwards can't redirect this voice message. Fire the same
+    # instant typing indicator text gets (text_handler fires it before
+    # its own slow steps too) so the "message accepted" signal shows up
+    # right away instead of only after transcription finishes.
+    await fire_typing(context.bot, user.id, "voice_handler.received", window_id=wid)
+
     voice_file = await update.message.voice.get_file()
     ogg_data = bytes(await voice_file.download_as_bytearray())
 
@@ -601,18 +608,17 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await safe_reply(update.message, f"⚠ Transcription failed: {e}")
         return
 
-    await fire_typing(context.bot, user.id, "voice_handler", window_id=wid)
+    await fire_typing(context.bot, user.id, "voice_handler.transcribed", window_id=wid)
+    cancel_bash_capture(user.id, wid)
 
     if await _intercept_if_pending_ui(context.bot, user.id, wid, update.message):
         return
 
-    sess = session_manager.find_session_by_window(wid)
-    async with _card_repost_bracket(context.bot, user.id, sess) as repost:
-        success, message = await session_manager.send_to_window(wid, text)
-        if not success:
-            await safe_reply(update.message, f"❌ {message}")
-            return
-        repost.commit()
+    # Same dispatch path text uses — identical reaction (send, auto-name,
+    # bash-capture, interactive-UI check, card repost) once the text is
+    # known. No voice-specific reply; the transcribed text just becomes
+    # this message's text, same as if the user had typed it.
+    await _dispatch_text_to_active(update, context, user.id, wid, text)
 
 
 # --- text + bash !cmd capture ---

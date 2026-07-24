@@ -1,19 +1,25 @@
-"""Regression test: a voice message must be routed to the session that
-was active at the moment the bot received it, not whatever session is
-active by the time transcription finishes.
+"""Regression tests for voice_handler's session-pinning + reaction parity.
 
-``voice_handler`` reads ``active_window(user.id)`` into a local ``wid``
-BEFORE the slow ``transcribe_voice`` await; the transcribed text is
-later sent via ``send_to_window(wid, text)`` using that same captured
-value. Combined with python-telegram-bot's default
-``concurrent_updates=1`` (updates are processed strictly one at a time —
-see ``Application.__process_update_wrapper`` gating in
-``process_update``), a session-switch callback that arrives after the
-voice message cannot even start processing until ``voice_handler``'s
-whole coroutine — including transcription — has finished. This test
-simulates the switch happening mid-transcription (the realistic race
-window: transcription can take several seconds) and asserts the text
-still lands on the originally-active window.
+1. A voice message must be routed to the session that was active at the
+   moment the bot received it, not whatever session is active by the
+   time transcription finishes. ``voice_handler`` reads
+   ``active_window(user.id)`` into a local ``wid`` BEFORE the slow
+   ``transcribe_voice`` await; the transcribed text is later dispatched
+   via that same captured ``wid``. Combined with python-telegram-bot's
+   default ``concurrent_updates=1`` (updates are processed strictly one
+   at a time — see ``Application.__process_update_wrapper`` gating in
+   ``process_update``), a session-switch callback that arrives after the
+   voice message cannot even start processing until ``voice_handler``'s
+   whole coroutine — including transcription — has finished.
+
+2. The reaction must match what a typed text message gets: an instant
+   typing indicator fired before the slow step (transcription for
+   voice, nothing for text — text has no slow step of its own), and
+   once the content is known, dispatch through the exact same
+   ``_dispatch_text_to_active`` path text uses — same send, same
+   auto-naming, same bash-capture check, same card repost. No
+   voice-specific reply message; the transcribed text just becomes the
+   message's text, same as if the user had typed it.
 """
 
 from __future__ import annotations
@@ -127,3 +133,94 @@ class TestVoiceSessionPinning:
             await voice_handler(update, context)
 
         mock_sm.send_to_window.assert_called_once_with("@7", "hi")
+
+
+class TestVoiceReactionParity:
+    @pytest.mark.asyncio
+    async def test_typing_fires_before_transcription(self):
+        """The typing indicator must fire immediately on receipt — the
+        same instant "message accepted" signal text gets — not only
+        after transcription completes."""
+        update = _make_voice_update()
+        context = _make_context()
+        events: list[str] = []
+
+        mock_sm = MagicMock()
+        mock_sm.get_active_window.return_value = "@5"
+        mock_sm.find_session_by_window.return_value = None
+        mock_sm.send_to_window = AsyncMock(return_value=(True, "ok"))
+
+        mock_tmux = MagicMock()
+        mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock(window_id="@5"))
+        mock_tmux.capture_pane = AsyncMock(return_value="")
+
+        async def _fire_typing(bot, user_id, source, **extra):
+            events.append(f"typing:{source}")
+
+        async def _transcribe(*args, **kwargs):
+            events.append("transcribe")
+            return "hello"
+
+        with (
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.session_manager", mock_sm),
+            patch("ccbot.bot._common.session_manager", mock_sm),
+            patch("ccbot.bot.messages.tmux_manager", mock_tmux),
+            patch("ccbot.bot.messages.resolve_voice_backend", return_value="whisper"),
+            patch(
+                "ccbot.bot.messages.transcribe_voice",
+                new=AsyncMock(side_effect=_transcribe),
+            ),
+            patch(
+                "ccbot.bot.messages.fire_typing",
+                new=AsyncMock(side_effect=_fire_typing),
+            ),
+            patch("ccbot.bot.messages.safe_reply", new=AsyncMock()),
+        ):
+            from ccbot.bot.messages import voice_handler
+
+            await voice_handler(update, context)
+
+        assert "typing:voice_handler.received" in events
+        assert events.index("typing:voice_handler.received") < events.index(
+            "transcribe"
+        )
+
+    @pytest.mark.asyncio
+    async def test_dispatches_through_same_path_as_text(self):
+        """Once transcribed, the text is handed to _dispatch_text_to_active
+        — the exact function text_handler uses — not a voice-specific
+        send/repost flow."""
+        update = _make_voice_update()
+        context = _make_context()
+
+        mock_sm = MagicMock()
+        mock_sm.get_active_window.return_value = "@5"
+
+        mock_tmux = MagicMock()
+        mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock(window_id="@5"))
+        mock_tmux.capture_pane = AsyncMock(return_value="")
+
+        mock_dispatch = AsyncMock()
+
+        with (
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.session_manager", mock_sm),
+            patch("ccbot.bot._common.session_manager", mock_sm),
+            patch("ccbot.bot.messages.tmux_manager", mock_tmux),
+            patch("ccbot.bot.messages.resolve_voice_backend", return_value="whisper"),
+            patch(
+                "ccbot.bot.messages.transcribe_voice",
+                new=AsyncMock(return_value="hello from voice"),
+            ),
+            patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
+            patch("ccbot.bot.messages.safe_reply", new=AsyncMock()),
+            patch("ccbot.bot.messages._dispatch_text_to_active", new=mock_dispatch),
+        ):
+            from ccbot.bot.messages import voice_handler
+
+            await voice_handler(update, context)
+
+        mock_dispatch.assert_called_once_with(
+            update, context, update.effective_user.id, "@5", "hello from voice"
+        )

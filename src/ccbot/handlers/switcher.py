@@ -137,7 +137,10 @@ def build_session_preview(
     """
     parts: list[str] = []
     emoji = session_emoji(sess)
-    state_label = sess.state if sess.state else "?"
+    if sess.state == "active":
+        state_label = sess.dir_label
+    else:
+        state_label = sess.state if sess.state else "?"
     header = f"{emoji} {sess.name or sess.id} · {state_label}"
     if sess.goal:
         header += f"\ngoal: {sess.goal}"

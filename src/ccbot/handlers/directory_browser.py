@@ -38,6 +38,33 @@ from .callback_data import (
     CB_SESSION_SELECT,
 )
 
+
+def _dir_recency(d: Path) -> float:
+    """Best-effort "last touched" timestamp for a directory.
+
+    A directory's own mtime only changes when an entry is added,
+    removed, or renamed directly inside it — editing an existing file's
+    content, or ``git commit`` (which only touches objects/refs under
+    ``.git/``), leaves the project root's own mtime untouched. That
+    silently buried actively-worked-on git repos under stale scratch
+    dirs in the picker. Take the max of the directory's own mtime and
+    its ``.git/HEAD`` / ``.git/index`` mtimes (updated by nearly every
+    git operation: commit, checkout, add, merge, rebase, reset) without
+    doing a full recursive tree walk.
+    """
+    try:
+        best = d.stat().st_mtime
+    except OSError:
+        return 0.0
+    git_dir = d / ".git"
+    for marker in ("HEAD", "index"):
+        try:
+            best = max(best, (git_dir / marker).stat().st_mtime)
+        except OSError:
+            continue
+    return best
+
+
 # Directories per page in directory browser
 DIRS_PER_PAGE = 6
 
@@ -159,11 +186,7 @@ def build_directory_browser(
                 continue
             if not config.show_hidden_dirs and d.name.startswith("."):
                 continue
-            try:
-                m = d.stat().st_mtime
-            except OSError:
-                m = 0.0
-            candidates.append((m, d.name))
+            candidates.append((_dir_recency(d), d.name))
         candidates.sort(key=lambda t: (-t[0], t[1].lower()))
         subdirs = [name for _, name in candidates]
     except (PermissionError, OSError):

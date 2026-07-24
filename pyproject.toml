@@ -27,7 +27,13 @@ dev = [
     "pytest>=8.0,<9.1",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=6.0",
-    "ruff>=0.8.0",
+    # Pin <0.16 — ruff 0.16 promoted a large set of rules (BLE001, I001,
+    # SIM, UP, S, RUF, …) into the DEFAULT lint select, which flags ~250
+    # pre-existing style issues repo-wide and breaks ``ruff check`` in CI
+    # (there is no committed lockfile, so ``uv sync`` resolves to the
+    # latest ruff). Keeping <0.16 holds the old default ruleset. Lift the
+    # bound in a dedicated cleanup commit that also fixes the new findings.
+    "ruff>=0.8.0,<0.16",
 ]
 # macOS-only optional: Apple Speech framework bindings used by the
 # native Apple Speech voice backend. Falls back to whisper.cpp if missing.

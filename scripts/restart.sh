@@ -40,14 +40,33 @@ if ! tmux list-windows -t "$TMUX_SESSION" -F '#{window_name}' 2>/dev/null | grep
     exit 1
 fi
 
-# Detect a running ccbot process. We deliberately avoid `pstree` (not on
-# macOS by default) and instead match on the process command line.
-is_ccbot_running() {
-    pgrep -f 'uv run ccbot|\.venv/bin/ccbot' > /dev/null 2>&1
+# Detect a running ccbot process, SCOPED to this CCBOT_DIR's singleton
+# lock holder. A bare `pgrep -f 'uv run ccbot'` also matches an unrelated
+# ccbot instance on the same host (different CCBOT_DIR — e.g. a second
+# bot deployment) and would kill it as collateral damage: discovered
+# 2026-07-24 when restarting instance A also SIGKILLed instance B
+# (`~/.ccbot2`), which only survived because its own supervisor
+# auto-restarted it. The flock holder is the authoritative "this
+# instance" signal — main.py holds it for the process lifetime
+# (FD_CLOEXEC), so whoever has `$bot_lock` open IS the running instance
+# for this CCBOT_DIR. We deliberately avoid `pstree` (not on macOS by
+# default); lsof/fuser are the portable "who holds this fd" tools.
+ccbot_pids() {
+    if [ -e "$bot_lock" ] && command -v lsof > /dev/null 2>&1; then
+        lsof -t "$bot_lock" 2>/dev/null
+    elif [ -e "$bot_lock" ] && command -v fuser > /dev/null 2>&1; then
+        fuser "$bot_lock" 2>/dev/null | grep -oE '[0-9]+'
+    else
+        # Last resort — no lock file yet, or neither lsof nor fuser is
+        # installed. Falls back to the old unscoped match, which CAN hit
+        # an unrelated instance; only reached when the precise check is
+        # unavailable.
+        pgrep -f 'uv run ccbot|\.venv/bin/ccbot' 2>/dev/null
+    fi
 }
 
-ccbot_pids() {
-    pgrep -f 'uv run ccbot|\.venv/bin/ccbot' 2>/dev/null
+is_ccbot_running() {
+    [ -n "$(ccbot_pids)" ]
 }
 
 # ``bot_lock_free`` — true when nothing holds the singleton flock. The

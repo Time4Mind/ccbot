@@ -108,6 +108,17 @@ class Session:
         """Generate a fresh short id (8 lowercase hex chars)."""
         return secrets.token_hex(4)
 
+    @property
+    def dir_label(self) -> str:
+        """Basename of ``workdir``, truncated to 7 chars + an ellipsis.
+
+        Used in place of the state label when the session is active —
+        "active" in the header of a session you're looking at right now
+        is redundant; the directory name is the useful signal instead.
+        """
+        name = self.workdir.rstrip("/").rsplit("/", 1)[-1] if self.workdir else ""
+        return name[:7] + "…" if len(name) > 7 else name
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,

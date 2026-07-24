@@ -1134,7 +1134,7 @@ def _render_card(
     user_id: int | None = None,
 ) -> str:
     emoji = session_emoji(sess)
-    state_label = sess.state
+    state_label = sess.dir_label if sess.state == "active" else sess.state
     cont_marker = " · …continued" if state.is_continuation else ""
     # Last-event timestamp in the header — HH:MM:SS of the most recent
     # event of any kind (per-event timestamps inside the body stay HH:MM).

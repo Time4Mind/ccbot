@@ -100,6 +100,48 @@ def _escape_outside_code(text: str) -> str:
 _TABLE_SEP_CELL_RE = re.compile(r"^:?-+:?$")
 
 
+def _is_sep_row(line: str) -> bool:
+    """True if ``line`` is a GFM table separator row (``|---|:--:|``)."""
+    cells = [c.strip() for c in line.strip().strip("|").split("|")]
+    return bool(cells) and all(_TABLE_SEP_CELL_RE.match(c) for c in cells if c)
+
+
+def _ensure_blank_before_tables(text: str) -> str:
+    """Insert a blank line before a GFM table that abuts a text paragraph.
+
+    CommonMark only recognises a pipe table when a blank line separates
+    it from the paragraph above; otherwise the header row is absorbed
+    into that paragraph and the rich parser emits plain text instead of
+    a native ``table`` block. Session output routinely writes a caption
+    (``**В работе**``) directly above the table, so we normalise it here.
+
+    A table is a ``|``-led line whose NEXT line is a GFM separator row.
+    We only inject when the previous emitted line is non-blank text (not
+    itself a ``|`` row), and never inside fenced code blocks.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    in_fence = False
+    for idx, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if (
+            not in_fence
+            and stripped.startswith("|")
+            and idx + 1 < len(lines)
+            and _is_sep_row(lines[idx + 1])
+            and out
+            and out[-1].strip()
+            and not out[-1].lstrip().startswith("|")
+        ):
+            out.append("")
+        out.append(line)
+    return "\n".join(out)
+
+
 def _sub_wrap_row(line: str) -> str:
     """Wrap each cell of one table row in ``<sub>…</sub>``."""
     cells = line.strip().strip("|").split("|")
@@ -172,6 +214,7 @@ def _render_details_headed(m: re.Match[str]) -> str:
 
 def to_rich_markdown(text: str) -> str:
     """Convert internal markdown to Rich Markdown for ``sendRichMessage``."""
+    text = _ensure_blank_before_tables(text)
     text = _escape_outside_code(text)
     text = _EXPHEADED_RE.sub(_render_details_headed, text)
     text = _EXPQUOTE_RE.sub(_render_details, text)

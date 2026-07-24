@@ -108,6 +108,32 @@ class TestSubWrapTables:
         assert "| <sub>a</sub> | <sub>b</sub> |" in out
 
 
+class TestBlankLineBeforeTables:
+    def test_blank_inserted_after_caption(self) -> None:
+        out = rich.to_rich_markdown("**В работе**\n| a | b |\n|---|---|\n| 1 | 2 |")
+        assert "**В работе**\n\n| <sub>a</sub>" in out
+
+    def test_existing_blank_not_doubled(self) -> None:
+        out = rich.to_rich_markdown("caption\n\n| a | b |\n|---|---|\n| 1 | 2 |")
+        assert "caption\n\n| <sub>a</sub>" in out
+        assert "caption\n\n\n" not in out
+
+    def test_table_at_start_untouched(self) -> None:
+        out = rich.to_rich_markdown("| a | b |\n|---|---|\n| 1 | 2 |")
+        assert out.startswith("| <sub>a</sub>")
+
+    def test_no_blank_when_next_line_not_separator(self) -> None:
+        # a lone pipe line after text is not a table — no blank injected
+        text = "caption\n| just pipes |\nmore"
+        out = rich.to_rich_markdown(text)
+        assert "caption\n| just pipes |" in out
+
+    def test_pipe_table_inside_fence_untouched(self) -> None:
+        text = "caption\n```\n| a | b |\n|---|---|\n```"
+        out = rich.to_rich_markdown(text)
+        assert "caption\n```\n| a | b |" in out
+
+
 def _sent_message_json() -> dict[str, Any]:
     return {
         "message_id": 42,

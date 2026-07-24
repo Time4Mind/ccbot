@@ -252,8 +252,8 @@ class TestVoicePendingCardMarker:
 
         state = CardState()
 
-        async def _resume_card_view(bot, user_id, sess):
-            events.append(f"resume_card_view:voice_pending={state.voice_pending}")
+        async def _repost_card(bot, user_id, sess):
+            events.append(f"repost_card:voice_pending={state.voice_pending}")
 
         async def _transcribe(*args, **kwargs):
             events.append(f"transcribe:voice_pending={state.voice_pending}")
@@ -274,25 +274,25 @@ class TestVoicePendingCardMarker:
             patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
             patch("ccbot.bot.messages.safe_reply", new=AsyncMock()),
             patch("ccbot.bot.messages.get_card_state", return_value=state),
+            patch("ccbot.bot.messages.resume_card_view", new=AsyncMock()),
             patch(
-                "ccbot.bot.messages.resume_card_view",
-                new=AsyncMock(side_effect=_resume_card_view),
+                "ccbot.bot.messages.repost_card",
+                new=AsyncMock(side_effect=_repost_card),
             ),
-            patch("ccbot.bot.messages.repost_card", new=AsyncMock()),
             patch("ccbot.bot.messages._dispatch_text_to_active", new=mock_dispatch),
         ):
             from ccbot.bot.messages import voice_handler
 
             await voice_handler(update, context)
 
-        # The card was edited in place WITH the pending marker set, and
-        # that edit happened before transcription started — NOT via
-        # repost_card, which would race the per-user switcher-carrier
-        # pointer across concurrent sessions (see the comment in
-        # voice_handler for the full race description).
-        assert "resume_card_view:voice_pending=True" in events
+        # The card was REPOSTED (fresh message below the user's voice)
+        # with the pending marker set, and that repost happened before
+        # transcription started. An in-place edit is not enough: the card
+        # sits above the voice message the user just sent, so the user
+        # would see nothing at all for the whole transcription.
+        assert "repost_card:voice_pending=True" in events
         assert "transcribe:voice_pending=True" in events
-        assert events.index("resume_card_view:voice_pending=True") < events.index(
+        assert events.index("repost_card:voice_pending=True") < events.index(
             "transcribe:voice_pending=True"
         )
         # Cleared again once transcription finished.

@@ -172,6 +172,67 @@ def _card_lock(user_id: int, session_id: str) -> asyncio.Lock:
     return lock
 
 
+# Per-user spawn lock. ``_send_card`` holds it across the whole
+# "send the message → strip every other card's keyboard → record the new
+# switcher carrier" sequence, so two *different sessions* spawning cards
+# concurrently (a voice repost racing a typed-message repost) can't
+# interleave those steps and leave the per-user ``last_switcher_msg_id``
+# pointing at the older message — the desync behind "I tap the switcher
+# on the last message but the previous one gets edited".
+#
+# ``_card_lock`` alone doesn't cover this: it is keyed per (user,
+# session), so two sessions never contend on it. Lock order is always
+# session-lock → user-lock; no path acquires them the other way round.
+_user_send_locks: dict[int, asyncio.Lock] = {}
+
+
+def _user_send_lock(user_id: int) -> asyncio.Lock:
+    """Get-or-create the cross-session spawn-serialization lock for a user."""
+    lock = _user_send_locks.get(user_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _user_send_locks[user_id] = lock
+    return lock
+
+
+async def _strip_stale_switchers(
+    bot: Bot, user_id: int, keep_msg_id: int, keep_session_id: str | None
+) -> None:
+    """Leave exactly ONE message in the chat carrying a live footer /
+    switcher keyboard: ``keep_msg_id``.
+
+    Stripping only ``last_switcher_msg_id`` (the previous behaviour) is
+    not enough — that pointer is a single per-user slot, while every
+    session owns its own card message and ``_edit_card`` re-attaches a
+    keyboard on every edit without moving the pointer. Two live cards
+    could therefore end up tappable at once, and a switcher tap would
+    repaint whichever message the tap came from rather than the newest.
+
+    So: strip the pointer's message *and* every other known card message
+    for this user. Cards in kb-mode are skipped — their keyboard is the
+    AskUserQuestion / ExitPlanMode navigation grid the user still has to
+    act on, not a stale switcher.
+    """
+    targets: list[int] = []
+    prev = session_manager.get_last_switcher_msg(user_id)
+    if prev and prev != keep_msg_id:
+        targets.append(prev)
+    for (uid, sid), st in _cards.items():
+        if uid != user_id or sid == keep_session_id or st.in_kb_mode:
+            continue
+        if st.msg_id is not None and st.msg_id != keep_msg_id:
+            if st.msg_id not in targets:
+                targets.append(st.msg_id)
+    for msg_id in targets:
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=user_id, message_id=msg_id, reply_markup=None
+            )
+        except Exception:
+            # Already stripped / deleted / not editable — nothing to do.
+            pass
+
+
 # Reverse lookup so reply-quote can route a one-shot user message to the
 # session that owns the message being replied to. Capped via FIFO eviction.
 _MSG_REGISTRY_LIMIT = 2000
@@ -781,9 +842,15 @@ def transfer_card_to_carrier(
     from_session_id: str | None,
     to_session_id: str,
     target_message_id: int,
-) -> None:
+) -> int | None:
     """Hand off ownership of ``target_message_id`` from one session's
     live card to another's. Called when the switcher flips active.
+
+    Returns the message id of the TO session's *previous* card when it
+    was a different message — that message is now orphaned (nothing will
+    ever edit it again) and the caller must strip its keyboard, or the
+    chat ends up with two tappable switchers. Returns None when there is
+    nothing to clean up.
 
     Effect:
       - FROM session is paused (``in_menu_view=True``) so its events
@@ -812,7 +879,7 @@ def transfer_card_to_carrier(
                 "reason": "same_session",
             },
         )
-        return
+        return None
     from_msg_id_was: int | None = None
     if from_session_id:
         from_state = _cards.get((user_id, from_session_id))
@@ -861,6 +928,24 @@ def transfer_card_to_carrier(
             "carrier_msg_id": target_message_id,
         },
     )
+    if to_msg_id_was is not None and to_msg_id_was != target_message_id:
+        return to_msg_id_was
+    return None
+
+
+def card_is_below(user_id: int, session_id: str, message_id: int) -> bool:
+    """True when the session's live card already sits *below*
+    ``message_id`` in the chat.
+
+    Telegram message ids are monotonically increasing per chat, so a
+    card whose ``msg_id`` is greater than the user's message was posted
+    after it and is already "in front" — a repost would only churn.
+    Used by the voice flow: the card is reposted at voice-receipt, so
+    when whisper returns 30 s later there is nothing to move, just the
+    🎙 marker to drop with an in-place edit.
+    """
+    state = _cards.get((user_id, session_id))
+    return state is not None and state.msg_id is not None and state.msg_id > message_id
 
 
 def detach_paused_cards_at_message(user_id: int, message_id: int) -> None:
@@ -1043,14 +1128,7 @@ async def paint_card_on_carrier(
         state.last_edit_ts = time.monotonic()
         # Migrate the switcher pointer onto the new carrier so previous
         # switcher rows in chat stop being the canonical surface.
-        prev = session_manager.get_last_switcher_msg(user_id)
-        if prev and prev != carrier_msg_id:
-            try:
-                await bot.edit_message_reply_markup(
-                    chat_id=user_id, message_id=prev, reply_markup=None
-                )
-            except Exception:
-                pass
+        await _strip_stale_switchers(bot, user_id, carrier_msg_id, sess.id)
         session_manager.set_last_switcher_msg(user_id, carrier_msg_id)
 
 
@@ -1128,6 +1206,27 @@ async def _send_card(
 ) -> None:
     """Send a brand-new card message and remember it as the live card.
 
+    Serialized per user (``_user_send_lock``) so concurrent spawns from
+    two different sessions can't interleave the send / strip / pointer
+    update and desync which message carries the live switcher.
+    """
+    async with _user_send_lock(user_id):
+        await _send_card_locked(
+            bot, user_id, sess, state, text=text, reply_markup=reply_markup
+        )
+
+
+async def _send_card_locked(
+    bot: Bot,
+    user_id: int,
+    sess: Session,
+    state: CardState,
+    *,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
+    """Body of :func:`_send_card`; call only with the user send-lock held.
+
     ``reply_markup`` overrides the default footer keyboard. Used by
     ``finalize_task`` to attach the idle-state Kill row to a completed
     result instead of the busy-state Stop row.
@@ -1202,19 +1301,12 @@ async def _send_card(
         if sent is None:
             return
         state.is_photo_msg = False
-    # Strip the previous switcher (if any), then remember this one as the
-    # carrier of the live switcher.
-    prev = session_manager.get_last_switcher_msg(user_id)
-    if prev and prev != sent.message_id:
-        try:
-            await bot.edit_message_reply_markup(
-                chat_id=user_id, message_id=prev, reply_markup=None
-            )
-        except Exception:
-            pass
+    # Exactly one message in the chat may carry a live switcher, and it is
+    # this one — strip every other card's keyboard, not just the pointer's.
+    state.msg_id = sent.message_id
+    await _strip_stale_switchers(bot, user_id, sent.message_id, sess.id)
     if keyboard is not None:
         session_manager.set_last_switcher_msg(user_id, sent.message_id)
-    state.msg_id = sent.message_id
     state.last_rendered = text
     _register_msg(user_id, sent.message_id, sess.id)
     session_manager.set_card_msg(user_id, sent.message_id)

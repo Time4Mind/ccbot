@@ -47,6 +47,21 @@ class TestCardHeaderDirLabel:
         assert "*my-session* · " in text.split("\n")[0]
 
 
+class TestVoicePendingMarker:
+    def test_marker_shown_when_pending(self) -> None:
+        sess = _session()
+        state = CardState()
+        state.voice_pending = True
+        text = _render_card(sess, state)
+        assert "🎙 voice message received" in text
+
+    def test_marker_absent_when_not_pending(self) -> None:
+        sess = _session()
+        state = CardState()
+        text = _render_card(sess, state)
+        assert "🎙" not in text
+
+
 class TestSwitcherPreviewDirLabel:
     def test_active_preview_shows_dirname(self) -> None:
         sess = _session()

@@ -49,6 +49,7 @@ from ..handlers.notifications import (
     begin_repost_intent,
     end_repost_intent,
     enter_kb_mode,
+    get_card_state,
     lookup_session_for_message,
     repost_card,
     resume_card_view,
@@ -554,6 +555,19 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 # --- voice ---
 
 
+async def _clear_voice_pending_marker(bot: Bot, user_id: int, sess: Session) -> None:
+    """Repaint the card without the voice_pending header line.
+
+    Only needed on the transcription-failure paths — the success path's
+    ``_dispatch_text_to_active`` already reposts unconditionally, which
+    naturally drops the marker once ``voice_pending`` is cleared.
+    """
+    try:
+        await resume_card_view(bot, user_id, sess)
+    except Exception as e:
+        logger.debug("voice-pending marker clear failed: %s", e)
+
+
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Transcribe the voice and forward as text to the active session."""
     user = update.effective_user
@@ -589,11 +603,23 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     # wid is pinned NOW, before the slow download/transcribe steps — a
-    # switch afterwards can't redirect this voice message. Fire the same
-    # instant typing indicator text gets (text_handler fires it before
-    # its own slow steps too) so the "message accepted" signal shows up
-    # right away instead of only after transcription finishes.
+    # switch afterwards can't redirect this voice message.
     await fire_typing(context.bot, user.id, "voice_handler.received", window_id=wid)
+
+    # Same reaction text gets: the live card reposts as a new message
+    # right away, not only once the text is known. voice_pending adds a
+    # header line so the reposted card visibly shows "voice received,
+    # already bound here" using the normal card surface — no separate
+    # reply. Skipped for an orphan window (no Session record).
+    sess = session_manager.find_session_by_window(wid)
+    card_state = get_card_state(user.id, sess) if sess is not None else None
+    if sess is not None and card_state is not None:
+        card_state.voice_pending = True
+        try:
+            await resume_card_view(context.bot, user.id, sess)
+            await repost_card(context.bot, user.id, sess)
+        except Exception as e:
+            logger.debug("voice-pending card repost failed: %s", e)
 
     voice_file = await update.message.voice.get_file()
     ogg_data = bytes(await voice_file.download_as_bytearray())
@@ -601,12 +627,21 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     try:
         text = await transcribe_voice(ogg_data, user_id=user.id)
     except ValueError as e:
+        if sess is not None and card_state is not None:
+            card_state.voice_pending = False
+            await _clear_voice_pending_marker(context.bot, user.id, sess)
         await safe_reply(update.message, f"⚠ {e}")
         return
     except Exception as e:
+        if sess is not None and card_state is not None:
+            card_state.voice_pending = False
+            await _clear_voice_pending_marker(context.bot, user.id, sess)
         logger.error("Voice transcription failed: %s", e)
         await safe_reply(update.message, f"⚠ Transcription failed: {e}")
         return
+
+    if card_state is not None:
+        card_state.voice_pending = False
 
     await fire_typing(context.bot, user.id, "voice_handler.transcribed", window_id=wid)
     cancel_bash_capture(user.id, wid)

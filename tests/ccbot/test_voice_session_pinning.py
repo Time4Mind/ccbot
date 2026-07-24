@@ -196,6 +196,7 @@ class TestVoiceReactionParity:
 
         mock_sm = MagicMock()
         mock_sm.get_active_window.return_value = "@5"
+        mock_sm.find_session_by_window.return_value = None
 
         mock_tmux = MagicMock()
         mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock(window_id="@5"))
@@ -224,3 +225,121 @@ class TestVoiceReactionParity:
         mock_dispatch.assert_called_once_with(
             update, context, update.effective_user.id, "@5", "hello from voice"
         )
+
+
+class TestVoicePendingCardMarker:
+    @pytest.mark.asyncio
+    async def test_card_reposted_with_pending_marker_before_transcription(self):
+        """When the window has a bound Session, the live card reposts
+        immediately (before transcription) with voice_pending set, and
+        the flag is cleared again once transcription completes."""
+        update = _make_voice_update()
+        context = _make_context()
+        events: list[str] = []
+
+        mock_sm = MagicMock()
+        mock_sm.get_active_window.return_value = "@5"
+        pinned_sess = MagicMock()
+        pinned_sess.id = "sess1"
+        pinned_sess.name = "scraper"
+        mock_sm.find_session_by_window.return_value = pinned_sess
+
+        mock_tmux = MagicMock()
+        mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock(window_id="@5"))
+        mock_tmux.capture_pane = AsyncMock(return_value="")
+
+        from ccbot.handlers.card_model import CardState
+
+        state = CardState()
+
+        async def _resume_card_view(bot, user_id, sess):
+            events.append("resume_card_view")
+
+        async def _repost_card(bot, user_id, sess):
+            events.append(f"repost_card:voice_pending={state.voice_pending}")
+
+        async def _transcribe(*args, **kwargs):
+            events.append(f"transcribe:voice_pending={state.voice_pending}")
+            return "hello"
+
+        mock_dispatch = AsyncMock()
+
+        with (
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.session_manager", mock_sm),
+            patch("ccbot.bot._common.session_manager", mock_sm),
+            patch("ccbot.bot.messages.tmux_manager", mock_tmux),
+            patch("ccbot.bot.messages.resolve_voice_backend", return_value="whisper"),
+            patch(
+                "ccbot.bot.messages.transcribe_voice",
+                new=AsyncMock(side_effect=_transcribe),
+            ),
+            patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
+            patch("ccbot.bot.messages.safe_reply", new=AsyncMock()),
+            patch("ccbot.bot.messages.get_card_state", return_value=state),
+            patch(
+                "ccbot.bot.messages.resume_card_view",
+                new=AsyncMock(side_effect=_resume_card_view),
+            ),
+            patch(
+                "ccbot.bot.messages.repost_card",
+                new=AsyncMock(side_effect=_repost_card),
+            ),
+            patch("ccbot.bot.messages._dispatch_text_to_active", new=mock_dispatch),
+        ):
+            from ccbot.bot.messages import voice_handler
+
+            await voice_handler(update, context)
+
+        # The card was reposted WITH the pending marker set, and that
+        # repost happened before transcription started.
+        assert "repost_card:voice_pending=True" in events
+        assert "transcribe:voice_pending=True" in events
+        assert events.index("repost_card:voice_pending=True") < events.index(
+            "transcribe:voice_pending=True"
+        )
+        # Cleared again once transcription finished.
+        assert state.voice_pending is False
+
+    @pytest.mark.asyncio
+    async def test_marker_cleared_on_transcription_failure(self):
+        """A failed transcription must not leave the card stuck showing
+        the pending marker forever."""
+        update = _make_voice_update()
+        context = _make_context()
+
+        mock_sm = MagicMock()
+        mock_sm.get_active_window.return_value = "@5"
+        pinned_sess = MagicMock()
+        pinned_sess.id = "sess1"
+        mock_sm.find_session_by_window.return_value = pinned_sess
+
+        mock_tmux = MagicMock()
+        mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock(window_id="@5"))
+        mock_tmux.capture_pane = AsyncMock(return_value="")
+
+        from ccbot.handlers.card_model import CardState
+
+        state = CardState()
+
+        with (
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.session_manager", mock_sm),
+            patch("ccbot.bot._common.session_manager", mock_sm),
+            patch("ccbot.bot.messages.tmux_manager", mock_tmux),
+            patch("ccbot.bot.messages.resolve_voice_backend", return_value="whisper"),
+            patch(
+                "ccbot.bot.messages.transcribe_voice",
+                new=AsyncMock(side_effect=ValueError("bad audio")),
+            ),
+            patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
+            patch("ccbot.bot.messages.safe_reply", new=AsyncMock()),
+            patch("ccbot.bot.messages.get_card_state", return_value=state),
+            patch("ccbot.bot.messages.resume_card_view", new=AsyncMock()),
+            patch("ccbot.bot.messages.repost_card", new=AsyncMock()),
+        ):
+            from ccbot.bot.messages import voice_handler
+
+            await voice_handler(update, context)
+
+        assert state.voice_pending is False

@@ -54,17 +54,20 @@ User sends text in DM
 
 ```
 SessionMonitor reads new event for claude session_id S
-  -> for each user whose Session.claude_session_id == S:
+  -> for every allowed user (the session pool is global — see
+     ``all_user_sessions_with_claude_id``), for each of their
+     Sessions with claude_session_id == S:
        active session  -> enqueue + paint the user's live card
-       background sess -> silent: only update handlers.bg_status
-                          (status enum + quota_level + needs_action snapshot)
+       background sess -> update handlers.bg_status (status enum +
+                          needs_action snapshot); optionally one
+                          short push on a state transition
 ```
 
-Background sessions emit **no** Telegram messages of their own — no
-live-card edits, no push, no AskUserQuestion prompt surfacing. Their
-state surfaces only as a panel at the bottom of the active session's
-card via ``handlers.bg_status.render_panel``. See "Background-session
-panel" below.
+Background sessions have **no live card of their own** — no in-chat
+card edits, no AskUserQuestion prompt surfacing. Their state surfaces
+as a panel at the bottom of the active session's card via
+``handlers.bg_status.render_panel``, plus (opt-out) a one-line push on
+transition. See "Background-session panel" below.
 
 ### One-shot reply-quote routing
 
@@ -86,7 +89,7 @@ States:
 - `idle`: tmux window alive, no input from user for >= SESSION_IDLE_TTL. Promoted to `archived` after the same threshold.
 - `archived`: tmux window killed. `claude --resume` rehydrates on restore. Visible in `/archive`.
 - `completed`: archived via `/done`. Tagged for the user; otherwise identical to `archived`.
-- `lost`: tmux window vanished externally. Surfaces in `/list` with a Restore button.
+- `lost`: tmux window vanished externally. Surfaces in the switcher with a Restore button.
 
 Goal closure is done only by the user via `/done <session>`. The bot never auto-closes a goal.
 
@@ -108,7 +111,7 @@ The main / live-card view's footer keyboard is built in `handlers.menu.build_foo
 [+ new] [≡ Menu]                                ← anchored bottom row
 ```
 
-`+ new` and `≡ Menu` share a single row so the two "go-elsewhere" affordances sit side-by-side. The same slot pairs `[+ new] [Back]` in `/list`, and a single `Back` button in `/archive` / Settings sub-screens. `build_switcher_keyboard` takes an `include_new: bool = True` flag — passed `False` by `build_footer_keyboard(screen="main")` and by `build_list_view` so they can compose the bottom pair themselves.
+`+ new` and `≡ Menu` share a single row so the two "go-elsewhere" affordances sit side-by-side. The same slot pairs `[+ new] [Back]` in the Menu → Sessions empty state, and a single `Back` button in `/archive` / Settings sub-screens. `build_switcher_keyboard` takes an `include_new: bool = True` flag — passed `False` by `build_footer_keyboard(screen="main")` so it can compose the bottom pair itself.
 
 ### Switcher tap → history view
 
@@ -119,13 +122,13 @@ When the user taps a session button in the main switcher:
 3. If the TO session has a stashed `bg_status.pending_interactive_ui` *and* the live pane still shows the prompt, the carrier is claimed as the live card and flipped into kb-mode (`enter_kb_mode`) so the CB_ASK_* keyboard drives the prompt. Otherwise the carrier is painted as the session's live card (`paint_card_on_carrier` — header + paginated body + bg-panel + footer) and receives subsequent claude events in place.
 4. `bg_status.mark_seen` + `prune_seen` drop the just-viewed badge from the panel.
 
-Pagination (`CB_HISTORY_PREV/NEXT`) preserves the original `extra_rows` by stamping `context.user_data['_history_origin']` (`switcher` or `menu_list`) when the history view is first painted; the pagination handler rebuilds the matching footer from this hint. There is no explicit "History" button in the footer — pagination buttons themselves are the navigation affordance, and the user lands on the paginated view via switcher tap, Menu → List, or `/screenshot Back` (both `m` and `l` origins now paint history).
+Pagination (`CB_HISTORY_PREV/NEXT`) walks the card's own pages and keeps the main footer under them. There is no explicit "History" button in the footer — pagination buttons themselves are the navigation affordance, and the user lands on the paginated view via switcher tap, Menu → Sessions, or `/screenshot` → `Back`.
 
-Tapping a session in the `/list` view (Menu → List) instead re-renders the list view with the new active highlighted — the management surface is the more useful affordance in that context. Tracked via `context.user_data['_in_list_view']`, cleared on `CB_MM_BACK`, `CB_FT_MORE`, and any typed message.
+Menu → Sessions (`CB_MM_LIST`) is **not** a separate list screen: it paints the active session's live card onto the carrier (`paint_card_on_carrier`), because that card already carries the switcher row and in-card pagination. Only the no-active-session case renders a thin empty state with `[+ new] [Back]`.
 
 ### Per-session live card
 
-Each active session has one "live card" message in chat, which the bot keeps editing. The card carries the latest tool/event one-line summary plus the final result on completion or error. A fresh card pre-seeds itself with up to `CARD_PRIOR_CONTEXT` transcript entries from before the user's most recent message (`_seed_prior_context_lines`). New card is opened on session completion, error, stale pause, or overflow.
+Each active session has one "live card" message in chat, which the bot keeps editing. The card carries the latest tool/event one-line summary plus the final result on completion or error. A fresh card pre-seeds itself from the session's JSONL with the last `card_history` end-of-turn boundaries (`_ensure_seeded` → `_seed_events_from_jsonl`; the user setting defaults to `CARD_SEED_TURNS = 20`). New card is opened on session completion, error, stale pause, or overflow.
 
 The active session's card body ends with the bg-status panel block (see below). Card edits coalesce within `CARD_EDIT_LAG`.
 
@@ -145,7 +148,13 @@ The active session's card body ends with the bg-status panel block (see below). 
 
 `render_panel(user_id, active_session_id)` formats the block appended to the bottom of the active card. `BG_STATUS_MAX` caps visible badges; older rows collapse to `+N more`.
 
-Bg sessions never emit push notifications.
+A bg session also pushes a one-liner (`push_event`) when
+`bg_status.update_status` reports an actual *transition* — the return
+value is the dedup, so a re-affirmed state never re-pushes. Three
+independent user settings gate it, all defaulting to `True`:
+`bg_notify_finished`, `bg_notify_error`, `bg_notify_needs_action`
+(`bot/session_events.py`). With all three off, background sessions are
+completely silent and only the panel badge changes.
 
 ### Push notifications
 
@@ -155,8 +164,9 @@ Reserved for events that genuinely cannot be deferred to a card edit:
 - AskUserQuestion / ExitPlanMode for the **active** session (rendered as a dedicated message with arrow / Enter / Esc keyboard)
 - session lifecycle (`created` / `restored` / `archived` / `done` / `killed`)
 - inbox file received
-
-Bg sessions never push, period.
+- a **background** session's state transition into finished / error /
+  needs_action — one short line, gated per-type by the `bg_notify_*`
+  user settings (default on)
 
 ### Typing indicator
 
@@ -167,7 +177,7 @@ Bg sessions never push, period.
 Only a few commands are published via `setMyCommands` (the Telegram
 `/`-menu, `bot/app.py`); the rest are registered handlers that work
 when typed but stay out of the menu. There is **no** `/list`, `/use`,
-or `/rename` — the inline switcher / Menu → List replace them.
+or `/rename` — the inline switcher / Menu → Sessions replace them.
 
 Published:
 

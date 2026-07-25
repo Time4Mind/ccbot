@@ -52,6 +52,135 @@ _pages_cache: dict[str, tuple[float, int, list[str], int]] = {}
 # a manually-edited file would invalidate the cache.
 _archived_pages_cache: dict[str, tuple[float, int, list[str], int]] = {}
 
+# Card-engine render cache for archived sessions (Archive → Inspect).
+# Same freeze-tag shape as ``_archived_pages_cache`` but holds the pages
+# produced by the live-card renderer (collapsible thinking / tool
+# spoilers) rather than the flat concat. Keyed by claude_session_id;
+# a page-line-budget change re-keys nothing, so we fold the budget into
+# the value tuple's implicit invalidation by clearing on cache miss only
+# — the budget rarely changes and a stale layout self-heals on the next
+# transcript mutation. Kept separate so both renderers can coexist.
+_archived_card_cache: dict[str, tuple[float, int, list[str], int]] = {}
+
+
+async def render_archived_card_pages(
+    sess: Session, user_id: int | None = None
+) -> tuple[list[str], int] | None:
+    """Render an archived session's transcript with the live-card engine.
+
+    Unlike :func:`render_archived_history_pages` — which flattens every
+    message into one page and strips the expandable-quote sentinels, so
+    long thinking / tool outputs dump inline as an unreadable wall — this
+    reuses ``card_model``'s event pipeline (``_build_event`` +
+    ``_apply_tool_result`` + ``paginate_events_for_card`` + ``render_page``).
+    Thinking blocks and tool bodies collapse into ``<details>`` spoilers
+    exactly like the active session card, and pagination follows answer
+    boundaries + the user's line budget.
+
+    Returns ``(pages, event_count)`` or ``None`` when no transcript
+    resolves (no claude_session_id, missing file, empty transcript).
+    """
+    sid = sess.claude_session_id
+    if not sid or not sess.workdir:
+        return None
+    fp = build_session_file_path(sid, sess.workdir)
+    if fp is None or not fp.exists():
+        # Glob fallback — cwd on the record may have shifted since archival.
+        pattern = f"*/{sid}.jsonl"
+        matches = list(config.claude_projects_path.glob(pattern))
+        if not matches:
+            return None
+        fp = matches[0]
+
+    try:
+        st = fp.stat()
+    except OSError:
+        return None
+
+    cached = _archived_card_cache.get(sid)
+    if cached is not None and cached[0] == st.st_mtime and cached[1] == st.st_size:
+        return list(cached[2]), cached[3]
+
+    # Lazy imports — card_model pulls in the whole notification model layer;
+    # keep it off history.py's import-time path (and avoid any cycle).
+    import time as _time
+
+    from ..session_monitor import NewMessage
+    from .card_model import (
+        CardState,
+        _apply_tool_result,
+        _build_event,
+        paginate_events_for_card,
+        render_page,
+    )
+
+    try:
+        raw = fp.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        logger.debug("archived card read failed for %s: %s", fp, e)
+        return None
+    raw_entries: list[dict[str, Any]] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            raw_entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    try:
+        parsed_list, _ = TranscriptParser.parse_entries(raw_entries, pending_tools=None)
+    except Exception as e:
+        logger.debug("archived card parse failed for %s: %s", fp, e)
+        return None
+    if not parsed_list:
+        return None
+
+    # ParsedEntry → NewMessage → Event, folding tool_results into their
+    # matching tool_use (same loop the live-card JSONL seed uses).
+    state = CardState()
+    for p in parsed_list:
+        ct = getattr(p, "content_type", "text")
+        msg = NewMessage(
+            session_id="archive",
+            text=getattr(p, "text", "") or "",
+            is_complete=True,
+            content_type=ct,
+            tool_use_id=getattr(p, "tool_use_id", None),
+            role=getattr(p, "role", "assistant"),
+            tool_name=getattr(p, "tool_name", None),
+            image_data=getattr(p, "image_data", None),
+            stop_reason=getattr(p, "stop_reason", None),
+            timestamp=getattr(p, "timestamp", "") or "",
+            is_error=getattr(p, "is_error", False),
+        )
+        ev = _build_event(msg)
+        if ct == "tool_result" and _apply_tool_result(state, ev):
+            continue
+        state.events.append(ev)
+    if not state.events:
+        return None
+
+    # Every event in an archived transcript is finished — nothing is
+    # streaming. Stamp ``completed_at`` so ``_is_in_flight`` never flags
+    # the terminal event of a page as live and renders a bogus ``⏳
+    # 3968:24`` elapsed against ``now`` instead of the entry's HH:MM.
+    for ev in state.events:
+        if ev.completed_at is None:
+            ev.completed_at = ev.started_at
+
+    now = _time.time()
+    label = sess.name or sess.id
+    header = f"📦 [{label}]"
+    pages_events = paginate_events_for_card(state, user_id)
+    pages: list[str] = []
+    for pe in pages_events:
+        body = render_page(pe, now)
+        pages.append(f"{header}\n\n{body}" if body.strip() else header)
+    total = len(state.events)
+    _archived_card_cache[sid] = (st.st_mtime, st.st_size, list(pages), total)
+    return list(pages), total
+
 
 async def render_archived_history_pages(
     sess: Session,

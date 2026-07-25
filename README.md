@@ -30,28 +30,36 @@ keystrokes.
 
 ## Differences from upstream
 
-This fork (`feat/dm-multisession`) deviates from upstream `ccbot` in
-ways that are intentional and not negotiable:
+This fork deviates from upstream `ccbot` in ways that are intentional
+and not negotiable:
 
 - **DM-only.** No supergroup, no forum topics, no thread routing. The
-  only chat the bot ever sees is a private 1-1 DM with one allowlisted
+  only chat the bot ever sees is a private 1-1 DM with an allowlisted
   Telegram user id.
-- **Single-user.** `ALLOWED_USERS` is expected to contain exactly one
-  numeric Telegram id. Multi-tenant deployments are out of scope. Any
+- **Personal, allowlist-gated.** `ALLOWED_USERS` normally holds a
+  single numeric Telegram id. Several ids are supported as a *shared
+  workspace* — the session pool is global and every claude event is
+  fanned out to each allowed user's own DM (own live card, own
+  switcher). It is not multi-tenant: everybody sees everything. Any
   message from a non-allowlisted sender is silently dropped (no reply,
   no callback toast) — the bot looks inert to outsiders.
 - **Bypass-only.** `claude` is launched with
   `--dangerously-skip-permissions`. There is no permission relay UI in
   Telegram — if you don't trust the model with full host access, run
-  upstream instead.
+  upstream instead. (The residual Yes/No prompts that bypass mode does
+  *not* cover — e.g. WebFetch domain trust — surface as a keyboard, or
+  can be auto-answered via `Settings → Auto-approve`.)
 - **Multi-session, inline-switcher.** A single user can have many
   sessions in the same DM; an inline keyboard under the most recent
   bot message switches between them.
-- **MarkdownV2** rendering pipeline (via `telegramify-markdown`) with
-  automatic plain-text fallback on parse failure. Upstream uses HTML.
-- **Hook-based session tracking.** A Claude Code `SessionStart` hook
-  writes `session_map.json`; the monitor polls it. No reliance on
-  process-tree introspection or claude SDK.
+- **Rich messages first.** Output goes out as a Bot API 10.1 rich
+  message (native markdown: GFM tables ≤ 20 columns, headings,
+  `<details>`, footnotes, math), falling back to the MarkdownV2
+  pipeline (`telegramify-markdown`) and then to plain text on any
+  failure. Kill switch: `CCBOT_RICH_MESSAGES=off`. Upstream uses HTML.
+- **Hook-based session tracking.** Claude Code `SessionStart` +
+  `UserPromptSubmit` hooks write `session_map.json`; the monitor polls
+  it. No reliance on process-tree introspection or claude SDK.
 - **Voice transcription is local-first.** `whisper.cpp` (default) or
   Apple Speech via PyObjC on macOS — no API key required to run.
 
@@ -77,12 +85,14 @@ Optional:
 ```bash
 git clone https://github.com/Time4Mind/ccbot.git
 cd ccbot
-git checkout feat/dm-multisession
 uv sync
 cp .env.example ~/.ccbot/.env   # fill in TELEGRAM_BOT_TOKEN + ALLOWED_USERS
-ccbot hook --install            # one-time: register Claude Code SessionStart hook
+ccbot hook --install            # one-time: register the Claude Code hooks
 ccbot                           # foreground; for prod use the systemd unit
 ```
+
+A full step-by-step Linux install (written for an AI agent to follow)
+lives in `doc/install-linux.md`.
 
 ## Configuration
 
@@ -103,23 +113,36 @@ Most-frequently-tweaked optionals:
 | `CLAUDE_FLAGS`              | `--dangerously-skip-permissions` | flags appended to `claude` |
 | `SESSION_IDLE_TTL`          | `4h`         | active → archived after this much idleness |
 | `ARCHIVE_PURGE_AFTER`       | `14d`        | archived sessions purged from state after this |
-| `QUOTA_ALERT_POLL_INTERVAL` | `5m`         | how often the live `/usage` modal is sampled |
+| `QUOTA_ALERT_POLL_INTERVAL` | `10m`        | how often the live `/usage` modal is sampled |
 | `VOICE_BACKEND`             | `auto`       | `auto` / `whisper` / `apple` / `off` |
-| `WHISPER_MODEL_PATH`        | `~/.ccbot/models/ggml-medium.bin` | whisper.cpp model |
+| `WHISPER_MODEL_PATH`        | `~/.ccbot/models/ggml-medium-q8_0.bin` | whisper.cpp model (falls back to a pre-existing `ggml-medium.bin`) |
+| `WHISPER_LANG_MODEL_PATH`   | `~/.ccbot/models/ggml-tiny.bin` | tiny model for the language-detect pre-pass |
+| `WHISPER_LANG_DEFAULT`      | `ru`         | language assumed when detection isn't confident |
+| `WHISPER_THREADS`           | `6`          | threads for `whisper-cli` (its own default is 4) |
 | `BG_STATUS_MAX`             | `4`          | max badges in the bg-status panel; older entries collapse to `+N more` |
 | `CARD_EDIT_LAG`             | `2.0`        | coalescing window for live-card edits (seconds) |
+| `CCBOT_RICH_MESSAGES`       | `on`         | `off` disables Bot API 10.1 rich messages (MarkdownV2 only) |
+| `CCBOT_HOST`                | hostname     | deployment label exported to sessions as `CCBOT_HOST` |
 | `TG_PROXY_URL`              | _(unset)_    | outbound proxy for the Bot API (`socks5://…` or `http://…`) |
 
-The full list lives in `doc/dm-multisession-spec.md` § 12.
+The full list lives in `.env.example` and in
+`doc/dm-multisession-spec.md` § 12. Per-user UI preferences (card
+size, notifications, voice backend, language, …) are not env vars —
+they live behind `≡ Menu → Settings`, see below.
 
 ## Hook setup
 
-The bot tracks tmux-window-to-Claude-session mappings via Claude Code's
-`SessionStart` hook. Auto-install once:
+The bot tracks tmux-window-to-Claude-session mappings via two Claude
+Code hooks: `SessionStart` catches every new claude process, and
+`UserPromptSubmit` self-heals a stale mapping on each prompt (covers
+`/resume`, `/clear`, and bot-restart races). Auto-install once:
 
 ```bash
 ccbot hook --install
 ```
+
+The installer is per-event idempotent — re-running it on an older
+`SessionStart`-only install just adds the missing entry.
 
 Or add manually to `~/.claude/settings.json`:
 
@@ -127,6 +150,9 @@ Or add manually to `~/.claude/settings.json`:
 {
   "hooks": {
     "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "ccbot hook", "timeout": 5 }] }
+    ],
+    "UserPromptSubmit": [
       { "hooks": [{ "type": "command", "command": "ccbot hook", "timeout": 5 }] }
     ]
   }
@@ -138,17 +164,25 @@ Or add manually to `~/.claude/settings.json`:
 The bot exposes a small slash-command surface in the Telegram `/`-menu
 plus an inline `≡ Menu` button on the most recent bot message:
 
-| Command  | Effect |
-| -------- | ------ |
-| `/menu`  | Open the inline ≡ Menu screen |
-| `/done`  | Mark active session as done and archive it |
+| Command    | Effect |
+| ---------- | ------ |
+| `/menu`    | Open the inline ≡ Menu screen |
+| `/help`    | Inline mini-doc with section buttons |
+| `/history` | Full transcript of the active session (paginated) |
+| `/done`    | Mark active session as done and archive it |
 
-The remaining actions live behind the menu — `List`, `Status`,
-`History`, `New`, `Archive`, `Settings`. The 🧑‍💻 *Shot* (terminal
-screenshot) button lives in the main view's control row and in
-*Menu → List* — next to *Kill* and *Clear* — so it's always reachable
-from the transcript surface itself. Most users never type slash
-commands at all once they discover the menu.
+Claude Code's own pickers (`/model`, `/effort`, `/compact`, `/memory`)
+are forwarded into the active session and published alongside them.
+A few more commands work when typed but stay out of the `/`-menu:
+`/new`, `/kill`, `/stop`, `/archive`, `/screenshot`, `/usage`,
+`/health`.
+
+The remaining actions live behind the menu — `Sessions`, `Archive`,
+`Status`, `New`, `Settings`. The 🧑‍💻 *Shot* (terminal screenshot)
+button lives in the main view's control row and in *Menu → Sessions* —
+next to *Kill* and *Clear* — so it's always reachable from the
+transcript surface itself. Most users never type slash commands at all
+once they discover the menu.
 
 ### Sessions and switcher
 
@@ -157,11 +191,17 @@ directory browser, you pick the project, and a tmux window with
 `claude` starts there. Subsequent text in the DM is routed to the
 **active** session.
 
+Sessions are named after the directory basename and renamed once by a
+one-shot Haiku call on the first message of ≥ 20 chars (a two-word
+summary of the intent — `token budget`). Turn that off in
+*Settings → Haiku session names* to keep the plain directory name and
+spend zero tokens.
+
 The most recent bot message carries an inline session switcher
 (`▷ session-A · session-B`) with a paired `[+ new] [≡ Menu]` row
 anchored at the bottom — the two "go-elsewhere" affordances sit
 side-by-side so the slot stays put across views (`[+ new] [Back]`
-takes that spot in *Menu → List* / *Archive*).
+takes that spot in *Menu → Sessions* / *Archive*).
 
 Tapping a non-active session **paints the full transcript history**
 of that session onto the carrier message and switches the active
@@ -183,10 +223,10 @@ stay in the footer.
 
 ### Background sessions
 
-Background (non-active) sessions are **silent in chat** — they don't
-emit live-card edits, push notifications, or AskUserQuestion prompts.
-Their state surfaces only as a compact panel at the bottom of the
-active session's card:
+Background (non-active) sessions have **no live card of their own** —
+they never edit a card or surface an AskUserQuestion prompt in chat.
+Their state surfaces as a compact panel at the bottom of the active
+session's card:
 
 ```
 🟦 session-A ⏳        ← working in background
@@ -202,32 +242,93 @@ shows `❓`, the switcher tap paints the stashed AskUserQuestion /
 ExitPlanMode prompt with the same arrow/Enter/Esc keyboard you'd
 get on a foreground prompt.
 
-### Live card UX knobs
+On top of the badge, a background session can push a short one-liner
+(`✅ [scraper] task complete`) on a *state transition*. Three
+independent toggles under *Settings → 🔔 Notifications*, all on by
+default: `Bg: task complete`, `Bg: errors`, `Bg: needs action`. Turn
+them off to keep background work entirely silent.
 
-A fresh live card seeds itself with up to `CARD_SEED_TURNS` (default
-20) recent end-of-turn boundaries from the session's JSONL transcript
-so the history doesn't disappear across a bot restart.
+### Live card
 
-`Settings → Card position` controls how your outgoing text relates
-to the live card:
-- `push` — leave it (your message scrolls the card up; default)
-- `delete` — bot deletes your message so the card stays the latest
-- `repost` — bot resends the card below your message and drops the
-  old one
+Each active session owns one live card message that the bot keeps
+editing — header, paginated body, bg panel, footer keyboard. Every
+message you send reposts the card below your text (there is one
+canonical behaviour; the old `Card position` setting was retired).
+Above the bg panel it prints the session's `context: N%` — an
+approximation of Claude Code's `/context` computed from the JSONL,
+typically within ±10 % of the modal.
+
+Card knobs live under *Settings → 🃏 Card / view*:
+
+| Setting | Default | Effect |
+| ------- | ------- | ------ |
+| `Card history` | `20` | end-of-turn boundaries seeded into a fresh card from the JSONL (survives bot restarts) |
+| `Page size` | `20` lines | max lines per card page; longer bodies chunk across pages on paragraph/sentence boundaries |
+| `Inline screenshots` | `off` | card becomes photo + caption — the photo is the live pane render (caption limit is 1024 chars, so shrink page size to compensate) |
+| `Previews` | `economical` | how verbose switcher previews are |
+| `Live lag` | `4s` | coalescing window for preview updates |
 
 Telegram's chat-header **`typing…` indicator** is driven by real
 claude events. As long as the active session keeps emitting (tool
 calls, thinking, text), `typing…` stays on; an idle session lets it
 fade within Telegram's ~5s window.
 
+### Other settings
+
+*≡ Menu → Settings* groups everything into five categories: 🃏 Card /
+view, 🔔 Notifications, 🎙 Voice, 🖥 Local terminal, ⚙ Behavior &
+language. Worth knowing:
+
+- **Auto-approve** (`off` by default) — auto-answers the interactive
+  Yes/No prompts that `--dangerously-skip-permissions` doesn't cover
+  (WebFetch domain trust and friends). When an auto-Yes doesn't clear
+  the prompt, the bot escalates to the manual keyboard instead of
+  looping.
+- **Local terminal** (`off` / `manual` / `auto`) — pops a native
+  Terminal.app / iTerm2 / Linux emulator window attached to the
+  session's tmux window, so you can drive the same session by hand.
+  `manual` only shows the 🖥 *Term* button; `auto` also spawns one per
+  new session. Killing the session closes the tab it opened.
+- **Weekly reset** — the day Anthropic's weekly quota window rolls
+  over; drives the `%/d` burn-rate in *Menu → Status*.
+- **Language** — `en` / `ru` / `zh` for the bot's own UI strings.
+
+### Quota and status
+
+*≡ Menu → 📊 Status* samples Claude Code's own `/usage` modal through a
+dedicated `ccbot-usage` tmux window and renders it compactly:
+
+```
+Claude Code
+🟡 5h: 62% · 12.4%/h · 17:00
+🟢 week: 28% · 4.0%/d · Mon 17:00
+🟢 week (Sonnet): 12% · Mon 17:00
+```
+
+The same poll runs in the background every
+`QUOTA_ALERT_POLL_INTERVAL` and pushes an alert when a 5h or weekly
+band crosses 50 / 75 / 90 %. Only settled reads are published, so a
+half-rendered modal can't fire a phantom alert.
+
 ### Voice and media
 
 - **Voice messages** are transcribed locally (whisper.cpp / Apple
-  Speech) and routed to the active session as if you typed them.
-  The reply echoes the transcribed text so you can verify what
-  Claude received.
+  Speech) and routed to the active session as if you typed them. The
+  card shows a pending marker while the transcription runs, then the
+  transcribed text in place, so you can verify what Claude received.
+  On the arm64 reference host a voice message costs ~9s end to end:
+  quantised `ggml-medium-q8_0` (1.8× faster than fp16, identical
+  transcripts on the ru/en samples) plus a `ggml-tiny` language-detect
+  pre-pass that lets the real run pin `-l` and encode once. Missing
+  binary or model? *Settings → 🎙 Voice* offers a one-tap install
+  (builds whisper.cpp, downloads both models).
 - **Photos and documents** drop into `<workdir>/.ccbot-inbox/` and
   Claude is told via tmux. Files are auto-cleaned 24h after upload.
+- **Outbound files** go the other way on demand: a session runs
+  `ccbot send-file <path> [--caption TEXT]` and the bot delivers it
+  into the DM right away (image extensions via `sendPhoto`, everything
+  else via `sendDocument`). The command prints a pass/fail line per
+  target chat, so Claude sees whether the delivery worked.
 - **Forwarded posts with media** (channel posts with video / GIF /
   sticker that carry a caption) have the caption + any hidden
   `text_link` URLs extracted and routed to the active session,
@@ -240,17 +341,21 @@ The full module map is `.claude/rules/architecture.md`. At a glance:
 
 ```
 src/ccbot/
-├── main.py                 — CLI entry point (`ccbot`, `ccbot hook`)
+├── main.py                 — CLI entry point (`ccbot`, `ccbot hook`, `ccbot send-file`)
 ├── config.py               — env-var loader (singleton)
 ├── session.py              — Session + SessionManager (state.json)
 ├── session_monitor.py      — JSONL polling, NewMessage callbacks
 ├── transcript_parser.py    — JSONL turn parsing
 ├── terminal_parser.py      — interactive-UI + status-line detection
 ├── tmux_manager.py         — libtmux wrapper
-├── markdown_v2.py          — MD → Telegram MarkdownV2
+├── rich.py                 — Bot API 10.1 rich messages (native markdown)
+├── markdown_v2.py          — MD → Telegram MarkdownV2 (fallback path)
 ├── telegram_sender.py      — split_message at 4096-char limit
 ├── transcribe.py           — voice → text dispatcher
-├── usage.py                — token aggregator + alert logic
+├── voice_install.py        — whisper.cpp + model auto-installer
+├── send_file.py            — `ccbot send-file` outbound delivery
+├── local_terminal.py       — native-terminal attach helper
+├── usage.py                — token aggregator, context %, alert logic
 ├── i18n.py                 — en / ru / zh UI strings
 ├── bot/                    — Telegram-facing handlers (≤ 600 LOC each)
 │   ├── app.py              — Application bootstrap, post_init / post_shutdown
@@ -260,6 +365,8 @@ src/ccbot/
 │   └── callbacks/          — one file per CB_* prefix
 └── handlers/
     ├── notifications.py    — live cards + push events
+    ├── card_model.py       — card state / render / paginate model layer
+    ├── bg_status.py        — background-session status panel
     ├── archive.py          — /archive page rendering + idle sweeps
     ├── quota_alerts.py     — background /usage poll
     ├── interactive_ui.py   — AskUserQuestion / ExitPlanMode
@@ -274,18 +381,35 @@ State is kept under `$CCBOT_DIR` (defaults to `~/.ccbot/`):
 | `state.json`        | sessions, active_sessions, window states, user settings |
 | `session_map.json`  | hook-generated tmux-window → claude-session map |
 | `monitor_state.json`| per-JSONL byte offsets (prevents duplicate notifications on restart) |
+| `ccbot.lock`        | exclusive flock held by the running bot; a second start refuses with exit 1 |
+
+## Reliability
+
+- **Single instance.** `main.py` holds an exclusive `flock` on
+  `ccbot.lock` for its whole lifetime, so a supervisor restart racing
+  a manual launch can't produce two bots fighting over `getUpdates`.
+- **Long-poll watchdog.** A thread-based liveness check notices a
+  silently hung long-poll, and a sustained network outage makes the
+  process exit rather than sit there mute — the supervisor/systemd
+  restarts it once the network is back.
+- **Startup recovery.** Sessions whose tmux window survived are
+  re-attached, vanished ones are marked `lost` (with a `Restore`
+  button), and tmux windows bound to nothing are logged as orphans
+  rather than killed.
 
 ## Deployment
 
-A systemd unit is at `scripts/ccbot.service`. For VPS hosts that can't
-reach `api.telegram.org` directly, see `doc/deploy.md` for the
-`TG_PROXY_URL` SSH-tunnel recipe.
+A systemd unit is at `scripts/ccbot.service`; hosts with a flaky
+uplink can instead run `scripts/ccbot-supervisor.sh`, which waits for
+network before each start and restarts with backoff. For VPS hosts
+that can't reach `api.telegram.org` directly, see `doc/deploy.md` for
+the `TG_PROXY_URL` SSH-tunnel recipe.
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). The short version: PRs that
-align with the DM-only / single-user / bypass-only invariants are
-welcome. CI must be green; pre-commit hooks must pass; one PR, one
+align with the DM-only / personal-allowlist / bypass-only invariants
+are welcome. CI must be green; pre-commit hooks must pass; one PR, one
 purpose.
 
 ## Security

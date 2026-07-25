@@ -4,9 +4,9 @@
 ┌─────────────────────────────────────────────────────────────────────┐
 │                       Telegram Bot (bot/ package)                   │
 │  - DM-based routing: 1 user = active_session -> tmux window        │
-│  - Inline ≡ Menu surface (List / Status / Shot / New / Archive /   │
+│  - Inline ≡ Menu surface (Sessions / Status / New / Archive /      │
 │    Settings) hosting most actions; History is reached via switcher │
-│    tap / Menu → List / /screenshot Back (pagination is the         │
+│    tap / Menu → Sessions / /screenshot Back (pagination is the     │
 │    affordance, no explicit History button)                         │
 │  - Slash commands (bot/commands/):  lifecycle.py + info.py         │
 │  - Callback dispatch (bot/callbacks/): one file per CB_* prefix    │
@@ -76,7 +76,11 @@ Additional modules:
   i18n.py             ─ Per-user UI strings (en / ru / zh)
   naming.py           ─ Haiku-generated session names + readable summaries
   usage.py            ─ Token usage aggregator + per-session token alerts
-  main.py             ─ CLI entry point
+  main.py             ─ CLI entry point (ccbot / ccbot hook / ccbot send-file)
+  config.py           ─ Env-var loader (singleton `config`), .env priority
+  send_file.py        ─ `ccbot send-file` — on-demand outbound delivery
+                       (photo vs document by extension; chat resolution:
+                       --chat-id > $CCBOT_CHAT_ID > all ALLOWED_USERS)
   utils.py            ─ Shared utilities (ccbot_dir, atomic_write_json)
   session_models.py   ─ Session / WindowState / ClaudeSession dataclasses
   session_recovery.py ─ Startup hygiene: reconcile w/ tmux + resolve stale window IDs
@@ -89,7 +93,9 @@ Additional modules:
                        escapes bare < and maps expandable-quote sentinels
                        to <details>); safe_* try rich first, fall back to
                        MarkdownV2 (kill switch CCBOT_RICH_MESSAGES=off)
-  voice_install.py    ─ whisper.cpp auto-installer (binary + ggml model)
+  voice_install.py    ─ whisper.cpp auto-installer (binary + medium-q8_0
+                       model + tiny language-detect model), driven from
+                       Settings → Voice
   local_terminal.py   ─ Native-terminal attach (drives the local_terminal* settings)
 
 bot/ package (was bot.py before A1, split per CLAUDE.md size budget):
@@ -160,6 +166,8 @@ Handler modules (handlers/):
                        helpers (pure model layer split from notifications.py;
                        notifications.py re-exports its names as a facade)
   kb_mode.py          ─ kb-mode keyboard builder + pane-capture-to-PNG helper
+  typing.py           ─ Per-user throttle in front of send_chat_action(TYPING)
+                       (status_polling + session_events share one timer)
   response_builder.py ─ Paginated response builder (display truncation)
   context_poll.py     ─ Background /context poller — PRESENT but DISABLED;
                        JSONL math (usage.context_pct_for_session) is the live
@@ -171,7 +179,8 @@ State files (~/.ccbot/ or $CCBOT_DIR/):
                       card_page_lines / card_inline_screenshots /
                       bg_notify_finished / bg_notify_error /
                       bg_notify_needs_action / language / weekly_reset_day /
-                      auto_approve / local_terminal*) + bg_status snapshot
+                      auto_approve / local_terminal* / haiku_naming)
+                      + bg_status snapshot
   session_map.json   ─ hook-generated window_id→session mapping
                        (SessionStart + UserPromptSubmit — the latter
                        self-heals stale entries on every prompt)

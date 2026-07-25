@@ -173,10 +173,45 @@ class Config:
         if voice_backend not in ("auto", "whisper", "apple", "off"):
             voice_backend = "auto"
         self.voice_backend: str = voice_backend
+        # q8_0 by default: measured 1.80-1.83x faster than fp16 medium on
+        # arm64 (MATMUL_INT8 + i8mm + REPACK put it on the native int8
+        # kernel) with byte-identical transcripts on the ru/en samples.
+        # Falls back to a pre-existing fp16 ggml-medium.bin so hosts
+        # installed before this change keep working — see
+        # ``resolve_whisper_model``.
         self.whisper_model_path: str = os.getenv(
             "WHISPER_MODEL_PATH",
-            str(self.config_dir / "models" / "ggml-medium.bin"),
+            str(self.config_dir / "models" / "ggml-medium-q8_0.bin"),
         )
+        # Tiny model used ONLY for the language-detect pre-pass. Whisper
+        # re-runs the full encoder when the language is "auto" (12.4 s on
+        # medium — half the total cost of a voice message), so detecting
+        # on a ~40x cheaper encoder and then pinning -l saves most of it.
+        self.whisper_lang_model_path: str = os.getenv(
+            "WHISPER_LANG_MODEL_PATH",
+            str(self.config_dir / "models" / "ggml-tiny.bin"),
+        )
+        # Language assumed when detection isn't confident. Russian is the
+        # dominant language on this deployment; English is rare, and tiny
+        # detects English very reliably (p >= 0.966 on every sample) while
+        # its Russian detection is the shaky one — so "default ru, only a
+        # confident non-default wins" is the accuracy-preserving shape.
+        self.whisper_lang_default: str = (
+            os.getenv("WHISPER_LANG_DEFAULT", "ru").strip().lower() or "ru"
+        )
+        try:
+            self.whisper_lang_min_p: float = float(
+                os.getenv("WHISPER_LANG_MIN_P", "0.9")
+            )
+        except ValueError:
+            self.whisper_lang_min_p = 0.9
+        # whisper-cli defaults to min(4, hw_concurrency); this host has 8
+        # cores and the phone still has to stay responsive, so 6 is the
+        # compromise (12.1 s vs 14.2 s at 4 and 10.1 s at 8).
+        try:
+            self.whisper_threads: int = int(os.getenv("WHISPER_THREADS", "6"))
+        except ValueError:
+            self.whisper_threads = 6
         self.whisper_bin: str = os.getenv("WHISPER_BIN", "whisper-cli")
 
         # Media inbox

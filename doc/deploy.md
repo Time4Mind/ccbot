@@ -12,7 +12,7 @@ single source of truth. macOS works as an interactive client via `ssh -t
 - `claude` CLI authenticated against `claude.ai` (Max x20 subscription) —
   `claude auth status` must succeed for the user that owns the bot
 - `ffmpeg` if `VOICE_BACKEND=whisper`
-- `whisper-cli` plus `ggml-medium.bin` if `VOICE_BACKEND=whisper`
+- `whisper-cli` plus `ggml-medium-q8_0.bin` if `VOICE_BACKEND=whisper`
 
 ## One-shot install
 
@@ -102,7 +102,9 @@ curl -s --max-time 8 -x "$TG_PROXY_URL" \
   pure-Python AVSpeechRecognizer wrapper proves stable.
 - `VOICE_BACKEND=whisper` → requires `WHISPER_BIN` (default
   `whisper-cli`) and `WHISPER_MODEL_PATH` (default
-  `$CCBOT_DIR/models/ggml-medium.bin`, ~1.5GB).
+  `$CCBOT_DIR/models/ggml-medium-q8_0.bin`, ~785MB). `WHISPER_THREADS`
+  (default 6), `WHISPER_LANG_DEFAULT` (default `ru`) and
+  `WHISPER_LANG_MODEL_PATH` tune the language-detect pre-pass.
 - `VOICE_BACKEND=off` → reject voice messages.
 
 ## State and disk usage
@@ -188,7 +190,8 @@ launchctl unload ~/Library/LaunchAgents/com.ccbot.plist
 Whisper.cpp model installer:
 
 ```bash
-# Default downloads ggml-medium.bin (~1.5GB) into ~/.ccbot/models/.
+# Default downloads ggml-medium-q8_0.bin (~785MB) + ggml-tiny.bin (~75MB)
+# into ~/.ccbot/models/.
 ./scripts/install_whisper_model.sh
 # Or pick a smaller model:
 MODEL=small ./scripts/install_whisper_model.sh

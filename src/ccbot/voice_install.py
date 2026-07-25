@@ -11,7 +11,11 @@ Steps performed (each skipped when already done):
   2. ``git clone`` whisper.cpp into ``WHISPER_SRC``.
   3. ``cmake`` build (Release).
   4. Copy the produced ``whisper-cli`` binary to ``/usr/local/bin``.
-  5. Download ``ggml-medium.bin`` (~1.5 GB) into ``config.whisper_model_path``.
+  5. Download ``ggml-medium-q8_0.bin`` (~785 MB) into
+     ``config.whisper_model_path``.
+  6. Download ``ggml-tiny.bin`` (~75 MB) into
+     ``config.whisper_lang_model_path`` for the language-detect pre-pass.
+     Best-effort — a failure here doesn't fail the install.
 
 Progress is reported through an async callback so the caller can stream
 chat messages between steps.
@@ -33,7 +37,15 @@ logger = logging.getLogger(__name__)
 
 WHISPER_SRC = Path("/opt/whisper.cpp")
 WHISPER_BIN_DST = Path("/usr/local/bin/whisper-cli")
-MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin"
+_HF = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
+# q8_0 rather than fp16: same transcript, 1.8x faster on arm64, half the
+# download. See transcribe.py's module docstring for the measurements.
+MODEL_URL = f"{_HF}/ggml-medium-q8_0.bin"
+MODEL_MIN_BYTES = 500 * 1024 * 1024
+# Tiny is the language-detect pre-pass model (transcribe._detect_language).
+# Optional: a missing tiny just means we always use WHISPER_LANG_DEFAULT.
+LANG_MODEL_URL = f"{_HF}/ggml-tiny.bin"
+LANG_MODEL_MIN_BYTES = 30 * 1024 * 1024
 
 
 ProgressCB = Callable[[str], Awaitable[None]]
@@ -53,6 +65,10 @@ def whisper_model_path() -> Path:
     return Path(config.whisper_model_path)
 
 
+def whisper_lang_model_path() -> Path:
+    return Path(config.whisper_lang_model_path)
+
+
 def is_bin_ready() -> bool:
     return whisper_bin_path() is not None
 
@@ -60,11 +76,23 @@ def is_bin_ready() -> bool:
 def is_model_ready() -> bool:
     p = whisper_model_path()
     # Sanity threshold so a half-finished download doesn't masquerade
-    # as a valid model. The medium model is ~1.5 GB.
-    return p.exists() and p.stat().st_size > 500 * 1024 * 1024
+    # as a valid model. q8_0 medium is ~785 MB.
+    if p.exists() and p.stat().st_size > MODEL_MIN_BYTES:
+        return True
+    # Pre-q8_0 hosts only have the fp16 model; transcribe.py falls back to
+    # it, so don't re-download 785 MB just to change quantisation.
+    legacy = p.parent / "ggml-medium.bin"
+    return legacy.exists() and legacy.stat().st_size > MODEL_MIN_BYTES
+
+
+def is_lang_model_ready() -> bool:
+    p = whisper_lang_model_path()
+    return p.exists() and p.stat().st_size > LANG_MODEL_MIN_BYTES
 
 
 def is_ready() -> bool:
+    # The lang model is deliberately NOT part of readiness — without it
+    # transcription still works, just always at WHISPER_LANG_DEFAULT.
     return is_bin_ready() and is_model_ready()
 
 
@@ -84,7 +112,13 @@ def describe_plan() -> str:
         lines.append("• cp `build/bin/whisper-cli` → `/usr/local/bin/whisper-cli`")
     if not is_model_ready():
         lines.append(
-            f"• скачать `ggml-medium.bin` (~1.5 GB) в `{config.whisper_model_path}`"
+            f"• скачать `ggml-medium-q8_0.bin` (~785 MB) в "
+            f"`{config.whisper_model_path}`"
+        )
+    if not is_lang_model_ready():
+        lines.append(
+            f"• скачать `ggml-tiny.bin` (~75 MB, определение языка) в "
+            f"`{config.whisper_lang_model_path}`"
         )
     return "\n".join(lines)
 
@@ -206,9 +240,15 @@ async def _install_bin(progress: ProgressCB) -> bool:
     return True
 
 
-async def _download_model(progress: ProgressCB) -> bool:
-    """Stream ``ggml-medium.bin`` to disk via wget (curl fallback)."""
-    target = whisper_model_path()
+async def _download(
+    progress: ProgressCB,
+    *,
+    url: str,
+    target: Path,
+    min_bytes: int,
+    note: str,
+) -> bool:
+    """Stream one ggml model to disk via wget (curl fallback)."""
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(target.suffix + ".part")
     if tmp.exists():
@@ -218,19 +258,16 @@ async def _download_model(progress: ProgressCB) -> bool:
         except OSError:
             pass
 
-    await progress(
-        "Скачиваю `ggml-medium.bin` (~1.5 GB). Зависит от канала — "
-        "пара минут на быстром, дольше на мобильном."
-    )
+    await progress(note)
     fetcher = shutil.which("wget") or shutil.which("curl")
     if fetcher is None:
         await progress("❌ ни `wget`, ни `curl` не найдены в PATH")
         return False
 
     if fetcher.endswith("wget"):
-        cmd = [fetcher, "-q", "-O", str(tmp), MODEL_URL]
+        cmd = [fetcher, "-q", "-O", str(tmp), url]
     else:
-        cmd = [fetcher, "-fsSL", "-o", str(tmp), MODEL_URL]
+        cmd = [fetcher, "-fsSL", "-o", str(tmp), url]
     rc, out = await _run(cmd, timeout=3600)
     if rc != 0:
         await progress(f"❌ загрузка не удалась (rc={rc})\n```\n{_tail(out)}\n```")
@@ -241,10 +278,10 @@ async def _download_model(progress: ProgressCB) -> bool:
         return False
 
     # Sanity check the size before promoting the .part to final.
-    if tmp.stat().st_size < 500 * 1024 * 1024:
+    if tmp.stat().st_size < min_bytes:
         await progress(
             f"❌ скачанный файл подозрительно мал ({tmp.stat().st_size} байт) — "
-            "не похоже на ggml-medium.bin. Удалил."
+            f"не похоже на `{target.name}`. Удалил."
         )
         try:
             tmp.unlink()
@@ -258,6 +295,29 @@ async def _download_model(progress: ProgressCB) -> bool:
         await progress(f"❌ rename `.part` → final failed: {e}")
         return False
     return True
+
+
+async def _download_model(progress: ProgressCB) -> bool:
+    return await _download(
+        progress,
+        url=MODEL_URL,
+        target=whisper_model_path(),
+        min_bytes=MODEL_MIN_BYTES,
+        note=(
+            "Скачиваю `ggml-medium-q8_0.bin` (~785 MB). Зависит от канала — "
+            "минута на быстром, дольше на мобильном."
+        ),
+    )
+
+
+async def _download_lang_model(progress: ProgressCB) -> bool:
+    return await _download(
+        progress,
+        url=LANG_MODEL_URL,
+        target=whisper_lang_model_path(),
+        min_bytes=LANG_MODEL_MIN_BYTES,
+        note="Скачиваю `ggml-tiny.bin` (~75 MB) для определения языка.",
+    )
 
 
 async def install_async(progress: ProgressCB) -> bool:
@@ -278,6 +338,15 @@ async def install_async(progress: ProgressCB) -> bool:
     if not is_model_ready():
         if not await _download_model(progress):
             return False
+
+    # Best-effort: transcription works without it, just always pinned to
+    # WHISPER_LANG_DEFAULT, so a failure here must not fail the install.
+    if not is_lang_model_ready():
+        if not await _download_lang_model(progress):
+            await progress(
+                "⚠ tiny-модель не скачалась — распознавание будет работать, "
+                f"но язык всегда будет `{config.whisper_lang_default}`."
+            )
 
     if not is_ready():
         await progress(

@@ -12,6 +12,18 @@ Backend chosen at runtime via VOICE_BACKEND env var:
 DM-multisession spec section 8 — J4 selected: transcription is local
 (whisper.cpp / Apple Speech), no third-party API key required.
 
+The whisper.cpp path is tuned for arm64 (measured on the Kali-on-Android
+host, 8 cores, MATMUL_INT8 + i8mm, whisper built with REPACK=1):
+
+  - q8_0 medium instead of fp16 — 1.8x faster, byte-identical output.
+  - a tiny-model language-detect pre-pass so the real run can pin ``-l``
+    and encode once instead of twice (``-l auto`` costs a whole extra
+    encoder pass). See ``_detect_language``.
+  - ``-t`` from ``WHISPER_THREADS`` (default 6 of 8) instead of
+    whisper-cli's own default of 4.
+
+End to end this took a typical voice message from ~32 s to ~9 s.
+
 Public API: transcribe_voice(ogg_data) -> str (raises ValueError on failure).
 """
 
@@ -21,6 +33,7 @@ import asyncio
 import logging
 import os
 import platform
+import re
 import tempfile
 
 from .config import config
@@ -64,12 +77,86 @@ async def _ogg_to_wav(ogg_data: bytes) -> bytes:
     return stdout
 
 
+def resolve_whisper_model() -> str:
+    """Path of the transcription model, with an fp16 back-compat fallback.
+
+    The default moved to ``ggml-medium-q8_0.bin``; a host provisioned
+    before that still only has ``ggml-medium.bin`` on disk. Rather than
+    failing (or silently re-downloading 800 MB), use whatever is there.
+    """
+    primary = config.whisper_model_path
+    if os.path.exists(primary):
+        return primary
+    legacy = os.path.join(os.path.dirname(primary), "ggml-medium.bin")
+    if os.path.exists(legacy):
+        logger.info("q8_0 model absent, falling back to fp16 %s", legacy)
+        return legacy
+    return primary
+
+
+_LANG_RE = re.compile(r"auto-detected language: ([a-z]{2,3}) \(p = ([\d.]+)\)")
+
+
+async def _detect_language(wav_path: str) -> str:
+    """Pick the language to pin for the real transcription pass.
+
+    Why this exists: passing ``-l auto`` to whisper makes it run the
+    encoder TWICE — once inside ``whisper_lang_auto_detect`` and once for
+    the actual decode. On medium that is 12.4 s of pure overhead, about
+    half the wall time of a voice message. Running the detect pass on the
+    tiny model instead costs 0.6 s, and the real pass then gets ``-l xx``
+    and encodes once.
+
+    Accuracy shape (measured on espeak ru/en samples, deliberately harder
+    than live speech): tiny nails English every time (p >= 0.966) but is
+    unreliable on Russian (it guessed de / fr / da, never above p=0.704).
+    So we only *leave* the default language on a confident detection —
+    Russian audio that tiny misreads as some third language still falls
+    through to ``ru``, and only a p >= 0.9 call moves us off it.
+
+    Any failure (model missing, whisper error, unparseable output) returns
+    the default — detection is an optimisation, never a hard dependency.
+    """
+    default = config.whisper_lang_default
+    lang_model = config.whisper_lang_model_path
+    if not os.path.exists(lang_model):
+        return default
+    try:
+        code, stdout, stderr = await _run(
+            [
+                config.whisper_bin,
+                "-m",
+                lang_model,
+                "-f",
+                wav_path,
+                "-dl",  # detect language and exit
+                "-t",
+                str(config.whisper_threads),
+            ]
+        )
+    except OSError as e:
+        logger.debug("language detect failed to spawn: %s", e)
+        return default
+    if code != 0:
+        return default
+    blob = stdout.decode(errors="replace") + stderr.decode(errors="replace")
+    m = _LANG_RE.search(blob)
+    if not m:
+        return default
+    lang, prob = m.group(1), float(m.group(2))
+    if lang != default and prob >= config.whisper_lang_min_p:
+        logger.info("voice language detected as %s (p=%.3f)", lang, prob)
+        return lang
+    return default
+
+
 async def _whisper_cpp_transcribe(ogg_data: bytes) -> str:
     """Run whisper.cpp on a WAV converted from the OGG payload."""
-    if not os.path.exists(config.whisper_model_path):
+    model = resolve_whisper_model()
+    if not os.path.exists(model):
         raise ValueError(
-            f"whisper model not found at {config.whisper_model_path}. "
-            "Set WHISPER_MODEL_PATH or download ggml-medium.bin."
+            f"whisper model not found at {model}. "
+            "Set WHISPER_MODEL_PATH or download ggml-medium-q8_0.bin."
         )
     wav = await _ogg_to_wav(ogg_data)
 
@@ -79,17 +166,19 @@ async def _whisper_cpp_transcribe(ogg_data: bytes) -> str:
         tmp_path = tmp.name
 
     try:
+        lang = await _detect_language(tmp_path)
         cmd = [
             config.whisper_bin,
             "-m",
-            config.whisper_model_path,
+            model,
             "-f",
             tmp_path,
             "-nt",  # no timestamps
             "-otxt",  # write a .txt next to the input
+            "-t",
+            str(config.whisper_threads),
             "-l",
-            "auto",  # auto-detect language; whisper-cli defaults to "en",
-            # which would force Russian speech through English recognition.
+            lang,  # pinned, never "auto" — see _detect_language for why.
         ]
         code, stdout, stderr = await _run(cmd)
         if code != 0:

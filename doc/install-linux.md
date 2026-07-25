@@ -182,7 +182,7 @@ ALLOWED_USERS=<один числовой Telegram-id>
 ```ini
 TG_PROXY_URL=socks5://user:pass@host:1080   # если бот в блок-стране
 VOICE_BACKEND=whisper                        # см. шаг 7
-WHISPER_MODEL_PATH=/home/USER/.ccbot/models/ggml-medium.bin
+WHISPER_MODEL_PATH=/home/USER/.ccbot/models/ggml-medium-q8_0.bin
 ```
 
 **Не пиши** токен в `/opt/ccbot/.env`, в `CLAUDE.md`, в логи или в
@@ -218,7 +218,8 @@ cd /opt/ccbot
 MODEL=medium ./scripts/install_whisper_model.sh
 ```
 
-Скрипт сам положит файл в `~/.ccbot/models/ggml-medium.bin` и
+Скрипт сам положит файлы в `~/.ccbot/models/ggml-medium-q8_0.bin`
+(+ `ggml-tiny.bin` для определения языка) и
 напечатает строки для `.env`. Если у пользователя медленный канал —
 предложи `MODEL=small` (~488 MB).
 
@@ -226,7 +227,7 @@ MODEL=medium ./scripts/install_whisper_model.sh
 
 ```ini
 VOICE_BACKEND=whisper
-WHISPER_MODEL_PATH=/home/USER/.ccbot/models/ggml-medium.bin
+WHISPER_MODEL_PATH=/home/USER/.ccbot/models/ggml-medium-q8_0.bin
 ```
 
 ---

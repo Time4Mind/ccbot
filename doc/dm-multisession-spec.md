@@ -321,17 +321,44 @@ Token usage is read from Claude Code transcripts on disk:
 
 ## 8. Voice (J4)
 
-- Backend: `whisper.cpp` with `ggml-medium.bin` (~1.5GB on disk).
+- Backend: `whisper.cpp` with `ggml-medium-q8_0.bin` (~785MB on disk).
 - On macOS, optional Apple Speech Recognition backend via `python-speechrecognition`. Selected by `VOICE_BACKEND=auto|whisper|apple|off`. `auto` picks Apple on Darwin, whisper.cpp elsewhere.
 - Subprocess call on each voice message. RAM is freed between calls; only `whisper.cpp` binary stays loaded (~10MB).
 - Transcript is forwarded to the active session as if the user typed it. Reply-quote routing applies.
 - No OpenAI API key required.
 
+### Latency tuning (arm64)
+
+A voice message used to cost ~32s end to end. Three changes took it to
+~9s, all measured on the Kali-on-Android host (8 cores, `MATMUL_INT8` +
+`i8mm`, whisper built with `REPACK=1`):
+
+| Change | Effect |
+|---|---|
+| `ggml-medium-q8_0` instead of fp16 | 1.80–1.83× faster, **byte-identical** transcripts on the ru/en samples — the CPU has a native int8 path |
+| Language-detect pre-pass on `ggml-tiny` | `-l auto` makes whisper run the **encoder twice** (12.4s of pure overhead on medium). Detecting on tiny costs 0.6s, then the real pass pins `-l` and encodes once |
+| `-t 6` (was whisper-cli's own default of 4) | 14.2s → 12.1s at fp16; 2 cores left for the rest of the phone |
+
+`_detect_language` only moves **off** `WHISPER_LANG_DEFAULT` on a
+confident call (`p >= WHISPER_LANG_MIN_P`, default 0.9). Measured shape:
+tiny detects English reliably (p ≥ 0.966 on every sample) but is shaky on
+Russian (guessed `de` / `fr` / `da`, never above p=0.704) — so Russian
+audio that tiny misreads still falls through to `ru`, and only a
+high-confidence non-default wins. A missing tiny model is not an error;
+the language just stays at the default.
+
+Rejected after measuring: `whisper-server` (saves only the 0.93s model
+load — the file is already in page cache), `large-v3-turbo` (its encoder
+is ~2× medium's; turbo only accelerates the decoder, and the encoder is
+our bottleneck), `-ac 256` (3.3× faster but visibly corrupts the text),
+`-d` duration limits (the encoder always processes a full 30s window).
+
 Install footprint:
 
 - `whisper.cpp` binary: ~10MB
-- Model `ggml-medium.bin`: 1.5GB (one-time download)
-- Total: <2GB target met.
+- Model `ggml-medium-q8_0.bin`: 785MB (one-time download)
+- Model `ggml-tiny.bin`: 75MB (language detection, optional)
+- Total: <1GB — comfortably under the original <2GB target.
 
 ---
 
@@ -373,7 +400,7 @@ Install footprint:
 
 - Systemd unit owns: tmux server, ccbot process, claude processes (children of tmux).
 - Restart policy: `Restart=always`. On reboot, ccbot's auto-recover flow (section 9) handles state.
-- whisper.cpp model is on local disk; `WHISPER_MODEL_PATH=/var/lib/ccbot/models/ggml-medium.bin` (defaults to `$CCBOT_DIR/models/ggml-medium.bin`).
+- whisper.cpp models are on local disk; `WHISPER_MODEL_PATH=/var/lib/ccbot/models/ggml-medium-q8_0.bin` (defaults to `$CCBOT_DIR/models/ggml-medium-q8_0.bin`, with an automatic fallback to a pre-existing `ggml-medium.bin`) and `WHISPER_LANG_MODEL_PATH` for the tiny language-detect model.
 
 ### Secondary: macOS as ssh client
 
@@ -424,7 +451,11 @@ PREVIEW_TOOLS=2
 
 # Voice
 VOICE_BACKEND=auto             # auto | whisper | apple | off
-WHISPER_MODEL_PATH=/var/lib/ccbot/models/ggml-medium.bin
+WHISPER_MODEL_PATH=/var/lib/ccbot/models/ggml-medium-q8_0.bin
+WHISPER_LANG_MODEL_PATH=/var/lib/ccbot/models/ggml-tiny.bin
+WHISPER_LANG_DEFAULT=ru        # assumed when detection isn't confident
+WHISPER_LANG_MIN_P=0.9         # confidence needed to override the default
+WHISPER_THREADS=6              # whisper-cli's own default is 4
 
 # Claude
 CLAUDE_COMMAND=claude

@@ -28,7 +28,7 @@ from ...handlers.callback_data import (
     CB_CONF_DEL_YES,
     CB_MM_BACK,
 )
-from ...handlers.history import render_archived_history_pages
+from ...handlers.history import render_archived_card_pages
 from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_edit
 from ...i18n import t
@@ -42,27 +42,28 @@ def _show_all(context: ContextTypes.DEFAULT_TYPE) -> bool:
     return bool(context.user_data and context.user_data.get("_arc_show_all", False))
 
 
-async def _build_inspect_text(sess: Session) -> str:
+async def _build_inspect_text(sess: Session, user_id: int | None = None) -> str:
     """Render the body of the Archive → Inspect view.
 
-    Tries to surface the actual transcript (most recent page) by reading
-    the on-disk JSONL — gives the user the "what did this session do"
-    context the old preview blurb hid. Falls back to the short preview
-    when there is no resolvable transcript (very old archives, glob
-    miss, corrupt JSONL).
+    Surfaces the actual transcript (most recent page) via the live-card
+    renderer, so thinking / tool bodies collapse into ``<details>``
+    spoilers exactly like the active session card instead of dumping as
+    an unreadable inline wall. Falls back to the short preview when there
+    is no resolvable transcript (very old archives, glob miss, corrupt
+    JSONL).
 
-    Only the LAST page is shown — archived JSONLs can be huge and we
-    don't have a window_id to drive the existing pagination plumbing.
-    The header notes when older pages were truncated so the user knows
-    to /restore for the full picture.
+    Only the LAST page is shown — archived JSONLs can be huge and the
+    Inspect keyboard carries no pagination controls. The header notes
+    when older pages were truncated so the user knows to /restore for the
+    full picture. ``user_id`` drives the per-user card line budget.
     """
-    pages_total = await render_archived_history_pages(sess)
+    pages_total = await render_archived_card_pages(sess, user_id)
     if pages_total is None:
         return await render_session_preview(sess)
     pages, total = pages_total
     last = pages[-1] if pages else ""
     if len(pages) > 1:
-        prefix = f"_… {len(pages) - 1} older page(s) — restore to read fully ({total} msgs)_\n\n"
+        prefix = f"_… {len(pages) - 1} older page(s) — restore to read fully ({total} events)_\n\n"
         last = prefix + last
     return last
 
@@ -149,7 +150,7 @@ async def handle(
         if sess is None:
             await query.answer(t(user.id, "toast.session_not_found"), show_alert=True)
             return True
-        text = await _build_inspect_text(sess)
+        text = await _build_inspect_text(sess, user.id)
         kb = InlineKeyboardMarkup(
             [
                 [

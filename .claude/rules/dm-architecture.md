@@ -192,7 +192,16 @@ Plus the forwarded Claude Code pickers `/model` `/effort` `/compact`
 `/memory` when present in `CC_COMMANDS`.
 
 Hidden (registered, typed-only): `/new` `/kill` `/stop` `/archive`
-`/screenshot` `/usage` `/health`.
+`/screenshot` `/usage` `/health` `/login`.
+
+`/login` is the recovery path for a dead Claude OAuth login: the bot spawns
+`claude auth login` on a pty, posts its URL, and consumes the user's next
+message as the pasted code (`bot/commands/auth.py`). It stays out of the
+published menu because it is surfaced by the "authorization expired" notice
+itself — `session_events` matches `claude_auth.looks_like_auth_failure` on
+incoming events and pushes that notice once per credential deadline, with a
+🔐 button. The bot needs no Claude auth of its own, so this works while every
+session is failing.
 
 The legacy ``/status`` command was retired — Menu → Status fetches
 the same /usage modal data via the dedicated ``ccbot-usage`` window.

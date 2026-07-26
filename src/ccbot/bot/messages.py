@@ -72,6 +72,7 @@ from ..tmux_manager import tmux_manager
 from ..transcribe import resolve_voice_backend, transcribe_voice
 from ..utils import ccbot_dir
 from ._common import active_window, is_user_allowed
+from .commands.auth import maybe_consume_code
 
 logger = logging.getLogger(__name__)
 
@@ -1017,6 +1018,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     text = update.message.text
+
+    # A pending /login flow owns the next message: it's the OAuth code, not a
+    # prompt. Must run before session routing — the code would otherwise be
+    # typed into a pane (and echoed into that session's transcript).
+    if await maybe_consume_code(update, context):
+        return
 
     # Ignore text while a picker UI is mid-flight.
     state = context.user_data.get(STATE_KEY) if context.user_data else None

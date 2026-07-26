@@ -75,6 +75,11 @@ CB_FT_TERM = "ft:term"  # open a native desktop terminal for the active session
 CB_KB_BACK = "kb:back"  # exit kb-mode view → regular card; Resume button stays
 CB_KB_RESUME = "kb:resume"  # re-enter kb-mode (when pending still active)
 
+
+# Claude re-authentication (/login)
+CB_AUTH_LOGIN = "au:login"  # start the OAuth exchange, post the URL
+CB_AUTH_CANCEL = "au:cancel"  # drop a pending flow (kills the child process)
+
 # Live-card pagination (in-card page navigation)
 CB_PG_PREV = "pg:prev"  # ◀ — previous page within the card
 CB_PG_NEXT = "pg:next"  # ▶ — next page within the card

@@ -163,7 +163,15 @@ ccbot hook --install
 Claude Code 自己的选择器(`/model`、`/effort`、`/compact`、
 `/memory`)会转发到活动会话,并与上面几条一起发布。另有几个命令
 输入时可用,但不出现在 `/`-菜单里:`/new`、`/kill`、`/stop`、
-`/archive`、`/screenshot`、`/usage`、`/health`。
+`/archive`、`/screenshot`、`/usage`、`/health`、`/login`。
+
+**`/login` —— 用手机给 Claude 重新授权。** `claude` 背后的 OAuth 登录
+过期后,所有会话都会开始报错,通常没有电脑就修不了。机器人本身不需要
+Claude 授权,所以它会发现失败、推送 🔐 通知,并由 `/login` 完成整个
+交换:机器人给你链接,你在手机浏览器里确认(重定向到
+`platform.claude.com`,不是 localhost 回调,所以不需要隧道),再把页面
+显示的码作为普通消息发回来。机器人把它喂给等待中的进程、确认新的期限,
+并删除你那条带码的消息。
 
 其余动作藏在内联菜单后面:`Sessions`、`Archive`、`Status`、`New`、
 `Settings`。🧑‍💻 *Shot*(终端截图)按钮住在主视图的控制行和

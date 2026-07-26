@@ -97,6 +97,10 @@ Additional modules:
                        model + tiny language-detect model), driven from
                        Settings → Voice
   local_terminal.py   ─ Native-terminal attach (drives the local_terminal* settings)
+  claude_auth.py      ─ Claude OAuth re-login driven from chat: auth-failure
+                       detection, credential-deadline read, and a pty-backed
+                       `claude auth login` child whose URL goes to the chat and
+                       whose code comes back from it (per-user flow + TTL)
 
 bot/ package (was bot.py before A1, split per CLAUDE.md size budget):
   __init__.py         ─ Re-exports create_bot, forward_command_handler
@@ -116,6 +120,8 @@ bot/ package (was bot.py before A1, split per CLAUDE.md size budget):
   commands/lifecycle.py    ─ /new /kill /done /stop /menu /archive
                             (+ archive_session shared helper)
   commands/info.py         ─ /history /screenshot /usage /health /help (+ emit_*)
+  commands/auth.py         ─ /login re-auth flow (+ maybe_consume_code,
+                            notify_auth_expired)
   callbacks/__init__.py    ─ Top-level dispatcher; tries each handler in order
   callbacks/dir_browser.py ─ CB_DIR_*, CB_SESSION_*  (+ Haiku summary cache)
   callbacks/window_picker.py ─ CB_WIN_*
@@ -129,6 +135,7 @@ bot/ package (was bot.py before A1, split per CLAUDE.md size budget):
   callbacks/interactive_ui.py     ─ CB_ASK_*  (Up/Down/Left/Right/Esc/Enter/...)
   callbacks/screenshot_keys.py    ─ CB_SCREENSHOT_REFRESH + CB_KEYS_*
   callbacks/help.py        ─ CB_HLP_HOME / CB_HLP_SEC (inline /help doc)
+  callbacks/auth.py        ─ CB_AUTH_LOGIN / CB_AUTH_CANCEL (🔐 re-login)
 
 Handler modules (handlers/):
   message_sender.py   ─ safe_reply/safe_edit/safe_send + send_with_fallback

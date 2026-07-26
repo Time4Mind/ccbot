@@ -186,7 +186,15 @@ approve it in the phone browser (the redirect goes to
 `platform.claude.com`, not a localhost callback, so no tunnel is
 needed), and you send the code the page shows back as an ordinary
 message. The bot feeds it to the waiting process, confirms the new
-deadline, and deletes your message with the code.
+deadline, and deletes your message with the code. It then reposts the
+active session's card (or the Menu, if no session is active) so you carry
+on where you were instead of scrolling back past the exchange.
+
+The notice fires on Claude Code's own error entry (`isApiErrorMessage` /
+`authentication_failed`), not on the error text — a session that merely
+writes about a dead login won't trigger it. A fresh login moves the
+credential deadline out by ~30 days; that deadline is the only thing that
+matters, since refresh-token rotation keeps it fixed.
 
 The remaining actions live behind the menu — `Sessions`, `Archive`,
 `Status`, `New`, `Settings`. The 🧑‍💻 *Shot* (terminal screenshot)

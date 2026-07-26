@@ -98,7 +98,9 @@ Additional modules:
                        Settings → Voice
   local_terminal.py   ─ Native-terminal attach (drives the local_terminal* settings)
   claude_auth.py      ─ Claude OAuth re-login driven from chat: auth-failure
-                       detection, credential-deadline read, and a pty-backed
+                       detection (is_auth_failure_event — gated on the JSONL's
+                       isApiErrorMessage flag via NewMessage.api_error, never on
+                       error wording), credential-deadline read, and a pty-backed
                        `claude auth login` child whose URL goes to the chat and
                        whose code comes back from it (per-user flow + TTL)
 

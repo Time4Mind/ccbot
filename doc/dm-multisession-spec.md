@@ -170,6 +170,7 @@ Hidden (typed only):
 | `/screenshot` | Snapshot the active session's tmux pane as a PNG. |
 | `/usage` | Live `/usage` modal sample (5h / weekly / Sonnet). |
 | `/health` | Uptime, queue stats, latency, counters. |
+| `/login` | Re-authenticate Claude Code from the chat when its OAuth login died: the bot runs the login exchange, posts the URL, takes the code back as a normal message, then reposts the active session's card (or the Menu). Surfaced by the "authorization expired" notice, which fires on Claude's own `isApiErrorMessage` / `authentication_failed` entry. |
 | `/restore-file <msg_id>` | _(Planned — no handler implemented yet.)_ Re-fetch a previously-uploaded inbox file from Telegram. |
 
 The legacy ``/status`` command was retired — Menu → Status surfaces

@@ -175,7 +175,18 @@ Claude Code's own pickers (`/model`, `/effort`, `/compact`, `/memory`)
 are forwarded into the active session and published alongside them.
 A few more commands work when typed but stay out of the `/`-menu:
 `/new`, `/kill`, `/stop`, `/archive`, `/screenshot`, `/usage`,
-`/health`.
+`/health`, `/login`.
+
+**`/login` — re-authenticating Claude from the phone.** When the OAuth
+login behind `claude` expires, every session starts failing and there is
+normally no way to fix it without a desktop. The bot needs no Claude
+auth of its own, so it notices the failure, posts a 🔐 notice, and
+`/login` runs the exchange for you: it hands you the OAuth link, you
+approve it in the phone browser (the redirect goes to
+`platform.claude.com`, not a localhost callback, so no tunnel is
+needed), and you send the code the page shows back as an ordinary
+message. The bot feeds it to the waiting process, confirms the new
+deadline, and deletes your message with the code.
 
 The remaining actions live behind the menu — `Sessions`, `Archive`,
 `Status`, `New`, `Settings`. The 🧑‍💻 *Shot* (terminal screenshot)

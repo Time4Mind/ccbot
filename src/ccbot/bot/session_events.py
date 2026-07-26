@@ -21,6 +21,7 @@ from pathlib import Path
 
 from telegram import Bot
 
+from ..claude_auth import looks_like_auth_failure
 from ..config import config
 from ..handlers import bg_status
 from ..handlers.interactive_ui import (
@@ -40,6 +41,7 @@ from ..session_monitor import NewMessage
 from ..terminal_parser import extract_interactive_content
 from ..tmux_manager import tmux_manager
 from ..usage import context_pct_for_session
+from .commands.auth import notify_auth_expired
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +66,16 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         # Session exists for the matching window without a claude_session_id yet.
         await session_manager.load_session_map()
         targets = session_manager.all_user_sessions_with_claude_id(msg.session_id)
+
+    # A dead OAuth login makes every session fail identically. Surface it once
+    # with the /login affordance instead of letting the raw CLI error scroll by
+    # in each card — the bot itself needs no Claude auth, so it can fix this.
+    if looks_like_auth_failure(msg.text or ""):
+        for user_id in sorted(config.allowed_users):
+            try:
+                await notify_auth_expired(bot, user_id)
+            except Exception as exc:  # noqa: BLE001 — never break event dispatch
+                logger.debug("auth-expired notice failed for %s: %s", user_id, exc)
     if not targets:
         logger.info("No session record for claude session %s", msg.session_id)
         return

@@ -35,6 +35,32 @@ _EN: dict[str, str] = {
     "btn.term": "🖥 Term",
     "btn.back": "← Back",
     "btn.cancel": "× Cancel",
+    "btn.login": "🔐 Log in",
+    # Claude re-authentication (/login)
+    "auth.expired": (
+        "🔐 *Claude authorization expired*\n\n"
+        "Every session on this host will keep failing until the login is "
+        "renewed. The bot itself is fine — it can walk you through it.\n\n"
+        "Send /login (or tap below): I hand you a link, you approve it in the "
+        "browser and send the code back here."
+    ),
+    "auth.login.starting": "🔐 Starting the login exchange…",
+    "auth.login.url": (
+        "🔐 *Step 1/2* — open this and approve:\n\n"
+        "{url}\n\n"
+        "*Step 2/2* — the page shows a code. Send it here as a normal "
+        "message. The link is valid for 15 minutes."
+    ),
+    "auth.login.no_url": (
+        "❌ Could not get a login URL from the CLI. Try /login again; if it "
+        "keeps failing, run `claude auth login` on the host."
+    ),
+    "auth.login.ok": (
+        "✅ *Logged in.* Authorization renewed until {deadline}.\n\n"
+        "Sessions that were failing will work on the next message."
+    ),
+    "auth.login.failed": "❌ The code was not accepted: {detail}\n\nSend /login to retry.",
+    "auth.login.cancelled": "Login cancelled.",
     "btn.confirm": "✓ Confirm",
     "btn.no": "× No",
     "btn.yes_kill": "⚠ Yes, kill",
@@ -436,6 +462,32 @@ _RU: dict[str, str] = {
     "btn.term": "🖥 Терминал",
     "btn.back": "← Назад",
     "btn.cancel": "× Отмена",
+    "btn.login": "🔐 Войти",
+    # Claude re-authentication (/login)
+    "auth.expired": (
+        "🔐 *Авторизация Claude слетела*\n\n"
+        "Все сессии на этом хосте будут падать, пока логин не обновлён. Сам "
+        "бот при этом жив — он и проведёт тебя через процедуру.\n\n"
+        "Отправь /login (или нажми кнопку): я дам ссылку, ты подтверждаешь в "
+        "браузере и присылаешь код сюда."
+    ),
+    "auth.login.starting": "🔐 Запускаю процедуру логина…",
+    "auth.login.url": (
+        "🔐 *Шаг 1/2* — открой и подтверди:\n\n"
+        "{url}\n\n"
+        "*Шаг 2/2* — на странице будет код. Пришли его сюда обычным "
+        "сообщением. Ссылка живёт 15 минут."
+    ),
+    "auth.login.no_url": (
+        "❌ Не удалось получить ссылку логина от CLI. Попробуй /login ещё раз; "
+        "если повторяется — выполни `claude auth login` на хосте."
+    ),
+    "auth.login.ok": (
+        "✅ *Готово.* Авторизация продлена до {deadline}.\n\n"
+        "Падавшие сессии заработают со следующего сообщения."
+    ),
+    "auth.login.failed": "❌ Код не принят: {detail}\n\nОтправь /login, чтобы повторить.",
+    "auth.login.cancelled": "Логин отменён.",
     "btn.confirm": "✓ Подтвердить",
     "btn.no": "× Нет",
     "btn.yes_kill": "⚠ Да, убить",
@@ -812,6 +864,32 @@ _ZH: dict[str, str] = {
     "btn.term": "🖥 终端",
     "btn.back": "← 返回",
     "btn.cancel": "× 取消",
+    "btn.login": "🔐 登录",
+    # Claude re-authentication (/login)
+    "auth.expired": (
+        "🔐 *Claude 授权已失效*\n\n"
+        "在重新登录之前,这台主机上的所有会话都会报错。机器人本身没事 —— "
+        "它可以带你走完流程。\n\n"
+        "发送 /login(或点下面的按钮):我给你链接,你在浏览器里确认,"
+        "然后把码发回这里。"
+    ),
+    "auth.login.starting": "🔐 正在启动登录流程…",
+    "auth.login.url": (
+        "🔐 *第 1/2 步* —— 打开并确认:\n\n"
+        "{url}\n\n"
+        "*第 2/2 步* —— 页面会显示一个码。把它作为普通消息发到这里。"
+        "链接 15 分钟内有效。"
+    ),
+    "auth.login.no_url": (
+        "❌ 没能从 CLI 拿到登录链接。再试一次 /login;如果一直失败,"
+        "请在主机上执行 `claude auth login`。"
+    ),
+    "auth.login.ok": (
+        "✅ *已登录。* 授权已延长到 {deadline}。\n\n"
+        "之前报错的会话在下一条消息就会恢复。"
+    ),
+    "auth.login.failed": "❌ 验证码未被接受:{detail}\n\n发送 /login 重试。",
+    "auth.login.cancelled": "已取消登录。",
     "btn.confirm": "✓ 确认",
     "btn.no": "× 否",
     "btn.yes_kill": "⚠ 是，终止",

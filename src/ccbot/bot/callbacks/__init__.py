@@ -16,6 +16,7 @@ from telegram.ext import ContextTypes
 from .._common import is_user_allowed
 from . import (
     archive,
+    auth as auth_callbacks,
     confirm,
     dir_browser,
     footer,
@@ -35,6 +36,7 @@ logger = logging.getLogger(__name__)
 # Order matters only for prefix overlap; in practice the prefixes are disjoint.
 _HANDLERS = (
     history_pagination.handle,
+    auth_callbacks.handle,
     dir_browser.handle,
     window_picker.handle,
     switcher.handle,

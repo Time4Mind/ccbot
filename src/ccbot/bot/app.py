@@ -34,6 +34,7 @@ from ..session import session_manager
 from ..session_monitor import NewMessage, SessionMonitor
 from ._common import CC_COMMANDS
 from .callbacks import callback_handler
+from .commands.auth import login_command
 from .commands.info import (
     health_command,
     help_command,
@@ -447,6 +448,9 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     application.add_handler(CommandHandler("archive", archive_command))
     application.add_handler(CommandHandler("health", health_command))
     application.add_handler(CommandHandler("help", help_command))
+    # /login stays out of setMyCommands: it is an emergency path surfaced by the
+    # "authorization expired" notice (text + 🔐 button), not day-to-day UI.
+    application.add_handler(CommandHandler("login", login_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Forward any other /command to Claude Code.
     application.add_handler(MessageHandler(filters.COMMAND, forward_command_handler))

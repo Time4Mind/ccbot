@@ -21,7 +21,7 @@ from pathlib import Path
 
 from telegram import Bot
 
-from ..claude_auth import looks_like_auth_failure
+from ..claude_auth import is_auth_failure_event
 from ..config import config
 from ..handlers import bg_status
 from ..handlers.interactive_ui import (
@@ -70,7 +70,9 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
     # A dead OAuth login makes every session fail identically. Surface it once
     # with the /login affordance instead of letting the raw CLI error scroll by
     # in each card — the bot itself needs no Claude auth, so it can fix this.
-    if looks_like_auth_failure(msg.text or ""):
+    # Gated on the JSONL's own ``isApiErrorMessage`` flag: keying off the error
+    # wording alone fires on any session that merely writes about the failure.
+    if is_auth_failure_event(msg.api_error, msg.text or ""):
         for user_id in sorted(config.allowed_users):
             try:
                 await notify_auth_expired(bot, user_id)

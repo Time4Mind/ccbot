@@ -63,6 +63,12 @@ class ParsedEntry:
     # in the JSONL — propagates through NewMessage and lands on the matching
     # tool_use Event so ``render_event`` can flip the leading glyph to ✗.
     is_error: bool = False
+    # Claude Code marks its own synthetic error turns at the entry level:
+    # ``isApiErrorMessage: true`` plus an ``error`` code (e.g.
+    # "authentication_failed"). Carried through so consumers can tell a real
+    # API failure from an assistant that merely *talks about* one — matching
+    # error text against arbitrary assistant output produces false positives.
+    api_error: str = ""
 
 
 @dataclass
@@ -412,8 +418,15 @@ class TranscriptParser:
                 # Stamp stop_reason on every entry produced from this assistant
                 # message — bot.py uses it to distinguish intermediate text
                 # (stop_reason="tool_use") from a real end-of-turn ("end_turn").
+                # ``api_error`` rides along the same way: Claude Code writes its
+                # own failures as synthetic assistant turns flagged at the entry
+                # level (``isApiErrorMessage`` + ``error`` code).
+                api_error = ""
+                if data.get("isApiErrorMessage"):
+                    api_error = str(data.get("error") or "unknown")
                 for entry in result[pre_count:]:
                     entry.stop_reason = stop_reason
+                    entry.api_error = api_error
 
             elif msg_type == "user":
                 # Check for tool_result blocks and merge with pending tools

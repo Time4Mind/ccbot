@@ -15,22 +15,102 @@ from ccbot import claude_auth
 
 
 class TestAuthFailureDetection:
-    def test_matches_the_cli_wording(self) -> None:
-        # Captured from `claude -p` against an expired store.
-        assert claude_auth.looks_like_auth_failure(
-            "Failed to authenticate: OAuth session expired and could not be refreshed"
+    def test_matches_the_real_error_entry(self) -> None:
+        # Captured from a live session against a dead store: Claude Code writes
+        # a synthetic assistant turn with isApiErrorMessage + this error code.
+        assert claude_auth.is_auth_failure_event(
+            "authentication_failed", "Login expired · Please run /login"
+        )
+
+    def test_generic_error_code_falls_back_to_the_wording(self) -> None:
+        assert claude_auth.is_auth_failure_event(
+            "unknown", "Failed to authenticate: OAuth session expired"
         )
 
     @pytest.mark.parametrize(
         "text",
-        ["Please run /login", "Invalid API key · Fix external API key"],
+        [
+            "Login expired · Please run /login",
+            "The error text is `Login expired · Please run /login` and it means "
+            "the OAuth login died; send /login to the bot to fix it. Note that "
+            "Please run /login is the marker we used to match on.",
+        ],
     )
-    def test_matches_other_markers(self, text: str) -> None:
-        assert claude_auth.looks_like_auth_failure(text)
+    def test_unflagged_text_never_counts(self, text: str) -> None:
+        # THE regression: a session that merely writes about the failure (this
+        # feature's own development session did, repeatedly) must not make the
+        # bot announce that a healthy host lost its login.
+        assert not claude_auth.is_auth_failure_event("", text)
+
+    def test_long_prose_with_a_generic_code_is_ignored(self) -> None:
+        prose = "Login expired · Please run /login " + "x" * 200
+        assert not claude_auth.is_auth_failure_event("unknown", prose)
 
     @pytest.mark.parametrize("text", ["", "all good", "authenticated fine"])
-    def test_ignores_unrelated_output(self, text: str) -> None:
-        assert not claude_auth.looks_like_auth_failure(text)
+    def test_unflagged_unrelated_output_is_ignored(self, text: str) -> None:
+        assert not claude_auth.is_auth_failure_event("", text)
+
+    def test_other_api_errors_are_not_auth_failures(self) -> None:
+        # A flagged error of a different kind (quota, overload, network) must
+        # not offer a re-login.
+        assert not claude_auth.is_auth_failure_event(
+            "rate_limit_error", "Usage limit reached · resets at 17:00"
+        )
+
+
+class TestApiErrorPlumbing:
+    """The flag has to survive the parser, or the detector never sees it."""
+
+    def _entry(self, text: str, **extra) -> dict:
+        return {
+            "type": "assistant",
+            "timestamp": "2026-07-26T13:05:47.279Z",
+            "message": {
+                "role": "assistant",
+                "model": "<synthetic>",
+                "stop_reason": "stop_sequence",
+                "content": [{"type": "text", "text": text}],
+            },
+            **extra,
+        }
+
+    def test_auth_error_entry_carries_the_code(self) -> None:
+        from ccbot.transcript_parser import TranscriptParser
+
+        entries, _ = TranscriptParser.parse_entries(
+            [
+                self._entry(
+                    "Login expired · Please run /login",
+                    isApiErrorMessage=True,
+                    error="authentication_failed",
+                )
+            ]
+        )
+        assert entries
+        assert entries[0].api_error == "authentication_failed"
+        assert claude_auth.is_auth_failure_event(entries[0].api_error, entries[0].text)
+
+    def test_plain_assistant_text_has_no_code(self) -> None:
+        # Exactly this session's own case: writing *about* the error.
+        from ccbot.transcript_parser import TranscriptParser
+
+        entries, _ = TranscriptParser.parse_entries(
+            [self._entry("the CLI prints `Login expired · Please run /login` on death")]
+        )
+        assert entries
+        assert entries[0].api_error == ""
+        assert not claude_auth.is_auth_failure_event(
+            entries[0].api_error, entries[0].text
+        )
+
+    def test_flagged_entry_without_error_code_gets_a_placeholder(self) -> None:
+        from ccbot.transcript_parser import TranscriptParser
+
+        entries, _ = TranscriptParser.parse_entries(
+            [self._entry("Login expired · Please run /login", isApiErrorMessage=True)]
+        )
+        assert entries[0].api_error == "unknown"
+        assert claude_auth.is_auth_failure_event(entries[0].api_error, entries[0].text)
 
 
 class TestCredentialsState:

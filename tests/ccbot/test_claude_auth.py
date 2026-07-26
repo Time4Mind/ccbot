@@ -231,3 +231,57 @@ class TestFlowRegistry:
         silent.chmod(0o755)
         assert await claude_auth.start_flow(10, command=str(silent)) is None
         assert claude_auth.get_flow(10) is None
+
+
+class TestLoginMessages:
+    """The URL message is the one thing the whole flow depends on."""
+
+    @pytest.mark.asyncio
+    async def test_url_message_kwargs_survive_ptb_validation(
+        self, monkeypatch, fake_cli
+    ) -> None:
+        # safe_send already defaults link_preview_options; passing
+        # disable_web_page_preview alongside it makes PTB raise ValueError
+        # ("mutually exclusive") and the link never reaches the chat.
+        from telegram._utils.argumentparsing import parse_lpo_and_dwpp
+
+        from ccbot.bot.commands import auth as auth_cmd
+        from ccbot.handlers.message_sender import NO_LINK_PREVIEW
+
+        command, _ = fake_cli
+        monkeypatch.setattr(auth_cmd.config, "claude_command", command)
+        sent: list[dict] = []
+
+        async def fake_safe_send(bot, chat_id, text, **kwargs):
+            sent.append({"text": text, **kwargs})
+            return None
+
+        monkeypatch.setattr(auth_cmd, "safe_send", fake_safe_send)
+        assert await auth_cmd.start_login(object(), 42) is True
+        claude_auth.drop_flow(42)
+
+        url_msg = next(m for m in sent if _FAKE_URL in m["text"])
+        # Emulate what safe_send does before calling PTB.
+        kwargs = {k: v for k, v in url_msg.items() if k != "text"}
+        kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)
+        parse_lpo_and_dwpp(
+            kwargs.get("disable_web_page_preview"), kwargs["link_preview_options"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_failure_message_when_no_url(self, monkeypatch, tmp_path) -> None:
+        from ccbot.bot.commands import auth as auth_cmd
+
+        silent = tmp_path / "silent"
+        silent.write_text("#!/bin/sh\nexit 0\n")
+        silent.chmod(0o755)
+        monkeypatch.setattr(auth_cmd.config, "claude_command", str(silent))
+        sent: list[str] = []
+
+        async def fake_safe_send(bot, chat_id, text, **kwargs):
+            sent.append(text)
+            return None
+
+        monkeypatch.setattr(auth_cmd, "safe_send", fake_safe_send)
+        assert await auth_cmd.start_login(object(), 43) is False
+        assert any("/login" in s for s in sent)

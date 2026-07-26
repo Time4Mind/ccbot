@@ -59,12 +59,14 @@ async def start_login(bot: Bot, user_id: int) -> bool:
     if flow is None:
         await safe_send(bot, user_id, t(user_id, "auth.login.no_url"))
         return False
+    # No ``disable_web_page_preview`` here: safe_send already defaults
+    # ``link_preview_options`` and PTB raises ValueError when both are given —
+    # which would have killed the one message the whole flow depends on.
     await safe_send(
         bot,
         user_id,
         t(user_id, "auth.login.url", url=flow.url),
         reply_markup=_cancel_keyboard(user_id),
-        disable_web_page_preview=True,
     )
     return True
 

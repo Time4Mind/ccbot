@@ -29,8 +29,11 @@ from ...claude_auth import (
 )
 from ...config import config
 from ...handlers.callback_data import CB_AUTH_CANCEL, CB_AUTH_LOGIN
+from ...handlers.menu import build_footer_keyboard, render_more_text
 from ...handlers.message_sender import safe_send
+from ...handlers.notifications import repost_card
 from ...i18n import t
+from ...session import session_manager
 from .._common import is_user_allowed
 
 logger = logging.getLogger(__name__)
@@ -121,11 +124,35 @@ async def maybe_consume_code(
                 deadline=_fmt_deadline(state.refresh_expires_at),
             ),
         )
+        await _restore_working_surface(context.bot, user.id)
     else:
         await safe_send(
             context.bot, user.id, t(user.id, "auth.login.failed", detail=detail)
         )
     return True
+
+
+async def _restore_working_surface(bot: Bot, user_id: int) -> None:
+    """Put a usable surface back under the confirmation message.
+
+    A bare "✅ logged in" leaves the user staring at a dead end: the last live
+    card is buried above the notice / link / code exchange, so they'd have to
+    scroll back to reach the switcher and footer. Repost the active session's
+    card instead (it carries header, body, bg-panel, switcher and footer), or
+    the Menu when no session is active.
+    """
+    sess = session_manager.get_active_session(user_id)
+    if sess is not None and sess.window_id:
+        try:
+            await repost_card(bot, user_id, sess)
+            return
+        except Exception as exc:  # noqa: BLE001 — fall back to the Menu
+            logger.debug("post-login card repost failed: %s", exc)
+    text = render_more_text(user_id)
+    keyboard = build_footer_keyboard(user_id, screen="more")
+    sent = await safe_send(bot, user_id, text, reply_markup=keyboard)
+    if sent is not None and keyboard is not None:
+        session_manager.set_last_switcher_msg(user_id, sent.message_id)
 
 
 async def notify_auth_expired(bot: Bot, user_id: int) -> None:

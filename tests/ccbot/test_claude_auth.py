@@ -365,3 +365,83 @@ class TestLoginMessages:
         monkeypatch.setattr(auth_cmd, "safe_send", fake_safe_send)
         assert await auth_cmd.start_login(object(), 43) is False
         assert any("/login" in s for s in sent)
+
+
+class TestPostLoginSurface:
+    """A bare "logged in" line leaves the user with nothing to tap."""
+
+    @pytest.fixture
+    def wired(self, monkeypatch, fake_cli):
+        from ccbot.bot.commands import auth as auth_cmd
+
+        command, store = fake_cli
+        monkeypatch.setattr(auth_cmd.config, "claude_command", command)
+        _write_wall(store, int(time.time() * 1000) - 1000)
+        sent: list[dict] = []
+        reposted: list[object] = []
+
+        async def fake_safe_send(bot, chat_id, text, **kwargs):
+            sent.append({"text": text, **kwargs})
+            return None
+
+        async def fake_repost(bot, user_id, sess):
+            reposted.append(sess)
+
+        monkeypatch.setattr(auth_cmd, "safe_send", fake_safe_send)
+        monkeypatch.setattr(auth_cmd, "repost_card", fake_repost)
+        return auth_cmd, command, sent, reposted
+
+    class _Msg:
+        def __init__(self, text: str) -> None:
+            self.text = text
+            self.deleted = False
+
+        async def delete(self) -> None:
+            self.deleted = True
+
+    class _Update:
+        def __init__(self, user_id: int, message) -> None:
+            self.effective_user = type("U", (), {"id": user_id})()
+            self.message = message
+
+    class _Ctx:
+        bot = object()
+
+    @pytest.mark.asyncio
+    async def test_active_session_card_is_reposted(self, wired, monkeypatch) -> None:
+        auth_cmd, command, sent, reposted = wired
+        sess = object()
+        monkeypatch.setattr(
+            auth_cmd.session_manager,
+            "get_active_session",
+            lambda uid: type("S", (), {"window_id": "@7"})(),
+        )
+        flow = await claude_auth.start_flow(70, command=command)
+        assert flow is not None
+        msg = self._Msg("good-code")
+        assert await auth_cmd.maybe_consume_code(self._Update(70, msg), self._Ctx())
+        assert any("✅" in m["text"] or "Готово" in m["text"] for m in sent)
+        # The working surface has to follow the confirmation.
+        assert reposted, "active session card was not reposted after login"
+        assert msg.deleted, "the pasted code must not stay in the chat"
+        assert sess is not None
+
+    @pytest.mark.asyncio
+    async def test_menu_fallback_without_active_session(
+        self, wired, monkeypatch
+    ) -> None:
+        auth_cmd, command, sent, reposted = wired
+        monkeypatch.setattr(
+            auth_cmd.session_manager, "get_active_session", lambda uid: None
+        )
+        monkeypatch.setattr(auth_cmd, "render_more_text", lambda uid: "MENU-TEXT")
+        monkeypatch.setattr(auth_cmd, "build_footer_keyboard", lambda uid, screen: None)
+        flow = await claude_auth.start_flow(71, command=command)
+        assert flow is not None
+        assert await auth_cmd.maybe_consume_code(
+            self._Update(71, self._Msg("good-code")), self._Ctx()
+        )
+        assert not reposted
+        assert any(m["text"] == "MENU-TEXT" for m in sent), (
+            "no menu surface after login without an active session"
+        )

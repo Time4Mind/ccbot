@@ -54,6 +54,11 @@ class NewMessage:
     )
     timestamp: str = ""  # ISO-8601 timestamp from JSONL; "" if unknown
     is_error: bool = False  # tool_result block carried ``is_error: true``
+    # Non-empty when Claude Code wrote this turn as its own API failure
+    # (``isApiErrorMessage`` + ``error`` code, e.g. "authentication_failed").
+    # The only trustworthy auth-failure signal: assistant text that merely
+    # mentions such an error must never be mistaken for one.
+    api_error: str = ""
 
 
 class SessionMonitor:
@@ -369,6 +374,7 @@ class SessionMonitor:
                             stop_reason=entry.stop_reason,
                             timestamp=entry.timestamp or "",
                             is_error=entry.is_error,
+                            api_error=entry.api_error,
                         )
                     )
 

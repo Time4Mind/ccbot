@@ -17,10 +17,12 @@ Measured against Claude Code v2.1.220:
   no trailing newline), so the child runs on a **pty**, sized wide enough that
   the URL is not wrapped across lines;
 * a dead login surfaces as ``Failed to authenticate: OAuth session expired and
-  could not be refreshed`` — see ``looks_like_auth_failure``.
+  could not be refreshed``, written to the JSONL as a synthetic assistant
+  turn flagged ``isApiErrorMessage: true`` with ``error: authentication_failed``
+  — that flag, not the wording, is what ``is_auth_failure_event`` trusts.
 
 Core responsibilities:
-  - detect auth failure in arbitrary session output (``looks_like_auth_failure``)
+  - recognise Claude Code's own auth-failure turn (``is_auth_failure_event``)
   - read the credential store's deadlines (``credentials_state``)
   - run the login exchange (``LoginFlow``) with a per-user registry + TTL
 
@@ -47,13 +49,20 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Substrings that mean "the OAuth login is gone", as emitted by the CLI itself.
+# Entry-level ``error`` code Claude Code writes for a dead login (observed on
+# v2.1.220 alongside ``isApiErrorMessage: true`` and ``model: "<synthetic>"``).
+AUTH_ERROR_CODE = "authentication_failed"
+
+# Wording of the same failure, used only as a fallback and only when the text
+# *is* the error line (see ``is_auth_failure_event``).
 AUTH_FAILURE_MARKERS: tuple[str, ...] = (
+    "Login expired",
     "OAuth session expired",
     "Failed to authenticate",
     "Please run /login",
-    "Invalid API key",
 )
+# The real error line is one short sentence; anything longer is prose about it.
+_MAX_ERROR_TEXT = 120
 
 _URL_RE = re.compile(r"https://claude\.com/cai/oauth/authorize\?[^\s\x1b\]]+")
 _ANSI_RE = re.compile(
@@ -71,11 +80,26 @@ _URL_WAIT = 90.0
 _CODE_WAIT = 120.0
 
 
-def looks_like_auth_failure(text: str) -> bool:
-    """True when `text` carries the CLI's own "your login is dead" wording."""
-    if not text:
+def is_auth_failure_event(api_error: str, text: str) -> bool:
+    """True only for Claude Code's own synthetic auth-failure turn.
+
+    ``api_error`` is the JSONL entry-level code (``error`` alongside
+    ``isApiErrorMessage: true``) — that flag is the whole point. Matching the
+    error *wording* against arbitrary assistant text is not good enough: a
+    session that merely discusses the failure (this feature's own development
+    session did) would trip the notice and offer to re-authenticate a perfectly
+    healthy host.
+    """
+    if not api_error:
         return False
-    return any(marker in text for marker in AUTH_FAILURE_MARKERS)
+    if api_error == AUTH_ERROR_CODE:
+        return True
+    # Older/other builds may only set a generic code, so fall back to the
+    # wording — but only for text that *is* the error, not text containing it.
+    stripped = (text or "").strip()
+    if len(stripped) > _MAX_ERROR_TEXT:
+        return False
+    return any(stripped.startswith(marker) for marker in AUTH_FAILURE_MARKERS)
 
 
 def config_dir() -> Path:

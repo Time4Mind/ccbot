@@ -133,8 +133,19 @@ async def notify_auth_expired(bot: Bot, user_id: int) -> None:
     state = credentials_state()
     wall = state.refresh_expires_at or 0.0
     if wall in _notified_walls:
+        logger.debug("auth-expired notice already sent for wall=%s", wall)
         return
     _notified_walls.add(wall)
+    logger.info(
+        "auth_expired_notice user=%d wall=%s",
+        user_id,
+        _fmt_deadline(state.refresh_expires_at),
+        extra={
+            "event": "auth_expired_notice",
+            "user_id": user_id,
+            "wall": state.refresh_expires_at,
+        },
+    )
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton(t(user_id, "btn.login"), callback_data=CB_AUTH_LOGIN)]]
     )

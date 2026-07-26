@@ -198,10 +198,26 @@ Hidden (registered, typed-only): `/new` `/kill` `/stop` `/archive`
 `claude auth login` on a pty, posts its URL, and consumes the user's next
 message as the pasted code (`bot/commands/auth.py`). It stays out of the
 published menu because it is surfaced by the "authorization expired" notice
-itself — `session_events` matches `claude_auth.looks_like_auth_failure` on
-incoming events and pushes that notice once per credential deadline, with a
-🔐 button. The bot needs no Claude auth of its own, so this works while every
+itself. The bot needs no Claude auth of its own, so this works while every
 session is failing.
+
+Detection is gated on Claude Code's **own** error flag, not on wording:
+`claude_auth.is_auth_failure_event(msg.api_error, msg.text)`. The CLI writes a
+dead login as a synthetic assistant turn carrying `isApiErrorMessage: true` and
+`error: "authentication_failed"`, which `transcript_parser` stamps onto
+`ParsedEntry.api_error` and `session_monitor` carries as `NewMessage.api_error`.
+Matching the error *wording* against event text was tried first and had to be
+reverted: any session that merely discussed the failure (this feature's own
+development session did) made the bot announce that a healthy host had lost its
+login. `session_events` pushes the notice once per credential deadline
+(`_notified_walls`), with a 🔐 button.
+
+On success `maybe_consume_code` deletes the user's message (the code is a
+single-use credential), reports the new deadline, and then calls
+`_restore_working_surface`: the active session's card is reposted below the
+confirmation so the switcher and footer are immediately reachable, or the Menu
+screen is sent when no session is active. A bare confirmation leaves the last
+card buried above the notice / link / code exchange.
 
 The legacy ``/status`` command was retired — Menu → Status fetches
 the same /usage modal data via the dedicated ``ccbot-usage`` window.

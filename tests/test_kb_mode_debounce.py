@@ -224,6 +224,68 @@ async def test_auto_approve_distinct_prompts_never_escalate():
 
 
 @pytest.mark.asyncio
+async def test_auto_approve_identical_prompts_never_escalate_when_pane_advances():
+    """A storm of IDENTICAL-looking sub-agent prompts (same signature) must NOT
+    trip the give-up cap as long as the pane transcript keeps advancing — each
+    is a fresh, approvable prompt from the next parallel agent, not one stuck
+    prompt. This is the multi-agent regression: keying give-up on the prompt
+    signature alone bailed mid-storm and forced manual yes/yes/yes."""
+    send_keys = AsyncMock()
+    with (
+        patch.object(
+            status_polling.session_manager,
+            "get_user_settings",
+            lambda u: {"auto_approve": "on"},
+        ),
+        patch.object(status_polling.tmux_manager, "send_keys", send_keys),
+        # Signature is constant (same body) every poll — only the pane's
+        # transcript above the prompt grows, as it would each time an approved
+        # command runs and the next identical prompt appears.
+        patch.object(
+            status_polling, "extract_interactive_content", lambda p: _content()
+        ),
+    ):
+        n = AUTO_APPROVE_MAX_ATTEMPTS + 5
+        for i in range(n):
+            # Each approved command appends a fresh tool-result line above the
+            # prompt (non-digit content — the digit counters alone wouldn't
+            # count as progress). Mimic that accumulation.
+            pane = (
+                "".join(f"⎿  done {chr(97 + j)}\n" for j in range(i + 1)) + _YESNO_PANE
+            )
+            assert await _maybe_auto_approve(1, "@1", pane) is True
+    # Every single one auto-approved — no give-up despite identical signatures.
+    assert send_keys.await_count == n
+
+
+@pytest.mark.asyncio
+async def test_auto_approve_stuck_prompt_still_escalates_with_ticking_timers():
+    """A genuinely wedged prompt still gives up even while volatile digit
+    counters (token/elapsed) tick — those are normalised out of the progress
+    marker, so they don't masquerade as forward progress."""
+    send_keys = AsyncMock()
+    with (
+        patch.object(
+            status_polling.session_manager,
+            "get_user_settings",
+            lambda u: {"auto_approve": "on"},
+        ),
+        patch.object(status_polling.tmux_manager, "send_keys", send_keys),
+        patch.object(
+            status_polling, "extract_interactive_content", lambda p: _content()
+        ),
+    ):
+        # Same prompt, only a ticking elapsed timer changes between polls.
+        for i in range(AUTO_APPROVE_MAX_ATTEMPTS):
+            pane = f"◯ general-purpose  agent  {i}s\n" + _YESNO_PANE
+            assert await _maybe_auto_approve(1, "@1", pane) is True
+        # Cap reached — the timer tick was normalised, so no false progress.
+        pane = f"◯ general-purpose  agent  {AUTO_APPROVE_MAX_ATTEMPTS}s\n" + _YESNO_PANE
+        assert await _maybe_auto_approve(1, "@1", pane) is False
+    assert send_keys.await_count == AUTO_APPROVE_MAX_ATTEMPTS
+
+
+@pytest.mark.asyncio
 async def test_auto_approve_counter_resets_when_prompt_clears():
     """Once the prompt clears, _reconcile_no_ui_state pops the escalation
     counter so a later prompt starts fresh instead of instantly escalating."""

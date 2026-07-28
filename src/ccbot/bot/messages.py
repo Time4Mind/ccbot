@@ -58,6 +58,7 @@ from ..handlers.notifications import (
     resume_card_view,
 )
 from ..handlers.typing import fire_typing
+from ..i18n import t
 from ..session_models import Session
 from ..handlers.inbox import save_inbox_file
 from ..markdown_v2 import convert_markdown
@@ -146,11 +147,26 @@ async def _card_repost_bracket(
         end_repost_intent(user_id, sess.id)
 
 
+async def _pane_has_interactive_ui(wid: str) -> bool:
+    """True iff the window's pane is currently showing an interactive prompt.
+
+    Cheap capture-and-classify used by the voice path to verify delivery —
+    a transcription typed into a pane that is showing a Yes/No prompt gets
+    consumed as menu navigation and lost, so the caller needs to know.
+    """
+    w = await tmux_manager.find_window_by_id(wid)
+    if not w:
+        return False
+    pane_text = await tmux_manager.capture_pane(w.window_id)
+    return bool(pane_text) and is_interactive_ui(pane_text)
+
+
 async def _intercept_if_pending_ui(
     bot: Bot,
     user_id: int,
     wid: str,
     reply_to: Any,
+    wasnt_sent_notice: str | None = None,
 ) -> bool:
     """If the pane has a pending interactive UI, surface it and intercept.
 
@@ -158,6 +174,10 @@ async def _intercept_if_pending_ui(
     AskUserQuestion / ExitPlanMode / Permission prompt on the pane would
     otherwise consume the user's text as menu keystrokes (digits select
     options, Enter submits). Caller should ``return`` on True.
+
+    ``wasnt_sent_notice`` overrides the "your message wasn't sent" reply —
+    the voice path passes a resend-oriented line since a transcription, unlike
+    typed text, can't just be retyped.
 
     Surface preference:
       - Active session (sess matches ``get_active_session``) → kb-mode
@@ -198,8 +218,11 @@ async def _intercept_if_pending_ui(
     try:
         await safe_reply(
             reply_to,
-            "⏳ Pending prompt above — answer it via the keyboard first. "
-            "Your message wasn't sent.",
+            wasnt_sent_notice
+            or (
+                "⏳ Pending prompt above — answer it via the keyboard first. "
+                "Your message wasn't sent."
+            ),
         )
     except Exception:
         pass
@@ -665,7 +688,14 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
     cancel_bash_capture(user.id, wid)
 
-    if await _intercept_if_pending_ui(context.bot, user.id, wid, update.message):
+    # A transcription is expensive and unrecoverable — unlike typed text the
+    # user can't just retype 90 seconds of speech. If the pane is showing an
+    # interactive prompt, the text would be consumed as menu keystrokes and
+    # silently lost, so tell the user to resend rather than swallowing it.
+    _voice_lost_notice = t(user.id, "voice.not_delivered")
+    if await _intercept_if_pending_ui(
+        context.bot, user.id, wid, update.message, _voice_lost_notice
+    ):
         return
 
     # Same dispatch path text uses — identical reaction (send, auto-name,
@@ -673,6 +703,20 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # known. No voice-specific reply; the transcribed text just becomes
     # this message's text, same as if the user had typed it.
     await _dispatch_text_to_active(update, context, user.id, wid, text)
+
+    # Post-send verification. The pre-send check above is a single snapshot;
+    # a prompt can surface in the gap between it and the Enter keystroke (or
+    # the transcription lands right as claude raises one — common on this host
+    # where a managed policy blocks bypass mode, so Bash/sub-agent prompts are
+    # frequent). If the pane is showing an interactive prompt shortly after we
+    # sent, our keystrokes almost certainly landed in it and the voice was
+    # eaten — notify so the user resends instead of waiting on dead air.
+    await asyncio.sleep(1.5)
+    if await _pane_has_interactive_ui(wid):
+        try:
+            await safe_reply(update.message, _voice_lost_notice)
+        except Exception:
+            pass
 
 
 # --- text + bash !cmd capture ---

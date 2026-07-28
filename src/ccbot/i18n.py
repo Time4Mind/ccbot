@@ -27,6 +27,12 @@ LANGUAGES: tuple[tuple[str, str], ...] = (
 
 # English source of truth — every key MUST be present here.
 _EN: dict[str, str] = {
+    # Voice delivery
+    "voice.not_delivered": (
+        "🎙 Voice didn't reach the session — it has an open prompt "
+        "(permission/question), so the transcribed text can't go in. "
+        "Answer the prompt and resend the voice message."
+    ),
     # Footer buttons
     "btn.stop": "⏹ Stop",
     "btn.kill": "💀 Kill",
@@ -455,6 +461,11 @@ _EN: dict[str, str] = {
 }
 
 _RU: dict[str, str] = {
+    "voice.not_delivered": (
+        "🎙 Голос не попал в сессию — в ней открыт запрос (опрув/вопрос), "
+        "и распознанный текст туда не уходит. Ответь на запрос и перешли "
+        "голосовое ещё раз."
+    ),
     "btn.stop": "⏹ Стоп",
     "btn.kill": "💀 Убить",
     "btn.clear": "🧹 Очистить",
@@ -857,6 +868,10 @@ _RU: dict[str, str] = {
 }
 
 _ZH: dict[str, str] = {
+    "voice.not_delivered": (
+        "🎙 语音未送达会话 —— 会话中有待处理的提示（授权/提问），"
+        "转写文本无法送入。请先回应该提示，然后重新发送语音消息。"
+    ),
     "btn.stop": "⏹ 停止",
     "btn.kill": "💀 终止",
     "btn.clear": "🧹 清空",

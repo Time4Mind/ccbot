@@ -80,18 +80,52 @@ _kb_clear_miss: dict[tuple[int, str], int] = {}
 # permanently shadows the kb-mode / bg-status surface — leaving the session
 # wedged with no manual escape hatch.
 #
-# Verification is cross-poll: each poll compares the prompt's signature to
-# the last one we auto-approved. Same signature next poll ⇒ the previous
-# keystroke did NOT clear it. After AUTO_APPROVE_MAX_ATTEMPTS consecutive
-# no-progress attempts on an identical prompt we STOP auto-approving and
-# return False, letting the caller surface the kb-mode keyboard (active
-# session) or the ❓ bg-status badge (background) so the user can drive it
-# by hand. A genuinely different prompt (new domain / file) has a different
-# signature ⇒ the counter resets, so normal one-shot approvals are
-# untouched.
+# Verification is cross-poll, and it keys on TWO signals, not one:
+#
+#   * the prompt's own signature (``_auto_approve_signature``), and
+#   * a *progress marker* of everything else on the pane
+#     (``_auto_approve_progress``) — the transcript / tool-result
+#     scrollback above the prompt, with volatile digit counters
+#     (token/elapsed ticks) normalised out.
+#
+# We only count an attempt as FAILED when BOTH are unchanged since the last
+# auto-Yes we sent: same prompt AND nothing on the pane advanced ⇒ the
+# keystroke genuinely didn't land. After AUTO_APPROVE_MAX_ATTEMPTS such
+# no-progress attempts we STOP auto-approving and return False, surfacing the
+# kb-mode keyboard (active session) or the ❓ bg-status badge (background).
+#
+# Why the progress marker matters: parallel sub-agents (or a loop) routinely
+# raise a *stream of identical-looking* permission prompts — N agents each
+# running ``ls`` / the same ``yql`` / ``touch x``. Keying give-up on the
+# prompt signature ALONE conflated "the same prompt is still stuck" with
+# "I approved that one and an identical new one popped from the next agent",
+# so the counter hit 3 and bailed mid-storm — the user then had to tap Yes by
+# hand (the reported yes/yes/yes). When our Yes actually lands, the approved
+# command runs and the transcript above the prompt advances ⇒ the progress
+# marker changes ⇒ the counter resets, even though the next prompt looks
+# identical. Only a truly wedged prompt (nothing moves across sends) still
+# trips the cap.
 AUTO_APPROVE_MAX_ATTEMPTS = 3
-# (user_id, window_id) -> (prompt_signature, consecutive_attempts)
-_auto_approve_attempts: dict[tuple[int, str], tuple[str, int]] = {}
+# (user_id, window_id) -> (prompt_signature, progress_marker, attempts)
+_auto_approve_attempts: dict[tuple[int, str], tuple[str, str, int]] = {}
+
+# Volatile per-frame counters (token totals, elapsed timers on the running
+# agent rows) tick every poll even while a prompt sits unanswered. Normalising
+# every run of digits to ``#`` keeps those ticks from reading as real progress,
+# while genuine new output (tool results, day names, paths) still changes the
+# marker.
+_DIGIT_RUN_RE = re.compile(r"\d+")
+
+
+def _auto_approve_progress(pane_text: str) -> str:
+    """Progress marker: the pane minus its volatile digit counters.
+
+    Equal across two polls ⇒ nothing but timers ticked (no command ran).
+    Different ⇒ the transcript advanced (an approval landed and its tool
+    executed), so a same-looking follow-up prompt is a NEW one, not a stuck
+    repeat. Cheap and structural — no attempt to locate the prompt region.
+    """
+    return _DIGIT_RUN_RE.sub("#", pane_text)
 
 
 # A *durable* Yes label — approving it once suppresses the whole storm of
@@ -168,16 +202,24 @@ async def _maybe_auto_approve(user_id: int, window_id: str, pane_text: str) -> b
 
     key = (user_id, window_id)
     sig = _auto_approve_signature(pane_text)
-    prev_sig, attempts = _auto_approve_attempts.get(key, ("", 0))
-    attempts = attempts + 1 if sig == prev_sig else 1
+    prog = _auto_approve_progress(pane_text)
+    prev_sig, prev_prog, attempts = _auto_approve_attempts.get(key, ("", "", 0))
+    # A failed attempt = same prompt AND nothing on the pane advanced since our
+    # last auto-Yes. A different prompt OR any transcript progress (an approval
+    # landed, its command ran) resets the streak — so a storm of identical
+    # sub-agent prompts is approved one after another instead of tripping the
+    # give-up cap. See the module note above ``AUTO_APPROVE_MAX_ATTEMPTS``.
+    no_progress = sig == prev_sig and prog == prev_prog
+    attempts = attempts + 1 if no_progress else 1
     if attempts > AUTO_APPROVE_MAX_ATTEMPTS:
-        # Give up: the prompt isn't responding to the auto-Yes hotkey.
+        # Give up: the prompt isn't responding to the auto-Yes hotkey AND the
+        # pane hasn't moved across our last few sends — genuinely wedged.
         # Keep the entry so we stay escalated (return False) until the
         # prompt clears and ``_reconcile_no_ui_state`` pops the counter.
-        _auto_approve_attempts[key] = (sig, attempts)
+        _auto_approve_attempts[key] = (sig, prog, attempts)
         logger.warning(
-            "auto_approve giving up after %d attempts (prompt not clearing) "
-            "for user=%d window=%s — surfacing manual keyboard",
+            "auto_approve giving up after %d no-progress attempts (prompt not "
+            "clearing) for user=%d window=%s — surfacing manual keyboard",
             AUTO_APPROVE_MAX_ATTEMPTS,
             user_id,
             window_id,
@@ -190,7 +232,7 @@ async def _maybe_auto_approve(user_id: int, window_id: str, pane_text: str) -> b
     except Exception as e:
         logger.debug("auto_approve send_keys failed: %s", e)
         return False
-    _auto_approve_attempts[key] = (sig, attempts)
+    _auto_approve_attempts[key] = (sig, prog, attempts)
     logger.info(
         "Auto-approved interactive prompt (opt=%s, attempt=%d) for user=%d window=%s",
         digit,

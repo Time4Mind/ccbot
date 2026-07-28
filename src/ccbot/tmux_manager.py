@@ -57,6 +57,27 @@ class TmuxManager:
         """
         self.session_name = session_name or config.tmux_session_name
         self._server: libtmux.Server | None = None
+        # One lock per window id, serializing send_keys on that pane. The
+        # literal+enter path types the text, sleeps ~0.5s, then presses
+        # Enter — without a lock a second concurrent send (e.g. a voice
+        # transcription landing while the user just typed text) injects
+        # its keystrokes into the same input box during that gap, merging
+        # both messages into one and firing a spurious Enter. See
+        # send_keys.
+        self._send_locks: dict[str, asyncio.Lock] = {}
+
+    def _send_lock_for(self, window_id: str) -> asyncio.Lock:
+        """Return the per-window send lock, creating it on first use.
+
+        Safe to call without external synchronization: this runs on the
+        single asyncio event loop thread, so the get-or-create is atomic
+        with respect to other coroutines.
+        """
+        lock = self._send_locks.get(window_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._send_locks[window_id] = lock
+        return lock
 
     @property
     def server(self) -> libtmux.Server:
@@ -252,7 +273,21 @@ class TmuxManager:
 
         Returns:
             True if successful, False otherwise
+
+        Serialized per window: the literal+enter path types the text, waits
+        ~0.5s, then presses Enter. A concurrent send on the same pane during
+        that gap (classically a voice transcription completing right as the
+        user typed text into the same session) would otherwise interleave
+        its keystrokes into the same input box — both messages merge into
+        one submission and one of the two Enters lands on an empty prompt.
+        The lock makes each send atomic against every other send on the pane.
         """
+        async with self._send_lock_for(window_id):
+            return await self._send_keys_locked(window_id, text, enter, literal)
+
+    async def _send_keys_locked(
+        self, window_id: str, text: str, enter: bool, literal: bool
+    ) -> bool:
         if literal and enter:
             # Split into text + delay + Enter via libtmux.
             # Claude Code's TUI sometimes interprets a rapid-fire Enter
@@ -386,7 +421,11 @@ class TmuxManager:
                 logger.error(f"Failed to kill window {window_id}: {e}")
                 return False
 
-        return await asyncio.to_thread(_sync_kill)
+        killed = await asyncio.to_thread(_sync_kill)
+        # Drop the per-window send lock — tmux never reuses window ids, so
+        # the entry would otherwise linger for the process lifetime.
+        self._send_locks.pop(window_id, None)
+        return killed
 
     def has_client_for_window(self, window_id: str) -> bool:
         """True iff some tmux client is attached to this window's group session.

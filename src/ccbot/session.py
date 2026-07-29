@@ -860,13 +860,20 @@ class SessionManager:
         self.save_state()
 
     def set_session_window(self, session_id: str, window_id: str) -> None:
-        """Re-attach a session to a (possibly new) tmux window after restore."""
+        """Re-attach a session to a (possibly new) tmux window after restore.
+
+        A restored (or re-bound lost) session re-enters as if freshly created:
+        ``created_at`` is bumped to now so the oldest -> newest switcher slots
+        it at the far right rather than back in its original position.
+        """
         sess = self.sessions.get(session_id)
         if not sess:
             return
+        now = time.time()
         sess.window_id = window_id
         sess.state = "active"
-        sess.last_event_at = time.time()
+        sess.created_at = now
+        sess.last_event_at = now
         self.save_state()
 
     def set_session_claude_id(self, session_id: str, claude_session_id: str) -> None:

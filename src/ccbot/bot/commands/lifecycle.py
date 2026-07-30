@@ -66,6 +66,15 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if path_arg:
         target_path = str(Path(path_arg).expanduser().resolve())
+        if session_manager.agent_backend == "codex":
+            from .auth import ensure_codex_authenticated
+
+            if not await ensure_codex_authenticated(context.bot, user.id):
+                await safe_reply(
+                    update.message,
+                    t(user.id, "auth.codex.required"),
+                )
+                return
         await safe_reply(update.message, f"⏳ Creating session at {target_path}…")
         success, message, created_wname, created_wid = await tmux_manager.create_window(
             target_path,

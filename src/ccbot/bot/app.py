@@ -34,7 +34,11 @@ from ..session import session_manager
 from ..session_monitor import NewMessage, SessionMonitor
 from ._common import CC_COMMANDS
 from .callbacks import callback_handler
-from .commands.auth import login_command
+from .commands.auth import (
+    ensure_codex_auth_on_start,
+    login_command,
+    shutdown_auth_flows,
+)
 from .commands.info import (
     health_command,
     help_command,
@@ -155,6 +159,7 @@ _card_timer_task: asyncio.Task[None] | None = None
 _quota_alerts_task: asyncio.Task[None] | None = None
 _metrics_flush_task: asyncio.Task[None] | None = None
 _heartbeat_task: asyncio.Task[None] | None = None
+_auth_preflight_task: asyncio.Task[None] | None = None
 
 
 async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") -> None:
@@ -166,6 +171,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
         _quota_alerts_task, \
         _metrics_flush_task, \
         _heartbeat_task, \
+        _auth_preflight_task, \
         _last_heartbeat, \
         _conflict_app
 
@@ -208,6 +214,14 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     # window vanished get state=lost and surface in the switcher with a
     # Restore button.
     await session_manager.reconcile_sessions_with_tmux()
+
+    # A fresh Codex host should be operable from Telegram alone. Read auth
+    # state after the bot is online and automatically start the official
+    # device-code flow when no account is present.
+    _auth_preflight_task = asyncio.create_task(
+        ensure_codex_auth_on_start(application.bot)
+    )
+    logger.info("Agent auth preflight scheduled")
 
     # Pre-fill global rate limiter bucket on restart. AsyncLimiter starts at
     # _level=0 (full burst capacity), but Telegram's server-side counter
@@ -354,7 +368,15 @@ async def post_shutdown(
         _card_timer_task, \
         _quota_alerts_task, \
         _metrics_flush_task, \
-        _heartbeat_task
+        _heartbeat_task, \
+        _auth_preflight_task
+
+    if _auth_preflight_task:
+        if not _auth_preflight_task.done():
+            _auth_preflight_task.cancel()
+        await asyncio.gather(_auth_preflight_task, return_exceptions=True)
+        _auth_preflight_task = None
+    await shutdown_auth_flows()
 
     if _status_poll_task:
         _status_poll_task.cancel()

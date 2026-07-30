@@ -1,4 +1,4 @@
-"""``/login`` — re-authenticate Claude Code from the chat.
+"""``/login`` and automatic agent authentication from Telegram.
 
 The whole point is recovering from a dead OAuth login while the only device at
 hand is the phone. The bot process itself never needs Claude auth, so it stays
@@ -10,13 +10,16 @@ browser and sends the code back as an ordinary message → ``maybe_consume_code`
 picks that message up instead of routing it to a session, feeds it to the
 waiting process, and reports the new deadline.
 
-Key components: login_command, maybe_consume_code, notify_auth_expired.
+Claude uses its paste-back OAuth code flow. Codex uses app-server's device-code
+flow: the bot posts a URL and code, then waits for completion without consuming
+the user's next Telegram message.
 """
 
 from __future__ import annotations
 
 import logging
 import time
+import asyncio
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -27,6 +30,7 @@ from ...claude_auth import (
     get_flow,
     start_flow,
 )
+from ... import codex_auth
 from ...config import config
 from ...handlers.callback_data import CB_AUTH_CANCEL, CB_AUTH_LOGIN
 from ...handlers.menu import build_footer_keyboard, render_more_text
@@ -41,6 +45,7 @@ logger = logging.getLogger(__name__)
 # One notice per bot lifetime per credential deadline — re-notifying on every
 # failing event would bury the chat while every session is erroring out.
 _notified_walls: set[float] = set()
+_codex_watchers: set[asyncio.Task[None]] = set()
 
 
 def _fmt_deadline(ts: float | None) -> str:
@@ -57,15 +62,28 @@ def _cancel_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 async def start_login(bot: Bot, user_id: int) -> bool:
     """Spawn the login exchange and post the URL. True when the URL went out."""
-    active = session_manager.get_active_session(user_id)
-    if active is not None and active.backend == "codex":
+    if session_manager.agent_backend == "codex":
+        await safe_send(bot, user_id, t(user_id, "auth.login.starting"))
+        flow = await codex_auth.start_flow(user_id, command=config.codex_command)
+        if flow is None:
+            await safe_send(bot, user_id, t(user_id, "auth.codex.no_device_code"))
+            return False
         await safe_send(
             bot,
             user_id,
-            "Codex uses its own login. Run `codex login --device-auth` in "
-            "the Termux/proot environment that hosts ccbot.",
+            t(
+                user_id,
+                "auth.codex.device",
+                url=flow.verification_url,
+                code=flow.user_code,
+            ),
+            reply_markup=_cancel_keyboard(user_id),
         )
-        return False
+        task = asyncio.create_task(_watch_codex_login(bot, user_id, flow))
+        _codex_watchers.add(task)
+        task.add_done_callback(_codex_watchers.discard)
+        return True
+
     await safe_send(bot, user_id, t(user_id, "auth.login.starting"))
     flow = await start_flow(user_id, command=config.claude_command)
     if flow is None:
@@ -81,6 +99,71 @@ async def start_login(bot: Bot, user_id: int) -> bool:
         reply_markup=_cancel_keyboard(user_id),
     )
     return True
+
+
+async def _watch_codex_login(
+    bot: Bot, user_id: int, flow: codex_auth.LoginFlow
+) -> None:
+    ok, detail = await flow.wait_completed()
+    codex_auth.finish_flow(user_id, flow)
+    if ok:
+        _notified_walls.clear()
+        await safe_send(bot, user_id, t(user_id, "auth.codex.ok"))
+        await _restore_working_surface(bot, user_id)
+        return
+    if detail != "cancelled":
+        await safe_send(
+            bot,
+            user_id,
+            t(user_id, "auth.codex.failed", detail=detail),
+        )
+
+
+async def ensure_codex_authenticated(bot: Bot, user_id: int) -> bool:
+    """Return True when Codex can run, otherwise ensure a login is underway."""
+    if session_manager.agent_backend != "codex":
+        return True
+    state = await codex_auth.read_account_state(command=config.codex_command)
+    if state is not None and state.authenticated:
+        return True
+    if codex_auth.get_flow(user_id) is None:
+        await start_login(bot, user_id)
+    else:
+        await safe_send(bot, user_id, t(user_id, "auth.codex.waiting"))
+    return False
+
+
+async def ensure_codex_auth_on_start(bot: Bot) -> None:
+    """On a fresh Codex host, start device login as soon as the bot is online."""
+    if session_manager.agent_backend != "codex":
+        return
+    state = await codex_auth.read_account_state(command=config.codex_command)
+    if state is None:
+        logger.warning("Codex auth preflight was unavailable")
+        for user_id in sorted(config.allowed_users):
+            await safe_send(bot, user_id, t(user_id, "auth.codex.check_failed"))
+        return
+    if state.authenticated:
+        logger.info(
+            "Codex account ready (type=%s, plan=%s)",
+            state.account_type,
+            state.plan_type,
+        )
+        return
+    logger.info("Codex account is not authenticated; starting device flow")
+    for user_id in sorted(config.allowed_users):
+        await start_login(bot, user_id)
+
+
+async def shutdown_auth_flows() -> None:
+    """Cancel login children/watchers during bot shutdown."""
+    await codex_auth.cancel_all_flows()
+    watchers = list(_codex_watchers)
+    for task in watchers:
+        task.cancel()
+    if watchers:
+        await asyncio.gather(*watchers, return_exceptions=True)
+    _codex_watchers.clear()
 
 
 async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

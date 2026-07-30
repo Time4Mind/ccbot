@@ -147,9 +147,12 @@ claude auth status   # должен показать активную подпи
 curl -fsSL https://chatgpt.com/codex/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 codex --version
-codex login --device-auth
-codex login status
 ```
+
+Codex заранее логинить не нужно: после первого запуска ccbot проверяет
+`account/read` через app-server. Если аккаунта нет, бот автоматически присылает
+в Telegram `verificationUrl` и `userCode`, ждёт подтверждения и сохраняет
+авторизацию через сам Codex CLI. `/login` повторно запускает тот же flow.
 
 Для Codex добавь в `~/.ccbot/.env`:
 
@@ -375,8 +378,8 @@ supervisor с авто-рестартом и ожиданием сети.
 ## 12. Чеклист «всё ли сделано»
 
 - [ ] `tmux`, `ffmpeg`, `git`, `curl`, `python3.12`, `uv` установлены.
-- [ ] CLI выбранного агента установлен и авторизован (`claude auth status`
-      или `codex login status`).
+- [ ] CLI выбранного агента установлен; для Claude выполнен `claude auth
+      status`, для Codex подтверждён автоматический device-code flow в Telegram.
 - [ ] `/opt/ccbot` склонирован (ветка `main`), `uv sync` отработал
       без ошибок.
 - [ ] `uv run ruff check` и `uv run pyright src/ccbot/` чистые.

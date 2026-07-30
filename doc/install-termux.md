@@ -33,9 +33,12 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ```bash
 curl -fsSL https://chatgpt.com/codex/install.sh | sh
 codex --version
-codex login --device-auth
-codex login status
 ```
+
+Ручной `codex login` не требуется. После запуска ccbot проверит авторизацию
+через Codex app-server и, если аккаунта нет, сам пришлёт в Telegram ссылку и
+device code. Откройте ссылку, введите код — бот дождётся подтверждения и
+разрешит создавать сессии.
 
 ## 3. Установить и настроить ccbot
 

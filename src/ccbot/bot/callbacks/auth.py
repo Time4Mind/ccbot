@@ -13,6 +13,7 @@ from telegram import CallbackQuery
 from telegram.ext import ContextTypes
 
 from ...claude_auth import drop_flow
+from ...codex_auth import cancel_flow
 from ...handlers.callback_data import CB_AUTH_CANCEL, CB_AUTH_LOGIN
 from ...handlers.message_sender import safe_send
 from ...i18n import t
@@ -35,6 +36,7 @@ async def handle(
     if data == CB_AUTH_CANCEL:
         await query.answer()
         drop_flow(user.id)
+        await cancel_flow(user.id)
         await safe_send(context.bot, user.id, t(user.id, "auth.login.cancelled"))
         return True
 

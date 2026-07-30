@@ -213,6 +213,13 @@ deadline, and deletes your message with the code. It then reposts the
 active session's card (or the Menu, if no session is active) so you carry
 on where you were instead of scrolling back past the exchange.
 
+With the Codex backend, authentication starts automatically on a fresh bot
+launch. The bot checks `account/read` through Codex app-server; when no
+account is present it sends the official device-login URL and user code to
+Telegram, waits for `account/login/completed`, and then unlocks session
+creation. The code is entered on the OpenAI page and is never sent back to
+the chat. `/login` manually restarts the same flow.
+
 The notice fires on Claude Code's own error entry (`isApiErrorMessage` /
 `authentication_failed`), not on the error text — a session that merely
 writes about a dead login won't trigger it. A fresh login moves the

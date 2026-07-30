@@ -57,6 +57,15 @@ def _cancel_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 async def start_login(bot: Bot, user_id: int) -> bool:
     """Spawn the login exchange and post the URL. True when the URL went out."""
+    active = session_manager.get_active_session(user_id)
+    if active is not None and active.backend == "codex":
+        await safe_send(
+            bot,
+            user_id,
+            "Codex uses its own login. Run `codex login --device-auth` in "
+            "the Termux/proot environment that hosts ccbot.",
+        )
+        return False
     await safe_send(bot, user_id, t(user_id, "auth.login.starting"))
     flow = await start_flow(user_id, command=config.claude_command)
     if flow is None:

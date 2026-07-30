@@ -37,10 +37,15 @@ def encode_cwd(cwd: str) -> str:
 
 
 def build_session_file_path(session_id: str, cwd: str) -> Path | None:
-    """Direct path to ``<projects>/<encoded_cwd>/<session_id>.jsonl``."""
+    """Resolve a Claude project JSONL or Codex rollout for a session id."""
     if not session_id or not cwd:
         return None
-    return config.claude_projects_path / encode_cwd(cwd) / f"{session_id}.jsonl"
+    claude_path = config.claude_projects_path / encode_cwd(cwd) / f"{session_id}.jsonl"
+    if claude_path.exists():
+        return claude_path
+    from .codex_session_io import build_session_file_path as build_codex_path
+
+    return build_codex_path(session_id, cwd) or claude_path
 
 
 def _parse_session_file(file_path: Path, session_id: str) -> ClaudeSession | None:

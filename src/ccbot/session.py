@@ -130,6 +130,9 @@ class SessionManager:
     # User-scoped UI/runtime preferences (set via the inline ⚙ menu).
     # user_id -> {key: value}. Defaults are filled by get_user_settings.
     user_settings: dict[int, dict[str, Any]] = field(default_factory=dict)
+    # Bot-wide agent mode selected from Telegram Settings. The env value is
+    # only the initial default for a state file that has no saved selection.
+    agent_backend: str = field(default_factory=lambda: config.agent_backend)
     # Cached short summaries for ClaudeSession picker. Key = claude session id.
     # Value = {"summary": str, "mtime": float, "ts": float}.
     summary_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -175,6 +178,7 @@ class SessionManager:
             "user_settings": {
                 str(uid): vals for uid, vals in self.user_settings.items()
             },
+            "agent_backend": self.agent_backend,
             "summary_cache": self.summary_cache,
             "bg_status": bg_status.serialize_per_user(),
         }
@@ -228,6 +232,15 @@ class SessionManager:
                     int(uid): dict(vals)
                     for uid, vals in state.get("user_settings", {}).items()
                 }
+                saved_backend = state.get("agent_backend", config.agent_backend)
+                self.agent_backend = (
+                    saved_backend
+                    if saved_backend in ("claude", "codex")
+                    else config.agent_backend
+                )
+                # Keep legacy call sites and helper modules in sync with the
+                # persisted bot-wide selection.
+                config.agent_backend = self.agent_backend
                 self.summary_cache = dict(state.get("summary_cache", {}))
 
                 # Late import — handlers package imports session_manager.
@@ -257,6 +270,7 @@ class SessionManager:
                 self.window_display_names = {}
                 self.user_settings = {}
                 self.summary_cache = {}
+                self.agent_backend = config.agent_backend
 
     async def reconcile_sessions_with_tmux(self) -> int:
         """Mark sessions whose tmux window vanished as ``lost``."""
@@ -363,9 +377,17 @@ class SessionManager:
             new_sid = info.get("session_id", "")
             new_cwd = info.get("cwd", "")
             new_wname = info.get("window_name", "")
+            new_backend = info.get("backend", "claude")
+            new_transcript_path = info.get("transcript_path", "")
             if not new_sid:
                 continue
             state = self.get_window_state(window_id)
+            state.backend = (
+                new_backend if new_backend in ("claude", "codex") else "claude"
+            )
+            if state.transcript_path != new_transcript_path:
+                state.transcript_path = new_transcript_path
+                changed = True
             if state.session_id != new_sid or state.cwd != new_cwd:
                 logger.info(
                     "Session map: window_id %s updated sid=%s, cwd=%s",
@@ -378,11 +400,16 @@ class SessionManager:
                 changed = True
             # Mirror the claude session id onto any Session record bound to this window.
             sess = self.find_session_by_window(window_id)
-            if sess is not None and sess.claude_session_id != new_sid:
-                sess.claude_session_id = new_sid
+            if sess is not None:
+                if sess.claude_session_id != new_sid:
+                    sess.claude_session_id = new_sid
+                    changed = True
+                if sess.backend != state.backend:
+                    sess.backend = state.backend
+                    changed = True
                 if not sess.workdir and new_cwd:
                     sess.workdir = new_cwd
-                changed = True
+                    changed = True
             # Update display name
             if new_wname:
                 state.window_name = new_wname
@@ -416,10 +443,11 @@ class SessionManager:
         logger.info("Cleared session for window_id %s", window_id)
 
     async def list_sessions_for_directory(self, cwd: str) -> list[ClaudeSession]:
-        """List existing Claude sessions for a directory (newest first, max 10)."""
-        from . import session_claude_io
+        """List existing sessions for the configured backend."""
+        from . import codex_session_io, session_claude_io
 
-        return await session_claude_io.list_sessions_for_directory(cwd)
+        io = codex_session_io if self.agent_backend == "codex" else session_claude_io
+        return await io.list_sessions_for_directory(cwd)
 
     async def resolve_session_for_window(self, window_id: str) -> ClaudeSession | None:
         """Resolve a tmux window to the best matching Claude session.
@@ -427,15 +455,14 @@ class SessionManager:
         Uses persisted session_id + cwd; returns None if the file is gone
         and clears the stale window-state pointer when that happens.
         """
-        from . import session_claude_io
+        from . import codex_session_io, session_claude_io
 
         state = self.get_window_state(window_id)
         if not state.session_id or not state.cwd:
             return None
 
-        session = await session_claude_io.get_session_direct(
-            state.session_id, state.cwd
-        )
+        io = codex_session_io if state.backend == "codex" else session_claude_io
+        session = await io.get_session_direct(state.session_id, state.cwd)
         if session:
             return session
 
@@ -544,6 +571,7 @@ class SessionManager:
         window_id: str = "",
         workdir: str = "",
         goal: str = "",
+        backend: str | None = None,
     ) -> "Session":
         """Register a new Session record. Caller is responsible for the tmux window."""
         now = time.time()
@@ -562,6 +590,7 @@ class SessionManager:
             state="active",
             created_at=now,
             last_event_at=now,
+            backend=backend or self.agent_backend,
         )
         self.sessions[sid] = sess
         self.save_state()
@@ -825,6 +854,29 @@ class SessionManager:
         bucket = self.user_settings.setdefault(user_id, {})
         bucket[key] = value
         self.save_state()
+
+    def set_agent_backend(self, backend: str) -> None:
+        """Persist the bot-wide backend used for every newly created session.
+
+        Switching while a live session exists is rejected: a bot instance is
+        deliberately single-backend at runtime. Archive/kill live sessions
+        first; historical records retain their backend for safe inspection.
+        """
+        if backend not in ("claude", "codex"):
+            raise ValueError(f"Unknown agent backend: {backend}")
+        if backend == self.agent_backend:
+            return
+        live = [
+            sess
+            for sess in self.sessions.values()
+            if sess.state in ("active", "idle") and sess.backend != backend
+        ]
+        if live:
+            raise RuntimeError("archive live sessions before switching backend")
+        self.agent_backend = backend
+        config.agent_backend = backend
+        self.save_state()
+        logger.info("Bot-wide agent backend changed to %s", backend)
 
     # --- Summary cache (Claude session id -> short readable summary) ---
 

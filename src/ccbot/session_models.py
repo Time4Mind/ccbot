@@ -34,6 +34,8 @@ class WindowState:
     session_id: str = ""
     cwd: str = ""
     window_name: str = ""
+    backend: str = "claude"
+    transcript_path: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -42,6 +44,10 @@ class WindowState:
         }
         if self.window_name:
             d["window_name"] = self.window_name
+        if self.backend != "claude":
+            d["backend"] = self.backend
+        if self.transcript_path:
+            d["transcript_path"] = self.transcript_path
         return d
 
     @classmethod
@@ -50,6 +56,8 @@ class WindowState:
             session_id=data.get("session_id", ""),
             cwd=data.get("cwd", ""),
             window_name=data.get("window_name", ""),
+            backend=data.get("backend", "claude"),
+            transcript_path=data.get("transcript_path", ""),
         )
 
 
@@ -102,6 +110,9 @@ class Session:
     archived_at: float = 0.0
     message_count: int = 0
     was_lost: bool = False
+    backend: str = "claude"
+    imported_from_backend: str = ""
+    imported_from_session_id: str = ""
 
     @staticmethod
     def new_id() -> str:
@@ -133,6 +144,9 @@ class Session:
             "archived_at": self.archived_at,
             "message_count": self.message_count,
             "was_lost": self.was_lost,
+            "backend": self.backend,
+            "imported_from_backend": self.imported_from_backend,
+            "imported_from_session_id": self.imported_from_session_id,
         }
 
     @classmethod
@@ -153,4 +167,7 @@ class Session:
             archived_at=float(data.get("archived_at", 0.0)),
             message_count=int(data.get("message_count", 0)),
             was_lost=bool(data.get("was_lost", False)),
+            backend=data.get("backend", "claude"),
+            imported_from_backend=data.get("imported_from_backend", ""),
+            imported_from_session_id=data.get("imported_from_session_id", ""),
         )

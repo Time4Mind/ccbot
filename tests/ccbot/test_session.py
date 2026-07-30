@@ -12,6 +12,7 @@ import pytest
 
 from ccbot.config import config
 from ccbot.session import SessionManager, key_matches_window
+from ccbot.session_models import Session
 
 
 class TestKeyMatchesWindow:
@@ -119,6 +120,54 @@ class TestLocalTerminalSetting:
         spawn behavior without re-clicking the settings screen."""
         mgr.user_settings[1] = {"local_terminal": "on"}
         assert mgr.get_user_settings(1).get("local_terminal") == "auto"
+
+
+class TestGlobalAgentBackend:
+    def test_switch_persists_bot_wide_value(
+        self, mgr: SessionManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(config, "agent_backend", "claude")
+        save = MagicMock()
+        monkeypatch.setattr(mgr, "save_state", save)
+        mgr.agent_backend = "claude"
+
+        mgr.set_agent_backend("codex")
+
+        assert mgr.agent_backend == "codex"
+        assert config.agent_backend == "codex"
+        save.assert_called_once_with()
+
+    def test_switch_rejected_while_old_backend_is_live(
+        self, mgr: SessionManager
+    ) -> None:
+        mgr.agent_backend = "claude"
+        mgr.sessions["live"] = Session(
+            id="live",
+            name="work",
+            state="idle",
+            backend="claude",
+        )
+
+        with pytest.raises(RuntimeError, match="archive live sessions"):
+            mgr.set_agent_backend("codex")
+
+        assert mgr.agent_backend == "claude"
+
+    def test_archived_old_backend_does_not_block_switch(
+        self, mgr: SessionManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(config, "agent_backend", "claude")
+        mgr.agent_backend = "claude"
+        mgr.sessions["old"] = Session(
+            id="old",
+            name="history",
+            state="archived",
+            backend="claude",
+        )
+
+        mgr.set_agent_backend("codex")
+
+        assert mgr.agent_backend == "codex"
 
 
 class TestActiveSessions:

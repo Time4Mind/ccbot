@@ -1,12 +1,12 @@
 [Unit]
-Description=ccbot DM multi-session bridge to Claude Code
+Description=ccbot DM multi-session bridge to Claude Code or Codex
 Documentation=https://github.com/Time4Mind/ccbot
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-# Replace with your install user; the bot must own ~/.claude and ~/.ccbot.
+# Replace with your install user; the bot must own its agent and ccbot state.
 User=%i
 # Working directory holds the cloned repo.
 WorkingDirectory=/opt/ccbot
@@ -26,11 +26,11 @@ RestartSec=5
 TimeoutStartSec=60
 KillMode=mixed
 
-# Hardening (loose; loosen further only if claude needs more).
+# Hardening (loose; loosen further only if the selected agent needs more).
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/opt/ccbot %h/.ccbot %h/.claude
+ReadWritePaths=/opt/ccbot %h/.ccbot %h/.claude %h/.codex
 
 [Install]
 WantedBy=multi-user.target

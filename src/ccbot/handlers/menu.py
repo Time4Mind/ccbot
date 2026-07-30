@@ -41,6 +41,7 @@ from .callback_data import (
     CB_MM_SHOT,
     CB_MM_STATUS,
     CB_ST_APPROVE,
+    CB_ST_AGENT,
     CB_ST_BACK,
     CB_ST_BGNOTIFY,
     CB_ST_HAIKU,
@@ -77,6 +78,7 @@ Screen = Literal[
     "settings_lag",
     "settings_voice",
     "settings_language",
+    "settings_agent",
     "settings_weeklyday",
     "settings_approve",
     "settings_local",
@@ -91,6 +93,7 @@ Screen = Literal[
 
 # Group key -> (label translation key, sub-screen name, settings-dict key)
 _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
+    ("agent_backend", "settings.group.agent", "settings_agent", "agent_backend"),
     ("language", "settings.group.language", "settings_language", "language"),
     ("previews", "settings.group.previews", "settings_previews", "previews"),
     ("live_lag", "settings.group.live_lag", "settings_lag", "live_lag"),
@@ -198,7 +201,7 @@ SETTINGS_CATEGORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "settings.cat.behavior",
         "settings_cat_behavior",
-        ("auto_approve", "haiku_naming", "language"),
+        ("agent_backend", "auto_approve", "haiku_naming", "language"),
     ),
 )
 
@@ -412,6 +415,8 @@ def _format_setting_value(user_id: int, value_key: str, cur: object) -> str:
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
     if value_key == "haiku_naming":
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
+    if value_key == "agent_backend":
+        return str(cur).capitalize()
     return str(cur) if cur is not None else "?"
 
 
@@ -455,7 +460,11 @@ def _settings_category_grid(
         if member_key not in groups_by_key:
             continue
         label_key, _sub_screen, value_key = groups_by_key[member_key]
-        cur = s.get(value_key, "")
+        cur = (
+            session_manager.agent_backend
+            if value_key == "agent_backend"
+            else s.get(value_key, "")
+        )
         label = t(user_id, label_key)
         value_str = _format_setting_value(user_id, value_key, cur)
         rows.append(
@@ -546,6 +555,25 @@ def _settings_language_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
         [
             InlineKeyboardButton(
                 t(user_id, "btn.back"), callback_data=_parent_cat_cb("language")
+            )
+        ],
+    ]
+
+
+def _settings_agent_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
+    cur = session_manager.agent_backend
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(name.capitalize(), cur == name),
+                callback_data=f"{CB_ST_AGENT}{name}",
+            )
+            for name in ("claude", "codex")
+        ],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("agent_backend"),
             )
         ],
     ]
@@ -841,6 +869,8 @@ def build_footer_keyboard(
         rows.extend(_settings_voice_grid(user_id))
     elif screen == "settings_language":
         rows.extend(_settings_language_grid(user_id))
+    elif screen == "settings_agent":
+        rows.extend(_settings_agent_grid(user_id))
     elif screen == "settings_weeklyday":
         rows.extend(_settings_weeklyday_grid(user_id))
     elif screen == "settings_approve":
@@ -943,6 +973,7 @@ def render_settings_text(user_id: int) -> str:
     return t(
         user_id,
         "settings.body",
+        agent=session_manager.agent_backend.capitalize(),
         language=s.get("language", "en"),
         previews=s.get("previews", "economical"),
         live_lag=int(s.get("live_lag", 4)),
@@ -951,6 +982,7 @@ def render_settings_text(user_id: int) -> str:
 
 
 _GROUP_TEXT_KEYS: dict[str, str] = {
+    "settings_agent": "settings.agent.body",
     "settings_previews": "settings.previews.body",
     "settings_lag": "settings.lag.body",
     "settings_voice": "settings.voice.body",

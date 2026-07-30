@@ -2,6 +2,7 @@
 
 import io
 import json
+import subprocess
 import sys
 from typing import Any
 
@@ -140,3 +141,28 @@ class TestHookMainValidation:
             },
         )
         assert not (tmp_path / "session_map.json").exists()
+
+    def test_codex_hook_records_backend_and_transcript(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
+        monkeypatch.setattr(
+            "ccbot.hook.subprocess.run",
+            lambda *_args, **_kwargs: subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="ccbot::@7:project\n", stderr=""
+            ),
+        )
+        transcript = tmp_path / ".codex" / "sessions" / "rollout.jsonl"
+        self._run_hook_main(
+            monkeypatch,
+            {
+                "session_id": "550e8400-e29b-41d4-a716-446655440000",
+                "cwd": str(tmp_path),
+                "transcript_path": str(transcript),
+                "hook_event_name": "SessionStart",
+            },
+            tmux_pane="%1",
+        )
+        stored = json.loads((tmp_path / "session_map.json").read_text())
+        assert stored["ccbot:@7"]["backend"] == "codex"
+        assert stored["ccbot:@7"]["transcript_path"] == str(transcript)

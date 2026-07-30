@@ -1,4 +1,4 @@
-"""Hook subcommand for Claude Code session tracking.
+"""Hook subcommand for Claude Code and Codex session tracking.
 
 Called by Claude Code's SessionStart hook to maintain a window↔session
 mapping in <CCBOT_DIR>/session_map.json. Also provides `--install` to
@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 _CLAUDE_SETTINGS_FILE = Path.home() / ".claude" / "settings.json"
+_CODEX_HOOKS_FILE = Path.home() / ".codex" / "hooks.json"
 
 # The hook command suffix for detection
 _HOOK_COMMAND_SUFFIX = "ccbot hook"
@@ -89,12 +90,12 @@ def _is_hook_installed(settings: dict[str, Any]) -> bool:
     return all(_is_event_installed(settings, ev) for ev in _HOOK_EVENTS)
 
 
-def _install_hook() -> int:
-    """Install the ccbot hook into Claude's settings.json.
+def _install_hook(backend: str = "claude") -> int:
+    """Install the ccbot hook into the selected agent's settings.
 
     Returns 0 on success, 1 on error.
     """
-    settings_file = _CLAUDE_SETTINGS_FILE
+    settings_file = _CODEX_HOOKS_FILE if backend == "codex" else _CLAUDE_SETTINGS_FILE
     settings_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Read existing settings
@@ -169,12 +170,18 @@ def hook_main() -> None:
         action="store_true",
         help="Install the hook into ~/.claude/settings.json",
     )
+    parser.add_argument(
+        "--backend",
+        choices=("claude", "codex"),
+        default=os.environ.get("CCBOT_AGENT_BACKEND", "claude"),
+        help="Agent whose hook configuration should be updated",
+    )
     # Parse only known args to avoid conflicts with stdin JSON
     args, _ = parser.parse_known_args(sys.argv[2:])
 
     if args.install:
         logger.info("Hook install requested")
-        sys.exit(_install_hook())
+        sys.exit(_install_hook(args.backend))
 
     try:
         _process_hook_event()
@@ -195,6 +202,7 @@ def _process_hook_event() -> None:
     session_id = payload.get("session_id", "")
     cwd = payload.get("cwd", "")
     event = payload.get("hook_event_name", "")
+    transcript_path = str(payload.get("transcript_path") or "")
 
     if not session_id or not event:
         logger.debug("Empty session_id or event, ignoring")
@@ -285,11 +293,21 @@ def _process_hook_event() -> None:
                             "Failed to read existing session_map, starting fresh"
                         )
 
+                detected_backend = os.environ.get("CCBOT_AGENT_BACKEND", "")
+                if not detected_backend:
+                    detected_backend = (
+                        "codex"
+                        if "/.codex/" in transcript_path.replace("\\", "/")
+                        else "claude"
+                    )
                 new_entry = {
                     "session_id": session_id,
                     "cwd": cwd,
                     "window_name": window_name,
+                    "backend": detected_backend,
                 }
+                if transcript_path:
+                    new_entry["transcript_path"] = transcript_path
 
                 # Clean up old-format key ("session:window_name") if it exists.
                 # Previous versions keyed by window_name instead of window_id.

@@ -18,6 +18,13 @@ class TestWindowState:
         ws = WindowState(session_id="abc", cwd="/tmp", window_name="proj")
         assert ws.to_dict()["window_name"] == "proj"
 
+    def test_codex_backend_round_trip(self) -> None:
+        ws = WindowState(session_id="abc", cwd="/tmp", backend="codex")
+        assert WindowState.from_dict(ws.to_dict()).backend == "codex"
+
+    def test_legacy_state_defaults_to_claude(self) -> None:
+        assert WindowState.from_dict({"session_id": "abc"}).backend == "claude"
+
 
 class TestSession:
     def test_new_id_is_8_hex(self) -> None:
@@ -48,3 +55,10 @@ class TestSession:
             {"id": "x", "alerted_token_thresholds": [100_000, 200_000]}
         )
         assert s.id == "x"
+
+    def test_backend_round_trip_and_legacy_default(self) -> None:
+        assert Session.from_dict({"id": "x"}).backend == "claude"
+        restored = Session.from_dict(
+            Session(id="x", name="codex", backend="codex").to_dict()
+        )
+        assert restored.backend == "codex"

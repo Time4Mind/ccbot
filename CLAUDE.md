@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-ccbot (this fork) — Telegram bot that bridges a private 1-1 DM to multiple parallel Claude Code sessions via tmux windows. One user, N sessions, one inline switcher in the most recent bot message.
+ccbot (this fork) — Telegram bot that bridges a private 1-1 DM to multiple parallel Claude Code or Codex CLI sessions via tmux windows. One user, N sessions, one inline switcher in the most recent bot message.
 
 Authoritative product spec: `doc/dm-multisession-spec.md`. Implementation plan: `doc/dm-multisession-plan.md`.
 
@@ -37,12 +37,24 @@ ccbot hook --install                  # Auto-install Claude Code SessionStart ho
 ## Configuration
 
 - Config directory: `~/.ccbot/` by default, override with `CCBOT_DIR` env var.
+- Bot-wide agent backend is persisted in `state.json` and selected in Telegram
+  Settings. `CCBOT_AGENT_BACKEND=claude|codex` is only the initial default.
 - `.env` loading priority: local `.env` > config dir `.env`.
 - State files: `state.json` (sessions / window_states / user settings), `session_map.json` (hook-generated), `monitor_state.json` (byte offsets), `ccbot.lock` (singleton flock).
 
 ## Hook Configuration
 
 Auto-install: `ccbot hook --install` (per-event idempotent — re-running on a partial SessionStart-only install adds the missing UserPromptSubmit entry without duplicating).
+
+Codex install: `ccbot hook --install --backend codex` writes the equivalent
+events to `~/.codex/hooks.json`. Codex sessions use the same tmux/window map;
+their rollout JSONL is normalized by `codex_session_io.py` +
+`TranscriptParser`.
+
+Cross-backend archive restore is implemented by `session_import.py`: source
+JSONL becomes a bounded Markdown handoff, then the target CLI creates and owns
+a fresh native session id. Never rewrite source transcripts into another
+agent's private/unstable JSONL schema.
 
 Or manually in `~/.claude/settings.json`:
 ```json

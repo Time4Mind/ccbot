@@ -41,6 +41,21 @@ class TestConfigValid:
         cfg = Config()
         assert cfg.is_user_allowed(99999) is False
 
+    def test_codex_backend_defaults(self, monkeypatch):
+        monkeypatch.setenv("CCBOT_AGENT_BACKEND", "codex")
+        cfg = Config()
+        assert cfg.agent_backend == "codex"
+        assert cfg.codex_command == "codex"
+        assert "--dangerously-bypass-approvals-and-sandbox" in cfg.codex_flags
+        assert "--dangerously-bypass-hook-trust" in cfg.codex_flags
+        assert "--enable hooks" in cfg.codex_flags
+        assert "--no-alt-screen" in cfg.codex_flags
+
+    def test_invalid_agent_backend_fails_early(self, monkeypatch):
+        monkeypatch.setenv("CCBOT_AGENT_BACKEND", "other")
+        with pytest.raises(ValueError, match="CCBOT_AGENT_BACKEND"):
+            Config()
+
 
 @pytest.mark.usefixtures("_base_env")
 class TestConfigMissingEnv:

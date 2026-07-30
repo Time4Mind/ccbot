@@ -177,6 +177,92 @@ class TranscriptParser:
         r"<(bash-input|bash-stdout|bash-stderr|local-command-caveat|system-reminder)"
     )
 
+    @staticmethod
+    def _normalize_codex_entry(data: dict[str, Any]) -> dict[str, Any] | None:
+        """Translate a stable subset of Codex rollout events to Claude blocks.
+
+        Codex emits user/agent text as ``event_msg`` rows and tool calls as
+        ``response_item`` rows.  Normalizing at this boundary lets the existing
+        history, live-card, tool-pairing, and Telegram formatting pipeline stay
+        unchanged.
+        """
+        top_type = data.get("type")
+        payload = data.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        timestamp = data.get("timestamp")
+        if top_type == "event_msg":
+            event_type = payload.get("type")
+            if event_type == "user_message":
+                text = str(payload.get("message") or "")
+                return {
+                    "type": "user",
+                    "timestamp": timestamp,
+                    "message": {"content": [{"type": "text", "text": text}]},
+                }
+            if event_type == "agent_message":
+                text = str(payload.get("message") or "")
+                phase = str(payload.get("phase") or "")
+                return {
+                    "type": "assistant",
+                    "timestamp": timestamp,
+                    "message": {
+                        "content": [{"type": "text", "text": text}],
+                        "stop_reason": "end_turn"
+                        if phase in ("final_answer", "final")
+                        else None,
+                    },
+                }
+            return None
+        if top_type != "response_item":
+            return None
+        item_type = payload.get("type")
+        if item_type in ("function_call", "custom_tool_call"):
+            arguments = payload.get("arguments")
+            if arguments is None:
+                arguments = payload.get("input")
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    arguments = {"input": arguments}
+            if not isinstance(arguments, dict):
+                arguments = {"input": arguments}
+            return {
+                "type": "assistant",
+                "timestamp": timestamp,
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": str(
+                                payload.get("call_id") or payload.get("id") or ""
+                            ),
+                            "name": str(payload.get("name") or "tool"),
+                            "input": arguments,
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                },
+            }
+        if item_type in ("function_call_output", "custom_tool_call_output"):
+            return {
+                "type": "user",
+                "timestamp": timestamp,
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": str(
+                                payload.get("call_id") or payload.get("id") or ""
+                            ),
+                            "content": payload.get("output") or "",
+                        }
+                    ]
+                },
+            }
+        return None
+
     @classmethod
     def parse_message(cls, data: dict[str, Any]) -> ParsedMessage | None:
         """Parse a message entry from the JSONL data.
@@ -267,7 +353,13 @@ class TranscriptParser:
                 pending_tools
             )  # don't mutate caller's dict[str, Any]
 
-        for data in entries:
+        for raw_data in entries:
+            data = raw_data
+            if data.get("type") not in ("user", "assistant"):
+                normalized = cls._normalize_codex_entry(data)
+                if normalized is None:
+                    continue
+                data = normalized
             msg_type = cls.get_message_type(data)
             if msg_type not in ("user", "assistant"):
                 continue

@@ -39,6 +39,16 @@ RICH_MAX_CHARS = 32768
 # code spans — `<` inside these is preserved verbatim by the rich parser.
 _CODE_SPAN_RE = re.compile(r"```[\s\S]*?(?:```|$)|`[^`\n]*`")
 
+# A one-line fenced block carries no layout information that an inline code
+# span can't preserve. Telegram's current Rich Message clients expose Copy
+# for the latter but not for fenced blocks, so normalize only this narrow
+# case. Multi-line code, empty blocks, and commands containing a backtick
+# remain fenced.
+_SINGLE_LINE_FENCE_RE = re.compile(
+    r"(?m)^[ \t]*```([^\n`]*)\n([^\n`]+)\n[ \t]*```[ \t]*$"
+)
+_COPYABLE_SHELL_LANGS = {"", "bash", "sh", "zsh", "shell", "console"}
+
 # HTML tags the Rich Markdown parser supports (see "Rich HTML style" in the
 # Bot API docs). A `<` starting one of these is left alone; any other `<`
 # is escaped, because the parser drops unknown tag-shaped fragments
@@ -94,6 +104,18 @@ def _escape_outside_code(text: str) -> str:
         last = m.end()
     out.append(_escape_lt(text[last:]))
     return "".join(out)
+
+
+def _inline_single_line_fences(text: str) -> str:
+    """Turn a one-line shell fence into Telegram-copyable inline code."""
+
+    def replace(match: re.Match[str]) -> str:
+        language = match.group(1).strip().lower()
+        if language not in _COPYABLE_SHELL_LANGS:
+            return match.group(0)
+        return f"`{match.group(2)}`"
+
+    return _SINGLE_LINE_FENCE_RE.sub(replace, text)
 
 
 # A GFM table separator cell: dashes with optional alignment colons.
@@ -214,6 +236,7 @@ def _render_details_headed(m: re.Match[str]) -> str:
 
 def to_rich_markdown(text: str) -> str:
     """Convert internal markdown to Rich Markdown for ``sendRichMessage``."""
+    text = _inline_single_line_fences(text)
     text = _ensure_blank_before_tables(text)
     text = _escape_outside_code(text)
     text = _EXPHEADED_RE.sub(_render_details_headed, text)

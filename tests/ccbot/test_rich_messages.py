@@ -47,6 +47,28 @@ class TestToRichMarkdown:
         text = "```\n<streaming>"
         assert rich.to_rich_markdown(text) == text
 
+    def test_single_line_fence_becomes_copyable_inline_code(self) -> None:
+        text = "Команда:\n\n```bash\nuv sync && uv run ccbot\n```"
+        assert rich.to_rich_markdown(text) == (
+            "Команда:\n\n`uv sync && uv run ccbot`"
+        )
+
+    def test_single_line_fence_preserves_lt_inside_inline_code(self) -> None:
+        text = "```bash\nprintf '%s\\n' 'a<b'\n```"
+        assert rich.to_rich_markdown(text) == "`printf '%s\\n' 'a<b'`"
+
+    def test_multiline_fence_stays_fenced(self) -> None:
+        text = "```bash\nuv sync\nuv run ccbot\n```"
+        assert rich.to_rich_markdown(text) == text
+
+    def test_single_line_fence_with_backtick_stays_fenced(self) -> None:
+        text = "```bash\necho `date`\n```"
+        assert rich.to_rich_markdown(text) == text
+
+    def test_single_line_non_shell_fence_keeps_language_formatting(self) -> None:
+        text = "```python\nprint('hello')\n```"
+        assert rich.to_rich_markdown(text) == text
+
     def test_expandable_quote_becomes_details(self) -> None:
         out = rich.to_rich_markdown(format_expandable_quote("first line\nrest"))
         assert "<details><summary>first line</summary>" in out

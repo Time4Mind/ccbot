@@ -114,6 +114,7 @@ Most-frequently-tweaked optionals:
 | `CLAUDE_FLAGS`              | `--dangerously-skip-permissions` | flags appended to `claude` |
 | `CODEX_COMMAND`             | `codex`      | Codex CLI binary (an absolute Termux path is accepted) |
 | `CODEX_FLAGS`               | bypass + hook trust + hooks + `--no-alt-screen` | flags appended to `codex` |
+| `CODEX_NAMING_MODEL`        | `gpt-5.6-luna` | lightweight Codex model used only for automatic session names |
 | `SESSION_IDLE_TTL`          | `4h`         | active → archived after this much idleness |
 | `ARCHIVE_PURGE_AFTER`       | `14d`        | archived sessions purged from state after this |
 | `QUOTA_ALERT_POLL_INTERVAL` | `10m`        | how often the live `/usage` modal is sampled |

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from ccbot.config import config
 from ccbot.naming import (
     _build_naming_env,
     _looks_default_name,
@@ -108,6 +109,26 @@ class TestGenerateName:
 
         monkeypatch.setattr("ccbot.naming._run", fake_run)
         assert await generate_name("investigate token budget alerts") == "token budget"
+
+    @pytest.mark.asyncio
+    async def test_codex_uses_lightweight_ephemeral_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = AsyncMock(return_value="token-budget")
+        monkeypatch.setattr("ccbot.naming._run", run)
+        monkeypatch.setattr(config, "codex_command", "/opt/codex --feature")
+        monkeypatch.setattr(config, "codex_naming_model", "gpt-light")
+
+        assert await generate_name("investigate alerts", backend="codex") == (
+            "token budget"
+        )
+        argv = run.await_args.args
+        assert argv[:3] == ("/opt/codex", "--feature", "exec")
+        assert argv[argv.index("--model") + 1] == "gpt-light"
+        assert "--ephemeral" in argv
+        assert "--ignore-user-config" in argv
+        assert "--ignore-rules" in argv
+        assert argv[argv.index("--sandbox") + 1] == "read-only"
 
 
 class TestBuildNamingEnv:
@@ -233,8 +254,29 @@ class TestMaybeAutoName:
         gen = AsyncMock(return_value="token-budget-alerts")
         monkeypatch.setattr("ccbot.naming.generate_name", gen)
         await maybe_auto_name(sess.id, "investigate token-budget alerts", user_id=42)
-        gen.assert_awaited_once()
+        gen.assert_awaited_once_with(
+            "investigate token-budget alerts", backend="claude"
+        )
         rename_mock.assert_called_once_with(sess.id, "token-budget-alerts")
+
+    @pytest.mark.asyncio
+    async def test_codex_session_uses_codex_namer(
+        self, fresh_session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sess, rename_mock = fresh_session
+        sess.backend = "codex"
+        monkeypatch.setattr(
+            session_manager,
+            "get_user_settings",
+            lambda _uid: {"haiku_naming": True},
+        )
+        gen = AsyncMock(return_value="codex naming")
+        monkeypatch.setattr("ccbot.naming.generate_name", gen)
+
+        await maybe_auto_name(sess.id, "name this codex session", user_id=42)
+
+        gen.assert_awaited_once_with("name this codex session", backend="codex")
+        rename_mock.assert_called_once_with(sess.id, "codex naming")
 
     @pytest.mark.asyncio
     async def test_skips_manually_renamed(

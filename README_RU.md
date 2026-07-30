@@ -114,6 +114,7 @@ ccbot                           # foreground; для prod — systemd-юнит
 | `CLAUDE_FLAGS`              | `--dangerously-skip-permissions` | флаги для `claude` |
 | `CODEX_COMMAND`             | `codex`      | бинарь Codex CLI (можно указать абсолютный Termux-путь) |
 | `CODEX_FLAGS`               | bypass + hook trust + hooks + `--no-alt-screen` | флаги для `codex` |
+| `CODEX_NAMING_MODEL`        | `gpt-5.6-luna` | легковесная модель Codex только для автоматических имён сессий |
 | `SESSION_IDLE_TTL`          | `4h`         | active → archived через столько простоя |
 | `ARCHIVE_PURGE_AFTER`       | `14d`        | архивные сессии удаляются из state через столько |
 | `QUOTA_ALERT_POLL_INTERVAL` | `10m`        | как часто опрашивается живой `/usage` |

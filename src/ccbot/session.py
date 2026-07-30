@@ -826,12 +826,11 @@ class SessionManager:
         # with smart sentence / paragraph boundaries — see
         # ``_chunk_final_text`` for the exact preference order.
         "card_page_lines": 20,
-        # Auto-rename new sessions via a one-shot Haiku call after the
+        # Auto-rename new sessions via a cheap one-shot model call after the
         # first user message ≥20 chars. When ``False``, names stay as
         # the directory basename (``workdir``, ``workdir-2``, ...) for
-        # the session's lifetime. When ``True`` (default), Haiku produces
-        # a 1-3 word kebab-case summary of the session's intent (~50
-        # tokens per new session, charged to the Max x20 subscription).
+        # the session's lifetime. The persisted key keeps its historical
+        # name for state-file compatibility.
         "haiku_naming": True,
     }
 

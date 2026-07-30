@@ -709,12 +709,11 @@ def _settings_screens_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
 
 
 def _settings_haiku_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
-    """Haiku auto-rename on/off toggle.
+    """Lightweight-model auto-rename on/off toggle.
 
     When *off*, new sessions keep the directory-basename name forever
-    (``workdir``, ``workdir-2``, ...). When *on*, a one-shot Haiku call
-    on the first user message ≥20 chars renames the session to a 1-3
-    word kebab-case summary.
+    (``workdir``, ``workdir-2``, ...). When *on*, a one-shot backend-specific
+    model call on the first user message ≥20 chars renames the session.
     """
     cur = bool(session_manager.get_user_settings(user_id).get("haiku_naming", True))
     return [

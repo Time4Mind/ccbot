@@ -101,6 +101,11 @@ Inline keyboard with one button per active session, plus a `+ new` button. The s
 
 State for "where the live switcher currently lives" is held in memory and persisted as `last_switcher_msg_id: dict[user_id, message_id]` in state.json.
 
+**Button order — oldest → newest.** `build_switcher_keyboard` re-sorts by `(created_at, id)` instead of using the order `list_user_sessions` returns (active-first, then by name). A session therefore keeps a stable slot for its lifetime and a new one appends to the right. Two consequences worth knowing:
+
+- `SessionManager.set_session_window` (restore-from-archive, or re-binding a `lost` session) bumps `created_at` to now, so a restored session re-enters at the newest end rather than in its original chronological slot.
+- Every surface that renders session buttons applies the same sort. `bot/commands/info.py: build_screenshot_compact_keyboard` sorts explicitly for this reason — it builds its rows straight from `list_user_sessions`, so without the sort a session would sit in a different slot under `/screenshot` than on the live card. Any future switcher-like surface must do the same; `list_user_sessions` itself is deliberately left alone.
+
 ### Footer button order
 
 The main / live-card view's footer keyboard is built in `handlers.menu.build_footer_keyboard` with `screen="main"`:

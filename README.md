@@ -222,6 +222,12 @@ anchored at the bottom — the two "go-elsewhere" affordances sit
 side-by-side so the slot stays put across views (`[+ new] [Back]`
 takes that spot in *Menu → Sessions* / *Archive*).
 
+Switcher buttons read **oldest → newest**: each session keeps the same
+slot for its whole life and a newly created one appends to the right,
+so muscle memory survives switching. Restoring a session from the
+archive re-enters it as the newest button rather than in its original
+slot. The compact switcher under `/screenshot` uses the same order.
+
 Tapping a non-active session **paints the full transcript history**
 of that session onto the carrier message and switches the active
 session in one go. Pagination buttons (◀ Older / Newer ▶) keep the

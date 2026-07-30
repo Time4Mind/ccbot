@@ -59,9 +59,11 @@ async def _try_rich_send(
     """Attempt a Bot API 10.1 rich send; None means fall back to MarkdownV2.
 
     Only ``reply_markup`` survives from kwargs — sendRichMessage has no
-    parse_mode / link_preview_options equivalents.
+    parse_mode / link_preview_options equivalents. Fenced code deliberately
+    takes the fallback path because Telegram clients expose their native Copy
+    action for classic ``pre`` entities, but not for Rich Message code blocks.
     """
-    if not config.rich_messages:
+    if not config.rich_messages or rich.has_fenced_code_block(text):
         return None
     try:
         return await rich.send_rich_message(
@@ -92,7 +94,7 @@ async def try_rich_edit(
     fallback, or an unchanged rich message would get visibly downgraded).
     False means the caller should fall back to the MarkdownV2 pipeline.
     """
-    if not config.rich_messages:
+    if not config.rich_messages or rich.has_fenced_code_block(text):
         return False
     try:
         await rich.edit_rich_message(

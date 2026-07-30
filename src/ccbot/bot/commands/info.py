@@ -156,6 +156,10 @@ def build_screenshot_compact_keyboard(
     del mode  # legacy param, ignored
     active_sess = session_manager.get_active_session(user_id)
     sessions = session_manager.list_user_sessions(user_id, states=("active", "idle"))
+    # Match the main switcher: oldest -> newest by created_at so a session
+    # keeps the same slot here as it does on the live card. list_user_sessions
+    # returns active-first / by-name, which would diverge from build_switcher_keyboard.
+    sessions = sorted(sessions, key=lambda s: (s.created_at, s.id))
     active_id = active_sess.id if active_sess is not None else ""
     rows = []
     row: list[InlineKeyboardButton] = []

@@ -110,6 +110,7 @@ Switcher layout:
 ```
 
 - The active session is marked with a leading checkmark.
+- Buttons are ordered oldest → newest by `created_at` (ties broken by session id), so a session holds a stable slot and a newly created one appends to the right. A session restored from the archive counts as newest (its `created_at` is bumped on restore). Every surface that renders session buttons — including the compact switcher under `/screenshot` — uses this same order.
 - Tapping a non-active session triggers a callback. The bot edits the same message in place to show a context preview of the selected session and updates the active flag.
 - After switching, all subsequent free-text from the user routes to the new active session. Background work in the previously active session continues.
 
@@ -294,7 +295,7 @@ Token usage is read from Claude Code transcripts on disk:
 - `/archive` — paginated list, 0–72h, newest first, 5 per page.
 - `/archive --all` — 0–14d.
 - Each archived row has inline buttons:
-  - `Restore` — recreate tmux window, run `claude --resume <id> --dangerously-skip-permissions` in the original workdir, move back to active.
+  - `Restore` — recreate tmux window, run `claude --resume <id> --dangerously-skip-permissions` in the original workdir, move back to active. `created_at` is bumped to now, so the session re-enters the switcher as the newest button (§4.1).
   - `Delete` — purge state record (transcript files retained on disk).
   - `Inspect` — show last context (same format as A8 preview, no live update).
 
@@ -388,7 +389,7 @@ Install footprint:
 ### Manual restore (F3)
 
 - Inline `Restore` button on archived and lost sessions.
-- On restore: create tmux window, run `claude --resume <session-id> --dangerously-skip-permissions` in the original workdir, attach monitor.
+- On restore: create tmux window, run `claude --resume <session-id> --dangerously-skip-permissions` in the original workdir, attach monitor, bump `created_at` so the session lands at the newest end of the switcher.
 
 ---
 

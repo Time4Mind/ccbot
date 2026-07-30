@@ -49,9 +49,7 @@ class TestToRichMarkdown:
 
     def test_single_line_fence_becomes_copyable_inline_code(self) -> None:
         text = "Команда:\n\n```bash\nuv sync && uv run ccbot\n```"
-        assert rich.to_rich_markdown(text) == (
-            "Команда:\n\n`uv sync && uv run ccbot`"
-        )
+        assert rich.to_rich_markdown(text) == ("Команда:\n\n`uv sync && uv run ccbot`")
 
     def test_single_line_fence_preserves_lt_inside_inline_code(self) -> None:
         text = "```bash\nprintf '%s\\n' 'a<b'\n```"

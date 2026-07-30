@@ -90,6 +90,11 @@ class Config:
         if self.agent_backend not in ("claude", "codex"):
             raise ValueError("CCBOT_AGENT_BACKEND must be 'claude' or 'codex'")
         self.codex_command = os.getenv("CODEX_COMMAND", "codex")
+        # Cheap, fast model used only for one-shot session auto-naming.
+        # Keep this separate from the interactive session model.
+        self.codex_naming_model = os.getenv(
+            "CODEX_NAMING_MODEL", "gpt-5.6-luna"
+        ).strip()
         self.codex_flags = os.getenv(
             "CODEX_FLAGS",
             "--dangerously-bypass-approvals-and-sandbox "

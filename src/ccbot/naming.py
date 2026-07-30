@@ -1,10 +1,9 @@
-"""H6 — auto-generated session names via a one-shot Haiku call.
+"""H6 — auto-generated session names via a cheap one-shot model call.
 
-``generate_name(seed_text)`` shells out to ``claude --model haiku --print``
-with a fixed prompt and returns a kebab-case name on success, or None on
-any failure (network, missing CLI, malformed output). Cost: tiny — ~50
-tokens of input/output, single turn, charged to the user's Max x20
-subscription.
+Claude sessions use ``claude --model haiku --print``. Codex sessions use
+``codex exec`` with the independently configurable ``CODEX_NAMING_MODEL``
+(Luna by default). Both paths use the same fixed prompt and return a
+kebab-case name on success, or None on any failure.
 
 ``--print`` makes the call non-interactive and one-shot, so it never
 attempts to resume a prior session — no need for the old ``--no-resume``
@@ -22,6 +21,7 @@ import asyncio
 import logging
 import os
 import re
+import shlex
 from pathlib import Path
 
 from .config import config
@@ -190,8 +190,8 @@ def _sanitize(text: str) -> str:
     return ""
 
 
-async def generate_name(seed_text: str) -> str | None:
-    """Run a one-shot Haiku call to produce a session name.
+async def generate_name(seed_text: str, backend: str = "claude") -> str | None:
+    """Run a one-shot lightweight-model call to produce a session name.
 
     `seed_text` is the user's message that triggered naming. Trimmed to ~200
     chars to keep token cost negligible.
@@ -199,17 +199,38 @@ async def generate_name(seed_text: str) -> str | None:
     seed = (seed_text or "").strip().replace("\n", " ")[:200]
     if not seed:
         return None
-    claude_bin = config.claude_command or "claude"
     prompt = _PROMPT_TEMPLATE.format(seed=seed)
-    raw = await _run(
-        claude_bin,
-        "--model",
-        "haiku",
-        "--print",
-        prompt,
-        timeout=30.0,
-        env=_build_naming_env(),
-    )
+    if backend == "codex":
+        command = shlex.split(config.codex_command or "codex")
+        if not command or not config.codex_naming_model:
+            return None
+        raw = await _run(
+            *command,
+            "exec",
+            "--model",
+            config.codex_naming_model,
+            "-c",
+            'model_reasoning_effort="low"',
+            "--ephemeral",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--sandbox",
+            "read-only",
+            "--skip-git-repo-check",
+            prompt,
+            timeout=30.0,
+        )
+    else:
+        claude_bin = config.claude_command or "claude"
+        raw = await _run(
+            claude_bin,
+            "--model",
+            "haiku",
+            "--print",
+            prompt,
+            timeout=30.0,
+            env=_build_naming_env(),
+        )
     if raw is None:
         return None
     if _looks_like_refusal(raw):
@@ -237,9 +258,7 @@ async def maybe_auto_name(
     sess = session_manager.get_session(session_id)
     if sess is None:
         return
-    # Haiku naming is a Claude-only auxiliary call. Codex deployments may
-    # not have a Claude binary or credentials; keep the directory name.
-    if sess.backend != "claude":
+    if sess.backend not in ("claude", "codex"):
         return
 
     if user_id is not None:
@@ -256,7 +275,7 @@ async def maybe_auto_name(
         return
     setattr(sess, flag, True)
 
-    new_name = await generate_name(seed_text)
+    new_name = await generate_name(seed_text, backend=sess.backend)
     if not new_name:
         # Reset flag so a future trigger can retry.
         setattr(sess, flag, False)

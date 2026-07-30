@@ -329,15 +329,15 @@ _EN: dict[str, str] = {
         "Otherwise only the ❓ badge in the bg-panel signals it — easy "
         "to miss."
     ),
-    "settings.group.haiku_naming": "Haiku session names",
+    "settings.group.haiku_naming": "AI session names",
     "settings.haiku.body": (
-        "*Haiku session names*\n\n"
+        "*AI session names*\n\n"
         "When *on*, every new session is renamed after the first user "
-        "message ≥20 chars via a one-shot Haiku call — yields a 1-3 "
+        "message ≥20 chars via a one-shot lightweight-model call (Haiku "
+        "for Claude, `CODEX_NAMING_MODEL` for Codex) — yields a 1-3 "
         "word kebab-case summary of the session's intent "
-        "(``token-budget-alerts``, ``archive-pagination-fix``). Cost "
-        "~50 tokens per new session, charged to the Max x20 "
-        "subscription. Manually-renamed sessions (``/rename``, ``/new "
+        "(``token-budget-alerts``, ``archive-pagination-fix``). "
+        "Manually-renamed sessions (``/rename``, ``/new "
         "<name>``) are never overwritten.\n\n"
         "When *off*, sessions keep the directory-basename name forever "
         "(``workdir``, ``workdir-2``, ``ccbot``). Zero token cost."
@@ -783,14 +783,14 @@ _RU: dict[str, str] = {
         "показывает AskUserQuestion / ExitPlanMode / Permission промпт.\n"
         "Иначе только ❓ бейдж в bg-panel — легко пропустить."
     ),
-    "settings.group.haiku_naming": "Имена сессий через Haiku",
+    "settings.group.haiku_naming": "Имена сессий через AI",
     "settings.haiku.body": (
-        "*Имена сессий через Haiku*\n\n"
+        "*Имена сессий через AI*\n\n"
         "При *on* каждая новая сессия переименовывается после первого\n"
         "пользовательского сообщения ≥20 символов одноразовым\n"
-        "вызовом Haiku — 1-3 слова в kebab-case о сути сессии\n"
+        "вызовом легковесной модели (Haiku для Claude,\n"
+        "`CODEX_NAMING_MODEL` для Codex) — 1-3 слова в kebab-case о сути сессии\n"
         "(``token-budget-alerts``, ``archive-pagination-fix``).\n"
-        "Цена ~50 токенов за сессию, списывается с Max x20.\n"
         "Сессии, переименованные вручную (``/rename``,\n"
         "``/new <name>``), никогда не перетираются.\n\n"
         "При *off* имя навсегда остаётся basename'ом директории\n"

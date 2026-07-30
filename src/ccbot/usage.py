@@ -259,8 +259,7 @@ def format_usage_breakdown_compact(user_id: int, info: object) -> str | None:
 
         if info.five_hour is None:
             rows.append(
-                f"⚪ {t(user_id, 'usage.5h')}: "
-                f"{t(user_id, 'usage.not_reported')}"
+                f"⚪ {t(user_id, 'usage.5h')}: {t(user_id, 'usage.not_reported')}"
             )
         else:
             window = info.five_hour

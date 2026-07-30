@@ -222,7 +222,9 @@ class LoginFlow:
         self.verification_url = str(result.get("verificationUrl") or "")
         self.user_code = str(result.get("userCode") or "")
         if not self.login_id or not self.verification_url or not self.user_code:
-            logger.warning("Codex login/start returned an incomplete device-code payload")
+            logger.warning(
+                "Codex login/start returned an incomplete device-code payload"
+            )
             await self.connection.close()
             return False
         return True
@@ -274,9 +276,7 @@ def get_flow(user_id: int) -> LoginFlow | None:
     return flow
 
 
-async def start_flow(
-    user_id: int, *, command: str | None = None
-) -> LoginFlow | None:
+async def start_flow(user_id: int, *, command: str | None = None) -> LoginFlow | None:
     await cancel_flow(user_id)
     flow = LoginFlow(user_id, command=command)
     if not await flow.start():

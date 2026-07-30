@@ -22,6 +22,7 @@ from ..handlers.notifications import (
     detach_paused_cards_at_message,
     paint_card_on_carrier,
 )
+from ..i18n import t
 from ..local_terminal import open_terminal_for_window
 from ..naming import maybe_auto_name
 from ..session import session_manager
@@ -59,6 +60,16 @@ async def create_and_activate_session(
     # with a frozen card when they switch back via the switcher.
     if query.message is not None:
         detach_paused_cards_at_message(user.id, query.message.message_id)
+
+    if session_manager.agent_backend == "codex":
+        from .commands.auth import ensure_codex_authenticated
+
+        if not await ensure_codex_authenticated(context.bot, user.id):
+            await safe_edit(
+                query,
+                t(user.id, "auth.codex.required"),
+            )
+            return
 
     success, message, created_wname, created_wid = await tmux_manager.create_window(
         selected_path,

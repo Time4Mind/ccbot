@@ -329,6 +329,7 @@ class TestLoginMessages:
         from ccbot.handlers.message_sender import NO_LINK_PREVIEW
 
         command, _ = fake_cli
+        monkeypatch.setattr(auth_cmd.session_manager, "agent_backend", "claude")
         monkeypatch.setattr(auth_cmd.config, "claude_command", command)
         sent: list[dict] = []
 
@@ -355,6 +356,7 @@ class TestLoginMessages:
         silent = tmp_path / "silent"
         silent.write_text("#!/bin/sh\nexit 0\n")
         silent.chmod(0o755)
+        monkeypatch.setattr(auth_cmd.session_manager, "agent_backend", "claude")
         monkeypatch.setattr(auth_cmd.config, "claude_command", str(silent))
         sent: list[str] = []
 

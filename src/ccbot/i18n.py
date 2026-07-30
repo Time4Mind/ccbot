@@ -67,6 +67,31 @@ _EN: dict[str, str] = {
     ),
     "auth.login.failed": "❌ The code was not accepted: {detail}\n\nSend /login to retry.",
     "auth.login.cancelled": "Login cancelled.",
+    "auth.codex.device": (
+        "🔐 *Codex sign-in*\n\n"
+        "1. Open {url}\n"
+        "2. Enter this code: `{code}`\n\n"
+        "The bot will detect approval automatically; don't send the code here. "
+        "The code is valid for about 15 minutes."
+    ),
+    "auth.codex.no_device_code": (
+        "❌ Codex did not provide a device code. Check that a current Codex CLI "
+        "is installed and run /login to retry."
+    ),
+    "auth.codex.ok": (
+        "✅ *Codex is authorized.* You can create and resume sessions now."
+    ),
+    "auth.codex.failed": "❌ Codex sign-in failed: {detail}\n\nSend /login to retry.",
+    "auth.codex.waiting": (
+        "🔐 Codex is still waiting for browser approval. Use the link and code above."
+    ),
+    "auth.codex.required": (
+        "🔐 Authorize Codex using the link above, then retry creating the session."
+    ),
+    "auth.codex.check_failed": (
+        "❌ Could not check Codex authorization. Verify `codex --version` and "
+        "`CODEX_COMMAND`, then send /login."
+    ),
     "btn.confirm": "✓ Confirm",
     "btn.no": "× No",
     "btn.yes_kill": "⚠ Yes, kill",
@@ -513,6 +538,33 @@ _RU: dict[str, str] = {
     ),
     "auth.login.failed": "❌ Код не принят: {detail}\n\nОтправь /login, чтобы повторить.",
     "auth.login.cancelled": "Логин отменён.",
+    "auth.codex.device": (
+        "🔐 *Авторизация Codex*\n\n"
+        "1. Открой {url}\n"
+        "2. Введи код: `{code}`\n\n"
+        "Бот сам увидит подтверждение; присылать код сюда не нужно. "
+        "Код действует около 15 минут."
+    ),
+    "auth.codex.no_device_code": (
+        "❌ Codex не выдал device code. Проверь, что установлен актуальный "
+        "Codex CLI, и повтори /login."
+    ),
+    "auth.codex.ok": (
+        "✅ *Codex авторизован.* Теперь можно создавать и возобновлять сессии."
+    ),
+    "auth.codex.failed": (
+        "❌ Авторизация Codex не завершена: {detail}\n\nПовтори /login."
+    ),
+    "auth.codex.waiting": (
+        "🔐 Codex всё ещё ждёт подтверждения в браузере. Используй ссылку и код выше."
+    ),
+    "auth.codex.required": (
+        "🔐 Авторизуй Codex по ссылке выше, затем повтори создание сессии."
+    ),
+    "auth.codex.check_failed": (
+        "❌ Не удалось проверить авторизацию Codex. Проверь `codex --version` "
+        "и `CODEX_COMMAND`, затем отправь /login."
+    ),
     "btn.confirm": "✓ Подтвердить",
     "btn.no": "× Нет",
     "btn.yes_kill": "⚠ Да, убить",
@@ -933,6 +985,23 @@ _ZH: dict[str, str] = {
     ),
     "auth.login.failed": "❌ 验证码未被接受:{detail}\n\n发送 /login 重试。",
     "auth.login.cancelled": "已取消登录。",
+    "auth.codex.device": (
+        "🔐 *Codex 登录*\n\n"
+        "1. 打开 {url}\n"
+        "2. 输入代码: `{code}`\n\n"
+        "机器人会自动检测授权;无需把代码发到这里。代码约 15 分钟内有效。"
+    ),
+    "auth.codex.no_device_code": (
+        "❌ Codex 未提供设备代码。请确认已安装最新 Codex CLI,然后发送 /login 重试。"
+    ),
+    "auth.codex.ok": "✅ *Codex 已授权。* 现在可以创建和恢复会话。",
+    "auth.codex.failed": "❌ Codex 登录失败:{detail}\n\n发送 /login 重试。",
+    "auth.codex.waiting": "🔐 Codex 仍在等待浏览器确认。请使用上面的链接和代码。",
+    "auth.codex.required": "🔐 请先通过上面的链接授权 Codex,然后重新创建会话。",
+    "auth.codex.check_failed": (
+        "❌ 无法检查 Codex 授权。请检查 `codex --version` 和 "
+        "`CODEX_COMMAND`,然后发送 /login。"
+    ),
     "btn.confirm": "✓ 确认",
     "btn.no": "× 否",
     "btn.yes_kill": "⚠ 是，终止",

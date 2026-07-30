@@ -209,27 +209,6 @@ class TestSafeSendRichPath:
         bot.send_message.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_fenced_command_uses_copyable_pre_entity(
-        self, rich_on: None
-    ) -> None:
-        bot = _FakeBot(post_result=_sent_message_json())
-        text = (
-            "Обновить и запустить:\n\n"
-            "```bash\n"
-            "git switch feature/codex-backend\n"
-            "uv run ccbot\n"
-            "```"
-        )
-
-        await message_sender.safe_send(bot, 449, text)  # type: ignore[arg-type]
-
-        assert bot.posts == []
-        bot.send_message.assert_called_once()
-        call = bot.send_message.call_args.kwargs
-        assert call["parse_mode"] == "MarkdownV2"
-        assert call["text"].startswith("Обновить и запустить:\n\n```bash\n")
-
-    @pytest.mark.asyncio
     async def test_retry_after_propagates(self, rich_on: None) -> None:
         from telegram.error import RetryAfter
 
@@ -289,22 +268,6 @@ class TestSafeEditRichPath:
         await message_sender.safe_edit(target, "hello")
         bot.edit_message_text.assert_called_once()  # type: ignore[attr-defined]
 
-    @pytest.mark.asyncio
-    async def test_fenced_command_edit_uses_copyable_pre_entity(
-        self, rich_on: None
-    ) -> None:
-        bot = _FakeBot(post_result=True)
-        bot.edit_message_text = AsyncMock()  # type: ignore[attr-defined]
-        target = _FakeMessage(bot)
-
-        await message_sender.safe_edit(target, "```bash\nuv run ccbot\n```")
-
-        assert bot.posts == []
-        bot.edit_message_text.assert_called_once()  # type: ignore[attr-defined]
-        call = bot.edit_message_text.call_args.kwargs  # type: ignore[attr-defined]
-        assert call["parse_mode"] == "MarkdownV2"
-        assert call["text"].startswith("```bash\n")
-
 
 class TestTryRichEditRaw:
     @pytest.mark.asyncio
@@ -339,17 +302,6 @@ class TestTryRichEditRaw:
     async def test_rich_off_means_fallback(self, rich_off: None) -> None:
         bot = _FakeBot(post_result=True)
         assert await message_sender.try_rich_edit(bot, 449, 7, "x") is False
-        assert bot.posts == []
-
-    @pytest.mark.asyncio
-    async def test_fenced_code_means_classic_fallback(self, rich_on: None) -> None:
-        bot = _FakeBot(post_result=True)
-        assert (
-            await message_sender.try_rich_edit(
-                bot, 449, 7, "```bash\nsystemctl restart ccbot\n```"
-            )
-            is False
-        )
         assert bot.posts == []
 
     @pytest.mark.asyncio

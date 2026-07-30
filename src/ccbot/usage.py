@@ -241,8 +241,42 @@ def format_usage_breakdown_compact(user_id: int, info: object) -> str | None:
     window; the weekly rows omit it because the modal doesn't expose the
     elapsed time within the week). Returns None when info has nothing.
     """
+    from .codex_usage import CodexUsageInfo
     from .i18n import t
     from .terminal_parser import UsageInfo, extract_usage_breakdown
+
+    if isinstance(info, CodexUsageInfo):
+        from datetime import datetime
+
+        rows: list[str] = []
+
+        def _reset_text(timestamp: int | None, *, weekly: bool) -> str:
+            if timestamp is None:
+                return ""
+            dt = datetime.fromtimestamp(timestamp)
+            pattern = "%d.%m %H:%M" if weekly else "%H:%M"
+            return f" · {dt.strftime(pattern)}"
+
+        if info.five_hour is None:
+            rows.append(
+                f"⚪ {t(user_id, 'usage.5h')}: "
+                f"{t(user_id, 'usage.not_reported')}"
+            )
+        else:
+            window = info.five_hour
+            rows.append(
+                f"{_quota_emoji(window.used_percent)} {t(user_id, 'usage.5h')}: "
+                f"{window.used_percent}%{_reset_text(window.resets_at, weekly=False)}"
+            )
+        if info.weekly is not None:
+            window = info.weekly
+            rows.append(
+                f"{_quota_emoji(window.used_percent)} {t(user_id, 'usage.week')}: "
+                f"{window.used_percent}%{_reset_text(window.resets_at, weekly=True)}"
+            )
+        if not rows:
+            return None
+        return t(user_id, "usage.title.codex") + "\n" + "\n".join(rows)
 
     if not isinstance(info, UsageInfo):
         return None

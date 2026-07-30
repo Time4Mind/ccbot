@@ -6,7 +6,7 @@ user's active session is doing — and ``/usage`` is a UI-only modal so
 running it in a parked window costs nothing token-wise.
 
 Public API:
-  fetch_claude_usage() -> UsageInfo | None
+  fetch_live_usage() -> UsageInfo | CodexUsageInfo | None
 """
 
 from __future__ import annotations
@@ -230,6 +230,10 @@ async def fetch_claude_usage() -> object | None:
     modal indefinitely, so on failure we kill the window and retry once
     against a fresh process. Returns ``None`` on persistent failure.
     """
+    from ..session import session_manager
+
+    if session_manager.agent_backend != "claude":
+        return None
     async with _usage_window_lock:
         wid = await _ensure_usage_window()
         if not wid:
@@ -246,3 +250,14 @@ async def fetch_claude_usage() -> object | None:
         if not wid:
             return None
         return await _poll_usage_modal(wid)
+
+
+async def fetch_live_usage() -> object | None:
+    """Fetch quota data for the currently selected agent backend."""
+    from ..session import session_manager
+
+    if session_manager.agent_backend == "codex":
+        from ..codex_usage import fetch_codex_usage
+
+        return await fetch_codex_usage()
+    return await fetch_claude_usage()

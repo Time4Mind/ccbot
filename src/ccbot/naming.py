@@ -237,6 +237,10 @@ async def maybe_auto_name(
     sess = session_manager.get_session(session_id)
     if sess is None:
         return
+    # Haiku naming is a Claude-only auxiliary call. Codex deployments may
+    # not have a Claude binary or credentials; keep the directory name.
+    if sess.backend != "claude":
+        return
 
     if user_id is not None:
         settings = session_manager.get_user_settings(user_id)

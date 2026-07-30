@@ -61,7 +61,10 @@ async def create_and_activate_session(
         detach_paused_cards_at_message(user.id, query.message.message_id)
 
     success, message, created_wname, created_wid = await tmux_manager.create_window(
-        selected_path, resume_session_id=resume_session_id, owner_user_id=user.id
+        selected_path,
+        resume_session_id=resume_session_id,
+        owner_user_id=user.id,
+        backend=session_manager.agent_backend,
     )
     if not success:
         await safe_edit(query, f"❌ {message}")
@@ -95,9 +98,10 @@ async def create_and_activate_session(
         # mid-compaction. The background watcher drains the buffer after
         # the pane settles AND refreshes Telegram TYPING in the meantime
         # so the chat doesn't look frozen.
-        session_manager.mark_window_resuming(
-            created_wid, bot=context.bot, user_id=user.id
-        )
+        if session_manager.agent_backend == "claude":
+            session_manager.mark_window_resuming(
+                created_wid, bot=context.bot, user_id=user.id
+            )
         hook_ok = await session_manager.wait_for_session_map_entry(
             created_wid, timeout=15.0
         )

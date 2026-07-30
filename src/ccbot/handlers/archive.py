@@ -440,10 +440,31 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
     if not workdir:
         return False, "No workdir on session record — cannot restore"
 
+    source_backend = sess.backend
+    target_backend = session_manager.agent_backend
+    cross_backend = source_backend != target_backend
+    resume_session_id = sess.claude_session_id or None
+    initial_prompt: str | None = None
+    if cross_backend:
+        import asyncio
+
+        from ..session_import import build_import_context, import_prompt
+
+        try:
+            context_path = await asyncio.to_thread(
+                build_import_context, sess, target_backend
+            )
+        except (OSError, ValueError) as e:
+            return False, f"Could not import {source_backend} transcript: {e}"
+        initial_prompt = import_prompt(context_path, source_backend)
+        resume_session_id = None
+
     success, message, created_wname, created_wid = await tmux_manager.create_window(
         workdir,
-        resume_session_id=sess.claude_session_id or None,
+        resume_session_id=resume_session_id,
         owner_user_id=user_id,
+        backend=target_backend,
+        initial_prompt=initial_prompt,
     )
     if not success:
         return False, message
@@ -454,7 +475,7 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
     # typed mid-compaction. The background watcher drains the buffer
     # once the pane settles AND keeps Telegram TYPING refreshed so the
     # chat doesn't look frozen during the wait.
-    if sess.claude_session_id:
+    if resume_session_id and target_backend == "claude":
         session_manager.mark_window_resuming(created_wid, bot=bot, user_id=user_id)
 
     hook_ok = await session_manager.wait_for_session_map_entry(
@@ -463,13 +484,27 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
     del hook_ok
 
     # If we did a --resume, override window_state to original sid (Claude allocates a new sid for the resume).
-    if sess.claude_session_id:
+    if resume_session_id:
         ws = session_manager.get_window_state(created_wid)
-        if ws.session_id != sess.claude_session_id:
-            ws.session_id = sess.claude_session_id
+        if ws.session_id != resume_session_id:
+            ws.session_id = resume_session_id
             ws.cwd = workdir
             ws.window_name = created_wname
             session_manager.save_state()
+    elif cross_backend:
+        ws = session_manager.get_window_state(created_wid)
+        if not ws.session_id:
+            await tmux_manager.kill_window(created_wid)
+            return (
+                False,
+                f"{target_backend} import started but no session id was captured",
+            )
+        if not sess.imported_from_backend:
+            sess.imported_from_backend = source_backend
+            sess.imported_from_session_id = sess.claude_session_id
+        sess.backend = target_backend
+        sess.claude_session_id = ws.session_id
+        session_manager.save_state()
 
     session_manager.set_session_window(sess.id, created_wid)
     session_manager.set_active_session(user_id, sess.id)
@@ -478,8 +513,12 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
 
         await open_terminal_for_window(created_wid, user_id=user_id)
     note = ""
-    if sess.claude_session_id:
+    if resume_session_id:
         note = " — if it was a large session it may compact for a minute; your first message is held until it's ready."
+    elif cross_backend:
+        note = (
+            f" — imported from {source_backend} into a native {target_backend} session"
+        )
     return True, f"Restored {sess.name or sess.id} ({created_wname}){note}"
 
 

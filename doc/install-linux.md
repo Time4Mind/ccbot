@@ -8,7 +8,8 @@
 2. в Telegram-DM работали все слэш-команды и инлайн-меню;
 3. SessionStart-хук Claude Code был установлен (для трекинга
    `session_id ↔ tmux window`);
-4. голос/медиа работали (whisper.cpp опционально).
+4. можно было выбрать Claude Code или OpenAI Codex;
+5. голос/медиа работали (whisper.cpp опционально).
 
 Целевая платформа: **Linux x86_64 или arm64**, дистрибутивы на базе
 Debian/Ubuntu (для других — адаптировать пакетный менеджер). Работа
@@ -109,9 +110,11 @@ uv --version
 
 ---
 
-## 4. Claude Code CLI
+## 4. CLI агента: Claude Code или Codex
 
-ccbot — это лишь мост к `claude` CLI. Без него ничего не запустится.
+ccbot — это мост к CLI агента. Установи как минимум один backend.
+
+### Claude Code
 
 ```bash
 # Официальный установщик; ставит в ~/.claude/local/
@@ -135,6 +138,37 @@ claude auth status   # должен показать активную подпи
 ```
 
 `ANTHROPIC_API_KEY` **НЕ нужен** — авторизация через CLI subscription.
+
+### OpenAI Codex
+
+Для Linux arm64 используй официальный standalone installer:
+
+```bash
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+codex --version
+codex login --device-auth
+codex login status
+```
+
+Для Codex добавь в `~/.ccbot/.env`:
+
+```ini
+CCBOT_AGENT_BACKEND=codex
+CODEX_COMMAND=codex
+CODEX_FLAGS=--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust --enable hooks --no-alt-screen
+```
+
+И установи hook выбранного backend:
+
+```bash
+cd /opt/ccbot
+uv run ccbot hook --install --backend codex
+```
+
+При запуске через systemd unit должен разрешать запись не только в
+`~/.ccbot`, но и в `~/.codex`: там Codex хранит авторизацию, hooks и rollout
+JSONL. Шаблон `scripts/ccbot.service` уже содержит этот путь.
 
 ---
 
@@ -232,18 +266,20 @@ WHISPER_MODEL_PATH=/home/USER/.ccbot/models/ggml-medium-q8_0.bin
 
 ---
 
-## 8. SessionStart hook
+## 8. Session hook
 
-Хук пишет `~/.ccbot/session_map.json` при каждом старте/ресуме claude
-— без него бот не сможет связать tmux-окно с claude-сессией.
+Хук пишет `~/.ccbot/session_map.json` при каждом старте/ресуме агента
+— без него бот не сможет связать tmux-окно с native session/thread id.
 
 ```bash
 cd /opt/ccbot
-uv run ccbot hook --install
+uv run ccbot hook --install --backend claude  # для Claude
+uv run ccbot hook --install --backend codex   # для Codex
 ```
 
-Проверка: в `~/.claude/settings.json` должен появиться блок
-`hooks.SessionStart` с `command: "ccbot hook"`.
+Проверка: для Claude блок `hooks.SessionStart` появляется в
+`~/.claude/settings.json`; для Codex hooks записываются в
+`~/.codex/hooks.json`.
 
 ---
 
@@ -321,7 +357,7 @@ supervisor с авто-рестартом и ожиданием сети.
 
 1. `/start` → бот отвечает приветствием.
 2. Любой текст → открывается directory-browser, выбираешь каталог.
-3. После выбора создаётся tmux-окно с `claude`, в чат приходит
+3. После выбора создаётся tmux-окно с выбранным агентом, в чат приходит
    первое сообщение от модели.
 4. `/menu` → открывается инлайн-меню (Sessions / Status / Archive / …).
    В Sessions карточка активной сессии со свитчером.
@@ -339,15 +375,14 @@ supervisor с авто-рестартом и ожиданием сети.
 ## 12. Чеклист «всё ли сделано»
 
 - [ ] `tmux`, `ffmpeg`, `git`, `curl`, `python3.12`, `uv` установлены.
-- [ ] `claude --version` работает, `claude auth status` показывает
-      активную подписку.
+- [ ] CLI выбранного агента установлен и авторизован (`claude auth status`
+      или `codex login status`).
 - [ ] `/opt/ccbot` склонирован (ветка `main`), `uv sync` отработал
       без ошибок.
 - [ ] `uv run ruff check` и `uv run pyright src/ccbot/` чистые.
 - [ ] `~/.ccbot/.env` существует, mode 600, заполнены
       `TELEGRAM_BOT_TOKEN` и `ALLOWED_USERS`.
-- [ ] `ccbot hook --install` — в `~/.claude/settings.json` есть
-      SessionStart hook.
+- [ ] `ccbot hook --install --backend ...` установил hook выбранного агента.
 - [ ] (опц.) `whisper-cli` в PATH, модель в `~/.ccbot/models/`.
 - [ ] `ccbot@$USER.service` enabled и active.
 - [ ] Telegram-DM реагирует, создаётся первая сессия, в Menu →

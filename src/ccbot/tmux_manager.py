@@ -20,6 +20,7 @@ import re
 import shlex
 import signal
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,6 +35,9 @@ logger = logging.getLogger(__name__)
 _CLAUDE_SESSION_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
+
+_CODEX_TRUST_PROMPT = "Do you trust the contents of this directory?"
+_CODEX_TRUST_YES = "1. Yes, continue"
 
 
 @dataclass
@@ -78,6 +82,35 @@ class TmuxManager:
             lock = asyncio.Lock()
             self._send_locks[window_id] = lock
         return lock
+
+    @staticmethod
+    def _accept_codex_directory_trust(pane: object) -> bool:
+        """Accept only Codex's exact initial directory-trust prompt.
+
+        Codex can show this before its normal input box even in full-access
+        mode. The bot already owns the selected working directory, so leaving
+        the TUI blocked here makes Telegram input appear broken. Poll briefly
+        because the Node wrapper needs a moment to draw the prompt.
+        """
+        capture = getattr(pane, "capture_pane", None)
+        send_keys = getattr(pane, "send_keys", None)
+        if not callable(capture) or not callable(send_keys):
+            return False
+        for _ in range(20):
+            time.sleep(0.15)
+            try:
+                lines = capture()
+                text = "\n".join(lines) if isinstance(lines, list) else str(lines)
+            except Exception:
+                return False
+            if _CODEX_TRUST_PROMPT in text and _CODEX_TRUST_YES in text:
+                send_keys("", enter=True)
+                logger.info("Accepted Codex directory trust prompt")
+                return True
+            # The regular input box is ready, so there is no trust prompt.
+            if "OpenAI Codex" in text and "›" in text:
+                return False
+        return False
 
     @property
     def server(self) -> libtmux.Server:
@@ -551,8 +584,10 @@ class TmuxManager:
         start_claude: bool = True,
         resume_session_id: str | None = None,
         owner_user_id: int | None = None,
+        backend: str | None = None,
+        initial_prompt: str | None = None,
     ) -> tuple[bool, str, str, str]:
-        """Create a new tmux window and optionally start Claude Code.
+        """Create a new tmux window and optionally start the configured agent.
 
         Args:
             work_dir: Working directory for the new window
@@ -569,6 +604,9 @@ class TmuxManager:
         """
         # Validate directory first
         path = Path(work_dir).expanduser().resolve()
+        selected_backend = backend or config.agent_backend
+        if selected_backend not in ("claude", "codex"):
+            return False, f"Unsupported agent backend: {selected_backend}", "", ""
         if not path.exists():
             return False, f"Directory does not exist: {work_dir}", "", ""
         if not path.is_dir():
@@ -603,18 +641,30 @@ class TmuxManager:
                 if start_claude:
                     pane = window.active_pane
                     if pane:
-                        cmd = config.claude_command
-                        if config.claude_flags:
-                            cmd = f"{cmd} {config.claude_flags}"
-                        if resume_session_id:
-                            cmd = f"{cmd} --resume {resume_session_id}"
+                        if selected_backend == "codex":
+                            cmd = config.codex_command
+                            if config.codex_flags:
+                                cmd = f"{cmd} {config.codex_flags}"
+                            if resume_session_id:
+                                cmd = f"{cmd} resume {shlex.quote(resume_session_id)}"
+                        else:
+                            cmd = config.claude_command
+                            if config.claude_flags:
+                                cmd = f"{cmd} {config.claude_flags}"
+                            if resume_session_id:
+                                cmd = f"{cmd} --resume {shlex.quote(resume_session_id)}"
+                        if initial_prompt:
+                            cmd = f"{cmd} {shlex.quote(initial_prompt)}"
                         # Identify the runtime so Claude (via the
                         # output-format guidance in CLAUDE.md) can
                         # tailor its replies to the Telegram surface AND
                         # know *which* bot / device hosts the session —
                         # useful when the user runs multiple ccbot
                         # deployments (e.g. Mac + arm64 box).
-                        env_prefix = "CCBOT_INTERFACE=telegram"
+                        env_prefix = (
+                            "CCBOT_INTERFACE=telegram "
+                            f"CCBOT_AGENT_BACKEND={selected_backend}"
+                        )
                         if config.bot_username:
                             env_prefix += f" CCBOT_BOT_USERNAME={shlex.quote(config.bot_username)}"
                         if config.host_label:
@@ -630,6 +680,8 @@ class TmuxManager:
                         else:
                             cmd = f"{env_prefix} {cmd}"
                         pane.send_keys(cmd, enter=True)
+                        if selected_backend == "codex":
+                            self._accept_codex_directory_trust(pane)
 
                 logger.info(
                     "Created window '%s' (id=%s) at %s",

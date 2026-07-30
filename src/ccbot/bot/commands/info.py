@@ -45,7 +45,6 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     if not update.message:
         return
-
     wid = active_window(user.id)
     if not wid:
         await safe_reply(
@@ -247,6 +246,13 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not user or not is_user_allowed(user.id):
         return
     if not update.message:
+        return
+    active = session_manager.get_active_session(user.id)
+    if active is not None and active.backend == "codex":
+        await safe_reply(
+            update.message,
+            "Codex usage quota is not exposed through the Claude /usage parser.",
+        )
         return
 
     wid = active_window(user.id)

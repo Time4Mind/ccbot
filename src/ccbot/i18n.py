@@ -99,6 +99,7 @@ _EN: dict[str, str] = {
     "settings.title": "*Settings*",
     "settings.body": (
         "*Settings*\n\n"
+        "Agent: `{agent}`\n"
         "Language: `{language}`\n"
         "Previews: `{previews}`\n"
         "Live lag: `{live_lag}s`\n"
@@ -106,6 +107,7 @@ _EN: dict[str, str] = {
         "_Tap a group to change._"
     ),
     # Settings — group labels (in the main grid)
+    "settings.group.agent": "Agent",
     "settings.group.language": "Language",
     "settings.group.previews": "Previews",
     "settings.group.live_lag": "Live lag",
@@ -129,6 +131,13 @@ _EN: dict[str, str] = {
         "• `whisper` — force whisper.cpp\n"
         "• `apple` — force Apple Speech (macOS only)\n"
         "• `off` — drop voice messages"
+    ),
+    "settings.agent.body": (
+        "*Agent*\n\n"
+        "Global backend for the entire bot. All new sessions use either "
+        "*Claude* or *Codex*.\n\n"
+        "Switching is blocked while sessions from the current backend are "
+        "still live. Archive or kill them first."
     ),
     "settings.lang.body": "*Language*\n\nUI language. Switches everything\nbut Claude's own output.",
     # Sessions list — only ``list.empty`` is still used (Menu → Sessions
@@ -172,6 +181,9 @@ _EN: dict[str, str] = {
     "toast.done": "Done",
     "toast.deleted": "Deleted",
     "toast.saved": "Saved",
+    "toast.agent_live": (
+        "Archive or kill all live sessions before switching the global agent."
+    ),
     "toast.restored": "Restored",
     "toast.already_gone": "Already gone",
     "toast.nothing_to_kill": "Nothing to kill",
@@ -193,10 +205,12 @@ _EN: dict[str, str] = {
     "archive.age.d": "{n}d ago",
     # /usage compact display
     "usage.title": "*Claude Code*",
+    "usage.title.codex": "*OpenAI Codex*",
     "usage.unavailable": "Live usage unavailable.",
     "usage.5h": "5h",
     "usage.week": "week",
     "usage.week_sonnet": "week (Sonnet)",
+    "usage.not_reported": "not reported by Codex",
     "usage.extra": "Extra",
     "usage.on": "on",
     "usage.off": "off",
@@ -308,7 +322,7 @@ _EN: dict[str, str] = {
     "settings.cat.notifications": "🔔 Notifications",
     "settings.cat.voice": "🎙 Voice",
     "settings.cat.terminal": "🖥 Local terminal",
-    "settings.cat.behavior": "⚙ Behavior & language",
+    "settings.cat.behavior": "⚙ Agent, behavior & language",
     "settings.cat.card.body": (
         "*Card / view*\n\nLayout, density and refresh of the live session card."
     ),
@@ -326,7 +340,7 @@ _EN: dict[str, str] = {
     ),
     "settings.cat.behavior.body": (
         "*Behavior & language*\n\n"
-        "Auto-approve interactive prompts; Haiku session names; UI language."
+        "Global agent; auto-approve prompts; Haiku session names; UI language."
     ),
     # Settings group: pop a native Terminal/iTerm window per new session
     "settings.group.local_terminal": "Local terminal",
@@ -528,12 +542,14 @@ _RU: dict[str, str] = {
     "settings.title": "*Настройки*",
     "settings.body": (
         "*Настройки*\n\n"
+        "Агент: `{agent}`\n"
         "Язык: `{language}`\n"
         "Превью: `{previews}`\n"
         "Лаг карточки: `{live_lag}с`\n"
         "Голос: `{voice}`\n\n"
         "_Тапни группу, чтобы изменить._"
     ),
+    "settings.group.agent": "Агент",
     "settings.group.language": "Язык",
     "settings.group.previews": "Превью",
     "settings.group.live_lag": "Лаг карточки",
@@ -556,6 +572,13 @@ _RU: dict[str, str] = {
         "• `whisper` — форсить whisper.cpp\n"
         "• `apple` — форсить Apple Speech (только macOS)\n"
         "• `off` — игнорировать voice"
+    ),
+    "settings.agent.body": (
+        "*Агент*\n\n"
+        "Глобальный backend для всего бота. Все новые сессии работают либо "
+        "через *Claude*, либо через *Codex*.\n\n"
+        "Переключение заблокировано, пока остаются живые сессии текущего "
+        "агента. Сначала заверши или архивируй их."
     ),
     "settings.lang.body": (
         "*Язык*\n\nЯзык интерфейса. Переключает всё,\nкроме самого вывода Claude."
@@ -594,6 +617,9 @@ _RU: dict[str, str] = {
     "toast.done": "Закрыта",
     "toast.deleted": "Удалена",
     "toast.saved": "Сохранено",
+    "toast.agent_live": (
+        "Перед сменой глобального агента заверши или архивируй все живые сессии."
+    ),
     "toast.restored": "Восстановлена",
     "toast.already_gone": "Уже нет",
     "toast.nothing_to_kill": "Убивать нечего",
@@ -614,10 +640,12 @@ _RU: dict[str, str] = {
     "archive.age.h": "{n}ч назад",
     "archive.age.d": "{n}д назад",
     "usage.title": "*Claude Code*",
+    "usage.title.codex": "*OpenAI Codex*",
     "usage.unavailable": "Живые данные usage недоступны.",
     "usage.5h": "5ч",
     "usage.week": "неделя",
     "usage.week_sonnet": "неделя (Sonnet)",
+    "usage.not_reported": "Codex не передал",
     "usage.extra": "Extra",
     "usage.on": "вкл",
     "usage.off": "выкл",
@@ -720,7 +748,7 @@ _RU: dict[str, str] = {
     "settings.cat.notifications": "🔔 Уведомления",
     "settings.cat.voice": "🎙 Голос",
     "settings.cat.terminal": "🖥 Локальный терминал",
-    "settings.cat.behavior": "⚙ Поведение и язык",
+    "settings.cat.behavior": "⚙ Агент, поведение и язык",
     "settings.cat.card.body": (
         "*Карточка / вид*\n\nРаскладка, плотность и refresh живой карточки."
     ),
@@ -735,7 +763,7 @@ _RU: dict[str, str] = {
     ),
     "settings.cat.behavior.body": (
         "*Поведение и язык*\n\n"
-        "Авто-Yes на промпты; авто-имя сессии через Haiku; язык интерфейса."
+        "Глобальный агент; авто-Yes; имена через Haiku; язык интерфейса."
     ),
     "settings.group.local_terminal": "Локальный терминал",
     "settings.local.body": (
@@ -934,12 +962,14 @@ _ZH: dict[str, str] = {
     "settings.title": "*设置*",
     "settings.body": (
         "*设置*\n\n"
+        "代理: `{agent}`\n"
         "语言: `{language}`\n"
         "预览: `{previews}`\n"
         "卡片延迟: `{live_lag}秒`\n"
         "语音: `{voice}`\n\n"
         "_点击分组进行更改。_"
     ),
+    "settings.group.agent": "代理",
     "settings.group.language": "语言",
     "settings.group.previews": "预览",
     "settings.group.live_lag": "卡片延迟",
@@ -962,6 +992,11 @@ _ZH: dict[str, str] = {
         "• `whisper` — 强制 whisper.cpp\n"
         "• `apple` — 强制 Apple Speech (仅 macOS)\n"
         "• `off` — 忽略语音"
+    ),
+    "settings.agent.body": (
+        "*代理*\n\n"
+        "整个机器人的全局后端。所有新会话统一使用 *Claude* 或 *Codex*。\n\n"
+        "当前后端仍有活动会话时不能切换；请先结束或归档这些会话。"
     ),
     "settings.lang.body": "*语言*\n\n界面语言。切换除 Claude 自身输出外的一切文本。",
     "list.empty": "没有活动会话。点 🆕 新建以创建。",
@@ -995,6 +1030,7 @@ _ZH: dict[str, str] = {
     "toast.done": "已完成",
     "toast.deleted": "已删除",
     "toast.saved": "已保存",
+    "toast.agent_live": "切换全局代理前，请先结束或归档所有活动会话。",
     "toast.restored": "已恢复",
     "toast.already_gone": "已不存在",
     "toast.nothing_to_kill": "没什么可终止的",
@@ -1015,10 +1051,12 @@ _ZH: dict[str, str] = {
     "archive.age.h": "{n}时前",
     "archive.age.d": "{n}天前",
     "usage.title": "*Claude Code*",
+    "usage.title.codex": "*OpenAI Codex*",
     "usage.unavailable": "实时使用数据不可用。",
     "usage.5h": "5小时",
     "usage.week": "本周",
     "usage.week_sonnet": "本周 (Sonnet)",
+    "usage.not_reported": "Codex 未报告",
     "usage.extra": "Extra",
     "usage.on": "开",
     "usage.off": "关",
@@ -1098,14 +1136,16 @@ _ZH: dict[str, str] = {
     "settings.cat.notifications": "🔔 通知",
     "settings.cat.voice": "🎙 语音",
     "settings.cat.terminal": "🖥 本地终端",
-    "settings.cat.behavior": "⚙ 行为和语言",
+    "settings.cat.behavior": "⚙ 代理、行为和语言",
     "settings.cat.card.body": "*卡片 / 视图*\n\n实时会话卡片的布局、密度和刷新。",
     "settings.cat.notifications.body": (
         "*通知*\n\nBg 会话推送(完成 / 错误 / 需要操作)和\nweekly quota 提醒的重置日。"
     ),
     "settings.cat.voice.body": "*语音*\n\n语音消息的 STT 后端。",
     "settings.cat.terminal.body": "*本地终端*\n\n附加到每个新会话的本地终端窗口。",
-    "settings.cat.behavior.body": ("*行为和语言*\n\n自动同意交互提示;界面语言。"),
+    "settings.cat.behavior.body": (
+        "*行为和语言*\n\n全局代理；自动同意交互提示；界面语言。"
+    ),
     "settings.group.local_terminal": "本地终端",
     "settings.local.body": (
         "*本地终端*\n\n"

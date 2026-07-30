@@ -68,7 +68,9 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         target_path = str(Path(path_arg).expanduser().resolve())
         await safe_reply(update.message, f"⏳ Creating session at {target_path}…")
         success, message, created_wname, created_wid = await tmux_manager.create_window(
-            target_path, owner_user_id=user.id
+            target_path,
+            owner_user_id=user.id,
+            backend=session_manager.agent_backend,
         )
         if not success:
             await safe_reply(update.message, f"❌ {message}")

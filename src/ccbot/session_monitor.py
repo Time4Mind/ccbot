@@ -119,6 +119,38 @@ class SessionMonitor:
 
         sessions = []
 
+        # Lifecycle hooks provide authoritative Codex rollout paths. Include
+        # them even when the deployment default is Claude: restored sessions
+        # retain their original backend and both kinds may be live together.
+        codex_ids_in_map: set[str] = set()
+        try:
+            async with aiofiles.open(config.session_map_file, "r") as f:
+                raw_map = json.loads(await f.read())
+            for info in raw_map.values():
+                if not isinstance(info, dict) or info.get("backend") != "codex":
+                    continue
+                path = Path(str(info.get("transcript_path") or ""))
+                cwd = str(info.get("cwd") or "")
+                try:
+                    cwd = str(Path(cwd).resolve())
+                except (OSError, ValueError):
+                    pass
+                sid = str(info.get("session_id") or "")
+                if sid:
+                    codex_ids_in_map.add(sid)
+                if sid and path.is_file() and cwd in active_cwds:
+                    sessions.append(SessionInfo(session_id=sid, file_path=path))
+        except (OSError, json.JSONDecodeError):
+            pass
+        if config.agent_backend == "codex" and not sessions:
+            from .codex_session_io import scan_active_sessions
+
+            sessions.extend(
+                SessionInfo(session_id=sid, file_path=path)
+                for sid, path in await scan_active_sessions(active_cwds)
+                if sid not in codex_ids_in_map
+            )
+
         if not self.projects_path.exists():
             return sessions
 

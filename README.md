@@ -6,7 +6,7 @@
 [中文文档](README_CN.md) · [Русская документация](README_RU.md)
 
 A personal Telegram bot that bridges a private DM to multiple parallel
-Claude Code sessions running in tmux. One user, N sessions, one inline
+Claude Code or Codex CLI sessions running in tmux. One user, N sessions, one inline
 switcher in the most recent bot message.
 
 ## Why
@@ -69,7 +69,7 @@ implementation map is in `doc/dm-multisession-plan.md`.
 ## Prerequisites
 
 - **tmux** in `PATH`
-- **Claude Code** CLI (`claude`) signed in with a Max subscription
+- **Claude Code** CLI (`claude`) or **Codex CLI** (`codex`), signed in
 - **Python 3.12+**
 - **uv** (recommended) for dependency management
 - macOS (Apple Silicon) or Linux arm64
@@ -109,8 +109,11 @@ Most-frequently-tweaked optionals:
 | --------------------------- | ------------ | ------ |
 | `CCBOT_DIR`                 | `~/.ccbot`   | Config and state directory |
 | `TMUX_SESSION_NAME`         | `ccbot`      | tmux session that holds all session windows |
+| `CCBOT_AGENT_BACKEND`       | `claude`     | initial global backend for a new state file |
 | `CLAUDE_COMMAND`            | `claude`     | binary used to start a session |
 | `CLAUDE_FLAGS`              | `--dangerously-skip-permissions` | flags appended to `claude` |
+| `CODEX_COMMAND`             | `codex`      | Codex CLI binary (an absolute Termux path is accepted) |
+| `CODEX_FLAGS`               | bypass + hook trust + hooks + `--no-alt-screen` | flags appended to `codex` |
 | `SESSION_IDLE_TTL`          | `4h`         | active → archived after this much idleness |
 | `ARCHIVE_PURGE_AFTER`       | `14d`        | archived sessions purged from state after this |
 | `QUOTA_ALERT_POLL_INTERVAL` | `10m`        | how often the live `/usage` modal is sampled |
@@ -128,7 +131,10 @@ Most-frequently-tweaked optionals:
 The full list lives in `.env.example` and in
 `doc/dm-multisession-spec.md` § 12. Per-user UI preferences (card
 size, notifications, voice backend, language, …) are not env vars —
-they live behind `≡ Menu → Settings`, see below.
+they live behind `≡ Menu → Settings`, see below. The agent is also a
+persisted bot-wide setting at `Settings → Behavior → Agent`: one bot
+instance runs either Claude or Codex. `CCBOT_AGENT_BACKEND` is only the
+initial default when the state file has no saved selection.
 
 ## Hook setup
 
@@ -140,6 +146,23 @@ Code hooks: `SessionStart` catches every new claude process, and
 ```bash
 ccbot hook --install
 ```
+
+For the Codex backend, install the equivalent hooks in
+`~/.codex/hooks.json`, then select Codex in Telegram Settings:
+
+```bash
+ccbot hook --install --backend codex
+```
+
+Switching is blocked while the current backend still has live sessions;
+archive or kill them first. Archived sessions retain their original backend.
+Restoring an archive from the other backend performs a cross-agent pickup:
+ccbot parses the source JSONL into a bounded handoff, starts a fresh native
+target session, and records both the new target id and the source provenance.
+The source transcript is never modified.
+
+Codex-on-Termux setup is documented in
+[`doc/install-termux.md`](doc/install-termux.md).
 
 The installer is per-event idempotent — re-running it on an older
 `SessionStart`-only install just adds the missing entry.

@@ -35,7 +35,7 @@ from ...handlers.notifications import paint_card_on_carrier
 from ...i18n import t
 from ...session import session_manager
 from .._common import set_view
-from .._usage_window import fetch_claude_usage
+from .._usage_window import fetch_live_usage
 from ..commands.info import emit_screenshot_compact
 
 logger = logging.getLogger(__name__)
@@ -130,7 +130,7 @@ async def handle(
         ]
         kb = InlineKeyboardMarkup([refresh_row] + [list(r) for r in base_rows])
         await safe_edit(query, t(user.id, "usage.fetching"), reply_markup=kb)
-        usage_info = await fetch_claude_usage()
+        usage_info = await fetch_live_usage()
         from ...usage import format_usage_breakdown_compact
 
         live_block = format_usage_breakdown_compact(user.id, usage_info)

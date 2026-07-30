@@ -1,6 +1,6 @@
 """Application configuration — reads env vars and exposes a singleton.
 
-Loads TELEGRAM_BOT_TOKEN, ALLOWED_USERS, tmux/Claude paths, and
+Loads TELEGRAM_BOT_TOKEN, ALLOWED_USERS, tmux/agent paths, and
 monitoring intervals from environment variables (with .env support).
 .env loading priority: local .env (cwd) > $CCBOT_DIR/.env (default ~/.ccbot).
 The module-level `config` instance is imported by nearly every other module.
@@ -84,6 +84,21 @@ class Config:
 
         # Claude command to run in new windows
         self.claude_command = os.getenv("CLAUDE_COMMAND", "claude")
+        # Agent backend. ``claude`` remains the default for backwards
+        # compatibility; ``codex`` uses OpenAI Codex CLI and its rollout store.
+        self.agent_backend = os.getenv("CCBOT_AGENT_BACKEND", "claude").strip().lower()
+        if self.agent_backend not in ("claude", "codex"):
+            raise ValueError("CCBOT_AGENT_BACKEND must be 'claude' or 'codex'")
+        self.codex_command = os.getenv("CODEX_COMMAND", "codex")
+        self.codex_flags = os.getenv(
+            "CODEX_FLAGS",
+            "--dangerously-bypass-approvals-and-sandbox "
+            "--dangerously-bypass-hook-trust --enable hooks --no-alt-screen",
+        )
+        codex_home = Path(os.getenv("CODEX_HOME", str(Path.home() / ".codex")))
+        self.codex_sessions_path = Path(
+            os.getenv("CCBOT_CODEX_SESSIONS_PATH", str(codex_home / "sessions"))
+        )
 
         # All state files live under config_dir
         self.state_file = self.config_dir / "state.json"

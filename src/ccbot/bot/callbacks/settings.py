@@ -12,6 +12,7 @@ from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from ... import voice_install
 from ...handlers.callback_data import (
     CB_ST_APPROVE,
+    CB_ST_AGENT,
     CB_ST_BACK,
     CB_ST_BGNOTIFY,
     CB_ST_CAT,
@@ -200,6 +201,7 @@ async def _run_voice_install(query: CallbackQuery, user_id: int) -> None:
 
 
 _GROUP_TO_SCREEN: dict[str, Screen] = {
+    "agent_backend": "settings_agent",
     "language": "settings_language",
     "previews": "settings_previews",
     "live_lag": "settings_lag",
@@ -283,6 +285,7 @@ async def handle(
         return True
 
     setter_prefixes = (
+        CB_ST_AGENT,
         CB_ST_PREV,
         CB_ST_LAG,
         CB_ST_VOICE,
@@ -301,7 +304,16 @@ async def handle(
         return False
 
     screen_name: Screen = "settings"
-    if data.startswith(CB_ST_PREV):
+    if data.startswith(CB_ST_AGENT):
+        value = data[len(CB_ST_AGENT) :]
+        if value in ("claude", "codex"):
+            try:
+                session_manager.set_agent_backend(value)
+            except RuntimeError:
+                await query.answer(t(user.id, "toast.agent_live"), show_alert=True)
+                return True
+        screen_name = "settings_agent"
+    elif data.startswith(CB_ST_PREV):
         value = data[len(CB_ST_PREV) :]
         if value in ("economical", "readable"):
             session_manager.update_user_setting(user.id, "previews", value)

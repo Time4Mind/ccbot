@@ -39,6 +39,12 @@ RICH_MAX_CHARS = 32768
 # code spans — `<` inside these is preserved verbatim by the rich parser.
 _CODE_SPAN_RE = re.compile(r"```[\s\S]*?(?:```|$)|`[^`\n]*`")
 
+# Telegram renders fenced code in a Rich Message, but current clients don't
+# expose the native code-block Copy action there.  A classic sendMessage with
+# a ``pre`` entity does, so the sender uses this detector to route messages
+# containing fenced code through the MarkdownV2 path instead.
+_FENCED_CODE_BLOCK_RE = re.compile(r"(?m)^[ \t]*```[^\n]*$")
+
 # HTML tags the Rich Markdown parser supports (see "Rich HTML style" in the
 # Bot API docs). A `<` starting one of these is left alone; any other `<`
 # is escaped, because the parser drops unknown tag-shaped fragments
@@ -219,6 +225,11 @@ def to_rich_markdown(text: str) -> str:
     text = _EXPHEADED_RE.sub(_render_details_headed, text)
     text = _EXPQUOTE_RE.sub(_render_details, text)
     return _sub_wrap_tables(text)
+
+
+def has_fenced_code_block(text: str) -> bool:
+    """Return whether ``text`` needs a classic, copyable ``pre`` entity."""
+    return bool(_FENCED_CODE_BLOCK_RE.search(text))
 
 
 def _input_rich_message(markdown: str) -> dict[str, Any]:

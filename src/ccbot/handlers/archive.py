@@ -438,7 +438,10 @@ async def build_archive_page(
         row.append(
             InlineKeyboardButton(
                 f"{idx}. {_display_name(sess)}",
-                callback_data=f"{CB_ARC_INSPECT}{sess.id}"[:64],
+                # Carry the clamped page in the callback itself rather than
+                # global user_data. This remains correct for old/stale archive
+                # messages and for several /archive messages in one chat.
+                callback_data=f"{CB_ARC_INSPECT}{page}:{sess.id}"[:64],
             )
         )
         if len(row) == 2:

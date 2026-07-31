@@ -73,6 +73,30 @@ def _lookback(show_all: bool) -> float:
     return config.archive_purge_after if show_all else DEFAULT_LOOKBACK_SECONDS
 
 
+def _inspect_target(data: str) -> tuple[int, str]:
+    """Parse new ``<page>:<sid>`` and legacy ``<sid>`` inspect payloads."""
+    payload = data[len(CB_ARC_INSPECT) :]
+    page_text, sep, sid = payload.partition(":")
+    if not sep:
+        return 0, payload
+    try:
+        page = max(0, int(page_text))
+    except ValueError:
+        return 0, payload
+    return page, sid
+
+
+def _back_page(data: str) -> int:
+    """Parse ``ar:back:<page>``; old bare ``ar:back`` returns page zero."""
+    suffix = data[len(CB_ARC_BACK) :]
+    if not suffix.startswith(":"):
+        return 0
+    try:
+        return max(0, int(suffix[1:]))
+    except ValueError:
+        return 0
+
+
 async def handle(
     query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
 ) -> bool:
@@ -154,7 +178,7 @@ async def handle(
         return True
 
     if data.startswith(CB_ARC_INSPECT):
-        sid = data[len(CB_ARC_INSPECT) :]
+        origin_page, sid = _inspect_target(data)
         sess = session_manager.get_session(sid)
         if sess is None:
             await query.answer(t(user.id, "toast.session_not_found"), show_alert=True)
@@ -172,7 +196,8 @@ async def handle(
                         callback_data=f"{CB_ARC_DELETE}{sess.id}"[:64],
                     ),
                     InlineKeyboardButton(
-                        t(user.id, "btn.back"), callback_data=CB_ARC_BACK
+                        t(user.id, "btn.back"),
+                        callback_data=f"{CB_ARC_BACK}:{origin_page}",
                     ),
                 ]
             ]
@@ -181,10 +206,10 @@ async def handle(
         await query.answer()
         return True
 
-    if data == CB_ARC_BACK:
+    if data.startswith(CB_ARC_BACK):
         show_all = _show_all(context)
         text, keyboard = await build_archive_page(
-            page=0,
+            page=_back_page(data),
             lookback_seconds=_lookback(show_all),
             show_all=show_all,
             user_id=user.id,

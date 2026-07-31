@@ -132,7 +132,7 @@ CB_CONF_CLEAR_NO = "cn:clr:n"
 # Archive
 CB_ARC_PAGE = "ar:p:"  # ar:p:<page>
 CB_ARC_RESTORE = "ar:r:"  # ar:r:<session.id>
-CB_ARC_INSPECT = "ar:i:"  # ar:i:<session.id>
+CB_ARC_INSPECT = "ar:i:"  # ar:i:<page>:<session.id> (old <session.id> accepted)
 CB_ARC_DELETE = "ar:d:"  # ar:d:<session.id>
-CB_ARC_BACK = "ar:back"  # back from inspect to list
+CB_ARC_BACK = "ar:back"  # ar:back:<page> from inspect to originating list page
 CB_ARC_ALL = "ar:all"  # toggle 0-72h vs 0-14d

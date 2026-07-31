@@ -30,6 +30,7 @@ from unittest.mock import patch
 import pytest
 
 from ccbot.handlers.archive import PAGE_SIZE, build_archive_page
+from ccbot.handlers.callback_data import CB_ARC_INSPECT
 from ccbot.session_models import Session
 
 
@@ -104,6 +105,23 @@ class TestArchivePageNumbering:
         # Page-2 buttons cover indices PAGE_SIZE+1 … PAGE_SIZE*2.
         assert any(lbl.startswith(f"{PAGE_SIZE + 1}. ") for lbl in labels)
         assert any(lbl.startswith(f"{PAGE_SIZE * 2}. ") for lbl in labels)
+
+    @pytest.mark.asyncio
+    async def test_inspect_buttons_carry_originating_page(self, many_archived) -> None:
+        _text, kb = await build_archive_page(
+            page=2,
+            lookback_seconds=None,
+            show_all=True,
+            user_id=1,
+        )
+        callbacks = [
+            button.callback_data or ""
+            for row in kb.inline_keyboard
+            for button in row
+            if (button.callback_data or "").startswith(CB_ARC_INSPECT)
+        ]
+        assert callbacks
+        assert all(callback.startswith(f"{CB_ARC_INSPECT}2:") for callback in callbacks)
 
 
 class TestArchivePageLineBreaks:

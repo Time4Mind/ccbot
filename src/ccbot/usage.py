@@ -262,9 +262,17 @@ def _daily_quota_budget(
     saved = state or {}
     same_window = saved.get("resets_at") == resets_at
     same_day = saved.get("date") == today_key
+    day_start_used = float(used_percent)
+    daily_budget = 0.0
     try:
-        day_start_used = float(saved["day_start_used"])
-        daily_budget = float(saved["daily_budget"])
+        saved_day_start = saved["day_start_used"]
+        saved_daily_budget = saved["daily_budget"]
+        if not isinstance(saved_day_start, int | float) or not isinstance(
+            saved_daily_budget, int | float
+        ):
+            raise TypeError
+        day_start_used = float(saved_day_start)
+        daily_budget = float(saved_daily_budget)
     except (KeyError, TypeError, ValueError):
         same_day = False
 

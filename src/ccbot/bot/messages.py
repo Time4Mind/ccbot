@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from telegram import Bot, Update
-from telegram.error import BadRequest
+from telegram.error import BadRequest, NetworkError
 from telegram.ext import ContextTypes
 
 from ..handlers.cleanup import clear_session_state
@@ -81,12 +81,20 @@ logger = logging.getLogger(__name__)
 # transcription runs in a non-blocking PTB handler, so later updates can enter
 # their handlers while Whisper is still working.  Those handlers wait on the
 # tail that existed when they arrived, preserving Telegram message order.
-_voice_barriers: dict[tuple[int, str], asyncio.Future[None]] = {}
+_voice_barriers: dict[tuple[int, str], asyncio.Future[bool]] = {}
+_voice_waiters: dict[asyncio.Future[bool], int] = {}
+
+# A voice update holds the per-session ordering barrier while these attempts
+# run.  Retrying here is important: once Telegram has delivered the update,
+# dropping a transient getFile/download failure would permanently lose that
+# turn and let later messages overtake it.
+_VOICE_DOWNLOAD_ATTEMPTS = 3
+_VOICE_DOWNLOAD_RETRY_DELAYS = (1.0, 2.0)
 
 
 def _enqueue_voice(
     user_id: int, wid: str
-) -> tuple[asyncio.Future[None] | None, asyncio.Future[None]]:
+) -> tuple[asyncio.Future[bool] | None, asyncio.Future[bool]]:
     key = (user_id, wid)
     previous = _voice_barriers.get(key)
     current = asyncio.get_running_loop().create_future()
@@ -94,18 +102,67 @@ def _enqueue_voice(
     return previous, current
 
 
-async def _await_prior_voice(user_id: int, wid: str) -> None:
+async def _wait_for_voice(barrier: asyncio.Future[bool]) -> bool:
+    _voice_waiters[barrier] = _voice_waiters.get(barrier, 0) + 1
+    try:
+        return await asyncio.shield(barrier)
+    finally:
+        remaining = _voice_waiters.get(barrier, 1) - 1
+        if remaining > 0:
+            _voice_waiters[barrier] = remaining
+        else:
+            _voice_waiters.pop(barrier, None)
+
+
+async def _await_prior_voice(user_id: int, wid: str) -> bool:
     barrier = _voice_barriers.get((user_id, wid))
-    if barrier is not None:
-        await asyncio.shield(barrier)
+    if barrier is None:
+        return True
+    return await _wait_for_voice(barrier)
 
 
-def _release_voice(user_id: int, wid: str, barrier: asyncio.Future[None]) -> None:
+def _release_voice(
+    user_id: int, wid: str, barrier: asyncio.Future[bool], *, delivered: bool
+) -> None:
     key = (user_id, wid)
     if not barrier.done():
-        barrier.set_result(None)
+        barrier.set_result(delivered)
     if _voice_barriers.get(key) is barrier:
         _voice_barriers.pop(key, None)
+
+
+def _append_dropped_queue_notice(
+    user_id: int, text: str, barrier: asyncio.Future[bool] | None
+) -> str:
+    if barrier is None or _voice_waiters.get(barrier, 0) == 0:
+        return text
+    return f"{text}\n\n{t(user_id, 'voice.queued_dropped')}"
+
+
+async def _download_voice_bytes(voice: Any, *, user_id: int, wid: str) -> bytes:
+    """Fetch a Telegram voice payload, retrying transient network failures."""
+    for attempt in range(1, _VOICE_DOWNLOAD_ATTEMPTS + 1):
+        stage = "get_file"
+        try:
+            voice_file = await voice.get_file()
+            stage = "download"
+            return bytes(await voice_file.download_as_bytearray())
+        except NetworkError as e:
+            logger.warning(
+                "Voice download network failure user=%d window=%s "
+                "stage=%s attempt=%d/%d: %s",
+                user_id,
+                wid,
+                stage,
+                attempt,
+                _VOICE_DOWNLOAD_ATTEMPTS,
+                e,
+            )
+            if attempt >= _VOICE_DOWNLOAD_ATTEMPTS:
+                raise
+            await asyncio.sleep(_VOICE_DOWNLOAD_RETRY_DELAYS[attempt - 1])
+
+    raise RuntimeError("unreachable")
 
 
 # Telegram's Bot API caps file *downloads* (getFile) at 20 MB. A larger
@@ -280,7 +337,8 @@ async def forward_command_handler(
             update.message, "❌ No active session. Use /new to create one."
         )
         return
-    await _await_prior_voice(user.id, wid)
+    if not await _await_prior_voice(user.id, wid):
+        return
 
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
@@ -403,7 +461,8 @@ async def unsupported_content_handler(
     msg = update.message
     wid_for_queue = active_window(user.id)
     if wid_for_queue is not None:
-        await _await_prior_voice(user.id, wid_for_queue)
+        if not await _await_prior_voice(user.id, wid_for_queue):
+            return
 
     caption = (msg.caption or "").strip()
     if caption:
@@ -510,7 +569,8 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "❌ No active session. Send a text message first or use /new.",
         )
         return
-    await _await_prior_voice(user.id, wid)
+    if not await _await_prior_voice(user.id, wid):
+        return
 
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
@@ -573,7 +633,8 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "❌ No active session. Send a text message first or use /new.",
         )
         return
-    await _await_prior_voice(user.id, wid)
+    if not await _await_prior_voice(user.id, wid):
+        return
 
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
@@ -650,12 +711,15 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     previous, barrier = _enqueue_voice(user.id, wid)
+    delivered = False
     try:
-        if previous is not None:
-            await asyncio.shield(previous)
-        await _process_voice(update, context, pinned_wid=wid)
+        if previous is not None and not await _wait_for_voice(previous):
+            return
+        delivered = await _process_voice(
+            update, context, pinned_wid=wid, queue_barrier=barrier
+        )
     finally:
-        _release_voice(user.id, wid, barrier)
+        _release_voice(user.id, wid, barrier, delivered=delivered)
 
 
 async def _process_voice(
@@ -663,7 +727,8 @@ async def _process_voice(
     context: ContextTypes.DEFAULT_TYPE,
     *,
     pinned_wid: str | None = None,
-) -> None:
+    queue_barrier: asyncio.Future[bool] | None = None,
+) -> bool:
     """Transcribe the voice and forward as text to the active session."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -671,21 +736,21 @@ async def _process_voice(
         # allowlist is private; unauthorized senders should see the bot
         # as inert (no "not authorized" copy that signals "you found the
         # right bot, just not the right user").
-        return
+        return False
 
     if not update.message or not update.message.voice:
-        return
+        return False
 
     if resolve_voice_backend(user.id) == "off":
         await safe_reply(update.message, "⚠ Voice is disabled (voice backend = off).")
-        return
+        return False
     wid = pinned_wid or active_window(user.id)
     if wid is None:
         await safe_reply(
             update.message,
             "❌ No active session. Send a text message first or use /new.",
         )
-        return
+        return False
 
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
@@ -695,7 +760,7 @@ async def _process_voice(
             f"❌ Window '{display}' no longer exists.\n"
             "Send a message to start a new session.",
         )
-        return
+        return False
 
     # wid is pinned NOW, before the slow download/transcribe steps — a
     # switch afterwards can't redirect this voice message.
@@ -724,24 +789,70 @@ async def _process_voice(
         except Exception as e:
             logger.debug("voice-pending card repost failed: %s", e)
 
-    voice_file = await update.message.voice.get_file()
-    ogg_data = bytes(await voice_file.download_as_bytearray())
-
     try:
-        text = await transcribe_voice(ogg_data, user_id=user.id)
-    except ValueError as e:
+        ogg_data = await _download_voice_bytes(
+            update.message.voice, user_id=user.id, wid=wid
+        )
+    except NetworkError as e:
         if sess is not None and card_state is not None:
             card_state.voice_pending = False
             await _clear_voice_pending_marker(context.bot, user.id, sess)
-        await safe_reply(update.message, f"⚠ {e}")
-        return
+        logger.error(
+            "Voice did not reach transcription after %d download attempts "
+            "user=%d window=%s: %s",
+            _VOICE_DOWNLOAD_ATTEMPTS,
+            user.id,
+            wid,
+            e,
+        )
+        try:
+            await safe_reply(
+                update.message,
+                _append_dropped_queue_notice(
+                    user.id,
+                    t(
+                        user.id,
+                        "voice.download_failed",
+                        attempts=_VOICE_DOWNLOAD_ATTEMPTS,
+                    ),
+                    queue_barrier,
+                ),
+            )
+        except Exception as notify_error:
+            logger.warning(
+                "Voice download failure notification failed user=%d "
+                "window=%s: %s",
+                user.id,
+                wid,
+                notify_error,
+            )
+        return False
+
+    try:
+        text = await transcribe_voice(ogg_data, user_id=user.id)
+    except ValueError:
+        if sess is not None and card_state is not None:
+            card_state.voice_pending = False
+            await _clear_voice_pending_marker(context.bot, user.id, sess)
+        await safe_reply(
+            update.message,
+            _append_dropped_queue_notice(
+                user.id, t(user.id, "voice.transcription_failed"), queue_barrier
+            ),
+        )
+        return False
     except Exception as e:
         if sess is not None and card_state is not None:
             card_state.voice_pending = False
             await _clear_voice_pending_marker(context.bot, user.id, sess)
         logger.error("Voice transcription failed: %s", e)
-        await safe_reply(update.message, f"⚠ Transcription failed: {e}")
-        return
+        await safe_reply(
+            update.message,
+            _append_dropped_queue_notice(
+                user.id, t(user.id, "voice.transcription_failed"), queue_barrier
+            ),
+        )
+        return False
 
     if card_state is not None:
         card_state.voice_pending = False
@@ -760,11 +871,13 @@ async def _process_voice(
     # user can't just retype 90 seconds of speech. If the pane is showing an
     # interactive prompt, the text would be consumed as menu keystrokes and
     # silently lost, so tell the user to resend rather than swallowing it.
-    _voice_lost_notice = t(user.id, "voice.not_delivered")
+    _voice_lost_notice = _append_dropped_queue_notice(
+        user.id, t(user.id, "voice.not_delivered"), queue_barrier
+    )
     if await _intercept_if_pending_ui(
         context.bot, user.id, wid, update.message, _voice_lost_notice
     ):
-        return
+        return False
 
     # Same dispatch path text uses — identical reaction (send, auto-name,
     # bash-capture, interactive-UI check, card repost) once the text is
@@ -785,6 +898,8 @@ async def _process_voice(
             await safe_reply(update.message, _voice_lost_notice)
         except Exception:
             pass
+        return False
+    return True
 
 
 # --- text + bash !cmd capture ---
@@ -1143,7 +1258,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     text = update.message.text
     queued_wid = active_window(user.id)
     if queued_wid is not None:
-        await _await_prior_voice(user.id, queued_wid)
+        if not await _await_prior_voice(user.id, queued_wid):
+            return
 
     # A pending /login flow owns the next message: it's the OAuth code, not a
     # prompt. Must run before session routing — the code would otherwise be

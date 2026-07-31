@@ -25,6 +25,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from telegram.error import NetworkError
 
 
 def _make_voice_update(user_id: int = 1) -> MagicMock:
@@ -77,6 +78,7 @@ class TestVoiceMessageOrdering:
             voice_started.set()
             await finish_voice.wait()
             events.append("voice-dispatched")
+            return True
 
         async def _dispatch_text(*args, **kwargs):
             events.append("text-dispatched")
@@ -123,6 +125,130 @@ class TestVoiceMessageOrdering:
             await asyncio.gather(voice_task, text_task)
 
         assert events == ["voice-start", "voice-dispatched", "text-dispatched"]
+
+    @pytest.mark.asyncio
+    async def test_download_retries_keep_later_text_behind_voice_failure_notice(self):
+        """The voice barrier remains held through every download retry and
+        the terminal failure notice. Only then may a later text turn proceed."""
+        voice_update = _make_voice_update()
+        text_update = _make_text_update()
+        context = _make_context()
+        third_attempt_started = asyncio.Event()
+        finish_third_attempt = asyncio.Event()
+        events: list[str] = []
+        attempts = 0
+
+        async def _failing_get_file():
+            nonlocal attempts
+            attempts += 1
+            events.append(f"download-attempt-{attempts}")
+            if attempts == 3:
+                third_attempt_started.set()
+                await finish_third_attempt.wait()
+            raise NetworkError("telegram timeout")
+
+        async def _safe_reply(message, text):
+            events.append(f"voice-failure-notice:{text}")
+
+        async def _dispatch_text(*args, **kwargs):
+            events.append("text-dispatched")
+
+        voice_update.message.voice.get_file = AsyncMock(
+            side_effect=_failing_get_file
+        )
+        mock_sm = MagicMock()
+        mock_sm.find_session_by_window.return_value = None
+        mock_tmux = MagicMock()
+        mock_tmux.find_window_by_id = AsyncMock(
+            return_value=MagicMock(window_id="@5")
+        )
+
+        with (
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.active_window", return_value="@5"),
+            patch("ccbot.bot.messages.resolve_voice_backend", return_value="whisper"),
+            patch("ccbot.bot.messages.session_manager", mock_sm),
+            patch("ccbot.bot.messages.tmux_manager", mock_tmux),
+            patch("ccbot.bot.messages._VOICE_DOWNLOAD_RETRY_DELAYS", (0, 0)),
+            patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
+            patch("ccbot.bot.messages.safe_reply", new=AsyncMock(side_effect=_safe_reply)),
+            patch(
+                "ccbot.bot.messages.t",
+                side_effect=lambda user_id, key, **kwargs: {
+                    "voice.download_failed": "voice failed",
+                    "voice.queued_dropped": "queued messages dropped",
+                }[key],
+            ),
+            patch(
+                "ccbot.bot.messages.maybe_consume_code",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "ccbot.bot.messages._route_reply_quote",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "ccbot.bot.messages._resolve_active_window",
+                new=AsyncMock(return_value="@5"),
+            ),
+            patch(
+                "ccbot.bot.messages._intercept_if_pending_ui",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "ccbot.bot.messages._dispatch_text_to_active",
+                new=AsyncMock(side_effect=_dispatch_text),
+            ),
+        ):
+            from ccbot.bot.messages import text_handler, voice_handler
+
+            voice_task = asyncio.create_task(voice_handler(voice_update, context))
+            await third_attempt_started.wait()
+            text_task = asyncio.create_task(text_handler(text_update, context))
+            await asyncio.sleep(0)
+
+            assert "text-dispatched" not in events
+            finish_third_attempt.set()
+            await asyncio.gather(voice_task, text_task)
+
+            # The failed queue is now gone. A genuinely new message proceeds.
+            await text_handler(_make_text_update(text="after cleanup"), context)
+
+        assert attempts == 3
+        assert events[-2] == (
+            "voice-failure-notice:voice failed\n\nqueued messages dropped"
+        )
+        assert events[-1] == "text-dispatched"
+        assert events.count("text-dispatched") == 1
+
+
+class TestVoiceDownloadRetry:
+    @pytest.mark.asyncio
+    async def test_retries_both_get_file_and_payload_download(self):
+        """A transient failure at either Telegram download stage retries the
+        whole fetch and eventually returns the payload."""
+        from ccbot.bot.messages import _download_voice_bytes
+
+        failed_file = MagicMock()
+        failed_file.download_as_bytearray = AsyncMock(
+            side_effect=NetworkError("payload timeout")
+        )
+        good_file = MagicMock()
+        good_file.download_as_bytearray = AsyncMock(
+            return_value=bytearray(b"voice-data")
+        )
+        voice = MagicMock()
+        voice.get_file = AsyncMock(
+            side_effect=[NetworkError("getFile timeout"), failed_file, good_file]
+        )
+
+        with patch("ccbot.bot.messages._VOICE_DOWNLOAD_RETRY_DELAYS", (0, 0)):
+            result = await _download_voice_bytes(voice, user_id=1, wid="@5")
+
+        assert result == b"voice-data"
+        assert voice.get_file.await_count == 3
+        failed_file.download_as_bytearray.assert_awaited_once()
+        good_file.download_as_bytearray.assert_awaited_once()
 
 
 class TestVoiceSessionPinning:

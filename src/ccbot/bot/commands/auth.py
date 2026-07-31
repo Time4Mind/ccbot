@@ -123,7 +123,13 @@ async def ensure_codex_authenticated(bot: Bot, user_id: int) -> bool:
     """Return True when Codex can run, otherwise ensure a login is underway."""
     if session_manager.agent_backend != "codex":
         return True
-    state = await codex_auth.read_account_state(command=config.codex_command)
+    # Managed ChatGPT credentials are refreshable. A plain account/read can
+    # report account=null as soon as the cached ID token expires even while a
+    # valid refresh token is present. Force the official silent refresh before
+    # deciding that an interactive device flow is necessary.
+    state = await codex_auth.read_account_state(
+        refresh_token=True, command=config.codex_command
+    )
     if state is not None and state.authenticated:
         return True
     if codex_auth.get_flow(user_id) is None:
@@ -137,8 +143,19 @@ async def ensure_codex_auth_on_start(bot: Bot) -> None:
     """On a fresh Codex host, start device login as soon as the bot is online."""
     if session_manager.agent_backend != "codex":
         return
-    state = await codex_auth.read_account_state(command=config.codex_command)
+    # Do not turn a routinely expired cached token into a browser-login alert.
+    # app-server owns managed ChatGPT token rotation and refreshes auth.json.
+    state = await codex_auth.read_account_state(
+        refresh_token=True, command=config.codex_command
+    )
+    cached_managed_credentials = codex_auth.has_cached_managed_credentials()
     if state is None:
+        if cached_managed_credentials:
+            logger.warning(
+                "Codex auth preflight was unavailable; cached managed "
+                "credentials are present, so startup login is deferred"
+            )
+            return
         logger.warning("Codex auth preflight was unavailable")
         for user_id in sorted(config.allowed_users):
             await safe_send(bot, user_id, t(user_id, "auth.codex.check_failed"))
@@ -148,6 +165,13 @@ async def ensure_codex_auth_on_start(bot: Bot) -> None:
             "Codex account ready (type=%s, plan=%s)",
             state.account_type,
             state.plan_type,
+        )
+        return
+    if cached_managed_credentials:
+        logger.warning(
+            "Codex account/read remained unauthenticated after silent refresh; "
+            "cached managed credentials are present, so startup login is "
+            "deferred until a real Codex operation requires it"
         )
         return
     logger.info("Codex account is not authenticated; starting device flow")

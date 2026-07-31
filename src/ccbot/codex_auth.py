@@ -14,6 +14,7 @@ import os
 import shlex
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .config import SENSITIVE_ENV_VARS, config
@@ -55,6 +56,28 @@ def parse_account_result(result: object) -> CodexAccountState | None:
         email=email,
         plan_type=plan_type,
         requires_openai_auth=bool(result.get("requiresOpenaiAuth", False)),
+    )
+
+
+def has_cached_managed_credentials() -> bool:
+    """Whether file-backed managed ChatGPT credentials are still present.
+
+    This is deliberately only a presence check, not an authentication verdict.
+    It lets startup avoid replacing a refreshable/existing login with an
+    unsolicited device flow when account/read temporarily returns account=null.
+    A real Codex operation still performs the authoritative auth check.
+    """
+    codex_home = Path(os.getenv("CODEX_HOME", str(Path.home() / ".codex")))
+    auth_path = codex_home / "auth.json"
+    try:
+        payload = json.loads(auth_path.read_text())
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    if not isinstance(payload, dict) or payload.get("auth_mode") != "chatgpt":
+        return False
+    tokens = payload.get("tokens")
+    return isinstance(tokens, dict) and bool(
+        tokens.get("refresh_token") or tokens.get("access_token")
     )
 
 

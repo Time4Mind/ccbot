@@ -10,6 +10,7 @@ import pytest
 
 from ccbot import codex_usage
 from ccbot.codex_usage import (
+    parse_codex_status_output,
     parse_rate_limits_result,
     parse_rollout_rate_limits,
     read_latest_rollout_usage,
@@ -52,6 +53,39 @@ def test_parses_five_hour_and_weekly_windows() -> None:
     assert "Reset:" in rendered
     assert " · " not in rendered.split("week", 1)[1]
     assert "\n\nUsed: 61%" in rendered
+
+
+def test_parses_codex_status_left_percentages() -> None:
+    now = datetime(2026, 7, 31, 16, 0).astimezone()
+    info = parse_codex_status_output(
+        """
+        │  5h limit:     [██████████████████░░] 92% left (resets 18:24)
+        │  Weekly limit: [████████████████░░░░] 81% left (resets 12:37 on 2 Aug)
+        """,
+        now=now,
+    )
+
+    assert info is not None
+    assert info.five_hour is not None
+    assert info.five_hour.used_percent == 8
+    assert info.five_hour.duration_minutes == 300
+    assert info.five_hour.resets_at is not None
+    assert info.weekly is not None
+    assert info.weekly.used_percent == 19
+    assert info.weekly.duration_minutes == 10_080
+    assert info.weekly.resets_at is not None
+
+
+def test_parses_codex_status_used_percentages() -> None:
+    info = parse_codex_status_output(
+        "5h limit: 7% used\nWeekly limit: 23% used\n"
+    )
+
+    assert info is not None
+    assert info.five_hour is not None
+    assert info.five_hour.used_percent == 7
+    assert info.weekly is not None
+    assert info.weekly.used_percent == 23
 
 
 def test_parses_weekly_only_response() -> None:

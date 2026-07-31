@@ -8,9 +8,7 @@ from ccbot.handlers.callback_data import CB_MM_STATUS
 
 
 @pytest.mark.asyncio
-async def test_codex_usage_failure_starts_auth_only_on_explicit_status_request() -> (
-    None
-):
+async def test_codex_usage_failure_does_not_replace_working_auth() -> None:
     from ccbot.bot.callbacks import more_menu
 
     query = MagicMock()
@@ -28,10 +26,6 @@ async def test_codex_usage_failure_starts_auth_only_on_explicit_status_request()
         patch.object(more_menu, "safe_edit", new=AsyncMock(side_effect=fake_edit)),
         patch.object(more_menu, "fetch_live_usage", new=AsyncMock(return_value=None)),
         patch.object(more_menu.session_manager, "agent_backend", "codex"),
-        patch(
-            "ccbot.bot.commands.auth.ensure_codex_authenticated",
-            new=AsyncMock(return_value=False),
-        ) as ensure_auth,
         patch.object(
             more_menu,
             "t",
@@ -40,5 +34,4 @@ async def test_codex_usage_failure_starts_auth_only_on_explicit_status_request()
     ):
         assert await more_menu.handle(query, context, user) is True
 
-    ensure_auth.assert_awaited_once_with(context.bot, 7)
-    assert edits[-1] == "usage.auth_required"
+    assert edits[-1] == "usage.unavailable"

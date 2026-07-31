@@ -151,7 +151,11 @@ async def test_startup_preflight_starts_device_login(
         started.append(user_id)
         return True
 
+    async def stored(**_kwargs: object) -> bool:
+        return False
+
     monkeypatch.setattr(auth_cmd.codex_auth, "read_account_state", fake_state)
+    monkeypatch.setattr(auth_cmd.codex_auth, "stored_login_available", stored)
     monkeypatch.setattr(
         auth_cmd.codex_auth, "has_cached_managed_credentials", lambda: False
     )
@@ -179,7 +183,11 @@ async def test_startup_preflight_defers_login_when_cache_exists(
     async def must_not_start(*_args: object, **_kwargs: object) -> bool:
         raise AssertionError("startup replaced cached auth with a device flow")
 
+    async def stored(**_kwargs: object) -> bool:
+        return True
+
     monkeypatch.setattr(auth_cmd.codex_auth, "read_account_state", fake_state)
+    monkeypatch.setattr(auth_cmd.codex_auth, "stored_login_available", stored)
     monkeypatch.setattr(
         auth_cmd.codex_auth, "has_cached_managed_credentials", lambda: True
     )
@@ -202,7 +210,11 @@ async def test_startup_preflight_is_silent_on_check_error_when_cache_exists(
     async def must_not_send(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("startup auth probe error produced a Telegram alert")
 
+    async def stored(**_kwargs: object) -> None:
+        return None
+
     monkeypatch.setattr(auth_cmd.codex_auth, "read_account_state", fake_state)
+    monkeypatch.setattr(auth_cmd.codex_auth, "stored_login_available", stored)
     monkeypatch.setattr(
         auth_cmd.codex_auth, "has_cached_managed_credentials", lambda: True
     )

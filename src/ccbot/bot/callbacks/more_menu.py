@@ -134,18 +134,9 @@ async def handle(
         from ...usage import format_usage_breakdown_compact
 
         live_block = format_usage_breakdown_compact(user.id, usage_info)
-        text = live_block
-        if text is None and session_manager.agent_backend == "codex":
-            # A failed rate-limits read is often the first authoritative sign
-            # that cached Codex credentials can no longer access account data.
-            # Keep restarts silent, but when the user explicitly asks for
-            # Usage, start the normal Telegram device flow instead of leaving
-            # the modal stuck on a generic unavailable message.
-            from ..commands.auth import ensure_codex_authenticated
-
-            if not await ensure_codex_authenticated(context.bot, user.id):
-                text = t(user.id, "usage.auth_required")
-        text = text or t(user.id, "usage.unavailable")
+        # Status is a read-only operation. Failure to load quota data must not
+        # start or replace the user's otherwise-working Codex authorization.
+        text = live_block or t(user.id, "usage.unavailable")
         await safe_edit(query, text, reply_markup=kb)
         return True
 

@@ -300,6 +300,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     async def _seed_bg_statuses() -> None:
         from ..handlers import bg_status
         from ..handlers.notifications import refresh_panel
+        from ..usage import context_pct_for_session
 
         for user_id in config.allowed_users:
             active = session_manager.get_active_session(user_id)
@@ -318,6 +319,14 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
                 if inferred != "working":
                     continue
                 if bg_status.update_status(user_id, sess.id, "working"):
+                    changed = True
+                try:
+                    pct = await context_pct_for_session(sess)
+                except Exception as e:
+                    logger.debug("infer bg context failed for %s: %s", sess.id, e)
+                    pct = None
+                if pct is not None:
+                    bg_status.set_context_pct(user_id, sess.id, pct)
                     changed = True
             if changed:
                 try:

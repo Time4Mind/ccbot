@@ -5,7 +5,7 @@ header and badge rows onto one line.
 Field bug from the 2026-06-13 screenshot at
 ``.ccbot-inbox/1781374419-…`` — single ``\\n`` is a CommonMark soft
 break (= space), so the live card showed
-``─── фон ─── ⬛ session-name · context 50%`` on one row instead of the
+``─── фон ─── ⬛ session-name · 50%`` on one row instead of the
 header on a row above each badge.
 """
 
@@ -65,6 +65,8 @@ class TestPanelHardBreaks:
             assert "─── фон ───  \n" in out
             # And NOT collapsed onto a single line.
             assert "─── фон ─── ⬛" not in out
+            assert "· 50%" in out
+            assert "context" not in out
         finally:
             session_manager.sessions.pop(sid, None)
 

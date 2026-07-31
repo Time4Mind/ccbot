@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shlex
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +29,74 @@ class CodexRateLimitWindow:
 class CodexUsageInfo:
     five_hour: CodexRateLimitWindow | None = None
     weekly: CodexRateLimitWindow | None = None
+
+
+_STATUS_LIMIT_RE = re.compile(
+    r"(?im)^\s*[│|]?\s*(5h|weekly)\s+limit:\s*"
+    r"(?:\[[^\]]*\]\s*)?(\d{1,3})%\s*(left|used)"
+    r"(?:\s*\(resets\s+([^\)]+)\))?"
+)
+_RESET_FORMATS = (
+    "%H:%M on %d %b",
+    "%I:%M %p on %d %b",
+    "%H:%M",
+    "%I:%M %p",
+)
+
+
+def _parse_status_reset(value: str | None, now: datetime | None = None) -> int | None:
+    """Parse the local reset labels printed by Codex ``/status``."""
+    if not value:
+        return None
+    current = now or datetime.now().astimezone()
+    for fmt in _RESET_FORMATS:
+        try:
+            source = value.strip()
+            parse_fmt = fmt
+            if "%d" in fmt:
+                source = f"{source} {current.year}"
+                parse_fmt = f"{fmt} %Y"
+            parsed = datetime.strptime(source, parse_fmt)
+        except ValueError:
+            continue
+        if "%d" in fmt:
+            candidate = parsed.replace(year=current.year, tzinfo=current.tzinfo)
+            if candidate < current - timedelta(days=1):
+                candidate = candidate.replace(year=current.year + 1)
+        else:
+            candidate = current.replace(
+                hour=parsed.hour,
+                minute=parsed.minute,
+                second=0,
+                microsecond=0,
+            )
+            if candidate <= current:
+                candidate += timedelta(days=1)
+        return int(candidate.timestamp())
+    return None
+
+
+def parse_codex_status_output(
+    text: str, *, now: datetime | None = None
+) -> CodexUsageInfo | None:
+    """Parse the rate-limit rows rendered by the Codex TUI ``/status`` command."""
+    windows: dict[str, CodexRateLimitWindow] = {}
+    for match in _STATUS_LIMIT_RE.finditer(text):
+        label, percent_raw, direction, reset_raw = match.groups()
+        percent = max(0, min(100, int(percent_raw)))
+        used = 100 - percent if direction.lower() == "left" else percent
+        key = "five_hour" if label.lower() == "5h" else "weekly"
+        windows[key] = CodexRateLimitWindow(
+            used_percent=used,
+            duration_minutes=300 if key == "five_hour" else 10_080,
+            resets_at=_parse_status_reset(reset_raw, now),
+        )
+    if not windows:
+        return None
+    return CodexUsageInfo(
+        five_hour=windows.get("five_hour"),
+        weekly=windows.get("weekly"),
+    )
 
 
 def parse_rate_limits_result(result: object) -> CodexUsageInfo | None:

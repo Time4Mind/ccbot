@@ -31,6 +31,7 @@ from ...handlers.callback_data import (
 from ...handlers.history import render_archived_card_pages
 from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_edit
+from ...handlers.notifications import paint_card_on_carrier, reset_card
 from ...i18n import t
 from ...session import Session, session_manager
 from .._common import render_session_preview
@@ -132,11 +133,19 @@ async def handle(
             return True
         ok, msg = await restore_session(context.bot, user.id, sess)
         if ok:
-            preview = await render_session_preview(sess)
-            keyboard = build_footer_keyboard(user.id, screen="main")
-            await safe_edit(query, preview, reply_markup=keyboard)
-            if query.message and keyboard is not None:
+            if query.message is not None:
+                # An archived card may still exist in memory with finalized
+                # pagination state. Rebuild from the backend-native JSONL and
+                # claim the archive carrier as the restored live card.
+                reset_card(user.id, sess.id)
+                await paint_card_on_carrier(
+                    context.bot, user.id, sess, query.message.message_id
+                )
                 session_manager.set_last_switcher_msg(user.id, query.message.message_id)
+            else:
+                preview = await render_session_preview(sess)
+                keyboard = build_footer_keyboard(user.id, screen="main")
+                await safe_edit(query, preview, reply_markup=keyboard)
             await query.answer(t(user.id, "toast.restored"))
         else:
             await query.answer(

@@ -41,6 +41,32 @@ _HOOK_COMMAND_SUFFIX = "ccbot hook"
 _HOOK_EVENTS: tuple[str, ...] = ("SessionStart", "UserPromptSubmit")
 
 
+def _codex_transcript_matches(path_str: str, session_id: str) -> bool:
+    """Reject a Codex hook whose id disagrees with rollout metadata."""
+    if not path_str:
+        return False
+    try:
+        with Path(path_str).open("r", encoding="utf-8", errors="replace") as handle:
+            for _ in range(8):
+                line = handle.readline()
+                if not line:
+                    break
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("type") != "session_meta":
+                    continue
+                payload = row.get("payload")
+                return (
+                    isinstance(payload, dict)
+                    and str(payload.get("id") or "") == session_id
+                )
+    except OSError:
+        return False
+    return False
+
+
 def _find_ccbot_path() -> str:
     """Find the full path to the ccbot executable.
 
@@ -300,6 +326,15 @@ def _process_hook_event() -> None:
                         if "/.codex/" in transcript_path.replace("\\", "/")
                         else "claude"
                     )
+                if detected_backend == "codex" and not _codex_transcript_matches(
+                    transcript_path, session_id
+                ):
+                    logger.warning(
+                        "Ignoring Codex hook with mismatched rollout: id=%s path=%s",
+                        session_id,
+                        transcript_path,
+                    )
+                    return
                 new_entry = {
                     "session_id": session_id,
                     "cwd": cwd,

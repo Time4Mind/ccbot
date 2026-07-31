@@ -82,6 +82,44 @@ class TestSeedFromJsonl:
         types = {ev.type for ev in events}
         assert "final_text" in types
 
+    async def test_codex_seed_uses_rollout_transcript_path(
+        self, tmp_path: Path
+    ) -> None:
+        from ccbot.session import Session, session_manager
+
+        rollout = tmp_path / "rollout.jsonl"
+        _write_jsonl(
+            rollout,
+            [
+                {
+                    "timestamp": "2026-07-31T10:00:00Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "agent_message",
+                        "message": "codex final",
+                        "phase": "final_answer",
+                    },
+                }
+            ],
+        )
+        ws = session_manager.get_window_state("@seed-codex")
+        ws.session_id = "codex-session"
+        ws.cwd = str(tmp_path)
+        ws.backend = "codex"
+        ws.transcript_path = str(rollout)
+        sess = Session(
+            id="x",
+            name="y",
+            backend="codex",
+            window_id="@seed-codex",
+        )
+
+        events = await _seed_events_from_jsonl(sess)
+
+        assert any(
+            ev.type == "final_text" and ev.text == "codex final" for ev in events
+        )
+
 
 @pytest.mark.asyncio
 class TestEnsureSeededIdempotent:

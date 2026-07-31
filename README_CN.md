@@ -6,7 +6,8 @@
 [English README](README.md) · [Русская документация](README_RU.md)
 
 一个个人 Telegram 机器人,将私聊 1-1 DM 桥接到运行在 tmux 中的 N 个并行
-Claude Code 会话。一位用户、N 个会话、最新机器人消息下方的一个内联切换器。
+Claude Code 或 Codex CLI 会话。一位用户、N 个会话、最新机器人消息
+下方的一个内联切换器。
 
 ## 为什么
 
@@ -46,7 +47,8 @@ ccbot 让你可以:
 - **优先 rich 消息。** 输出以 Bot API 10.1 rich message 发出(原生
   markdown:≤ 20 列的 GFM 表格、标题、`<details>`、脚注、公式),
   失败时回退到 MarkdownV2 管道(`telegramify-markdown`),再失败
-  则回退到纯文本。总开关:`CCBOT_RICH_MESSAGES=off`。upstream 用
+  则回退到纯文本。单行 shell fenced block 会转换成可复制的 inline
+  code，多行代码块保持原样。总开关:`CCBOT_RICH_MESSAGES=off`。upstream 用
   HTML。
 - **基于 hook 的会话跟踪。** Claude Code 的 `SessionStart` +
   `UserPromptSubmit` hook 写入 `session_map.json`;监控器轮询它。
@@ -60,7 +62,8 @@ ccbot 让你可以:
 ## 先决条件
 
 - **tmux** 在 `PATH` 中
-- **Claude Code** CLI(`claude`)已用 Max 订阅登录
+- **Claude Code** CLI(`claude`)或 **Codex CLI**(`codex`)；Codex
+  可在首次启动时通过 Telegram 完成 device-code 登录
 - **Python 3.12+**
 - **uv**(推荐)用于依赖管理
 - macOS(Apple Silicon)或 Linux arm64
@@ -99,8 +102,12 @@ ccbot                           # 前台;生产环境用 systemd 单元
 | --------------------------- | ------------ | ---- |
 | `CCBOT_DIR`                 | `~/.ccbot`   | 配置和状态目录 |
 | `TMUX_SESSION_NAME`         | `ccbot`      | 装载所有 session 窗口的 tmux 会话 |
+| `CCBOT_AGENT_BACKEND`       | `claude`     | 新 state 的初始全局 backend |
 | `CLAUDE_COMMAND`            | `claude`     | 启动会话使用的二进制 |
 | `CLAUDE_FLAGS`              | `--dangerously-skip-permissions` | 附加给 `claude` 的 flag |
+| `CODEX_COMMAND`             | `codex`      | Codex CLI 二进制 |
+| `CODEX_FLAGS`               | bypass + hooks + `--no-alt-screen` | 附加给 `codex` 的 flag |
+| `CODEX_NAMING_MODEL`        | `gpt-5.6-luna` | 仅用于 Codex 会话自动命名 |
 | `SESSION_IDLE_TTL`          | `4h`         | 闲置多久后 active → archived |
 | `ARCHIVE_PURGE_AFTER`       | `14d`        | 归档会话从 state 中清除的时长 |
 | `QUOTA_ALERT_POLL_INTERVAL` | `10m`        | 实时 `/usage` 弹窗的采样间隔 |
@@ -121,14 +128,24 @@ ccbot                           # 前台;生产环境用 systemd 单元
 
 ## Hook 设置
 
-机器人通过两个 Claude Code hook 跟踪 tmux-窗口 ↔ Claude-session 的
-映射:`SessionStart` 捕获每个新的 claude 进程,`UserPromptSubmit`
+机器人通过所选 agent 的两个 lifecycle hook 跟踪 tmux-窗口 ↔
+agent-session 映射:`SessionStart` 捕获新进程,`UserPromptSubmit`
 在每次提交提示时修复过期映射(覆盖 `/resume`、`/clear` 以及机器人
 重启时的竞态)。一次性自动安装:
 
 ```bash
 ccbot hook --install
 ```
+
+Codex 使用 `~/.codex/hooks.json`：
+
+```bash
+ccbot hook --install --backend codex
+```
+
+backend 可在 `菜单 → Settings → Agent` 全局切换；当前 backend
+仍有活动会话时禁止切换。跨 agent 恢复归档会创建目标 agent 的新
+原生会话，并用受限 handoff 携带原会话上下文。
 
 安装器按事件幂等 — 在旧的仅 `SessionStart` 安装上重跑,只会补上
 缺失的那一条。
@@ -174,6 +191,11 @@ Claude 授权,所以它会发现失败、推送 🔐 通知,并由 `/login` 完�
 并删除你那条带码的消息。随后它会重新发出活动会话的卡片(没有活动会话
 则发菜单),让你直接接着干,而不用往上翻过整个授权过程。
 
+Codex backend 在启动时通过 app-server 的 `account/read` 检查账号。
+未登录时，机器人会发送 OpenAI verification URL 和 user code，等待
+`account/login/completed` 后再允许创建会话；code 只输入 OpenAI
+页面，不回传聊天。`/login` 可手动重启同一流程。
+
 该通知由 Claude Code 自己的错误条目触发(`isApiErrorMessage` /
 `authentication_failed`),而不是靠错误文本 —— 只是谈论登录失效的会话
 不会触发它。一次新的登录会把凭据期限往后推约 30 天;真正重要的就是这个
@@ -188,12 +210,12 @@ transcript 表面触手可及。多数用户一旦发现菜单,就再也不打 s
 ### 会话与切换器
 
 向 DM 发送任何文本即可创建第一个会话 — 机器人会打开目录浏览器,
-你选择项目,tmux 窗口中启动 `claude`。后续 DM 中的文本路由到**活动**
+你选择项目,tmux 窗口中启动当前选定的 agent。后续 DM 中的文本路由到**活动**
 会话。
 
 会话最初以目录名命名,在第一条 ≥ 20 字符的消息到达时由一次性
-Haiku 调用重命名一次(两个词概括意图 — `token budget`)。在
-*设置 → Haiku 会话命名* 中关掉它,即可保留目录名并零 token 开销。
+小型独立调用重命名一次：Claude 使用 Haiku，Codex 使用
+`CODEX_NAMING_MODEL`。关闭自动命名即可保留目录名并跳过额外调用。
 
 最新机器人消息携带内联会话切换器(`▷ session-A · session-B`),
 最底行是一对 `[+ new] [≡ 菜单]`:两个「去别处」的按钮并排放置,
@@ -284,8 +306,11 @@ Telegram 聊天头部的 **`正在输入…`** 指示由真实的 claude 事件�
 
 ### 配额与状态
 
-*≡ 菜单 → 📊 Status* 通过专用的 `ccbot-usage` tmux 窗口采样
-Claude Code 自己的 `/usage` 弹窗,并紧凑地渲染出来:
+*≡ 菜单 → 📊 Status* 使用当前 backend 的权威数据源：Claude 通过
+专用 `ccbot-usage` tmux 窗口读取 `/usage`；Codex 通过 app-server
+的 `account/rateLimits/read` 读取，不向工作会话发送命令。
+
+Claude 保持原有紧凑格式：
 
 ```
 Claude Code
@@ -297,6 +322,26 @@ Claude Code
 同一个轮询每隔 `QUOTA_ALERT_POLL_INTERVAL` 在后台运行,当 5 小时
 或每周窗口越过 50 / 75 / 90 % 时推送提醒。只有稳定读数才会发布,
 所以渲染到一半的弹窗不会触发幻影告警。
+
+Codex 的周配额按剩余日历日平均分配：
+
+```
+OpenAI Codex
+
+🟢 本周
+
+已使用: 50%
+
+今天: 还可用 10.0%
+
+重置: 05.08 17:00
+```
+
+每天开始时，剩余周配额会平均分给今天以及截至重置日期的所有剩余
+日历日（包含重置日）。当天额度固定，并扣除当天实际使用量；超出时
+显示超额。下一天会按真实剩余额度重新分配，因此前一天的超用或少用
+都会调整后续每日额度。基线保存在
+`$CCBOT_DIR/codex_quota_day.json`，重启后仍然有效。
 
 ### 语音和媒体
 
@@ -363,8 +408,9 @@ src/ccbot/
 | 文件                | 内容 |
 | ------------------- | ---- |
 | `state.json`        | sessions, active_sessions, window states, user settings |
-| `session_map.json`  | hook 生成的 tmux-窗口 → claude-session 映射 |
+| `session_map.json`  | hook 生成的 tmux-窗口 → agent-session 映射 |
 | `monitor_state.json`| per-JSONL byte offsets(防止重启时重复通知) |
+| `codex_quota_day.json` | Codex 每日配额基线与当天额度 |
 | `ccbot.lock`        | 运行中机器人持有的独占 flock;第二次启动以退出码 1 拒绝 |
 
 ## 可靠性

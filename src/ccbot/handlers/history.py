@@ -63,6 +63,30 @@ _archived_pages_cache: dict[str, tuple[float, int, list[str], int]] = {}
 _archived_card_cache: dict[str, tuple[float, int, list[str], int]] = {}
 
 
+def _session_file_path(sess: Session) -> Path | None:
+    """Resolve a transcript with the session's own backend."""
+    if not sess.claude_session_id:
+        return None
+    if sess.backend == "codex":
+        from ..codex_session_io import build_session_file_path as build_codex_path
+
+        return build_codex_path(sess.claude_session_id, sess.workdir or "")
+    return build_session_file_path(sess.claude_session_id, sess.workdir or "")
+
+
+def _window_file_path(window_id: str) -> Path | None:
+    """Resolve a live window transcript without assuming Claude."""
+    state = session_manager.get_window_state(window_id)
+    if state.transcript_path:
+        path = Path(state.transcript_path)
+        if path.exists():
+            return path
+    sess = session_manager.find_session_by_window(window_id)
+    if sess is not None:
+        return _session_file_path(sess)
+    return None
+
+
 async def render_archived_card_pages(
     sess: Session, user_id: int | None = None
 ) -> tuple[list[str], int] | None:
@@ -83,8 +107,10 @@ async def render_archived_card_pages(
     sid = sess.claude_session_id
     if not sid or not sess.workdir:
         return None
-    fp = build_session_file_path(sid, sess.workdir)
+    fp = _session_file_path(sess)
     if fp is None or not fp.exists():
+        if sess.backend == "codex":
+            return None
         # Glob fallback — cwd on the record may have shifted since archival.
         pattern = f"*/{sid}.jsonl"
         matches = list(config.claude_projects_path.glob(pattern))
@@ -195,8 +221,10 @@ async def render_archived_history_pages(
     sid = sess.claude_session_id
     if not sid or not sess.workdir:
         return None
-    fp = build_session_file_path(sid, sess.workdir)
+    fp = _session_file_path(sess)
     if fp is None or not fp.exists():
+        if sess.backend == "codex":
+            return None
         # Glob fallback — the cwd column on the Session may have shifted
         # since archival (rare, but cheap to handle).
         pattern = f"*/{sid}.jsonl"
@@ -371,13 +399,8 @@ async def prewarm_pages_cache(window_id: str) -> bool:
 
     Returns ``True`` when fresh pages were stored, ``False`` otherwise.
     """
-    from ..session_claude_io import build_session_file_path
-
     try:
-        state = session_manager.get_window_state(window_id)
-        if not state.session_id or not state.cwd:
-            return False
-        fp = build_session_file_path(state.session_id, state.cwd)
+        fp = _window_file_path(window_id)
         if fp is None or not fp.exists():
             return False
         st = fp.stat()
@@ -545,12 +568,7 @@ async def send_history(
         cached_pages: list[str] | None = None
         cached_total = 0
         try:
-            from ..session_claude_io import build_session_file_path
-
-            state = session_manager.get_window_state(window_id)
-            fp: Path | None = None
-            if state.session_id and state.cwd:
-                fp = build_session_file_path(state.session_id, state.cwd)
+            fp = _window_file_path(window_id)
             if fp is not None and fp.exists():
                 st = fp.stat()
                 mtime = st.st_mtime
@@ -711,12 +729,7 @@ async def send_history(
         # case — unread-range reads are parameterised and rare.
         if not is_unread:
             try:
-                from ..session_claude_io import build_session_file_path
-
-                state = session_manager.get_window_state(window_id)
-                fp_store: Path | None = None
-                if state.session_id and state.cwd:
-                    fp_store = build_session_file_path(state.session_id, state.cwd)
+                fp_store = _window_file_path(window_id)
                 if fp_store is not None and fp_store.exists():
                     st = fp_store.stat()
                     _pages_cache[window_id] = (

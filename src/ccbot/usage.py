@@ -33,7 +33,9 @@ from pathlib import Path
 import aiofiles
 
 from . import session_claude_io
+from .config import config
 from .session import Session, session_manager
+from .utils import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +236,88 @@ def _quota_emoji(pct: int) -> str:
     return "🔴"
 
 
+def _daily_quota_budget(
+    used_percent: int,
+    resets_at: int | None,
+    state: dict[str, object] | None,
+    *,
+    now: datetime | None = None,
+) -> tuple[float, dict[str, object]] | None:
+    """Return today's remaining budget and the updated persistent state.
+
+    At the first observation of each local calendar day, the remaining weekly
+    quota is divided equally over every calendar day through the reset date.
+    That day's allocation then stays fixed while usage is subtracted from it.
+    Over- or underspend is therefore redistributed only when the next day
+    begins.
+    """
+    if resets_at is None:
+        return None
+    current = now or datetime.now()
+    reset = datetime.fromtimestamp(resets_at)
+    if reset <= current:
+        return None
+
+    today_key = current.date().isoformat()
+    saved = state or {}
+    same_window = saved.get("resets_at") == resets_at
+    same_day = saved.get("date") == today_key
+    day_start_used = float(used_percent)
+    daily_budget = 0.0
+    try:
+        saved_day_start = saved["day_start_used"]
+        saved_daily_budget = saved["daily_budget"]
+        if not isinstance(saved_day_start, int | float) or not isinstance(
+            saved_daily_budget, int | float
+        ):
+            raise TypeError
+        day_start_used = float(saved_day_start)
+        daily_budget = float(saved_daily_budget)
+    except (KeyError, TypeError, ValueError):
+        same_day = False
+
+    # A lower percentage means Codex reset the window even if its advertised
+    # reset timestamp has not changed yet.
+    if not same_window or not same_day or used_percent < day_start_used:
+        calendar_days = max(1, (reset.date() - current.date()).days + 1)
+        day_start_used = float(used_percent)
+        daily_budget = max(0.0, 100.0 - used_percent) / calendar_days
+
+    spent_today = max(0.0, used_percent - day_start_used)
+    remaining_today = daily_budget - spent_today
+    new_state: dict[str, object] = {
+        "resets_at": resets_at,
+        "date": today_key,
+        "day_start_used": day_start_used,
+        "daily_budget": daily_budget,
+    }
+    return remaining_today, new_state
+
+
+def _persisted_daily_quota_budget(
+    used_percent: int, resets_at: int | None
+) -> float | None:
+    """Calculate today's budget and persist its daily baseline."""
+    state_file = config.config_dir / "codex_quota_day.json"
+    state: dict[str, object] | None = None
+    try:
+        raw = json.loads(state_file.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            state = raw
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    result = _daily_quota_budget(used_percent, resets_at, state)
+    if result is None:
+        return None
+    remaining_today, new_state = result
+    try:
+        atomic_write_json(state_file, new_state)
+    except OSError as e:
+        logger.debug("usage: cannot persist daily quota budget: %s", e)
+    return remaining_today
+
+
 def format_usage_breakdown_compact(user_id: int, info: object) -> str | None:
     """Render the live /usage payload as a compact, multilingual block.
 
@@ -250,32 +334,41 @@ def format_usage_breakdown_compact(user_id: int, info: object) -> str | None:
 
         rows: list[str] = []
 
-        def _reset_text(timestamp: int | None, *, weekly: bool) -> str:
-            if timestamp is None:
-                return ""
-            dt = datetime.fromtimestamp(timestamp)
-            pattern = "%d.%m %H:%M" if weekly else "%H:%M"
-            return f" · {dt.strftime(pattern)}"
-
         if info.five_hour is None:
             rows.append(
                 f"⚪ {t(user_id, 'usage.5h')}: {t(user_id, 'usage.not_reported')}"
             )
         else:
             window = info.five_hour
-            rows.append(
-                f"{_quota_emoji(window.used_percent)} {t(user_id, 'usage.5h')}: "
-                f"{window.used_percent}%{_reset_text(window.resets_at, weekly=False)}"
-            )
+            rows.append(f"{_quota_emoji(window.used_percent)} {t(user_id, 'usage.5h')}")
+            rows.append(f"{t(user_id, 'usage.used')}: {window.used_percent}%")
+            if window.resets_at is not None:
+                reset = datetime.fromtimestamp(window.resets_at).strftime("%H:%M")
+                rows.append(f"{t(user_id, 'usage.reset')}: {reset}")
         if info.weekly is not None:
             window = info.weekly
             rows.append(
-                f"{_quota_emoji(window.used_percent)} {t(user_id, 'usage.week')}: "
-                f"{window.used_percent}%{_reset_text(window.resets_at, weekly=True)}"
+                f"{_quota_emoji(window.used_percent)} {t(user_id, 'usage.week')}"
             )
+            rows.append(f"{t(user_id, 'usage.used')}: {window.used_percent}%")
+            today_budget = _persisted_daily_quota_budget(
+                window.used_percent, window.resets_at
+            )
+            if today_budget is not None:
+                if today_budget >= 0:
+                    value = f"{t(user_id, 'usage.today_left')} {today_budget:.1f}%"
+                else:
+                    value = (
+                        f"{t(user_id, 'usage.today_overspent')} "
+                        f"{abs(today_budget):.1f}%"
+                    )
+                rows.append(f"{t(user_id, 'usage.today')}: {value}")
+            if window.resets_at is not None:
+                reset = datetime.fromtimestamp(window.resets_at).strftime("%d.%m %H:%M")
+                rows.append(f"{t(user_id, 'usage.reset')}: {reset}")
         if not rows:
             return None
-        return t(user_id, "usage.title.codex") + "\n" + "\n".join(rows)
+        return t(user_id, "usage.title.codex") + "\n\n" + "\n\n".join(rows)
 
     if not isinstance(info, UsageInfo):
         return None

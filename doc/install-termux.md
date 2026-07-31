@@ -58,6 +58,7 @@ ALLOWED_USERS=123456789
 CCBOT_AGENT_BACKEND=codex
 CODEX_COMMAND=codex
 CODEX_FLAGS=--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust --enable hooks --no-alt-screen
+CODEX_NAMING_MODEL=gpt-5.6-luna
 VOICE_BACKEND=off
 ```
 
@@ -105,3 +106,7 @@ find ~/.codex/sessions -name 'rollout-*.jsonl' | tail
 `backend: "codex"`. Не запускайте bot/tmux снаружи proot, а Codex внутри:
 разные namespace, `$HOME` и tmux sockets не позволят ccbot управлять
 процессом.
+
+`Меню → Status` получает лимиты напрямую из Codex app-server и хранит
+дневную точку недельной квоты в
+`~/.ccbot/codex_quota_day.json`. Включите этот файл в backup состояния.

@@ -302,25 +302,37 @@ async def _poll_codex_status(wid: str) -> object | None:
     try:
         if not await _wait_for_codex_usage_prompt(wid):
             return None
-        await tmux_manager.send_keys(wid, "Escape", enter=False, literal=False)
-        await _clear_pane_history(wid)
-        await tmux_manager.send_keys(wid, "/status")
-        last: tuple[int | None, int | None] | None = None
-        for _ in range(60):  # 12 seconds for the rate-limit rows to populate
-            await asyncio.sleep(0.2)
-            pane = await _capture_with_scrollback(wid)
-            if not pane:
-                continue
-            info = parse_codex_status_output(pane)
-            if info is None:
-                continue
-            pair = (
-                info.five_hour.used_percent if info.five_hour else None,
-                info.weekly.used_percent if info.weekly else None,
+        for attempt in range(3):
+            await tmux_manager.send_keys(wid, "Escape", enter=False, literal=False)
+            await _clear_pane_history(wid)
+            await tmux_manager.send_keys(wid, "/status")
+            last: tuple[int | None, int | None] | None = None
+            refresh_requested = False
+            for _ in range(60):  # 12 seconds for the rate-limit rows to populate
+                await asyncio.sleep(0.2)
+                pane = await _capture_with_scrollback(wid)
+                if not pane:
+                    continue
+                if "refresh requested; run /status again shortly" in pane.lower():
+                    refresh_requested = True
+                    break
+                info = parse_codex_status_output(pane)
+                if info is None:
+                    continue
+                pair = (
+                    info.five_hour.used_percent if info.five_hour else None,
+                    info.weekly.used_percent if info.weekly else None,
+                )
+                if pair == last:
+                    return info
+                last = pair
+            if not refresh_requested:
+                break
+            logger.debug(
+                "Codex /status requested a refresh (attempt %d); retrying",
+                attempt + 1,
             )
-            if pair == last:
-                return info
-            last = pair
+            await asyncio.sleep(1.0)
     except Exception as e:
         logger.debug("fetch_codex_usage: tmux failed: %s", e)
     return None

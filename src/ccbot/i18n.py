@@ -101,6 +101,11 @@ _EN: dict[str, str] = {
         "❌ Could not check Codex authorization. Verify `codex --version` and "
         "`CODEX_COMMAND`, then send /login."
     ),
+    "auth.codex.storage_mismatch": (
+        "⚠ Codex found `auth.json`, but its effective credential storage does "
+        "not read it. Set `cli_auth_credentials_store = \"file\"`; the bot "
+        "will not replace the existing authorization."
+    ),
     "btn.confirm": "✓ Confirm",
     "btn.no": "× No",
     "btn.yes_kill": "⚠ Yes, kill",
@@ -592,6 +597,11 @@ _RU: dict[str, str] = {
         "❌ Не удалось проверить авторизацию Codex. Проверь `codex --version` "
         "и `CODEX_COMMAND`, затем отправь /login."
     ),
+    "auth.codex.storage_mismatch": (
+        "⚠ Codex нашел `auth.json`, но effective credential storage его не "
+        "читает. Установи `cli_auth_credentials_store = \"file\"`; бот не "
+        "будет заменять существующую авторизацию."
+    ),
     "btn.confirm": "✓ Подтвердить",
     "btn.no": "× Нет",
     "btn.yes_kill": "⚠ Да, убить",
@@ -1042,6 +1052,10 @@ _ZH: dict[str, str] = {
     "auth.codex.check_failed": (
         "❌ 无法检查 Codex 授权。请检查 `codex --version` 和 "
         "`CODEX_COMMAND`,然后发送 /login。"
+    ),
+    "auth.codex.storage_mismatch": (
+        "⚠ Codex 找到了 `auth.json`,但当前凭据存储不会读取它。请设置 "
+        "`cli_auth_credentials_store = \"file\"`;机器人不会替换现有授权。"
     ),
     "btn.confirm": "✓ 确认",
     "btn.no": "× 否",

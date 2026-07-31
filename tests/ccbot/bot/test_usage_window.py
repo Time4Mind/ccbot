@@ -116,3 +116,26 @@ async def test_codex_status_never_advances_sign_in_screen(
     info = await _usage_window._poll_codex_status("@2")
 
     assert info is None
+
+
+@pytest.mark.asyncio
+async def test_codex_status_retries_after_refresh_request(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    frames = iter(
+        [
+            "OpenAI Codex\n›",
+            "Limits: refresh requested; run /status again shortly.",
+            "Weekly limit: 88% left",
+            "Weekly limit: 88% left",
+        ]
+    )
+    monkeypatch.setattr(
+        _usage_window, "_capture_with_scrollback", _capture_returning(frames)
+    )
+
+    info = await _usage_window._poll_codex_status("@2")
+
+    assert info is not None
+    assert info.weekly is not None
+    assert info.weekly.used_percent == 12

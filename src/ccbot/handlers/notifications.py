@@ -47,6 +47,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 
 from telegram import Bot, InlineKeyboardMarkup
 from telegram.error import BadRequest, RetryAfter
@@ -437,12 +438,19 @@ async def _seed_events_from_jsonl(
     # just to refresh summary/token stats we don't use here, then we read
     # the file again below. On a multi-MB resumed transcript that wasted
     # walk costs >1s. Same fast-path the /history cache already uses.
-    from ..session_claude_io import build_session_file_path
-
     state = session_manager.get_window_state(sess.window_id)
     if not state.session_id or not state.cwd:
         return []
-    fp = build_session_file_path(state.session_id, state.cwd)
+    if state.transcript_path:
+        fp = Path(state.transcript_path)
+    elif sess.backend == "codex":
+        from ..codex_session_io import build_session_file_path
+
+        fp = build_session_file_path(state.session_id, state.cwd)
+    else:
+        from ..session_claude_io import build_session_file_path
+
+        fp = build_session_file_path(state.session_id, state.cwd)
     if fp is None or not fp.exists():
         return []
     file_path = str(fp)
@@ -529,12 +537,19 @@ def _transcript_mtime(sess: Session) -> float:
     """
     if not sess.window_id:
         return -1.0
-    from ..session_claude_io import build_session_file_path
-
     state = session_manager.get_window_state(sess.window_id)
     if not state.session_id or not state.cwd:
         return -1.0
-    fp = build_session_file_path(state.session_id, state.cwd)
+    if state.transcript_path:
+        fp = Path(state.transcript_path)
+    elif sess.backend == "codex":
+        from ..codex_session_io import build_session_file_path
+
+        fp = build_session_file_path(state.session_id, state.cwd)
+    else:
+        from ..session_claude_io import build_session_file_path
+
+        fp = build_session_file_path(state.session_id, state.cwd)
     if fp is None:
         return -1.0
     try:

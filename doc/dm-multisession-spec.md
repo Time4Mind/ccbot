@@ -1,6 +1,8 @@
 # DM Multi-Session Mode — Specification
 
-Working spec for the fork. Replaces the topic-based supergroup model with a single private DM where one bot manages multiple parallel Claude Code sessions.
+Working spec for the fork. Replaces the topic-based supergroup model with a
+single private DM where one bot manages multiple parallel Claude Code or
+OpenAI Codex sessions.
 
 Status: draft v0.1. Authoritative until superseded.
 
@@ -11,10 +13,13 @@ Status: draft v0.1. Authoritative until superseded.
 ### Goals
 
 - Run the bot in a private 1-1 DM with a single user. No supergroup, no forum topics.
-- Maintain N parallel Claude Code sessions, each backed by an independent tmux window and `claude --dangerously-skip-permissions` process.
+- Maintain N parallel sessions for one globally selected agent backend, each
+  backed by an independent tmux window and native Claude or Codex process.
 - Switching the active session does not stop or pause work in any other session.
-- Inherit the full Claude Code feature surface: skills, plugins, hooks, MCP, slash-commands, voice/photo/document inputs.
-- Authentication via Claude Code subscription (CLI auth, Max x20). No Anthropic API key required.
+- Preserve each agent's native feature surface: hooks, MCP, slash-commands,
+  skills/plugins where supported, and voice/photo/document inputs.
+- Authenticate through the CLI subscription: Claude OAuth or Codex
+  app-server device login. No provider API key is required.
 - Run on macOS (Apple Silicon) and Linux arm64.
 
 ### Non-goals
@@ -43,7 +48,9 @@ Telegram DM (1-1)
    - one window per session
        |
        v
-   claude --dangerously-skip-permissions  (one process per window)
+   claude --dangerously-skip-permissions
+   or codex --dangerously-bypass-approvals-and-sandbox
+   (one process per window)
    - reads/writes files
    - skills/plugins/hooks/MCP all native
 ```
@@ -53,6 +60,7 @@ State persistence in `$CCBOT_DIR`:
 - `state.json` — active session per chat, session list with metadata
 - `session_map.json` — session_id ↔ tmux window mapping
 - `monitor_state.json` — JSONL read offsets per session
+- `codex_quota_day.json` — Codex daily quota baseline and fixed allocation
 - `ccbot.lock` — singleton flock held by `main.py` for the process lifetime; second-instance starts refuse with `sys.exit(1)`
 
 Deployment target M3:
@@ -76,9 +84,13 @@ A session is defined by its goal, not by its working directory. The user can `cd
                           restore
 ```
 
-- **active**: tmux window alive, claude process running, in the inline switcher
+- **active**: tmux window alive, selected agent process running, in the inline switcher
 - **idle**: tmux window alive, no input from user for >4h. Promoted to archived after the same threshold (kill window, persist state)
-- **archived**: tmux window killed, claude session id stored. `claude --resume <id>` rehydrates on restore. Visible in `/archive` for 0–72h, in `/archive --all` for up to 14d, then purged
+- **archived**: tmux window killed, backend and native session id stored.
+  Same-backend restore uses `claude --resume <id>` or
+  `codex resume <thread-id>`. Cross-backend restore creates a fresh target
+  session from a bounded handoff. Visible in `/archive` for 0–72h, in
+  `/archive --all` for up to 14d, then purged
 - **purged**: state removed from `state.json`; transcripts on disk are kept for audit
 
 ### Goal closure (P1)
@@ -88,9 +100,15 @@ Only the user marks a goal as done via `/done <session>`. The bot never auto-clo
 ### Identification (H6)
 
 - Each session has a stable short id (e.g. `a3f1`) and a human-readable name.
-- The initial name is the workdir basename (`ccbot`, `ccbot-2`). It is replaced once, on the session's first message, by a one-shot Haiku call (`naming.maybe_auto_name` → `generate_name`). A name that no longer matches the `basename` / `basename-N` pattern is treated as user-chosen and never overwritten.
-- Haiku call cost is debited from the user's Max x20 budget. The call is single-shot, ~200ms, ~50 tokens. Prompt: `"Generate a 2 word kebab-case name (lowercase, hyphenated, exactly two words) for a coding session about: <seed>. Reply with only the name, no quotes."` The result is capped at `_MAX_NAME_WORDS` (2) and rejected outright when it starts with a refusal opener ("i cannot", "sorry", …); hyphens render as spaces in the UI.
-- The whole mechanism is opt-out: `Settings → Haiku session names` (`haiku_naming`, default on). With it off, the basename sticks and no tokens are spent.
+- The initial name is the workdir basename (`ccbot`, `ccbot-2`). It is
+  replaced once on the first message by a one-shot naming call: Haiku for
+  Claude or `CODEX_NAMING_MODEL` for Codex. A name that no longer matches
+  the `basename` / `basename-N` pattern is treated as user-chosen.
+- The result is capped at `_MAX_NAME_WORDS` (2), rejected on a refusal
+  opener, and rendered with hyphens as spaces in the UI.
+- The mechanism is opt-out through the session-naming setting
+  (`haiku_naming`, retained as the persisted compatibility key). With it
+  off, the basename sticks and no naming tokens are spent.
 - There is no `/rename` command — the naming is automatic, and the switcher / archive views are the surfaces where names are read.
 
 ---
@@ -169,9 +187,9 @@ Hidden (typed only):
 | `/stop` | Send Esc to the active session's tmux window (interrupt current task). |
 | `/archive` | Show archived sessions, paginated, last 0–72h. |
 | `/screenshot` | Snapshot the active session's tmux pane as a PNG. |
-| `/usage` | Live `/usage` modal sample (5h / weekly / Sonnet). |
+| `/usage` | Live account limits: Claude `/usage` modal or Codex app-server rate limits. |
 | `/health` | Uptime, queue stats, latency, counters. |
-| `/login` | Re-authenticate Claude Code from the chat when its OAuth login died: the bot runs the login exchange, posts the URL, takes the code back as a normal message, then reposts the active session's card (or the Menu). Surfaced by the "authorization expired" notice, which fires on Claude's own `isApiErrorMessage` / `authentication_failed` entry. |
+| `/login` | Re-authenticate the selected backend. Claude takes its OAuth code back through chat; Codex uses the official device URL/code and waits for app-server completion without receiving the code in chat. |
 | `/restore-file <msg_id>` | _(Planned — no handler implemented yet.)_ Re-fetch a previously-uploaded inbox file from Telegram. |
 
 The legacy ``/status`` command was retired — Menu → Status surfaces
@@ -218,9 +236,9 @@ except for the badge.
 
 ### 4.5 Status (Menu → Status)
 
-Menu → 📊 Status fetches a fresh snapshot of Claude Code's own
-`/usage` modal via the dedicated `ccbot-usage` tmux window and edits
-the carrier into a compact block:
+Menu → 📊 Status selects an authoritative source by backend. Claude
+fetches its own `/usage` modal via the dedicated `ccbot-usage` tmux
+window:
 
 ```
 Claude Code
@@ -229,6 +247,30 @@ Claude Code
 🟢 week (Sonnet): 12% · Mon 17:00
 Extra: off
 ```
+
+Codex calls `account/rateLimits/read` on its supported app-server API.
+The 5h and weekly windows include their exact reset timestamps. The weekly
+row also shows a fixed calendar-day budget:
+
+```
+OpenAI Codex
+
+🟢 week
+
+Used: 50%
+
+Today: another 10.0%
+
+Reset: 05.08 17:00
+```
+
+At the first reading on each local date, `(100 - used_percent)` is split
+equally across all calendar dates through the reset date, inclusive.
+Usage accumulated after that baseline reduces today's fixed allocation.
+At the next date boundary the actual remaining pool is redistributed, so
+over- and underspend affect every following day. State is persisted in
+`codex_quota_day.json`; an initial mid-day observation can only establish
+the baseline from that observation onward.
 
 The locally-aggregated 5h/weekly token counter was retired — the
 authoritative numbers come from Anthropic's own quota modal, so we
@@ -274,12 +316,16 @@ math is non-invasive and good enough for an at-a-glance signal.
 
 ## 5. Source of truth for usage
 
-Token usage is read from Claude Code transcripts on disk:
+Transcript and quota data have separate sources:
 
-- Path: `~/.claude/projects/<project-hash>/<session-id>.jsonl`
-- Each turn records `usage.input_tokens` and `usage.output_tokens` in the assistant message.
-- The bot maintains a rolling 5h-window aggregate and a 7-day aggregate per session and globally.
-- This is independent of any Anthropic-internal counter and survives ccbot restarts.
+- Claude transcripts:
+  `~/.claude/projects/<project-hash>/<session-id>.jsonl`.
+- Codex transcripts: rollout JSONL below
+  `$CCBOT_CODEX_SESSIONS_PATH` (default `~/.codex/sessions`).
+- Session monitoring reads each backend's native JSONL and normalizes turns
+  without rewriting the source transcript.
+- Account quota is never inferred from transcript tokens. Claude uses its
+  live `/usage` modal; Codex uses app-server `account/rateLimits/read`.
 
 ---
 
@@ -438,6 +484,15 @@ ALLOWED_USERS=<comma-separated tg user ids>
 
 # Storage
 CCBOT_DIR=/var/lib/ccbot
+
+# Agent backend (initial default; the saved Settings choice wins later)
+CCBOT_AGENT_BACKEND=claude       # claude | codex
+CLAUDE_COMMAND=claude
+CLAUDE_FLAGS=--dangerously-skip-permissions
+CODEX_COMMAND=codex
+CODEX_FLAGS=--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust --enable hooks --no-alt-screen
+CODEX_NAMING_MODEL=gpt-5.6-luna
+# CCBOT_CODEX_SESSIONS_PATH=~/.codex/sessions
 
 # Sessions
 SESSION_IDLE_TTL=4h            # active -> archived

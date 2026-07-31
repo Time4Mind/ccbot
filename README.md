@@ -43,8 +43,9 @@ and not negotiable:
   switcher). It is not multi-tenant: everybody sees everything. Any
   message from a non-allowlisted sender is silently dropped (no reply,
   no callback toast) — the bot looks inert to outsiders.
-- **Bypass-only.** `claude` is launched with
-  `--dangerously-skip-permissions`. There is no permission relay UI in
+- **Bypass-only.** Claude is launched with
+  `--dangerously-skip-permissions`; Codex uses
+  `--dangerously-bypass-approvals-and-sandbox`. There is no permission relay UI in
   Telegram — if you don't trust the model with full host access, run
   upstream instead. (The residual Yes/No prompts that bypass mode does
   *not* cover — e.g. WebFetch domain trust — surface as a keyboard, or
@@ -56,8 +57,10 @@ and not negotiable:
   message (native markdown: GFM tables ≤ 20 columns, headings,
   `<details>`, footnotes, math), falling back to the MarkdownV2
   pipeline (`telegramify-markdown`) and then to plain text on any
-  failure. Kill switch: `CCBOT_RICH_MESSAGES=off`. Upstream uses HTML.
-- **Hook-based session tracking.** Claude Code `SessionStart` +
+  failure. One-line fenced shell commands become inline code so Telegram
+  exposes Copy; multiline blocks remain fenced. Kill switch:
+  `CCBOT_RICH_MESSAGES=off`. Upstream uses HTML.
+- **Hook-based session tracking.** The selected agent's `SessionStart` +
   `UserPromptSubmit` hooks write `session_map.json`; the monitor polls
   it. No reliance on process-tree introspection or claude SDK.
 - **Voice transcription is local-first.** `whisper.cpp` (default) or
@@ -69,7 +72,8 @@ implementation map is in `doc/dm-multisession-plan.md`.
 ## Prerequisites
 
 - **tmux** in `PATH`
-- **Claude Code** CLI (`claude`) or **Codex CLI** (`codex`), signed in
+- **Claude Code** CLI (`claude`) or **Codex CLI** (`codex`); Codex can
+  authenticate through Telegram on first launch
 - **Python 3.12+**
 - **uv** (recommended) for dependency management
 - macOS (Apple Silicon) or Linux arm64
@@ -87,7 +91,7 @@ git clone https://github.com/Time4Mind/ccbot.git
 cd ccbot
 uv sync
 cp .env.example ~/.ccbot/.env   # fill in TELEGRAM_BOT_TOKEN + ALLOWED_USERS
-ccbot hook --install            # one-time: register the Claude Code hooks
+ccbot hook --install            # Claude; add --backend codex for Codex
 ccbot                           # foreground; for prod use the systemd unit
 ```
 
@@ -139,8 +143,8 @@ initial default when the state file has no saved selection.
 
 ## Hook setup
 
-The bot tracks tmux-window-to-Claude-session mappings via two Claude
-Code hooks: `SessionStart` catches every new claude process, and
+The bot tracks tmux-window-to-agent-session mappings via two lifecycle
+hooks: `SessionStart` catches every new agent process, and
 `UserPromptSubmit` self-heals a stale mapping on each prompt (covers
 `/resume`, `/clear`, and bot-restart races). Auto-install once:
 
@@ -238,14 +242,15 @@ once they discover the menu.
 
 Send any text in the DM to start your first session — the bot opens a
 directory browser, you pick the project, and a tmux window with
-`claude` starts there. Subsequent text in the DM is routed to the
+the selected agent starts there. Subsequent text in the DM is routed to the
 **active** session.
 
-Sessions are named after the directory basename and renamed once by a
-one-shot Haiku call on the first message of ≥ 20 chars (a two-word
-summary of the intent — `token budget`). Turn that off in
-*Settings → Haiku session names* to keep the plain directory name and
-spend zero tokens.
+Sessions are named after the directory basename and renamed once after
+the first message of ≥ 20 chars by a small separate request: Haiku for
+Claude or `CODEX_NAMING_MODEL` for Codex (default `gpt-5.6-luna`). The
+result is a two-word intent summary such as `token budget`. Disable
+automatic names in Settings to retain the directory name and skip the
+extra model call.
 
 The most recent bot message carries an inline session switcher
 (`▷ session-A · session-B`) with a paired `[+ new] [≡ Menu]` row
@@ -345,14 +350,21 @@ language. Worth knowing:
   session's tmux window, so you can drive the same session by hand.
   `manual` only shows the 🖥 *Term* button; `auto` also spawns one per
   new session. Killing the session closes the tab it opened.
-- **Weekly reset** — the day Anthropic's weekly quota window rolls
-  over; drives the `%/d` burn-rate in *Menu → Status*.
+- **Weekly reset** — only needed for Claude, whose `/usage` reports a
+  clock time but not a complete timestamp. Codex supplies its exact
+  reset timestamp through app-server.
 - **Language** — `en` / `ru` / `zh` for the bot's own UI strings.
 
 ### Quota and status
 
-*≡ Menu → 📊 Status* samples Claude Code's own `/usage` modal through a
-dedicated `ccbot-usage` tmux window and renders it compactly:
+*≡ Menu → 📊 Status* uses the selected backend's authoritative source:
+
+- Claude: its live `/usage` modal through the dedicated `ccbot-usage`
+  tmux window;
+- Codex: `account/rateLimits/read` from the supported app-server API,
+  without typing into a working session.
+
+Claude retains the compact display:
 
 ```
 Claude Code
@@ -361,7 +373,35 @@ Claude Code
 🟢 week (Sonnet): 12% · Mon 17:00
 ```
 
-The same poll runs in the background every
+For Codex, the weekly block focuses on the actionable calendar-day budget:
+
+```
+OpenAI Codex
+
+🟢 5h
+
+Used: 12%
+
+Reset: 14:30
+
+🟢 week
+
+Used: 50%
+
+Today: another 10.0%
+
+Reset: 05.08 17:00
+```
+
+At the start of each local calendar day, the remaining weekly quota is
+split equally across today and every remaining date through the reset
+date, inclusive. The day's allocation stays fixed while `Today`
+decreases by actual usage. Overspend is rendered as `over by N%`. On
+the next date, the real remaining pool is redistributed, so both over-
+and underspend adjust all following days. The daily baseline lives in
+`$CCBOT_DIR/codex_quota_day.json` and survives bot restarts.
+
+Claude's background poll runs every
 `QUOTA_ALERT_POLL_INTERVAL` and pushes an alert when a 5h or weekly
 band crosses 50 / 75 / 90 %. Only settled reads are published, so a
 half-rendered modal can't fire a phantom alert.
@@ -401,6 +441,10 @@ src/ccbot/
 ├── config.py               — env-var loader (singleton)
 ├── session.py              — Session + SessionManager (state.json)
 ├── session_monitor.py      — JSONL polling, NewMessage callbacks
+├── codex_session_io.py     — Codex rollout JSONL discovery and reading
+├── codex_auth.py           — account/read + device-code login
+├── codex_usage.py          — Codex app-server rate limits
+├── session_import.py       — cross-agent restore handoff
 ├── transcript_parser.py    — JSONL turn parsing
 ├── terminal_parser.py      — interactive-UI + status-line detection
 ├── tmux_manager.py         — libtmux wrapper
@@ -435,8 +479,9 @@ State is kept under `$CCBOT_DIR` (defaults to `~/.ccbot/`):
 | File                | Contents |
 | ------------------- | -------- |
 | `state.json`        | sessions, active_sessions, window states, user settings |
-| `session_map.json`  | hook-generated tmux-window → claude-session map |
+| `session_map.json`  | hook-generated tmux-window → agent-session map |
 | `monitor_state.json`| per-JSONL byte offsets (prevents duplicate notifications on restart) |
+| `codex_quota_day.json` | Codex daily baseline and allocation |
 | `ccbot.lock`        | exclusive flock held by the running bot; a second start refuses with exit 1 |
 
 ## Reliability

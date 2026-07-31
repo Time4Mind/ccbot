@@ -10,7 +10,9 @@ import pytest
 
 from ccbot import codex_session_io
 from ccbot.config import config
+from ccbot.handlers.callback_data import CB_ARC_RESTORE
 from ccbot.handlers import archive
+from ccbot.handlers.history import render_archived_card_pages
 from ccbot.handlers.menu import build_footer_keyboard, render_settings_text
 from ccbot.session import SessionManager, session_manager
 from ccbot.session_import import build_import_context
@@ -257,6 +259,17 @@ def test_codex_rollout_normalizes_text_and_tools() -> None:
     assert parsed[-1].stop_reason == "end_turn"
 
 
+def test_codex_pending_prompt_detection_only_matches_bottom_input() -> None:
+    pane = "old output\n\n› send the report now\n\n  model · ~/project"
+    assert TmuxManager._codex_prompt_contains(pane, "send the report now")
+    assert not TmuxManager._codex_prompt_contains(pane, "different prompt")
+
+
+def test_codex_completed_prompt_is_not_treated_as_pending() -> None:
+    pane = "› send the report now\n\n• Working (2s)\n"
+    assert not TmuxManager._codex_prompt_contains(pane, "send the report now")
+
+
 @pytest.mark.asyncio
 async def test_codex_rollout_discovery_uses_session_meta(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -280,6 +293,78 @@ async def test_codex_rollout_discovery_uses_session_meta(
     assert found is not None
     assert found.file_path == str(rollout)
     assert found.summary == "hello"
+
+
+@pytest.mark.asyncio
+async def test_codex_archive_renders_final_answer_from_rollout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "sessions"
+    sid = "550e8400-e29b-41d4-a716-446655440000"
+    rollout = root / "2026" / "07" / "31" / f"rollout-{sid}.jsonl"
+    rollout.parent.mkdir(parents=True)
+    rows = [
+        _line("session_meta", {"id": sid, "cwd": str(tmp_path)}),
+        _line(
+            "event_msg",
+            {
+                "type": "agent_message",
+                "message": "the archived final answer",
+                "phase": "final_answer",
+            },
+        ),
+    ]
+    rollout.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setattr(config, "codex_sessions_path", root)
+    sess = BotSession(
+        id="archive-codex",
+        name="archive",
+        backend="codex",
+        workdir=str(tmp_path),
+        claude_session_id=sid,
+        state="archived",
+    )
+
+    rendered = await render_archived_card_pages(sess)
+
+    assert rendered is not None
+    pages, _ = rendered
+    assert "the archived final answer" in pages[-1]
+
+
+@pytest.mark.asyncio
+async def test_archive_restore_rebuilds_live_card_on_existing_carrier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ccbot.bot.callbacks import archive as archive_callback
+
+    sess = BotSession(id="restored", name="restored", state="archived")
+    query = MagicMock()
+    query.data = f"{CB_ARC_RESTORE}{sess.id}"
+    query.message.message_id = 77
+    query.answer = AsyncMock()
+    context = MagicMock()
+    context.bot = MagicMock()
+    user = MagicMock(id=42)
+    paint = AsyncMock()
+    reset = MagicMock()
+    monkeypatch.setattr(
+        archive_callback.session_manager, "get_session", lambda _sid: sess
+    )
+    monkeypatch.setattr(
+        archive_callback.session_manager, "set_last_switcher_msg", MagicMock()
+    )
+    monkeypatch.setattr(
+        archive_callback, "restore_session", AsyncMock(return_value=(True, "ok"))
+    )
+    monkeypatch.setattr(archive_callback, "paint_card_on_carrier", paint)
+    monkeypatch.setattr(archive_callback, "reset_card", reset)
+
+    handled = await archive_callback.handle(query, context, user)
+
+    assert handled is True
+    reset.assert_called_once_with(42, "restored")
+    paint.assert_awaited_once_with(context.bot, 42, sess, 77)
 
 
 @pytest.mark.asyncio

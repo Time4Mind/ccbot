@@ -42,8 +42,9 @@ Claude Code живёт в терминале. Отошёл от стола — �
   переключатель). Это не multi-tenant — все видят всё. Сообщение от
   не-allowlisted отправителя молча отбрасывается (без ответа, без
   callback-тоста) — для постороннего бот выглядит мёртвым.
-- **Только bypass-режим.** `claude` запускается с
-  `--dangerously-skip-permissions`. Релэя permission-промптов в
+- **Только bypass-режим.** Claude запускается с
+  `--dangerously-skip-permissions`, Codex — с
+  `--dangerously-bypass-approvals-and-sandbox`. Релэя permission-промптов в
   Telegram нет — если не доверяешь модели полный доступ к хосту,
   используй upstream. (Остаточные Yes/No-промпты, которые bypass не
   снимает — например доверие домену в WebFetch — приходят
@@ -56,8 +57,10 @@ Claude Code живёт в терминале. Отошёл от стола — �
   Bot API 10.1 (нативный markdown: GFM-таблицы ≤ 20 колонок,
   заголовки, `<details>`, сноски, формулы), с фолбэком на MarkdownV2
   (`telegramify-markdown`) и дальше на plain text при любой ошибке.
+  Однострочные fenced shell-команды превращаются в inline code, чтобы
+  Telegram показывал для них Copy; многострочные блоки сохраняются.
   Kill switch: `CCBOT_RICH_MESSAGES=off`. В upstream — HTML.
-- **Hook-based session tracking.** Хуки Claude Code `SessionStart` +
+- **Hook-based session tracking.** Хуки выбранного агента `SessionStart` +
   `UserPromptSubmit` пишут `session_map.json`; монитор бота его
   опрашивает. Никаких process-tree introspection или claude SDK.
 - **Голос — local-first.** `whisper.cpp` (по умолчанию) или Apple
@@ -69,7 +72,8 @@ Claude Code живёт в терминале. Отошёл от стола — �
 ## Требования
 
 - **tmux** в `PATH`
-- **Claude Code** CLI (`claude`) или **Codex CLI** (`codex`) с активным входом
+- **Claude Code** CLI (`claude`) или **Codex CLI** (`codex`); Codex может
+  авторизоваться через Telegram при первом запуске
 - **Python 3.12+**
 - **uv** (рекомендуется) для управления зависимостями
 - macOS (Apple Silicon) или Linux arm64
@@ -87,7 +91,7 @@ git clone https://github.com/Time4Mind/ccbot.git
 cd ccbot
 uv sync
 cp .env.example ~/.ccbot/.env   # вписать TELEGRAM_BOT_TOKEN + ALLOWED_USERS
-ccbot hook --install            # один раз: регистрация хуков Claude Code
+ccbot hook --install            # Claude; для Codex добавь --backend codex
 ccbot                           # foreground; для prod — systemd-юнит
 ```
 
@@ -138,8 +142,8 @@ ccbot                           # foreground; для prod — systemd-юнит
 
 ## Установка хука
 
-Бот трекает связки tmux-окно → Claude-session через два хука Claude
-Code: `SessionStart` ловит каждый новый процесс claude, а
+Бот трекает связки tmux-окно → agent-session через два lifecycle-хука:
+`SessionStart` ловит каждый новый процесс агента, а
 `UserPromptSubmit` на каждом промпте чинит устаревший маппинг
 (покрывает `/resume`, `/clear` и гонки при рестарте бота). Авто-
 установка одной командой:
@@ -237,12 +241,14 @@ cross-agent pickup: ccbot парсит исходный JSONL в огранич�
 
 Отправь любой текст в DM, чтобы создать первую сессию — бот откроет
 браузер директорий, ты выберешь проект, в tmux-окне стартанёт
-`claude`. Дальнейший текст в DM роутится в **активную** сессию.
+выбранный агент. Дальнейший текст в DM роутится в **активную** сессию.
 
 Имя сессии сначала берётся из имени каталога, а на первом сообщении
-длиной ≥ 20 символов один раз переписывается вызовом Haiku (два слова
-о сути — `token budget`). Выключается в *Настройках → Имена сессий
-через Haiku*: останется имя каталога, ноль потраченных токенов.
+длиной ≥ 20 символов один раз переписывается коротким отдельным
+запросом: Haiku для Claude или `CODEX_NAMING_MODEL` для Codex (по
+умолчанию `gpt-5.6-luna`). Результат — два слова о сути, например
+`token budget`. Автоименование выключается в настройках; тогда остаётся
+имя каталога и отдельный модельный вызов не выполняется.
 
 В самом свежем сообщении бота — инлайн-переключатель
 (`▷ session-A · session-B`), а внизу — парный ряд `[+ new] [≡ Меню]`:
@@ -339,14 +345,21 @@ thinking, текст) — `печатает…` горит; idle-сессия д
   к tmux-окну сессии, чтобы вести ту же сессию руками. `manual` только
   показывает кнопку 🖥 *Term*; `auto` ещё и открывает окно на каждую
   новую сессию. Kill сессии закрывает открытую им вкладку.
-- **Сброс недели** — день, когда у Anthropic перекатывается недельное
-  окно квоты; задаёт расчёт `%/д` в *Меню → Status*.
+- **Сброс недели** — нужен только Claude, чей `/usage` сообщает время,
+  но не полный timestamp. Codex отдаёт точное время сброса через
+  app-server, поэтому отдельная настройка дня ему не нужна.
 - **Язык** — `en` / `ru` / `zh` для UI-строк самого бота.
 
 ### Квота и статус
 
-*≡ Меню → 📊 Status* снимает модалку `/usage` самого Claude Code через
-выделенное tmux-окно `ccbot-usage` и рисует её компактно:
+*≡ Меню → 📊 Status* использует источник выбранного backend:
+
+- Claude: живая `/usage`-модалка через выделенное tmux-окно
+  `ccbot-usage`;
+- Codex: `account/rateLimits/read` поддерживаемого app-server API, без
+  ввода команд в рабочую сессию.
+
+Claude отображается в прежнем компактном виде:
 
 ```
 Claude Code
@@ -355,7 +368,36 @@ Claude Code
 🟢 week (Sonnet): 12% · Mon 17:00
 ```
 
-Тот же опрос идёт в фоне каждые `QUOTA_ALERT_POLL_INTERVAL` и шлёт
+Для Codex недельный блок показывает практически полезный дневной бюджет:
+
+```
+OpenAI Codex
+
+🟢 5ч
+
+Использовано: 12%
+
+Сброс: 14:30
+
+🟢 неделя
+
+Использовано: 50%
+
+Сегодня: ещё 10.0%
+
+Сброс: 05.08 17:00
+```
+
+В начале календарного дня остаток недельной квоты делится поровну между
+сегодняшним днём и всеми оставшимися датами до дня сброса включительно.
+Внутри дня бюджет фиксирован, а строка `Сегодня` уменьшается на
+фактический расход. При превышении она показывает `перерасход N%`. На
+следующей календарной дате реальный остаток распределяется заново,
+поэтому перерасход и недорасход автоматически меняют бюджеты следующих
+дней. Дневная точка хранится в
+`$CCBOT_DIR/codex_quota_day.json` и переживает рестарт.
+
+Фоновый опрос Claude идёт каждые `QUOTA_ALERT_POLL_INTERVAL` и шлёт
 алерт при пересечении 50 / 75 / 90 % по 5-часовому или недельному
 окну. Публикуются только «устаканившиеся» чтения — недорисованная
 модалка не выстрелит фантомным алертом.
@@ -396,6 +438,10 @@ src/ccbot/
 ├── config.py               — загрузчик env-vars (singleton)
 ├── session.py              — Session + SessionManager (state.json)
 ├── session_monitor.py      — JSONL polling, NewMessage callbacks
+├── codex_session_io.py     — поиск и чтение Codex rollout JSONL
+├── codex_auth.py           — account/read + device-code login
+├── codex_usage.py          — rate limits через Codex app-server
+├── session_import.py       — cross-agent handoff при restore
 ├── transcript_parser.py    — парсинг JSONL-турнов
 ├── terminal_parser.py      — детект interactive UI + status line
 ├── tmux_manager.py         — обёртка над libtmux
@@ -430,8 +476,9 @@ src/ccbot/
 | Файл                | Содержимое |
 | ------------------- | ---------- |
 | `state.json`        | сессии, active_sessions, window states, user settings |
-| `session_map.json`  | hook-генерируемая tmux-window → claude-session карта |
+| `session_map.json`  | hook-генерируемая tmux-window → agent-session карта |
 | `monitor_state.json`| per-JSONL byte offsets (защита от дублей при рестарте) |
+| `codex_quota_day.json` | дневная точка и бюджет Codex |
 | `ccbot.lock`        | эксклюзивный flock живого бота; второй старт отваливается с кодом 1 |
 
 ## Надёжность

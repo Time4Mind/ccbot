@@ -153,6 +153,18 @@ class TestHookMainValidation:
             ),
         )
         transcript = tmp_path / ".codex" / "sessions" / "rollout.jsonl"
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text(
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "550e8400-e29b-41d4-a716-446655440000"
+                    },
+                }
+            )
+            + "\n"
+        )
         self._run_hook_main(
             monkeypatch,
             {
@@ -166,3 +178,40 @@ class TestHookMainValidation:
         stored = json.loads((tmp_path / "session_map.json").read_text())
         assert stored["ccbot:@7"]["backend"] == "codex"
         assert stored["ccbot:@7"]["transcript_path"] == str(transcript)
+
+    def test_codex_hook_rejects_id_that_disagrees_with_rollout(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
+        monkeypatch.setenv("CCBOT_AGENT_BACKEND", "codex")
+        monkeypatch.setattr(
+            "ccbot.hook.subprocess.run",
+            lambda *_args, **_kwargs: subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="ccbot::@7:project\n", stderr=""
+            ),
+        )
+        transcript = tmp_path / "rollout.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "00000000-0000-0000-0000-000000000000"
+                    },
+                }
+            )
+            + "\n"
+        )
+
+        self._run_hook_main(
+            monkeypatch,
+            {
+                "session_id": "550e8400-e29b-41d4-a716-446655440000",
+                "cwd": str(tmp_path),
+                "transcript_path": str(transcript),
+                "hook_event_name": "SessionStart",
+            },
+            tmux_pane="%1",
+        )
+
+        assert not (tmp_path / "session_map.json").exists()

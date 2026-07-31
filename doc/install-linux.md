@@ -160,6 +160,7 @@ Codex заранее логинить не нужно: после первого
 CCBOT_AGENT_BACKEND=codex
 CODEX_COMMAND=codex
 CODEX_FLAGS=--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust --enable hooks --no-alt-screen
+CODEX_NAMING_MODEL=gpt-5.6-luna
 ```
 
 И установи hook выбранного backend:
@@ -172,6 +173,14 @@ uv run ccbot hook --install --backend codex
 При запуске через systemd unit должен разрешать запись не только в
 `~/.ccbot`, но и в `~/.codex`: там Codex хранит авторизацию, hooks и rollout
 JSONL. Шаблон `scripts/ccbot.service` уже содержит этот путь.
+
+В `Меню → Status` Codex читается через
+`account/rateLimits/read`. Недельный остаток в начале каждой локальной
+календарной даты делится поровну между оставшимися датами до сброса
+включительно; расход текущего дня вычитается из зафиксированного дневного
+бюджета. Точка отсчёта хранится в
+`~/.ccbot/codex_quota_day.json`, поэтому этот файл стоит включать в backup
+вместе со `state.json`.
 
 ---
 

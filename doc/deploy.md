@@ -112,6 +112,8 @@ curl -s --max-time 8 -x "$TG_PROXY_URL" \
 - `~/.ccbot/state.json` — sessions, active pointers, switcher trace.
 - `~/.ccbot/session_map.json` — written by claude's `SessionStart` hook.
 - `~/.ccbot/monitor_state.json` — JSONL byte offsets.
+- `~/.ccbot/codex_quota_day.json` — Codex daily quota baseline and allocation.
+- `~/.codex/` — Codex credentials, hooks, and rollout JSONL when Codex is used.
 - `~/.ccbot/models/` — whisper model (only if VOICE_BACKEND=whisper).
 - `<workdir>/.ccbot-inbox/` — uploaded photos/documents per session;
   pruned every hour past `INBOX_TTL_HOURS` (default 24h).

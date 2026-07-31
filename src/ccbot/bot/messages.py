@@ -978,6 +978,17 @@ async def _dispatch_text_to_active(
             metrics.inc("tg_send_failures")
             await safe_reply(update.message, f"❌ {message}")
             return
+        if (
+            sess is not None
+            and sess.backend == "codex"
+            and not await tmux_manager.ensure_codex_prompt_submitted(wid, text)
+        ):
+            metrics.inc("tg_send_failures")
+            await safe_reply(
+                update.message,
+                "❌ Codex kept the text in its input field; the prompt was not sent.",
+            )
+            return
 
         # Immediate typing-indicator so the user sees feedback within
         # ~500 ms of sending — claude can take 5-30 s before emitting

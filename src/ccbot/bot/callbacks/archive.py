@@ -141,9 +141,7 @@ async def handle(
                 await paint_card_on_carrier(
                     context.bot, user.id, sess, query.message.message_id
                 )
-                session_manager.set_last_switcher_msg(
-                    user.id, query.message.message_id
-                )
+                session_manager.set_last_switcher_msg(user.id, query.message.message_id)
             else:
                 preview = await render_session_preview(sess)
                 keyboard = build_footer_keyboard(user.id, screen="main")

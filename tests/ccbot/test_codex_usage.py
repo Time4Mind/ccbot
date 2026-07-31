@@ -106,9 +106,7 @@ def test_overspend_is_redistributed_on_the_next_day() -> None:
     assert initial is not None
 
     tomorrow = datetime(2026, 8, 1, 9, 0)
-    result = _daily_quota_budget(
-        64, int(reset.timestamp()), initial[1], now=tomorrow
-    )
+    result = _daily_quota_budget(64, int(reset.timestamp()), initial[1], now=tomorrow)
 
     assert result is not None
     today_left, state = result

@@ -158,9 +158,7 @@ class TestHookMainValidation:
             json.dumps(
                 {
                     "type": "session_meta",
-                    "payload": {
-                        "id": "550e8400-e29b-41d4-a716-446655440000"
-                    },
+                    "payload": {"id": "550e8400-e29b-41d4-a716-446655440000"},
                 }
             )
             + "\n"
@@ -195,9 +193,7 @@ class TestHookMainValidation:
             json.dumps(
                 {
                     "type": "session_meta",
-                    "payload": {
-                        "id": "00000000-0000-0000-0000-000000000000"
-                    },
+                    "payload": {"id": "00000000-0000-0000-0000-000000000000"},
                 }
             )
             + "\n"

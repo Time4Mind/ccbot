@@ -339,7 +339,9 @@ def format_usage_breakdown_compact(user_id: int, info: object) -> str | None:
                 rows.append(f"{t(user_id, 'usage.reset')}: {reset}")
         if info.weekly is not None:
             window = info.weekly
-            rows.append(f"{_quota_emoji(window.used_percent)} {t(user_id, 'usage.week')}")
+            rows.append(
+                f"{_quota_emoji(window.used_percent)} {t(user_id, 'usage.week')}"
+            )
             rows.append(f"{t(user_id, 'usage.used')}: {window.used_percent}%")
             today_budget = _persisted_daily_quota_budget(
                 window.used_percent, window.resets_at
@@ -352,9 +354,7 @@ def format_usage_breakdown_compact(user_id: int, info: object) -> str | None:
                         f"{t(user_id, 'usage.today_overspent')} "
                         f"{abs(today_budget):.1f}%"
                     )
-                rows.append(
-                    f"{t(user_id, 'usage.today')}: {value}"
-                )
+                rows.append(f"{t(user_id, 'usage.today')}: {value}")
             if window.resets_at is not None:
                 reset = datetime.fromtimestamp(window.resets_at).strftime("%d.%m %H:%M")
                 rows.append(f"{t(user_id, 'usage.reset')}: {reset}")

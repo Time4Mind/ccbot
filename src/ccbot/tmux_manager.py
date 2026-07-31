@@ -432,9 +432,7 @@ class TmuxManager:
         # A long TUI input may have scrolled its beginning out of the pane.
         return needle[-64:] in prompt or needle[:64] in prompt
 
-    async def ensure_codex_prompt_submitted(
-        self, window_id: str, text: str
-    ) -> bool:
+    async def ensure_codex_prompt_submitted(self, window_id: str, text: str) -> bool:
         """Retry Enter once when Codex left the just-typed prompt pending.
 
         ``send_keys`` can successfully deliver bytes while Codex treats the

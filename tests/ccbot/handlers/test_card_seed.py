@@ -116,7 +116,9 @@ class TestSeedFromJsonl:
 
         events = await _seed_events_from_jsonl(sess)
 
-        assert any(ev.type == "final_text" and ev.text == "codex final" for ev in events)
+        assert any(
+            ev.type == "final_text" and ev.text == "codex final" for ev in events
+        )
 
 
 @pytest.mark.asyncio

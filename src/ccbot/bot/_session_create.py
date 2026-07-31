@@ -113,10 +113,21 @@ async def create_and_activate_session(
             session_manager.mark_window_resuming(
                 created_wid, bot=context.bot, user_id=user.id
             )
-        hook_ok = await session_manager.wait_for_session_map_entry(
-            created_wid, timeout=15.0
-        )
         ws = session_manager.get_window_state(created_wid)
+        if session_manager.agent_backend == "codex":
+            # ``codex resume`` preserves the rollout id, so binding it is
+            # deterministic and must not wait for a SessionStart hook that can
+            # arrive only after the CLI finishes booting.
+            ws.session_id = resume_session_id
+            ws.cwd = str(selected_path)
+            ws.window_name = created_wname
+            ws.backend = "codex"
+            session_manager.save_state()
+            hook_ok = True
+        else:
+            hook_ok = await session_manager.wait_for_session_map_entry(
+                created_wid, timeout=15.0
+            )
         if not hook_ok:
             logger.warning(
                 "Hook timed out for resume window %s, "

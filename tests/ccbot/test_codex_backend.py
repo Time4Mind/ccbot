@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from ccbot import codex_session_io
+from ccbot.bot.callbacks import dir_browser as dir_browser_cb
 from ccbot.config import config
 from ccbot.handlers.callback_data import CB_ARC_RESTORE
 from ccbot.handlers import archive
@@ -216,6 +219,84 @@ async def test_restore_claude_archive_imports_into_codex(
     assert sess.imported_from_backend == "claude"
     assert sess.imported_from_session_id == sid
     assert "imported from claude" in message
+    mgr.wait_for_session_map_entry.assert_awaited_once_with("@9", timeout=15.0)  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_restore_codex_archive_does_not_wait_for_hook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
+    mgr = SessionManager()
+    monkeypatch.setattr(mgr, "save_state", lambda: None)
+    mgr.agent_backend = "codex"
+    mgr.wait_for_session_map_entry = AsyncMock(return_value=False)  # type: ignore[method-assign]
+    monkeypatch.setattr(archive, "session_manager", mgr)
+
+    sid = "550e8400-e29b-41d4-a716-446655440000"
+    workdir = tmp_path / "project"
+    workdir.mkdir()
+    sess = BotSession(
+        id="old",
+        name="old-codex",
+        workdir=str(workdir),
+        claude_session_id=sid,
+        backend="codex",
+        state="archived",
+    )
+    mgr.sessions[sess.id] = sess
+
+    tmux = MagicMock()
+    tmux.create_window = AsyncMock(return_value=(True, "ok", "project", "@9"))
+    monkeypatch.setattr(archive, "tmux_manager", tmux)
+
+    ok, _message = await archive.restore_session(MagicMock(), 42, sess)
+
+    assert ok is True
+    mgr.wait_for_session_map_entry.assert_not_awaited()  # type: ignore[attr-defined]
+    ws = mgr.get_window_state("@9")
+    assert ws.session_id == sid
+    assert ws.cwd == str(workdir)
+    assert ws.backend == "codex"
+    assert sess.window_id == "@9"
+
+
+@pytest.mark.asyncio
+async def test_codex_readable_previews_use_lightweight_codex_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text("{}\n")
+    session = SimpleNamespace(
+        session_id="codex-session",
+        summary="investigate archive latency",
+        file_path=str(rollout),
+    )
+    monkeypatch.setattr(session_manager, "agent_backend", "codex")
+    monkeypatch.setattr(
+        session_manager,
+        "get_user_settings",
+        lambda _uid: {"previews": "readable"},
+    )
+    monkeypatch.setattr(session_manager, "get_cached_summary", lambda *_args: None)
+
+    generated = AsyncMock(return_value="archive latency")
+    monkeypatch.setattr(dir_browser_cb, "generate_name", generated)
+    cached: list[tuple[str, str, float]] = []
+    cache_written = asyncio.Event()
+
+    def set_cached(sid: str, summary: str, mtime: float) -> None:
+        cached.append((sid, summary, mtime))
+        cache_written.set()
+
+    monkeypatch.setattr(session_manager, "set_cached_summary", set_cached)
+
+    initial = await dir_browser_cb.resolve_session_summaries([session], user_id=42)
+    await asyncio.wait_for(cache_written.wait(), timeout=1.0)
+
+    assert initial == {"codex-session": "investigate archive latency"}
+    generated.assert_awaited_once_with("investigate archive latency", backend="codex")
+    assert cached[0][:2] == ("codex-session", "archive latency")
 
 
 def test_codex_rollout_normalizes_text_and_tools() -> None:

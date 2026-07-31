@@ -107,7 +107,7 @@ ccbot                           # 前台;生产环境用 systemd 单元
 | `CLAUDE_FLAGS`              | `--dangerously-skip-permissions` | 附加给 `claude` 的 flag |
 | `CODEX_COMMAND`             | `codex`      | Codex CLI 二进制 |
 | `CODEX_FLAGS`               | bypass + hooks + `--no-alt-screen` | 附加给 `codex` 的 flag |
-| `CODEX_NAMING_MODEL`        | `gpt-5.6-luna` | 仅用于 Codex 会话自动命名 |
+| `CODEX_NAMING_MODEL`        | `gpt-5.6-luna` | 用于 Codex 自动命名和可读预览的轻量模型 |
 | `SESSION_IDLE_TTL`          | `4h`         | 闲置多久后 active → archived |
 | `ARCHIVE_PURGE_AFTER`       | `14d`        | 归档会话从 state 中清除的时长 |
 | `QUOTA_ALERT_POLL_INTERVAL` | `10m`        | 实时 `/usage` 弹窗的采样间隔 |

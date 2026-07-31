@@ -76,6 +76,27 @@ def test_parses_codex_status_left_percentages() -> None:
     assert info.weekly.resets_at is not None
 
 
+def test_parses_codex_status_wrapped_reset_row() -> None:
+    now = datetime(2026, 7, 31, 17, 0).astimezone()
+    info = parse_codex_status_output(
+        """
+        │  Weekly limit:                       [█████████████████░░░] 87% left         │
+        │                                      (resets 18:04 on 6 Aug)                 │
+        │  GPT-5.3-Codex-Spark Weekly limit:   [████████████████████] 100% left        │
+        │                                      (resets 17:15 on 7 Aug)                 │
+        """,
+        now=now,
+    )
+
+    assert info is not None
+    assert info.five_hour is None
+    assert info.weekly is not None
+    assert info.weekly.used_percent == 13
+    assert info.weekly.resets_at is not None
+    reset = datetime.fromtimestamp(info.weekly.resets_at)
+    assert (reset.month, reset.day, reset.hour, reset.minute) == (8, 6, 18, 4)
+
+
 def test_parses_codex_status_used_percentages() -> None:
     info = parse_codex_status_output(
         "5h limit: 7% used\nWeekly limit: 23% used\n"

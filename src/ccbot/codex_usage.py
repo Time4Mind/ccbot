@@ -34,7 +34,11 @@ class CodexUsageInfo:
 _STATUS_LIMIT_RE = re.compile(
     r"(?im)^\s*[│|]?\s*(5h|weekly)\s+limit:\s*"
     r"(?:\[[^\]]*\]\s*)?(\d{1,3})%\s*(left|used)"
-    r"(?:\s*\(resets\s+([^\)]+)\))?"
+    # Codex 0.146 wraps the reset onto an indented continuation row:
+    # ``Weekly limit: ... 87% left`` + ``│ (resets 18:04 on 6 Aug)``.
+    # Older versions keep it on the limit row, so accept both layouts.
+    r"(?:[ \t]*[│|]?[ \t]*(?:\n[ \t]*[│|]?[ \t]*)?"
+    r"\(resets\s+([^\)]+)\))?"
 )
 _RESET_FORMATS = (
     "%H:%M on %d %b",

@@ -121,6 +121,50 @@ async def get_session_direct(session_id: str, cwd: str) -> ClaudeSession | None:
     return None
 
 
+def _context_fill_from_rollout(path: Path) -> tuple[int, int] | None:
+    """Return ``(used_tokens, context_window)`` from the latest token event.
+
+    Codex reports the current turn's complete token footprint and the actual
+    model context window in every ``token_count`` event.  Unlike cumulative
+    ``total_token_usage``, ``last_token_usage`` naturally drops after a
+    compaction and therefore represents the context that is live right now.
+    """
+    latest: tuple[int, int] | None = None
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                payload = data.get("payload")
+                if data.get("type") != "event_msg" or not isinstance(payload, dict):
+                    continue
+                if payload.get("type") != "token_count":
+                    continue
+                info = payload.get("info")
+                if not isinstance(info, dict):
+                    continue
+                usage = info.get("last_token_usage")
+                if not isinstance(usage, dict):
+                    continue
+                try:
+                    used = int(usage.get("total_tokens") or 0)
+                    window = int(info.get("model_context_window") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if used >= 0 and window > 0:
+                    latest = used, window
+    except OSError:
+        return None
+    return latest
+
+
+async def context_fill(path: Path) -> tuple[int, int] | None:
+    """Read the latest exact Codex context usage without blocking the bot loop."""
+    return await asyncio.to_thread(_context_fill_from_rollout, path)
+
+
 async def list_sessions_for_directory(cwd: str) -> list[ClaudeSession]:
     """Return the ten newest Codex sessions whose metadata cwd matches."""
     try:

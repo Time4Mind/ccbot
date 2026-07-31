@@ -5,12 +5,9 @@
    time transcription finishes. ``voice_handler`` reads
    ``active_window(user.id)`` into a local ``wid`` BEFORE the slow
    ``transcribe_voice`` await; the transcribed text is later dispatched
-   via that same captured ``wid``. Combined with python-telegram-bot's
-   default ``concurrent_updates=1`` (updates are processed strictly one
-   at a time — see ``Application.__process_update_wrapper`` gating in
-   ``process_update``), a session-switch callback that arrives after the
-   voice message cannot even start processing until ``voice_handler``'s
-   whole coroutine — including transcription — has finished.
+   via that same captured ``wid``. Later content for that session is held
+   by a per-session barrier, while session-switch callbacks remain
+   responsive during transcription.
 
 2. The reaction must match what a typed text message gets: an instant
    typing indicator fired before the slow step (transcription for
@@ -24,6 +21,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -51,6 +49,80 @@ def _make_context() -> MagicMock:
     context.bot = AsyncMock()
     context.user_data = {}
     return context
+
+
+def _make_text_update(user_id: int = 1, text: str = "follow-up") -> MagicMock:
+    update = MagicMock()
+    update.effective_user = MagicMock(id=user_id)
+    update.message = MagicMock()
+    update.message.text = text
+    update.message.message_id = 22
+    return update
+
+
+class TestVoiceMessageOrdering:
+    @pytest.mark.asyncio
+    async def test_text_waits_until_prior_voice_is_dispatched(self):
+        """A later text update cannot reach its routing path before the
+        preceding voice update has completed transcription and dispatch."""
+        voice_update = _make_voice_update()
+        text_update = _make_text_update()
+        context = _make_context()
+        voice_started = asyncio.Event()
+        finish_voice = asyncio.Event()
+        events: list[str] = []
+
+        async def _slow_voice(*args, **kwargs):
+            events.append("voice-start")
+            voice_started.set()
+            await finish_voice.wait()
+            events.append("voice-dispatched")
+
+        async def _dispatch_text(*args, **kwargs):
+            events.append("text-dispatched")
+
+        with (
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.active_window", return_value="@5"),
+            patch("ccbot.bot.messages.resolve_voice_backend", return_value="whisper"),
+            patch(
+                "ccbot.bot.messages._process_voice",
+                new=AsyncMock(side_effect=_slow_voice),
+            ),
+            patch(
+                "ccbot.bot.messages.maybe_consume_code",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "ccbot.bot.messages._route_reply_quote",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "ccbot.bot.messages._resolve_active_window",
+                new=AsyncMock(return_value="@5"),
+            ),
+            patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
+            patch(
+                "ccbot.bot.messages._intercept_if_pending_ui",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "ccbot.bot.messages._dispatch_text_to_active",
+                new=AsyncMock(side_effect=_dispatch_text),
+            ),
+        ):
+            from ccbot.bot.messages import text_handler, voice_handler
+
+            voice_task = asyncio.create_task(voice_handler(voice_update, context))
+            await voice_started.wait()
+            text_task = asyncio.create_task(text_handler(text_update, context))
+            await asyncio.sleep(0)
+
+            assert events == ["voice-start"]
+            finish_voice.set()
+            await asyncio.gather(voice_task, text_task)
+
+        assert events == ["voice-start", "voice-dispatched", "text-dispatched"]
 
 
 class TestVoiceSessionPinning:

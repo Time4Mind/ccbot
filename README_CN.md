@@ -271,8 +271,9 @@ Enter / Esc 键盘。
 每个活动会话拥有一条机器人持续编辑的实时卡片 — 表头、分页正文、
 后台面板、底部键盘。你每发一条消息,卡片就会重新发布到你的消息
 下方(现在只有这一种行为;旧的 `Card position` 设置已移除)。后台
-面板上方会打印该会话的 `context: N%` — 由 JSONL 计算出的 Claude
-Code `/context` 近似值,通常与弹窗相差 ±10 % 以内。
+面板上方会打印该会话的 `context: N%` — Codex 使用 rollout 中准确的
+`token_count`,Claude 使用由 JSONL 计算出的 Claude Code `/context`
+近似值,通常与弹窗相差 ±10 % 以内。
 
 卡片相关开关在 *设置 → 🃏 卡片 / 视图*:
 

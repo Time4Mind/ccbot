@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from ccbot.session import SessionManager
-from ccbot.usage import parse_session_usage
+from ccbot.session import Session, SessionManager
+from ccbot.usage import context_pct_for_session, parse_session_usage
 
 
 @pytest.fixture
@@ -65,6 +65,99 @@ class TestParseSessionUsage:
         )
         turns = await parse_session_usage(f)
         assert turns == []
+
+
+class TestCodexContextUsage:
+    @pytest.mark.asyncio
+    async def test_uses_latest_exact_token_count_and_window(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        rollout = tmp_path / "rollout.jsonl"
+        _write_jsonl(
+            rollout,
+            [
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "last_token_usage": {"total_tokens": 25_000},
+                            "model_context_window": 250_000,
+                        },
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "last_token_usage": {"total_tokens": 64_600},
+                            "model_context_window": 258_400,
+                        },
+                    },
+                },
+            ],
+        )
+        sess = Session(
+            id="codex1",
+            name="codex",
+            workdir=str(tmp_path),
+            claude_session_id="codex-session-id",
+            backend="codex",
+        )
+        monkeypatch.setattr(
+            "ccbot.codex_session_io.build_session_file_path",
+            lambda session_id, cwd="": rollout,
+        )
+
+        assert await context_pct_for_session(sess) == 25
+
+    @pytest.mark.asyncio
+    async def test_compaction_uses_latest_non_cumulative_value(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        rollout = tmp_path / "rollout.jsonl"
+        _write_jsonl(
+            rollout,
+            [
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 2_000_000},
+                            "last_token_usage": {"total_tokens": 200_000},
+                            "model_context_window": 250_000,
+                        },
+                    },
+                },
+                {"type": "event_msg", "payload": {"type": "context_compacted"}},
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 2_050_000},
+                            "last_token_usage": {"total_tokens": 50_000},
+                            "model_context_window": 250_000,
+                        },
+                    },
+                },
+            ],
+        )
+        sess = Session(
+            id="codex2",
+            name="codex",
+            workdir=str(tmp_path),
+            claude_session_id="codex-session-id",
+            backend="codex",
+        )
+        monkeypatch.setattr(
+            "ccbot.codex_session_io.build_session_file_path",
+            lambda session_id, cwd="": rollout,
+        )
+
+        assert await context_pct_for_session(sess) == 20
 
     @pytest.mark.asyncio
     async def test_handles_malformed_json_lines(self, tmp_path: Path) -> None:

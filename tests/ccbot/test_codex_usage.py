@@ -98,9 +98,7 @@ def test_parses_codex_status_wrapped_reset_row() -> None:
 
 
 def test_parses_codex_status_used_percentages() -> None:
-    info = parse_codex_status_output(
-        "5h limit: 7% used\nWeekly limit: 23% used\n"
-    )
+    info = parse_codex_status_output("5h limit: 7% used\nWeekly limit: 23% used\n")
 
     assert info is not None
     assert info.five_hour is not None

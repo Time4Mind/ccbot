@@ -199,9 +199,7 @@ class TestExtractInteractiveContent:
 
     def test_codex_numbered_permission_cursor_is_recognized(self):
         pane = (
-            "› 1. Yes, proceed (y)\n"
-            "  2. Yes, and don't ask again (p)\n"
-            "  3. No (esc)\n"
+            "› 1. Yes, proceed (y)\n  2. Yes, and don't ask again (p)\n  3. No (esc)\n"
         )
         result = extract_interactive_content(pane)
         assert result is not None

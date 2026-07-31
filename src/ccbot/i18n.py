@@ -103,7 +103,7 @@ _EN: dict[str, str] = {
     ),
     "auth.codex.storage_mismatch": (
         "⚠ Codex found `auth.json`, but its effective credential storage does "
-        "not read it. Set `cli_auth_credentials_store = \"file\"`; the bot "
+        'not read it. Set `cli_auth_credentials_store = "file"`; the bot '
         "will not replace the existing authorization."
     ),
     "btn.confirm": "✓ Confirm",
@@ -599,7 +599,7 @@ _RU: dict[str, str] = {
     ),
     "auth.codex.storage_mismatch": (
         "⚠ Codex нашел `auth.json`, но effective credential storage его не "
-        "читает. Установи `cli_auth_credentials_store = \"file\"`; бот не "
+        'читает. Установи `cli_auth_credentials_store = "file"`; бот не '
         "будет заменять существующую авторизацию."
     ),
     "btn.confirm": "✓ Подтвердить",
@@ -1055,7 +1055,7 @@ _ZH: dict[str, str] = {
     ),
     "auth.codex.storage_mismatch": (
         "⚠ Codex 找到了 `auth.json`,但当前凭据存储不会读取它。请设置 "
-        "`cli_auth_credentials_store = \"file\"`;机器人不会替换现有授权。"
+        '`cli_auth_credentials_store = "file"`;机器人不会替换现有授权。'
     ),
     "btn.confirm": "✓ 确认",
     "btn.no": "× 否",

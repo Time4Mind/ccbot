@@ -100,9 +100,7 @@ UI_PATTERNS: list[UIPattern] = [
             re.compile(r"^\s*Would you like to run this command\?"),
         ),
         bottom=(
-            re.compile(
-                r"^\s*Press enter to confirm or esc to cancel", re.IGNORECASE
-            ),
+            re.compile(r"^\s*Press enter to confirm or esc to cancel", re.IGNORECASE),
         ),
     ),
     UIPattern(

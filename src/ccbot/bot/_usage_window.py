@@ -285,9 +285,7 @@ async def _wait_for_codex_usage_prompt(wid: str) -> bool:
                 or "sign in with device code" in lower
                 or "provide your own api key" in lower
             ):
-                logger.info(
-                    "Codex usage window is waiting for account authorization"
-                )
+                logger.info("Codex usage window is waiting for account authorization")
                 return False
             if "openai codex" in lower and ("›" in pane or ">" in pane):
                 return True

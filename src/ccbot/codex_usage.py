@@ -5,8 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shlex
+import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from .config import config
@@ -25,6 +29,78 @@ class CodexRateLimitWindow:
 class CodexUsageInfo:
     five_hour: CodexRateLimitWindow | None = None
     weekly: CodexRateLimitWindow | None = None
+
+
+_STATUS_LIMIT_RE = re.compile(
+    r"(?im)^\s*[│|]?\s*(5h|weekly)\s+limit:\s*"
+    r"(?:\[[^\]]*\]\s*)?(\d{1,3})%\s*(left|used)"
+    # Codex 0.146 wraps the reset onto an indented continuation row:
+    # ``Weekly limit: ... 87% left`` + ``│ (resets 18:04 on 6 Aug)``.
+    # Older versions keep it on the limit row, so accept both layouts.
+    r"(?:[ \t]*[│|]?[ \t]*(?:\n[ \t]*[│|]?[ \t]*)?"
+    r"\(resets\s+([^\)]+)\))?"
+)
+_RESET_FORMATS = (
+    "%H:%M on %d %b",
+    "%I:%M %p on %d %b",
+    "%H:%M",
+    "%I:%M %p",
+)
+
+
+def _parse_status_reset(value: str | None, now: datetime | None = None) -> int | None:
+    """Parse the local reset labels printed by Codex ``/status``."""
+    if not value:
+        return None
+    current = now or datetime.now().astimezone()
+    for fmt in _RESET_FORMATS:
+        try:
+            source = value.strip()
+            parse_fmt = fmt
+            if "%d" in fmt:
+                source = f"{source} {current.year}"
+                parse_fmt = f"{fmt} %Y"
+            parsed = datetime.strptime(source, parse_fmt)
+        except ValueError:
+            continue
+        if "%d" in fmt:
+            candidate = parsed.replace(year=current.year, tzinfo=current.tzinfo)
+            if candidate < current - timedelta(days=1):
+                candidate = candidate.replace(year=current.year + 1)
+        else:
+            candidate = current.replace(
+                hour=parsed.hour,
+                minute=parsed.minute,
+                second=0,
+                microsecond=0,
+            )
+            if candidate <= current:
+                candidate += timedelta(days=1)
+        return int(candidate.timestamp())
+    return None
+
+
+def parse_codex_status_output(
+    text: str, *, now: datetime | None = None
+) -> CodexUsageInfo | None:
+    """Parse the rate-limit rows rendered by the Codex TUI ``/status`` command."""
+    windows: dict[str, CodexRateLimitWindow] = {}
+    for match in _STATUS_LIMIT_RE.finditer(text):
+        label, percent_raw, direction, reset_raw = match.groups()
+        percent = max(0, min(100, int(percent_raw)))
+        used = 100 - percent if direction.lower() == "left" else percent
+        key = "five_hour" if label.lower() == "5h" else "weekly"
+        windows[key] = CodexRateLimitWindow(
+            used_percent=used,
+            duration_minutes=300 if key == "five_hour" else 10_080,
+            resets_at=_parse_status_reset(reset_raw, now),
+        )
+    if not windows:
+        return None
+    return CodexUsageInfo(
+        five_hour=windows.get("five_hour"),
+        weekly=windows.get("weekly"),
+    )
 
 
 def parse_rate_limits_result(result: object) -> CodexUsageInfo | None:
@@ -80,13 +156,81 @@ def parse_rate_limits_result(result: object) -> CodexUsageInfo | None:
     return CodexUsageInfo(five_hour=five_hour, weekly=weekly)
 
 
+def parse_rollout_rate_limits(rate_limits: object) -> CodexUsageInfo | None:
+    """Normalize ``event_msg.token_count.rate_limits`` from a Codex rollout."""
+    if not isinstance(rate_limits, dict):
+        return None
+    normalized: dict[str, object] = {}
+    for key in ("primary", "secondary"):
+        raw = rate_limits.get(key)
+        if not isinstance(raw, dict):
+            normalized[key] = None
+            continue
+        normalized[key] = {
+            "usedPercent": raw.get("used_percent"),
+            "windowDurationMins": raw.get("window_minutes"),
+            "resetsAt": raw.get("resets_at"),
+        }
+    return parse_rate_limits_result({"rateLimits": normalized})
+
+
+def read_latest_rollout_usage(
+    sessions_path: Path | None = None,
+) -> CodexUsageInfo | None:
+    """Read the freshest limits emitted by an already-running Codex session.
+
+    Working Codex processes include account rate limits in token-count rollout
+    events after each response. This remains available when a newly spawned
+    app-server process cannot reconstruct account state from the credential
+    cache. Only recent files are considered so Status never presents an old
+    weekly value as live data.
+    """
+    root = sessions_path or config.codex_sessions_path
+    try:
+        paths = sorted(
+            root.rglob("rollout-*.jsonl"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError as e:
+        logger.debug("Codex rollout usage discovery failed: %s", e)
+        return None
+
+    now = time.time()
+    for path in paths[:50]:
+        try:
+            stat = path.stat()
+            if now - stat.st_mtime > 24 * 60 * 60:
+                break
+            with path.open("rb") as stream:
+                stream.seek(max(0, stat.st_size - 1024 * 1024))
+                lines = stream.read().splitlines()
+        except OSError:
+            continue
+        for line in reversed(lines):
+            try:
+                message = json.loads(line)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if message.get("type") != "event_msg":
+                continue
+            payload = message.get("payload")
+            if not isinstance(payload, dict) or payload.get("type") != "token_count":
+                continue
+            info = parse_rollout_rate_limits(payload.get("rate_limits"))
+            if info is not None:
+                return info
+    return None
+
+
 async def fetch_codex_usage(timeout: float = 12.0) -> CodexUsageInfo | None:
     """Fetch limits without opening or sending keys to any Codex TUI session."""
     command = shlex.split(config.codex_command)
     if not command:
-        return None
+        return await asyncio.to_thread(read_latest_rollout_usage)
 
     proc: asyncio.subprocess.Process | None = None
+    usage: CodexUsageInfo | None = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *command,
@@ -96,7 +240,7 @@ async def fetch_codex_usage(timeout: float = 12.0) -> CodexUsageInfo | None:
             stderr=asyncio.subprocess.PIPE,
         )
         if proc.stdin is None or proc.stdout is None:
-            return None
+            raise OSError("Codex app-server did not expose stdio")
         stdin = proc.stdin
         stdout = proc.stdout
 
@@ -135,10 +279,9 @@ async def fetch_codex_usage(timeout: float = 12.0) -> CodexUsageInfo | None:
                 return parse_rate_limits_result(response.get("result"))
             return None
 
-        return await asyncio.wait_for(_read_result(), timeout=timeout)
+        usage = await asyncio.wait_for(_read_result(), timeout=timeout)
     except (OSError, asyncio.TimeoutError) as e:
         logger.debug("Codex usage fetch failed: %s", e)
-        return None
     finally:
         if proc is not None and proc.returncode is None:
             try:
@@ -153,3 +296,6 @@ async def fetch_codex_usage(timeout: float = 12.0) -> CodexUsageInfo | None:
                 except ProcessLookupError:
                     pass
                 await proc.wait()
+    if usage is not None:
+        return usage
+    return await asyncio.to_thread(read_latest_rollout_usage)

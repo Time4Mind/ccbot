@@ -131,6 +131,16 @@ async def handle(
                     changed = bg_status.clear_for_user_session(user.id, old_sess.id)
                 elif inferred == "working":
                     changed = bg_status.update_status(user.id, old_sess.id, "working")
+                    try:
+                        from ...usage import context_pct_for_session
+
+                        pct = await context_pct_for_session(old_sess)
+                    except Exception as e:
+                        logger.debug("infer bg context failed: %s", e)
+                        pct = None
+                    if pct is not None:
+                        bg_status.set_context_pct(user.id, old_sess.id, pct)
+                        changed = True
                 if changed:
                     try:
                         from ...handlers.notifications import refresh_panel

@@ -79,3 +79,63 @@ async def test_unsettled_read_returns_none(monkeypatch: pytest.MonkeyPatch):
     info = await _usage_window._poll_usage_modal("@1")
 
     assert info is None
+
+
+@pytest.mark.asyncio
+async def test_codex_status_uses_parked_prompt(monkeypatch: pytest.MonkeyPatch):
+    frames = iter(
+        [
+            "OpenAI Codex\n›",
+            "5h limit: 80% left\nWeekly limit: 60% left",
+            "5h limit: 80% left\nWeekly limit: 60% left",
+        ]
+    )
+    monkeypatch.setattr(
+        _usage_window, "_capture_with_scrollback", _capture_returning(frames)
+    )
+
+    info = await _usage_window._poll_codex_status("@2")
+
+    assert info is not None
+    assert info.five_hour is not None
+    assert info.five_hour.used_percent == 20
+    assert info.weekly is not None
+    assert info.weekly.used_percent == 40
+
+
+@pytest.mark.asyncio
+async def test_codex_status_never_advances_sign_in_screen(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        _usage_window,
+        "_capture_with_scrollback",
+        _capture_returning(iter(["Sign in with ChatGPT\nSign in with Device Code"])),
+    )
+
+    info = await _usage_window._poll_codex_status("@2")
+
+    assert info is None
+
+
+@pytest.mark.asyncio
+async def test_codex_status_retries_after_refresh_request(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    frames = iter(
+        [
+            "OpenAI Codex\n›",
+            "Limits: refresh requested; run /status again shortly.",
+            "Weekly limit: 88% left",
+            "Weekly limit: 88% left",
+        ]
+    )
+    monkeypatch.setattr(
+        _usage_window, "_capture_with_scrollback", _capture_returning(frames)
+    )
+
+    info = await _usage_window._poll_codex_status("@2")
+
+    assert info is not None
+    assert info.weekly is not None
+    assert info.weekly.used_percent == 12

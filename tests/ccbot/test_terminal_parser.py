@@ -177,6 +177,34 @@ class TestExtractInteractiveContent:
         assert result.name == "PermissionPrompt"
         assert "Do you want to proceed?" in result.content
 
+    def test_codex_command_approval(self):
+        pane = (
+            "  Would you like to run the following command?\n"
+            "\n"
+            "  Environment: local\n"
+            "\n"
+            "  $ YT_PROXY=hahn python -c 'print(1)'\n"
+            "\n"
+            "› 1. Yes, proceed (y)\n"
+            "  2. Yes, and don't ask again (p)\n"
+            "  3. No, and tell Codex what to do differently (esc)\n"
+            "\n"
+            "  Press enter to confirm or esc to cancel\n"
+        )
+        result = extract_interactive_content(pane)
+        assert result is not None
+        assert result.name == "CodexApproval"
+        assert "YT_PROXY=hahn" in result.content
+        assert "Press enter to confirm" in result.content
+
+    def test_codex_numbered_permission_cursor_is_recognized(self):
+        pane = (
+            "› 1. Yes, proceed (y)\n  2. Yes, and don't ask again (p)\n  3. No (esc)\n"
+        )
+        result = extract_interactive_content(pane)
+        assert result is not None
+        assert result.name == "PermissionPrompt"
+
     def test_restore_checkpoint(self):
         pane = (
             "  Restore the code to a previous state?\n"

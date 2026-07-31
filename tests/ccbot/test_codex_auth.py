@@ -151,7 +151,11 @@ async def test_startup_preflight_starts_device_login(
         started.append(user_id)
         return True
 
+    async def stored(**_kwargs: object) -> bool:
+        return False
+
     monkeypatch.setattr(auth_cmd.codex_auth, "read_account_state", fake_state)
+    monkeypatch.setattr(auth_cmd.codex_auth, "stored_login_available", stored)
     monkeypatch.setattr(
         auth_cmd.codex_auth, "has_cached_managed_credentials", lambda: False
     )
@@ -179,7 +183,11 @@ async def test_startup_preflight_defers_login_when_cache_exists(
     async def must_not_start(*_args: object, **_kwargs: object) -> bool:
         raise AssertionError("startup replaced cached auth with a device flow")
 
+    async def stored(**_kwargs: object) -> bool:
+        return True
+
     monkeypatch.setattr(auth_cmd.codex_auth, "read_account_state", fake_state)
+    monkeypatch.setattr(auth_cmd.codex_auth, "stored_login_available", stored)
     monkeypatch.setattr(
         auth_cmd.codex_auth, "has_cached_managed_credentials", lambda: True
     )
@@ -202,7 +210,11 @@ async def test_startup_preflight_is_silent_on_check_error_when_cache_exists(
     async def must_not_send(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("startup auth probe error produced a Telegram alert")
 
+    async def stored(**_kwargs: object) -> None:
+        return None
+
     monkeypatch.setattr(auth_cmd.codex_auth, "read_account_state", fake_state)
+    monkeypatch.setattr(auth_cmd.codex_auth, "stored_login_available", stored)
     monkeypatch.setattr(
         auth_cmd.codex_auth, "has_cached_managed_credentials", lambda: True
     )
@@ -260,6 +272,43 @@ async def test_runtime_auth_check_refreshes_before_starting_login(
     assert state_calls == [
         {"refresh_token": True, "command": auth_cmd.config.codex_command}
     ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_auth_storage_mismatch_never_starts_replacement_login(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ccbot.bot.commands import auth as auth_cmd
+
+    monkeypatch.setattr(auth_cmd.session_manager, "agent_backend", "codex")
+    auth_cmd._codex_storage_mismatch_notified.clear()
+
+    async def fake_state(**_kwargs: object) -> codex_auth.CodexAccountState:
+        return codex_auth.CodexAccountState(None, None, None, True)
+
+    async def stored(**_kwargs: object) -> bool:
+        return False
+
+    async def must_not_start(*_args: object, **_kwargs: object) -> bool:
+        raise AssertionError("storage mismatch started a replacement login")
+
+    sent: list[str] = []
+
+    async def fake_send(
+        _bot: object, _user_id: int, text: str, **_kwargs: object
+    ) -> None:
+        sent.append(text)
+
+    monkeypatch.setattr(auth_cmd.codex_auth, "read_account_state", fake_state)
+    monkeypatch.setattr(auth_cmd.codex_auth, "stored_login_available", stored)
+    monkeypatch.setattr(
+        auth_cmd.codex_auth, "has_cached_managed_credentials", lambda: True
+    )
+    monkeypatch.setattr(auth_cmd, "start_login", must_not_start)
+    monkeypatch.setattr(auth_cmd, "safe_send", fake_send)
+
+    assert await auth_cmd.ensure_codex_authenticated(object(), 7) is False
+    assert len(sent) == 1
 
 
 @pytest.mark.asyncio

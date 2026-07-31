@@ -81,7 +81,7 @@ class BgStatus:
     pending_interactive_ui: tuple[str, str] | None = None  # (content, ui_name)
     # Latest known context-fill percent for this session, sourced from
     # the JSONL transcript by ``usage.context_pct_for_session`` after each
-    # assistant turn. Rendered as ``context N%`` in the panel row.
+    # assistant turn. Rendered compactly as ``N%`` in the panel row.
     context_pct: int | None = None
 
 
@@ -236,7 +236,7 @@ def clear_for_user_session(user_id: int, session_id: str) -> bool:
 
 
 def _badge(sess: "Session", entry: BgStatus) -> str:
-    """Render one panel row: ``<emoji> <name> <status_glyph> [context N%]``.
+    """Render one panel row: ``<emoji> <name> <status_glyph> [N%]``.
 
     The context-fill suffix sits AFTER all the status emoji so a glance
     parses status-first, fill-second (pivot #43 feedback). When pct is
@@ -250,7 +250,7 @@ def _badge(sess: "Session", entry: BgStatus) -> str:
     parts = [sess_emoji, name, status_glyph]
     line = " ".join(p for p in parts if p)
     if entry.context_pct is not None:
-        line = f"{line} · context {entry.context_pct}%"
+        line = f"{line} · {entry.context_pct}%"
     return line
 
 

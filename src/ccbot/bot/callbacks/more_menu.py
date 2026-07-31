@@ -134,6 +134,8 @@ async def handle(
         from ...usage import format_usage_breakdown_compact
 
         live_block = format_usage_breakdown_compact(user.id, usage_info)
+        # Status is a read-only operation. Failure to load quota data must not
+        # start or replace the user's otherwise-working Codex authorization.
         text = live_block or t(user.id, "usage.unavailable")
         await safe_edit(query, text, reply_markup=kb)
         return True

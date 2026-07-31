@@ -28,6 +28,7 @@ from ..session import session_manager
 if TYPE_CHECKING:
     from ..session_models import Session
 from ..terminal_parser import (
+    InteractiveUIContent,
     extract_interactive_content,
     is_interactive_ui,
     parse_status_line,
@@ -52,7 +53,7 @@ from .notifications import (
 from .typing import fire_typing
 
 # Match option lines like "  1. Yes" / " ❯ 2. Yes, and don't ask again".
-_OPTION_LINE_RE = re.compile(r"^[\s❯>]*?(\d+)\.\s+(.+?)\s*$")
+_OPTION_LINE_RE = re.compile(r"^[\s❯›>]*?(\d+)\.\s+(.+?)\s*$")
 
 # kb-mode teardown debounce. terminal_parser detection over a live TUI
 # flickers: a single redraw frame, a partial pane capture, or the cursor
@@ -165,7 +166,9 @@ def _parse_best_yes_option(pane_text: str) -> str | None:
     return first_yes
 
 
-def _auto_approve_signature(pane_text: str) -> str:
+def _auto_approve_signature(
+    pane_text: str, content: InteractiveUIContent | None = None
+) -> str:
     """Stable identity of the on-screen prompt for attempt-tracking.
 
     Prefers the extracted prompt body + name so distinct prompts (a
@@ -174,7 +177,8 @@ def _auto_approve_signature(pane_text: str) -> str:
     signature. Falls back to the numbered option block when extraction
     returns None.
     """
-    content = extract_interactive_content(pane_text)
+    if content is None:
+        content = extract_interactive_content(pane_text)
     if content is not None:
         return f"{content.name}\x1f{content.content}"
     opts = [
@@ -196,12 +200,17 @@ async def _maybe_auto_approve(user_id: int, window_id: str, pane_text: str) -> b
     mode = session_manager.get_user_settings(user_id).get("auto_approve", "off")
     if mode != "on":
         return False
-    digit = _parse_best_yes_option(pane_text)
+    content = extract_interactive_content(pane_text)
+    # Codex exposes explicit one-key shortcuts (``Yes, proceed (y)``).
+    # Its printed option number is not the documented hotkey, unlike Claude's
+    # numbered menus, so send ``y`` without an extra Enter.
+    codex_approval = content is not None and content.name == "CodexApproval"
+    digit = "y" if codex_approval else _parse_best_yes_option(pane_text)
     if digit is None:
         return False
 
     key = (user_id, window_id)
-    sig = _auto_approve_signature(pane_text)
+    sig = _auto_approve_signature(pane_text, content)
     prog = _auto_approve_progress(pane_text)
     prev_sig, prev_prog, attempts = _auto_approve_attempts.get(key, ("", "", 0))
     # A failed attempt = same prompt AND nothing on the pane advanced since our
@@ -228,7 +237,9 @@ async def _maybe_auto_approve(user_id: int, window_id: str, pane_text: str) -> b
 
     # Number-key shortcut: typing the digit picks the option, Enter submits.
     try:
-        await tmux_manager.send_keys(window_id, digit, enter=True)
+        await tmux_manager.send_keys(
+            window_id, digit, enter=not codex_approval, literal=codex_approval
+        )
     except Exception as e:
         logger.debug("auto_approve send_keys failed: %s", e)
         return False

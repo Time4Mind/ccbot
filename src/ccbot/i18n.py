@@ -101,6 +101,11 @@ _EN: dict[str, str] = {
         "❌ Could not check Codex authorization. Verify `codex --version` and "
         "`CODEX_COMMAND`, then send /login."
     ),
+    "auth.codex.storage_mismatch": (
+        "⚠ Codex found `auth.json`, but its effective credential storage does "
+        'not read it. Set `cli_auth_credentials_store = "file"`; the bot '
+        "will not replace the existing authorization."
+    ),
     "btn.confirm": "✓ Confirm",
     "btn.no": "× No",
     "btn.yes_kill": "⚠ Yes, kill",
@@ -242,6 +247,10 @@ _EN: dict[str, str] = {
     "usage.title": "*Claude Code*",
     "usage.title.codex": "*OpenAI Codex*",
     "usage.unavailable": "Live usage unavailable.",
+    "usage.auth_required": (
+        "Codex authorization is required to load Usage. Complete the sign-in "
+        "sent above, then refresh this screen."
+    ),
     "usage.5h": "5h",
     "usage.week": "week",
     "usage.week_sonnet": "week (Sonnet)",
@@ -588,6 +597,11 @@ _RU: dict[str, str] = {
         "❌ Не удалось проверить авторизацию Codex. Проверь `codex --version` "
         "и `CODEX_COMMAND`, затем отправь /login."
     ),
+    "auth.codex.storage_mismatch": (
+        "⚠ Codex нашел `auth.json`, но effective credential storage его не "
+        'читает. Установи `cli_auth_credentials_store = "file"`; бот не '
+        "будет заменять существующую авторизацию."
+    ),
     "btn.confirm": "✓ Подтвердить",
     "btn.no": "× Нет",
     "btn.yes_kill": "⚠ Да, убить",
@@ -718,6 +732,10 @@ _RU: dict[str, str] = {
     "usage.title": "*Claude Code*",
     "usage.title.codex": "*OpenAI Codex*",
     "usage.unavailable": "Живые данные usage недоступны.",
+    "usage.auth_required": (
+        "Для загрузки Usage нужна авторизация Codex. Заверши вход по сообщению "
+        "выше, затем обнови этот экран."
+    ),
     "usage.5h": "5ч",
     "usage.week": "неделя",
     "usage.week_sonnet": "неделя (Sonnet)",
@@ -1035,6 +1053,10 @@ _ZH: dict[str, str] = {
         "❌ 无法检查 Codex 授权。请检查 `codex --version` 和 "
         "`CODEX_COMMAND`,然后发送 /login。"
     ),
+    "auth.codex.storage_mismatch": (
+        "⚠ Codex 找到了 `auth.json`,但当前凭据存储不会读取它。请设置 "
+        '`cli_auth_credentials_store = "file"`;机器人不会替换现有授权。'
+    ),
     "btn.confirm": "✓ 确认",
     "btn.no": "× 否",
     "btn.yes_kill": "⚠ 是，终止",
@@ -1155,6 +1177,7 @@ _ZH: dict[str, str] = {
     "usage.title": "*Claude Code*",
     "usage.title.codex": "*OpenAI Codex*",
     "usage.unavailable": "实时使用数据不可用。",
+    "usage.auth_required": "加载 Usage 需要 Codex 授权。请完成上方登录，然后刷新此页面。",
     "usage.5h": "5小时",
     "usage.week": "本周",
     "usage.week_sonnet": "本周 (Sonnet)",

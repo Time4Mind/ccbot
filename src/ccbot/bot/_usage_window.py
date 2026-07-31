@@ -1,9 +1,13 @@
-"""Dedicated long-lived tmux window for /usage queries.
+"""Dedicated long-lived tmux windows for agent quota queries.
 
 Spinning up a separate ``ccbot-usage`` window with its own Claude Code
 process means the Status screen never has to interrupt whatever the
 user's active session is doing — and ``/usage`` is a UI-only modal so
 running it in a parked window costs nothing token-wise.
+
+Codex uses the same isolation model in ``ccbot-codex-usage`` and reads the
+5-hour / weekly rows from its ``/status`` output. It never sends commands to
+one of the user's working Codex sessions.
 
 Public API:
   fetch_live_usage() -> UsageInfo | CodexUsageInfo | None
@@ -21,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 USAGE_WINDOW_NAME = "ccbot-usage"
+CODEX_USAGE_WINDOW_NAME = "ccbot-codex-usage"
 _usage_window_lock = asyncio.Lock()
 
 
@@ -252,12 +257,106 @@ async def fetch_claude_usage() -> object | None:
         return await _poll_usage_modal(wid)
 
 
+async def _ensure_codex_usage_window() -> str | None:
+    """Find or create the parked Codex process used only for ``/status``."""
+    w = await tmux_manager.find_window_by_name(CODEX_USAGE_WINDOW_NAME)
+    if w:
+        return w.window_id
+    success, message, _wname, wid = await tmux_manager.create_window(
+        str(Path.home()),
+        window_name=CODEX_USAGE_WINDOW_NAME,
+        start_claude=True,
+        backend="codex",
+    )
+    if not success:
+        logger.debug("ensure_codex_usage_window: create failed: %s", message)
+        return None
+    return wid
+
+
+async def _wait_for_codex_usage_prompt(wid: str) -> bool:
+    """Wait until Codex is ready, without advancing an authorization screen."""
+    for _ in range(30):  # up to 9 seconds for the Node wrapper and TUI
+        pane = await _capture_with_scrollback(wid)
+        if pane:
+            lower = pane.lower()
+            if (
+                "sign in with chatgpt" in lower
+                or "sign in with device code" in lower
+                or "provide your own api key" in lower
+            ):
+                logger.info("Codex usage window is waiting for account authorization")
+                return False
+            if "openai codex" in lower and ("›" in pane or ">" in pane):
+                return True
+        await asyncio.sleep(0.3)
+    return False
+
+
+async def _poll_codex_status(wid: str) -> object | None:
+    """Request ``/status`` in the dedicated Codex window and parse its limits."""
+    from ..codex_usage import parse_codex_status_output
+
+    try:
+        if not await _wait_for_codex_usage_prompt(wid):
+            return None
+        for attempt in range(3):
+            await tmux_manager.send_keys(wid, "Escape", enter=False, literal=False)
+            await _clear_pane_history(wid)
+            await tmux_manager.send_keys(wid, "/status")
+            last: tuple[int | None, int | None] | None = None
+            refresh_requested = False
+            for _ in range(60):  # 12 seconds for the rate-limit rows to populate
+                await asyncio.sleep(0.2)
+                pane = await _capture_with_scrollback(wid)
+                if not pane:
+                    continue
+                if "refresh requested; run /status again shortly" in pane.lower():
+                    refresh_requested = True
+                    break
+                info = parse_codex_status_output(pane)
+                if info is None:
+                    continue
+                pair = (
+                    info.five_hour.used_percent if info.five_hour else None,
+                    info.weekly.used_percent if info.weekly else None,
+                )
+                if pair == last:
+                    return info
+                last = pair
+            if not refresh_requested:
+                break
+            logger.debug(
+                "Codex /status requested a refresh (attempt %d); retrying",
+                attempt + 1,
+            )
+            await asyncio.sleep(1.0)
+    except Exception as e:
+        logger.debug("fetch_codex_usage: tmux failed: %s", e)
+    return None
+
+
+async def fetch_codex_usage() -> object | None:
+    """Fetch Codex quotas through a dedicated, long-lived Codex TUI session.
+
+    The app-server / rollout reader remains a non-invasive fallback for hosts
+    where a newly launched Codex process is temporarily waiting for sign-in.
+    """
+    async with _usage_window_lock:
+        wid = await _ensure_codex_usage_window()
+        if wid:
+            info = await _poll_codex_status(wid)
+            if info is not None:
+                return info
+    from ..codex_usage import fetch_codex_usage as fetch_codex_usage_fallback
+
+    return await fetch_codex_usage_fallback()
+
+
 async def fetch_live_usage() -> object | None:
     """Fetch quota data for the currently selected agent backend."""
     from ..session import session_manager
 
     if session_manager.agent_backend == "codex":
-        from ..codex_usage import fetch_codex_usage
-
         return await fetch_codex_usage()
     return await fetch_claude_usage()

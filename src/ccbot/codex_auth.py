@@ -81,6 +81,44 @@ def has_cached_managed_credentials() -> bool:
     )
 
 
+async def stored_login_available(
+    *, command: str | None = None, timeout: float = 5.0
+) -> bool | None:
+    """Ask Codex whether its effective credential store contains a login.
+
+    This is intentionally separate from ``auth.json`` inspection: managed
+    macOS policy can force Keychain storage, in which case a leftover file is
+    not usable by newly launched Codex processes. ``None`` means the probe was
+    inconclusive and callers must not start a destructive replacement login.
+    """
+    argv = shlex.split(command or config.codex_command)
+    if not argv:
+        return None
+    env = dict(os.environ)
+    env.pop("TMUX", None)
+    for name in SENSITIVE_ENV_VARS:
+        env.pop(name, None)
+    proc: asyncio.subprocess.Process | None = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            "login",
+            "status",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=env,
+        )
+        return await asyncio.wait_for(proc.wait(), timeout=timeout) == 0
+    except (OSError, asyncio.TimeoutError):
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+        return None
+
+
 class _AppServerConnection:
     def __init__(self, command: str | None = None) -> None:
         self.command = command or config.codex_command

@@ -89,9 +89,24 @@ UI_PATTERNS: list[UIPattern] = [
         bottom=(re.compile(r"^\s*Esc to cancel"),),
     ),
     UIPattern(
+        # Codex command approval. Enterprise/MDM requirements may force
+        # ``approval_policy = unless-trusted`` even when ccbot launches Codex
+        # with ``--dangerously-bypass-approvals-and-sandbox``. Codex uses a
+        # different header/footer and cursor glyph from Claude, so without a
+        # dedicated pattern the command sits in tmux with no Telegram controls.
+        name="CodexApproval",
+        top=(
+            re.compile(r"^\s*Would you like to run the following command\?"),
+            re.compile(r"^\s*Would you like to run this command\?"),
+        ),
+        bottom=(
+            re.compile(r"^\s*Press enter to confirm or esc to cancel", re.IGNORECASE),
+        ),
+    ),
+    UIPattern(
         # Permission menu with numbered choices (no "Esc to cancel" line)
         name="PermissionPrompt",
-        top=(re.compile(r"^\s*❯\s*1\.\s*Yes"),),
+        top=(re.compile(r"^\s*[❯›>]\s*1\.\s*Yes"),),
         bottom=(),
         min_gap=2,
     ),

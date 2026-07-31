@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
+from pathlib import Path
 
-from ccbot.codex_usage import parse_rate_limits_result
+import pytest
+
+from ccbot import codex_usage
+from ccbot.codex_usage import (
+    parse_codex_status_output,
+    parse_rate_limits_result,
+    parse_rollout_rate_limits,
+    read_latest_rollout_usage,
+)
 from ccbot.usage import _daily_quota_budget, format_usage_breakdown_compact
 
 
@@ -45,6 +55,58 @@ def test_parses_five_hour_and_weekly_windows() -> None:
     assert "\n\nUsed: 61%" in rendered
 
 
+def test_parses_codex_status_left_percentages() -> None:
+    now = datetime(2026, 7, 31, 16, 0).astimezone()
+    info = parse_codex_status_output(
+        """
+        │  5h limit:     [██████████████████░░] 92% left (resets 18:24)
+        │  Weekly limit: [████████████████░░░░] 81% left (resets 12:37 on 2 Aug)
+        """,
+        now=now,
+    )
+
+    assert info is not None
+    assert info.five_hour is not None
+    assert info.five_hour.used_percent == 8
+    assert info.five_hour.duration_minutes == 300
+    assert info.five_hour.resets_at is not None
+    assert info.weekly is not None
+    assert info.weekly.used_percent == 19
+    assert info.weekly.duration_minutes == 10_080
+    assert info.weekly.resets_at is not None
+
+
+def test_parses_codex_status_wrapped_reset_row() -> None:
+    now = datetime(2026, 7, 31, 17, 0).astimezone()
+    info = parse_codex_status_output(
+        """
+        │  Weekly limit:                       [█████████████████░░░] 87% left         │
+        │                                      (resets 18:04 on 6 Aug)                 │
+        │  GPT-5.3-Codex-Spark Weekly limit:   [████████████████████] 100% left        │
+        │                                      (resets 17:15 on 7 Aug)                 │
+        """,
+        now=now,
+    )
+
+    assert info is not None
+    assert info.five_hour is None
+    assert info.weekly is not None
+    assert info.weekly.used_percent == 13
+    assert info.weekly.resets_at is not None
+    reset = datetime.fromtimestamp(info.weekly.resets_at)
+    assert (reset.month, reset.day, reset.hour, reset.minute) == (8, 6, 18, 4)
+
+
+def test_parses_codex_status_used_percentages() -> None:
+    info = parse_codex_status_output("5h limit: 7% used\nWeekly limit: 23% used\n")
+
+    assert info is not None
+    assert info.five_hour is not None
+    assert info.five_hour.used_percent == 7
+    assert info.weekly is not None
+    assert info.weekly.used_percent == 23
+
+
 def test_parses_weekly_only_response() -> None:
     info = parse_rate_limits_result(
         {
@@ -73,6 +135,99 @@ def test_parses_weekly_only_response() -> None:
 
 def test_rejects_missing_windows() -> None:
     assert parse_rate_limits_result({"rateLimits": {}}) is None
+
+
+def test_parses_snake_case_rollout_rate_limits() -> None:
+    info = parse_rollout_rate_limits(
+        {
+            "limit_id": "codex",
+            "primary": {
+                "used_percent": 11.0,
+                "window_minutes": 10_080,
+                "resets_at": 1_786_028_677,
+            },
+            "secondary": None,
+        }
+    )
+
+    assert info is not None
+    assert info.five_hour is None
+    assert info.weekly is not None
+    assert info.weekly.used_percent == 11
+    assert info.weekly.resets_at == 1_786_028_677
+
+
+def test_reads_latest_usage_from_recent_rollout(tmp_path: Path) -> None:
+    older = tmp_path / "2026" / "07" / "30" / "rollout-old.jsonl"
+    newer = tmp_path / "2026" / "07" / "31" / "rollout-new.jsonl"
+    older.parent.mkdir(parents=True)
+    newer.parent.mkdir(parents=True)
+
+    def token_event(used_percent: int) -> str:
+        return json.dumps(
+            {
+                "timestamp": "2026-07-31T12:00:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "rate_limits": {
+                        "primary": {
+                            "used_percent": used_percent,
+                            "window_minutes": 10_080,
+                            "resets_at": 1_786_028_677,
+                        },
+                        "secondary": None,
+                    },
+                },
+            }
+        )
+
+    older.write_text(token_event(7) + "\n")
+    newer.write_text(token_event(11) + "\n")
+
+    info = read_latest_rollout_usage(tmp_path)
+
+    assert info is not None
+    assert info.weekly is not None
+    assert info.weekly.used_percent == 11
+
+
+@pytest.mark.asyncio
+async def test_fetch_falls_back_to_rollout_when_app_server_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    rollout = tmp_path / "2026" / "07" / "31" / "rollout-live.jsonl"
+    rollout.parent.mkdir(parents=True)
+    rollout.write_text(
+        json.dumps(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "rate_limits": {
+                        "primary": {
+                            "used_percent": 12,
+                            "window_minutes": 10_080,
+                            "resets_at": 1_786_028_677,
+                        }
+                    },
+                },
+            }
+        )
+        + "\n"
+    )
+
+    async def app_server_fails(*_args: object, **_kwargs: object) -> None:
+        raise OSError("account unavailable")
+
+    monkeypatch.setattr(codex_usage.config, "codex_sessions_path", tmp_path)
+    monkeypatch.setattr(codex_usage.asyncio, "create_subprocess_exec", app_server_fails)
+
+    info = await codex_usage.fetch_codex_usage()
+
+    assert info is not None
+    assert info.weekly is not None
+    assert info.weekly.used_percent == 12
 
 
 def test_daily_budget_uses_equal_calendar_day_buckets() -> None:

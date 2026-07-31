@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 # failing event would bury the chat while every session is erroring out.
 _notified_walls: set[float] = set()
 _codex_watchers: set[asyncio.Task[None]] = set()
+_codex_storage_mismatch_notified: set[int] = set()
 
 
 def _fmt_deadline(ts: float | None) -> str:
@@ -132,6 +133,24 @@ async def ensure_codex_authenticated(bot: Bot, user_id: int) -> bool:
     )
     if state is not None and state.authenticated:
         return True
+    stored = await codex_auth.stored_login_available(command=config.codex_command)
+    if stored is True:
+        # account/read can lag or reject an expired ID token while the
+        # effective credential store is still valid for a new Codex process.
+        return True
+    cached_managed_credentials = codex_auth.has_cached_managed_credentials()
+    if stored is None and cached_managed_credentials:
+        # An inconclusive Keychain probe is not permission to replace auth.
+        return True
+    if stored is False and cached_managed_credentials:
+        logger.error(
+            "Codex auth storage mismatch: auth.json exists but the effective "
+            "credential store reports no login"
+        )
+        if user_id not in _codex_storage_mismatch_notified:
+            _codex_storage_mismatch_notified.add(user_id)
+            await safe_send(bot, user_id, t(user_id, "auth.codex.storage_mismatch"))
+        return False
     if codex_auth.get_flow(user_id) is None:
         await start_login(bot, user_id)
     else:
@@ -148,31 +167,49 @@ async def ensure_codex_auth_on_start(bot: Bot) -> None:
     state = await codex_auth.read_account_state(
         refresh_token=True, command=config.codex_command
     )
-    cached_managed_credentials = codex_auth.has_cached_managed_credentials()
-    if state is None:
-        if cached_managed_credentials:
-            logger.warning(
-                "Codex auth preflight was unavailable; cached managed "
-                "credentials are present, so startup login is deferred"
-            )
-            return
-        logger.warning("Codex auth preflight was unavailable")
-        for user_id in sorted(config.allowed_users):
-            await safe_send(bot, user_id, t(user_id, "auth.codex.check_failed"))
-        return
-    if state.authenticated:
+    if state is not None and state.authenticated:
         logger.info(
             "Codex account ready (type=%s, plan=%s)",
             state.account_type,
             state.plan_type,
         )
         return
-    if cached_managed_credentials:
+    stored = await codex_auth.stored_login_available(command=config.codex_command)
+    cached_managed_credentials = codex_auth.has_cached_managed_credentials()
+    if state is None:
+        if stored is True or (stored is None and cached_managed_credentials):
+            logger.warning(
+                "Codex auth preflight was unavailable; credential storage "
+                "may still be usable, so startup login is deferred"
+            )
+            return
+        logger.warning(
+            "Codex auth preflight was unavailable and effective storage "
+            "reports no login; starting device flow"
+        )
+    if stored is True:
         logger.warning(
             "Codex account/read remained unauthenticated after silent refresh; "
-            "cached managed credentials are present, so startup login is "
-            "deferred until a real Codex operation requires it"
+            "the effective credential store is logged in, so startup login "
+            "will not replace it"
         )
+        return
+    if stored is None and cached_managed_credentials:
+        logger.warning(
+            "Codex credential-store probe was inconclusive; cached managed "
+            "credentials are present, so startup login will not replace them"
+        )
+        return
+    if stored is False and cached_managed_credentials:
+        logger.error(
+            "Codex auth storage mismatch: auth.json exists but the effective "
+            "credential store reports no login; refusing replacement login"
+        )
+        for user_id in sorted(config.allowed_users):
+            if user_id in _codex_storage_mismatch_notified:
+                continue
+            _codex_storage_mismatch_notified.add(user_id)
+            await safe_send(bot, user_id, t(user_id, "auth.codex.storage_mismatch"))
         return
     logger.info("Codex account is not authenticated; starting device flow")
     for user_id in sorted(config.allowed_users):

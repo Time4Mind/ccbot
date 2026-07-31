@@ -33,6 +33,15 @@ _EN: dict[str, str] = {
         "(permission/question), so the transcribed text can't go in. "
         "Answer the prompt and resend the voice message."
     ),
+    "voice.download_failed": (
+        "🎙 Voice didn't reach the session: Telegram couldn't provide the "
+        "audio file after {attempts} attempts. Please resend the voice message."
+    ),
+    "voice.transcription_failed": (
+        "🎙 The voice message couldn't be recognized and didn't reach the "
+        "session. Please send it again."
+    ),
+    "voice.queued_dropped": "Messages sent after it didn't reach the session either.",
     # Footer buttons
     "btn.stop": "⏹ Stop",
     "btn.kill": "💀 Kill",
@@ -510,6 +519,15 @@ _RU: dict[str, str] = {
         "и распознанный текст туда не уходит. Ответь на запрос и перешли "
         "голосовое ещё раз."
     ),
+    "voice.download_failed": (
+        "🎙 Голосовое не дошло до сессии: Telegram не отдал аудиофайл после "
+        "{attempts} попыток. Отправь голосовое ещё раз."
+    ),
+    "voice.transcription_failed": (
+        "🎙 Голосовое не удалось распознать, и оно не дошло до сессии. "
+        "Отправь его ещё раз."
+    ),
+    "voice.queued_dropped": "Последующие сообщения тоже не дошли до сессии.",
     "btn.stop": "⏹ Стоп",
     "btn.kill": "💀 Убить",
     "btn.clear": "🧹 Очистить",
@@ -961,6 +979,12 @@ _ZH: dict[str, str] = {
         "🎙 语音未送达会话 —— 会话中有待处理的提示（授权/提问），"
         "转写文本无法送入。请先回应该提示，然后重新发送语音消息。"
     ),
+    "voice.download_failed": (
+        "🎙 语音未送达会话：Telegram 在 {attempts} 次尝试后仍无法提供音频文件。"
+        "请重新发送语音消息。"
+    ),
+    "voice.transcription_failed": "🎙 语音无法识别且未送达会话。请重新发送。",
+    "voice.queued_dropped": "之后发送的消息也未送达会话。",
     "btn.stop": "⏹ 停止",
     "btn.kill": "💀 终止",
     "btn.clear": "🧹 清空",

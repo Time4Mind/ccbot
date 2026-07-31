@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -32,6 +34,26 @@ def test_account_state_accepts_chatgpt_login() -> None:
     assert state is not None
     assert state.authenticated is True
     assert state.plan_type == "pro"
+
+
+def test_cached_managed_credentials_presence_check(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    auth_path = tmp_path / "auth.json"
+    auth_path.write_text(
+        json.dumps(
+            {
+                "auth_mode": "chatgpt",
+                "tokens": {"refresh_token": "present-but-never-logged"},
+            }
+        )
+    )
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+
+    assert codex_auth.has_cached_managed_credentials() is True
+
+    auth_path.write_text(json.dumps({"auth_mode": "chatgpt", "tokens": {}}))
+    assert codex_auth.has_cached_managed_credentials() is False
 
 
 class _FakeConnection:
@@ -117,7 +139,10 @@ async def test_startup_preflight_starts_device_login(
     monkeypatch.setattr(auth_cmd.session_manager, "agent_backend", "codex")
     monkeypatch.setattr(auth_cmd.config, "allowed_users", {7})
 
-    async def fake_state(**_kwargs: object) -> codex_auth.CodexAccountState:
+    state_calls: list[dict[str, object]] = []
+
+    async def fake_state(**kwargs: object) -> codex_auth.CodexAccountState:
+        state_calls.append(kwargs)
         return codex_auth.CodexAccountState(None, None, None, True)
 
     started: list[int] = []
@@ -127,11 +152,63 @@ async def test_startup_preflight_starts_device_login(
         return True
 
     monkeypatch.setattr(auth_cmd.codex_auth, "read_account_state", fake_state)
+    monkeypatch.setattr(
+        auth_cmd.codex_auth, "has_cached_managed_credentials", lambda: False
+    )
     monkeypatch.setattr(auth_cmd, "start_login", fake_start)
 
     await auth_cmd.ensure_codex_auth_on_start(object())
 
+    assert state_calls == [
+        {"refresh_token": True, "command": auth_cmd.config.codex_command}
+    ]
     assert started == [7]
+
+
+@pytest.mark.asyncio
+async def test_startup_preflight_defers_login_when_cache_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ccbot.bot.commands import auth as auth_cmd
+
+    monkeypatch.setattr(auth_cmd.session_manager, "agent_backend", "codex")
+
+    async def fake_state(**_kwargs: object) -> codex_auth.CodexAccountState:
+        return codex_auth.CodexAccountState(None, None, None, True)
+
+    async def must_not_start(*_args: object, **_kwargs: object) -> bool:
+        raise AssertionError("startup replaced cached auth with a device flow")
+
+    monkeypatch.setattr(auth_cmd.codex_auth, "read_account_state", fake_state)
+    monkeypatch.setattr(
+        auth_cmd.codex_auth, "has_cached_managed_credentials", lambda: True
+    )
+    monkeypatch.setattr(auth_cmd, "start_login", must_not_start)
+
+    await auth_cmd.ensure_codex_auth_on_start(object())
+
+
+@pytest.mark.asyncio
+async def test_startup_preflight_is_silent_on_check_error_when_cache_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ccbot.bot.commands import auth as auth_cmd
+
+    monkeypatch.setattr(auth_cmd.session_manager, "agent_backend", "codex")
+
+    async def fake_state(**_kwargs: object) -> None:
+        return None
+
+    async def must_not_send(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("startup auth probe error produced a Telegram alert")
+
+    monkeypatch.setattr(auth_cmd.codex_auth, "read_account_state", fake_state)
+    monkeypatch.setattr(
+        auth_cmd.codex_auth, "has_cached_managed_credentials", lambda: True
+    )
+    monkeypatch.setattr(auth_cmd, "safe_send", must_not_send)
+
+    await auth_cmd.ensure_codex_auth_on_start(object())
 
 
 @pytest.mark.asyncio
@@ -142,7 +219,10 @@ async def test_startup_preflight_is_silent_when_authenticated(
 
     monkeypatch.setattr(auth_cmd.session_manager, "agent_backend", "codex")
 
-    async def fake_state(**_kwargs: object) -> codex_auth.CodexAccountState:
+    state_calls: list[dict[str, object]] = []
+
+    async def fake_state(**kwargs: object) -> codex_auth.CodexAccountState:
+        state_calls.append(kwargs)
         return codex_auth.CodexAccountState("chatgpt", None, "plus", True)
 
     async def must_not_start(*_args: object, **_kwargs: object) -> bool:
@@ -152,6 +232,34 @@ async def test_startup_preflight_is_silent_when_authenticated(
     monkeypatch.setattr(auth_cmd, "start_login", must_not_start)
 
     await auth_cmd.ensure_codex_auth_on_start(object())
+    assert state_calls == [
+        {"refresh_token": True, "command": auth_cmd.config.codex_command}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_auth_check_refreshes_before_starting_login(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ccbot.bot.commands import auth as auth_cmd
+
+    monkeypatch.setattr(auth_cmd.session_manager, "agent_backend", "codex")
+    state_calls: list[dict[str, object]] = []
+
+    async def fake_state(**kwargs: object) -> codex_auth.CodexAccountState:
+        state_calls.append(kwargs)
+        return codex_auth.CodexAccountState("chatgpt", None, "plus", True)
+
+    async def must_not_start(*_args: object, **_kwargs: object) -> bool:
+        raise AssertionError("login flow started before silent token refresh")
+
+    monkeypatch.setattr(auth_cmd.codex_auth, "read_account_state", fake_state)
+    monkeypatch.setattr(auth_cmd, "start_login", must_not_start)
+
+    assert await auth_cmd.ensure_codex_authenticated(object(), 7) is True
+    assert state_calls == [
+        {"refresh_token": True, "command": auth_cmd.config.codex_command}
+    ]
 
 
 @pytest.mark.asyncio

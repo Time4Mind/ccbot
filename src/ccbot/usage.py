@@ -1,9 +1,9 @@
 """Per-user /usage modal renderer + per-session context-fill from JSONL.
 
-Context-fill % per session is computed from the JSONL transcript —
-sending the live ``/context`` command into the pane writes the modal
-output back into the JSONL (as a fake user turn) AND eats real tokens
-from claude's own context window. JSONL math is non-invasive.
+Context-fill % per session is computed from its JSONL transcript. Claude is
+estimated from the latest assistant input usage; Codex exposes exact current
+turn usage and the actual model window in ``token_count`` rollout events.
+Reading either format is non-invasive.
 
 Per-model denominator:
   * Claude 4.x (opus-4-*, sonnet-4-*) — 1 000 000 (extended context
@@ -115,15 +115,43 @@ async def parse_session_usage(file_path: Path) -> list[Turn]:
 
 
 async def context_pct_for_session(sess: Session) -> int | None:
-    """Latest assistant turn's full context size as % of the model's
-    budget. None when there's no JSONL data yet.
+    """Current session context size as % of its model budget.
+
+    For Codex this uses the latest rollout ``token_count`` event's exact
+    ``last_token_usage.total_tokens / model_context_window`` pair.
+    None is returned when the session has no usable JSONL data yet.
 
     "Full context size" = ``input_tokens + cache_creation_input_tokens
     + cache_read_input_tokens`` of the most recent assistant message.
     The model name is read from that same message and routed through
     :func:`_budget_for_model` — 200k for Haiku, 1M for everything else.
     """
-    if not sess.claude_session_id or not sess.workdir:
+    if not sess.claude_session_id:
+        return None
+    if sess.backend == "codex":
+        from . import codex_session_io
+
+        file_path: Path | None = None
+        if sess.window_id:
+            window_state = session_manager.window_states.get(sess.window_id)
+            if window_state and window_state.transcript_path:
+                candidate = Path(window_state.transcript_path)
+                if candidate.exists():
+                    file_path = candidate
+        if file_path is None:
+            file_path = codex_session_io.build_session_file_path(
+                sess.claude_session_id, sess.workdir
+            )
+        if file_path is None or not file_path.exists():
+            return None
+        context_fill = await codex_session_io.context_fill(file_path)
+        if context_fill is None:
+            return None
+        used_tokens, context_window = context_fill
+        pct = int(round(used_tokens * 100 / context_window))
+        return max(0, min(100, pct))
+
+    if not sess.workdir:
         return None
     file_path = session_claude_io.build_session_file_path(
         sess.claude_session_id, sess.workdir

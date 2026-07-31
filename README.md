@@ -315,7 +315,8 @@ Each active session owns one live card message that the bot keeps
 editing — header, paginated body, bg panel, footer keyboard. Every
 message you send reposts the card below your text (there is one
 canonical behaviour; the old `Card position` setting was retired).
-Above the bg panel it prints the session's `context: N%` — an
+Above the bg panel it prints the session's `context: N%` — Codex uses exact
+`token_count` rollout data, while Claude uses an
 approximation of Claude Code's `/context` computed from the JSONL,
 typically within ±10 % of the modal.
 

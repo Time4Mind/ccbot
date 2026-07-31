@@ -77,6 +77,36 @@ from .commands.auth import maybe_consume_code
 
 logger = logging.getLogger(__name__)
 
+# The tail of the voice-message chain for each session window.  Voice
+# transcription runs in a non-blocking PTB handler, so later updates can enter
+# their handlers while Whisper is still working.  Those handlers wait on the
+# tail that existed when they arrived, preserving Telegram message order.
+_voice_barriers: dict[tuple[int, str], asyncio.Future[None]] = {}
+
+
+def _enqueue_voice(
+    user_id: int, wid: str
+) -> tuple[asyncio.Future[None] | None, asyncio.Future[None]]:
+    key = (user_id, wid)
+    previous = _voice_barriers.get(key)
+    current = asyncio.get_running_loop().create_future()
+    _voice_barriers[key] = current
+    return previous, current
+
+
+async def _await_prior_voice(user_id: int, wid: str) -> None:
+    barrier = _voice_barriers.get((user_id, wid))
+    if barrier is not None:
+        await asyncio.shield(barrier)
+
+
+def _release_voice(user_id: int, wid: str, barrier: asyncio.Future[None]) -> None:
+    key = (user_id, wid)
+    if not barrier.done():
+        barrier.set_result(None)
+    if _voice_barriers.get(key) is barrier:
+        _voice_barriers.pop(key, None)
+
 
 # Telegram's Bot API caps file *downloads* (getFile) at 20 MB. A larger
 # upload surfaces here as BadRequest("file is too big") on .get_file();
@@ -250,6 +280,7 @@ async def forward_command_handler(
             update.message, "❌ No active session. Use /new to create one."
         )
         return
+    await _await_prior_voice(user.id, wid)
 
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
@@ -370,6 +401,9 @@ async def unsupported_content_handler(
     if not user or not is_user_allowed(user.id):
         return
     msg = update.message
+    wid_for_queue = active_window(user.id)
+    if wid_for_queue is not None:
+        await _await_prior_voice(user.id, wid_for_queue)
 
     caption = (msg.caption or "").strip()
     if caption:
@@ -476,6 +510,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "❌ No active session. Send a text message first or use /new.",
         )
         return
+    await _await_prior_voice(user.id, wid)
 
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
@@ -538,6 +573,7 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "❌ No active session. Send a text message first or use /new.",
         )
         return
+    await _await_prior_voice(user.id, wid)
 
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
@@ -596,6 +632,38 @@ async def _clear_voice_pending_marker(bot: Bot, user_id: int, sess: Session) -> 
 
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Queue a voice turn, then transcribe it without letting later messages pass."""
+    user = update.effective_user
+    if (
+        not user
+        or not is_user_allowed(user.id)
+        or not update.message
+        or not update.message.voice
+        or resolve_voice_backend(user.id) == "off"
+    ):
+        await _process_voice(update, context)
+        return
+
+    wid = active_window(user.id)
+    if wid is None:
+        await _process_voice(update, context)
+        return
+
+    previous, barrier = _enqueue_voice(user.id, wid)
+    try:
+        if previous is not None:
+            await asyncio.shield(previous)
+        await _process_voice(update, context, pinned_wid=wid)
+    finally:
+        _release_voice(user.id, wid, barrier)
+
+
+async def _process_voice(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    pinned_wid: str | None = None,
+) -> None:
     """Transcribe the voice and forward as text to the active session."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -611,7 +679,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if resolve_voice_backend(user.id) == "off":
         await safe_reply(update.message, "⚠ Voice is disabled (voice backend = off).")
         return
-    wid = active_window(user.id)
+    wid = pinned_wid or active_window(user.id)
     if wid is None:
         await safe_reply(
             update.message,
@@ -1073,6 +1141,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     text = update.message.text
+    queued_wid = active_window(user.id)
+    if queued_wid is not None:
+        await _await_prior_voice(user.id, queued_wid)
 
     # A pending /login flow owns the next message: it's the OAuth code, not a
     # prompt. Must run before session routing — the code would otherwise be

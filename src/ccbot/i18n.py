@@ -469,11 +469,10 @@ _EN: dict[str, str] = {
         "• ❌ error\n"
         "• ❓ needs your attention (interactive prompt)\n"
         "Active session never pushes — it edits its live card instead.\n\n"
-        "*Context fill.* The card shows ``context: N%`` per session — "
-        "an approximation from JSONL math (latest assistant turn's "
-        "input + cache reads vs the model's published context window). "
-        "Within ±10% of what `/context` reports; not identical because "
-        "/context also counts system/tools/memory/autocompact buffer."
+        "*Context fill.* The card shows ``context: N%`` per session. "
+        "For Codex it uses exact token usage and model-window values from "
+        "the rollout. For Claude it is a JSONL estimate (latest assistant "
+        "input + cache reads vs the published model window)."
     ),
     "help.body.terminal": (
         "*Local terminal*\n\n"
@@ -924,11 +923,9 @@ _RU: dict[str, str] = {
         "• ❓ needs your attention (интерактивный prompt)\n"
         "Активная сессия не пушит — она дописывает свою live-карточку.\n\n"
         "*Заполнение контекста.* На карточке у каждой сессии есть "
-        "``context: N%`` — оценка из JSONL (последний assistant-turn: "
-        "input + cache_read относительно опубликованного окна модели). "
-        "В пределах ±10% от того, что показывает `/context`, но не "
-        "идентично — `/context` дополнительно считает system / tools / "
-        "memory / autocompact buffer."
+        "``context: N%``. Для Codex используются точные token usage и размер "
+        "окна из rollout. Для Claude это оценка из JSONL: input + cache_read "
+        "последнего assistant-turn относительно окна модели."
     ),
     "help.body.terminal": (
         "*Локальный терминал*\n\n"
@@ -1316,10 +1313,9 @@ _ZH: dict[str, str] = {
         "• ❌ error\n"
         "• ❓ needs your attention (交互式提示)\n"
         "活动会话不推送 — 直接更新它的实时卡片。\n\n"
-        "*上下文占用。* 卡片每个会话显示 ``context: N%`` — 来自 JSONL\n"
-        "估算(最近一次 assistant turn 的 input + cache_read 除以\n"
-        "模型公布的窗口)。与 `/context` 显示相差 ±10%,不完全一致 —\n"
-        "/context 还会计算 system / tools / memory / autocompact buffer。"
+        "*上下文占用。* 卡片每个会话显示 ``context: N%``。Codex 使用\n"
+        "rollout 中准确的 token usage 和模型窗口;Claude 使用 JSONL\n"
+        "估算(最近一次 assistant turn 的 input + cache_read 除以模型窗口)。"
     ),
     "help.body.terminal": (
         "*本地终端*\n\n"

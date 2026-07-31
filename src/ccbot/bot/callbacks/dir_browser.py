@@ -49,12 +49,23 @@ from ..messages import create_and_activate_session
 logger = logging.getLogger(__name__)
 
 
-async def _resolve_session_summaries(
+async def resolve_session_summaries(
     sessions: list[Any], *, user_id: int
 ) -> dict[str, str]:
-    """claude_session_id → display summary, honoring user Previews setting."""
+    """Agent session id → display summary, honoring user Previews setting.
+
+    ``readable`` uses the active backend's lightweight naming model:
+    Haiku for Claude, ``CODEX_NAMING_MODEL`` for Codex. The picker only
+    contains sessions discovered for the globally selected backend, so one
+    backend value applies to the whole batch.
+    """
     settings = session_manager.get_user_settings(user_id)
     mode = settings.get("previews", "economical")
+    backend = (
+        session_manager.agent_backend
+        if session_manager.agent_backend in ("claude", "codex")
+        else "claude"
+    )
     out: dict[str, str] = {}
     if mode != "readable":
         for s in sessions:
@@ -81,12 +92,17 @@ async def _resolve_session_summaries(
         async def _bg() -> None:
             for sid, seed, mtime in pending:
                 try:
-                    name = await generate_name(seed)
+                    name = await generate_name(seed, backend=backend)
                     if name:
                         readable = name.replace("-", " ")
                         session_manager.set_cached_summary(sid, readable, mtime)
                 except Exception as e:
-                    logger.debug("haiku resolve failed for %s: %s", sid, e)
+                    logger.debug(
+                        "%s readable-preview resolve failed for %s: %s",
+                        backend,
+                        sid,
+                        e,
+                    )
 
         asyncio.create_task(_bg())
     return out
@@ -101,7 +117,7 @@ async def emit_session_picker(
     user_id: int,
 ) -> None:
     """Render (or re-render) the session picker for the cached `sessions`."""
-    summaries = await _resolve_session_summaries(sessions, user_id=user_id)
+    summaries = await resolve_session_summaries(sessions, user_id=user_id)
 
     def _resolver(s: Any) -> str:
         return summaries.get(s.session_id, s.summary or "untitled")

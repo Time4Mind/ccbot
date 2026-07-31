@@ -820,8 +820,7 @@ async def _process_voice(
             )
         except Exception as notify_error:
             logger.warning(
-                "Voice download failure notification failed user=%d "
-                "window=%s: %s",
+                "Voice download failure notification failed user=%d window=%s: %s",
                 user.id,
                 wid,
                 notify_error,

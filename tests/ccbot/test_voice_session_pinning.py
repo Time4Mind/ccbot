@@ -153,15 +153,11 @@ class TestVoiceMessageOrdering:
         async def _dispatch_text(*args, **kwargs):
             events.append("text-dispatched")
 
-        voice_update.message.voice.get_file = AsyncMock(
-            side_effect=_failing_get_file
-        )
+        voice_update.message.voice.get_file = AsyncMock(side_effect=_failing_get_file)
         mock_sm = MagicMock()
         mock_sm.find_session_by_window.return_value = None
         mock_tmux = MagicMock()
-        mock_tmux.find_window_by_id = AsyncMock(
-            return_value=MagicMock(window_id="@5")
-        )
+        mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock(window_id="@5"))
 
         with (
             patch("ccbot.bot.messages.is_user_allowed", return_value=True),
@@ -171,7 +167,9 @@ class TestVoiceMessageOrdering:
             patch("ccbot.bot.messages.tmux_manager", mock_tmux),
             patch("ccbot.bot.messages._VOICE_DOWNLOAD_RETRY_DELAYS", (0, 0)),
             patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
-            patch("ccbot.bot.messages.safe_reply", new=AsyncMock(side_effect=_safe_reply)),
+            patch(
+                "ccbot.bot.messages.safe_reply", new=AsyncMock(side_effect=_safe_reply)
+            ),
             patch(
                 "ccbot.bot.messages.t",
                 side_effect=lambda user_id, key, **kwargs: {

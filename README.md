@@ -118,7 +118,7 @@ Most-frequently-tweaked optionals:
 | `CLAUDE_FLAGS`              | `--dangerously-skip-permissions` | flags appended to `claude` |
 | `CODEX_COMMAND`             | `codex`      | Codex CLI binary (an absolute Termux path is accepted) |
 | `CODEX_FLAGS`               | bypass + hook trust + hooks + `--no-alt-screen` | flags appended to `codex` |
-| `CODEX_NAMING_MODEL`        | `gpt-5.6-luna` | lightweight Codex model used only for automatic session names |
+| `CODEX_NAMING_MODEL`        | `gpt-5.6-luna` | lightweight Codex model for automatic names and readable previews |
 | `SESSION_IDLE_TTL`          | `4h`         | active → archived after this much idleness |
 | `ARCHIVE_PURGE_AFTER`       | `14d`        | archived sessions purged from state after this |
 | `QUOTA_ALERT_POLL_INTERVAL` | `10m`        | how often the live `/usage` modal is sampled |
@@ -326,7 +326,7 @@ Card knobs live under *Settings → 🃏 Card / view*:
 | `Card history` | `20` | end-of-turn boundaries seeded into a fresh card from the JSONL (survives bot restarts) |
 | `Page size` | `20` lines | max lines per card page; longer bodies chunk across pages on paragraph/sentence boundaries |
 | `Inline screenshots` | `off` | card becomes photo + caption — the photo is the live pane render (caption limit is 1024 chars, so shrink page size to compensate) |
-| `Previews` | `economical` | how verbose switcher previews are |
+| `Previews` | `economical` | local labels or cached summaries via Haiku / `CODEX_NAMING_MODEL` |
 | `Live lag` | `4s` | coalescing window for preview updates |
 
 Telegram's chat-header **`typing…` indicator** is driven by real

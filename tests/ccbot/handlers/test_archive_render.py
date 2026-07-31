@@ -22,12 +22,15 @@ Two CommonMark traps fired in sequence under the rich-message renderer:
 
 from __future__ import annotations
 
+import asyncio
 import time
+from unittest.mock import AsyncMock
 from unittest.mock import patch
 
 import pytest
 
 from ccbot.handlers.archive import PAGE_SIZE, build_archive_page
+from ccbot.handlers.callback_data import CB_ARC_INSPECT
 from ccbot.session_models import Session
 
 
@@ -102,6 +105,23 @@ class TestArchivePageNumbering:
         # Page-2 buttons cover indices PAGE_SIZE+1 … PAGE_SIZE*2.
         assert any(lbl.startswith(f"{PAGE_SIZE + 1}. ") for lbl in labels)
         assert any(lbl.startswith(f"{PAGE_SIZE * 2}. ") for lbl in labels)
+
+    @pytest.mark.asyncio
+    async def test_inspect_buttons_carry_originating_page(self, many_archived) -> None:
+        _text, kb = await build_archive_page(
+            page=2,
+            lookback_seconds=None,
+            show_all=True,
+            user_id=1,
+        )
+        callbacks = [
+            button.callback_data or ""
+            for row in kb.inline_keyboard
+            for button in row
+            if (button.callback_data or "").startswith(CB_ARC_INSPECT)
+        ]
+        assert callbacks
+        assert all(callback.startswith(f"{CB_ARC_INSPECT}2:") for callback in callbacks)
 
 
 class TestArchivePageLineBreaks:
@@ -235,8 +255,10 @@ class TestArchiveBlurbCollectsUserMessages:
         from ccbot.handlers import archive
 
         archive._BLURB_CACHE.clear()
+        archive._BLURB_SUMMARY_INFLIGHT.clear()
         yield
         archive._BLURB_CACHE.clear()
+        archive._BLURB_SUMMARY_INFLIGHT.clear()
 
     @pytest.mark.asyncio
     async def test_three_short_messages_all_included(
@@ -336,6 +358,126 @@ class TestArchiveBlurbCollectsUserMessages:
         )
         out = await archive._archive_blurb(sess)
         assert out == long_msg
+
+    @pytest.mark.asyncio
+    async def test_readable_codex_blurb_generates_cached_summary_in_background(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Archive opens on the local blurb, while Codex Luna fills the
+        persistent readable-preview cache without blocking the page."""
+        from ccbot import naming
+        from ccbot.handlers import archive
+
+        sess = Session(
+            id="s5",
+            name="",
+            state="archived",
+            claude_session_id="codex-5",
+            workdir="/tmp/x",
+            backend="codex",
+        )
+        local = "investigate slow archive restore"
+        monkeypatch.setattr(
+            archive,
+            "_collect_user_messages",
+            _fake_collect(local),
+        )
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_user_settings",
+            lambda _uid: {"previews": "readable"},
+        )
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_cached_summary",
+            lambda *_args: None,
+        )
+        generated = AsyncMock(return_value="archive latency")
+        monkeypatch.setattr(naming, "generate_name", generated)
+        cache_written = asyncio.Event()
+        cached: list[tuple[str, str, float]] = []
+
+        def set_cached(sid: str, summary: str, mtime: float) -> None:
+            cached.append((sid, summary, mtime))
+            cache_written.set()
+
+        monkeypatch.setattr(
+            archive.session_manager,
+            "set_cached_summary",
+            set_cached,
+        )
+
+        initial = await archive._archive_blurb(sess, user_id=42)
+        await asyncio.wait_for(cache_written.wait(), timeout=1.0)
+
+        assert initial == local
+        generated.assert_awaited_once_with(local, backend="codex")
+        assert cached[0][:2] == ("codex-5", "archive latency")
+
+    @pytest.mark.asyncio
+    async def test_codex_blurb_reads_user_messages_from_rollout(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Codex ``event_msg/user_message`` rows feed the same archive
+        blurb and lightweight-summary seed as Claude user rows."""
+        import json
+
+        from ccbot.handlers import archive
+
+        sid = "550e8400-e29b-41d4-a716-446655440000"
+        rollout_dir = tmp_path / "sessions" / "2026" / "07" / "31"
+        rollout_dir.mkdir(parents=True)
+        rollout = rollout_dir / f"rollout-test-{sid}.jsonl"
+        rows = [
+            {
+                "type": "session_meta",
+                "payload": {"id": sid, "cwd": "/tmp/x"},
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": "Investigate archive latency",
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "agent_message",
+                    "message": "I will inspect it",
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": "Use the lightweight model",
+                },
+            },
+        ]
+        rollout.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+        monkeypatch.setattr(
+            archive.config, "codex_sessions_path", tmp_path / "sessions"
+        )
+        monkeypatch.setattr(
+            archive.config,
+            "claude_projects_path",
+            tmp_path / "claude-projects",
+        )
+        sess = Session(
+            id="s6",
+            name="",
+            state="archived",
+            claude_session_id=sid,
+            workdir="/tmp/x",
+            backend="codex",
+        )
+
+        out = await archive._archive_blurb(sess)
+
+        assert "Investigate archive latency" in out
+        assert "Use the lightweight model" in out
+        assert "I will inspect it" not in out
 
 
 def _fake_collect(value: str):

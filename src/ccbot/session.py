@@ -772,7 +772,8 @@ class SessionManager:
 
     DEFAULT_USER_SETTINGS: ClassVar[dict[str, Any]] = {
         "language": "en",  # "en" | "ru" | "zh" — UI strings
-        "previews": "economical",  # "economical" | "readable" (Haiku-cached)
+        # ``readable`` uses Haiku for Claude or CODEX_NAMING_MODEL for Codex.
+        "previews": "economical",
         "live_lag": 4,  # seconds, see PREVIEW_LIVE_LAG
         "voice": "auto",  # "auto" | "whisper" | "apple" | "off"
         # Day-of-week the Anthropic weekly window resets on. Drives the %/d
@@ -877,7 +878,7 @@ class SessionManager:
         self.save_state()
         logger.info("Bot-wide agent backend changed to %s", backend)
 
-    # --- Summary cache (Claude session id -> short readable summary) ---
+    # --- Summary cache (agent session id -> short readable summary) ---
 
     def get_cached_summary(
         self, claude_session_id: str, file_mtime: float
@@ -893,7 +894,7 @@ class SessionManager:
     def set_cached_summary(
         self, claude_session_id: str, summary: str, file_mtime: float
     ) -> None:
-        """Persist a generated summary for a Claude session id."""
+        """Persist a generated summary for an agent session id."""
         if not claude_session_id or not summary:
             return
         self.summary_cache[claude_session_id] = {

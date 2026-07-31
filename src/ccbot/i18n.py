@@ -141,8 +141,9 @@ _EN: dict[str, str] = {
     "settings.previews.body": (
         "*Previews*\n\n"
         "How session names are rendered in the picker:\n"
-        "• `economical` — local fallback, no extra Claude calls\n"
-        "• `readable` — Haiku-cached short summaries"
+        "• `economical` — local fallback, no extra model calls\n"
+        "• `readable` — cached summaries via Haiku (Claude) or the "
+        "lightweight Codex model"
     ),
     "settings.lag.body": (
         "*Live preview lag*\n\n"
@@ -614,8 +615,9 @@ _RU: dict[str, str] = {
     "settings.previews.body": (
         "*Превью*\n\n"
         "Как именуются сессии в пикере:\n"
-        "• `economical` — локальный fallback, без обращений к Claude\n"
-        "• `readable` — короткие саммари через Haiku, кэшируется"
+        "• `economical` — локальный fallback, без обращений к модели\n"
+        "• `readable` — кэшируемые саммари через Haiku (Claude) или "
+        "лёгкую модель Codex"
     ),
     "settings.lag.body": (
         "*Лаг карточки*\n\n"
@@ -1056,8 +1058,8 @@ _ZH: dict[str, str] = {
     "settings.previews.body": (
         "*预览*\n\n"
         "选择器中如何呈现会话名:\n"
-        "• `economical` — 本地回退,不额外调用 Claude\n"
-        "• `readable` — Haiku 缓存的简短摘要"
+        "• `economical` — 本地回退,不额外调用模型\n"
+        "• `readable` — 通过 Haiku (Claude) 或轻量 Codex 模型生成并缓存摘要"
     ),
     "settings.lag.body": (
         "*实时预览延迟*\n\n"

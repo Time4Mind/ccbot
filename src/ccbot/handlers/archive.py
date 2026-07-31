@@ -40,6 +40,10 @@ from .cleanup import clear_session_state
 # soft length budget kicks in. Archived JSONLs are append-frozen so a
 # single scan covers the session's lifetime in archive.
 _BLURB_CACHE: dict[str, str] = {}
+# Session ids with a background readable-preview request in flight. Archive
+# rendering must stay local and instant; model output is persisted in the
+# shared summary cache and appears on the next paint.
+_BLURB_SUMMARY_INFLIGHT: set[str] = set()
 # Hard character cap on the combined blurb (all included messages
 # plus their hard-break separators). When the first message alone
 # exceeds this, it gets truncated with ``…`` on a word boundary;
@@ -207,12 +211,24 @@ async def _collect_user_messages(sess: Session) -> str:
                     data = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if not TranscriptParser.is_user_message(data):
-                    continue
-                parsed = TranscriptParser.parse_message(data)
-                if not parsed or not parsed.text.strip():
-                    continue
-                raw = parsed.text.strip()
+                if sess.backend == "codex":
+                    payload = data.get("payload")
+                    if (
+                        data.get("type") != "event_msg"
+                        or not isinstance(payload, dict)
+                        or payload.get("type") != "user_message"
+                    ):
+                        continue
+                    raw = str(payload.get("message") or "").strip()
+                    if not raw:
+                        continue
+                else:
+                    if not TranscriptParser.is_user_message(data):
+                        continue
+                    parsed = TranscriptParser.parse_message(data)
+                    if not parsed or not parsed.text.strip():
+                        continue
+                    raw = parsed.text.strip()
                 if _RE_INJECTED_USER_MSG.search(raw):
                     continue
                 if _RE_SYSTEM_UI_TEXT.match(raw):
@@ -240,24 +256,64 @@ async def _collect_user_messages(sess: Session) -> str:
     return _format_blurb(messages)
 
 
-async def _archive_blurb(sess: Session) -> str:
+async def _archive_blurb(sess: Session, user_id: int | None = None) -> str:
     """Return the "what was this session about" line for an archived row.
 
-    Source: the user's own first 1-3 messages from the JSONL transcript,
-    laid out so the first line stays under ``_BLURB_HEAD_LEN`` chars;
-    overflow folds into an expandable-quote block (tap to reveal). No
-    Haiku, no ai-title pickup — just the user's verbatim words in their
-    own language. Cached forever per claude-session-id.
+    Economical mode uses the user's own first 1-3 messages from the JSONL.
+    Readable mode first checks the persistent model-summary cache and, on a
+    miss, starts a non-blocking lightweight request: Haiku for Claude or
+    ``CODEX_NAMING_MODEL`` for Codex. The local blurb is returned immediately,
+    so opening Archive never waits for a model; the generated summary appears
+    on the next paint.
     """
     sid = sess.claude_session_id
     if not sid:
         return ""
     cached = _BLURB_CACHE.get(sid)
-    if cached is not None:
+    if cached is None:
+        cached = await _collect_user_messages(sess)
+        _BLURB_CACHE[sid] = cached
+
+    if user_id is None:
         return cached
-    blurb = await _collect_user_messages(sess)
-    _BLURB_CACHE[sid] = blurb
-    return blurb
+    settings = session_manager.get_user_settings(user_id)
+    if settings.get("previews", "economical") != "readable":
+        return cached
+
+    # Archived transcripts are append-frozen. ``archived_at`` is therefore a
+    # stable, zero-I/O cache version; when a restored session is archived
+    # again the timestamp changes and naturally invalidates the old summary.
+    mtime = sess.archived_at or sess.last_event_at or 0.0
+    readable = session_manager.get_cached_summary(sid, mtime)
+    if readable:
+        return readable
+    if not cached or sid in _BLURB_SUMMARY_INFLIGHT:
+        return cached
+
+    backend = sess.backend if sess.backend in ("claude", "codex") else "claude"
+    _BLURB_SUMMARY_INFLIGHT.add(sid)
+
+    async def generate_readable() -> None:
+        try:
+            from ..naming import generate_name
+
+            name = await generate_name(cached, backend=backend)
+            if name:
+                session_manager.set_cached_summary(sid, name, mtime)
+        except Exception as e:
+            logger.debug(
+                "%s archive readable-preview failed for %s: %s",
+                backend,
+                sid,
+                e,
+            )
+        finally:
+            _BLURB_SUMMARY_INFLIGHT.discard(sid)
+
+    import asyncio
+
+    asyncio.create_task(generate_readable())
+    return cached
 
 
 def _display_name(sess: Session) -> str:
@@ -330,7 +386,7 @@ async def build_archive_page(
     blurbs: dict[str, str] = {}
     for sess in chunk:
         try:
-            blurbs[sess.id] = await _archive_blurb(sess)
+            blurbs[sess.id] = await _archive_blurb(sess, user_id)
         except Exception as e:
             logger.debug("archive blurb fetch failed for %s: %s", sess.id, e)
             blurbs[sess.id] = ""
@@ -382,7 +438,10 @@ async def build_archive_page(
         row.append(
             InlineKeyboardButton(
                 f"{idx}. {_display_name(sess)}",
-                callback_data=f"{CB_ARC_INSPECT}{sess.id}"[:64],
+                # Carry the clamped page in the callback itself rather than
+                # global user_data. This remains correct for old/stale archive
+                # messages and for several /archive messages in one chat.
+                callback_data=f"{CB_ARC_INSPECT}{page}:{sess.id}"[:64],
             )
         )
         if len(row) == 2:
@@ -478,10 +537,23 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
     if resume_session_id and target_backend == "claude":
         session_manager.mark_window_resuming(created_wid, bot=bot, user_id=user_id)
 
-    hook_ok = await session_manager.wait_for_session_map_entry(
-        created_wid, timeout=15.0
-    )
-    del hook_ok
+    # Codex ``resume <id>`` keeps the same authoritative rollout id. We
+    # already know everything needed to bind the window, while its SessionStart
+    # hook may not run until the CLI has finished booting. Waiting 15 seconds
+    # here made a normal archive restore look frozen for exactly that long.
+    # Bind Codex immediately; the hook will later add transcript_path and
+    # self-heal the persisted map. Claude resume remains on the old wait path
+    # because Claude can report a transient new session id before we override
+    # it back to the resumed transcript id.
+    if resume_session_id and target_backend == "codex":
+        ws = session_manager.get_window_state(created_wid)
+        ws.session_id = resume_session_id
+        ws.cwd = workdir
+        ws.window_name = created_wname
+        ws.backend = "codex"
+        session_manager.save_state()
+    else:
+        await session_manager.wait_for_session_map_entry(created_wid, timeout=15.0)
 
     # If we did a --resume, override window_state to original sid (Claude allocates a new sid for the resume).
     if resume_session_id:

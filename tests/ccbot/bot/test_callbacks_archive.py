@@ -15,7 +15,7 @@ import pytest
 
 from ccbot.bot.callbacks import archive as archive_cb
 from ccbot.handlers.archive import PAGE_SIZE
-from ccbot.handlers.callback_data import CB_ARC_ALL
+from ccbot.handlers.callback_data import CB_ARC_ALL, CB_ARC_BACK, CB_ARC_INSPECT
 from ccbot.session_models import Session
 
 
@@ -150,3 +150,69 @@ class TestArchiveAllToggle:
             user = _make_user()
             await archive_cb.handle(query, context, user)
             assert mock_build.call_args.kwargs["page"] == 0
+
+
+class TestArchiveInspectBack:
+    @pytest.mark.asyncio
+    async def test_back_returns_to_originating_archive_page(self) -> None:
+        sess = _make_archived(7, age_hours=2.0)
+        context = _make_context(show_all=True)
+        user = _make_user()
+
+        with (
+            patch.object(
+                archive_cb.session_manager,
+                "get_session",
+                return_value=sess,
+            ),
+            patch.object(
+                archive_cb,
+                "_build_inspect_text",
+                new_callable=AsyncMock,
+                return_value="inspect",
+            ),
+            patch.object(
+                archive_cb,
+                "safe_edit",
+                new_callable=AsyncMock,
+            ) as safe_edit,
+        ):
+            inspect_query = _make_query(f"{CB_ARC_INSPECT}3:{sess.id}")
+            await archive_cb.handle(inspect_query, context, user)
+            inspect_keyboard = safe_edit.call_args.kwargs["reply_markup"]
+            back_button = inspect_keyboard.inline_keyboard[0][-1]
+            assert back_button.callback_data == f"{CB_ARC_BACK}:3"
+
+        with (
+            patch.object(
+                archive_cb,
+                "build_archive_page",
+                new_callable=AsyncMock,
+                return_value=("archive page", MagicMock()),
+            ) as build,
+            patch.object(archive_cb, "safe_edit", new_callable=AsyncMock),
+        ):
+            back_query = _make_query(f"{CB_ARC_BACK}:3")
+            await archive_cb.handle(back_query, context, user)
+
+            assert build.await_args.kwargs["page"] == 3
+            assert build.await_args.kwargs["show_all"] is True
+
+    @pytest.mark.asyncio
+    async def test_legacy_back_without_page_still_returns_to_zero(self) -> None:
+        with (
+            patch.object(
+                archive_cb,
+                "build_archive_page",
+                new_callable=AsyncMock,
+                return_value=("archive page", MagicMock()),
+            ) as build,
+            patch.object(archive_cb, "safe_edit", new_callable=AsyncMock),
+        ):
+            await archive_cb.handle(
+                _make_query(CB_ARC_BACK),
+                _make_context(),
+                _make_user(),
+            )
+
+            assert build.await_args.kwargs["page"] == 0

@@ -13,9 +13,11 @@ Also home to:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +61,7 @@ from ..handlers.notifications import (
 )
 from ..handlers.typing import fire_typing
 from ..i18n import t
-from ..session_models import Session
+from ..session_models import Session, WindowState
 from ..handlers.inbox import save_inbox_file
 from ..markdown_v2 import convert_markdown
 from ..naming import maybe_auto_name
@@ -90,6 +92,99 @@ _voice_waiters: dict[asyncio.Future[bool], int] = {}
 # turn and let later messages overtake it.
 _VOICE_DOWNLOAD_ATTEMPTS = 3
 _VOICE_DOWNLOAD_RETRY_DELAYS = (1.0, 2.0)
+_VOICE_TRANSCRIPT_CONFIRM_TIMEOUT = 15.0
+_VOICE_TRANSCRIPT_CONFIRM_POLL = 0.5
+
+
+@dataclass(frozen=True)
+class _VoiceTranscriptCheckpoint:
+    path: Path
+    offset: int
+    backend: str
+
+
+def _voice_transcript_checkpoint(wid: str) -> _VoiceTranscriptCheckpoint | None:
+    """Snapshot the authoritative transcript position before a voice send."""
+    state = session_manager.window_states.get(wid)
+    if not isinstance(state, WindowState) or not state.session_id:
+        return None
+    path: Path | None = Path(state.transcript_path) if state.transcript_path else None
+    if path is None or not path.is_file():
+        if state.backend == "codex":
+            from ..codex_session_io import build_session_file_path
+        else:
+            from ..session_claude_io import build_session_file_path
+
+        path = build_session_file_path(state.session_id, state.cwd)
+    if path is None or not path.is_file():
+        return None
+    try:
+        offset = path.stat().st_size
+    except OSError:
+        return None
+    return _VoiceTranscriptCheckpoint(path=path, offset=offset, backend=state.backend)
+
+
+def _transcript_contains_voice_text(
+    checkpoint: _VoiceTranscriptCheckpoint, text: str
+) -> bool:
+    """Check only rows appended after ``checkpoint`` for the exact user text."""
+    try:
+        size = checkpoint.path.stat().st_size
+        start = checkpoint.offset if size >= checkpoint.offset else 0
+        with checkpoint.path.open("rb") as stream:
+            stream.seek(start)
+            raw = stream.read()
+    except OSError:
+        return False
+    expected = text.strip()
+    for line in raw.splitlines():
+        try:
+            row = json.loads(line)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not isinstance(row, dict):
+            continue
+        candidate = ""
+        if checkpoint.backend == "codex":
+            payload = row.get("payload")
+            if (
+                row.get("type") == "event_msg"
+                and isinstance(payload, dict)
+                and payload.get("type") == "user_message"
+            ):
+                candidate = str(payload.get("message") or "")
+        elif row.get("type") == "user":
+            message = row.get("message")
+            if isinstance(message, dict):
+                content = message.get("content", "")
+                if isinstance(content, list):
+                    from ..transcript_parser import TranscriptParser
+
+                    candidate = TranscriptParser.extract_text_only(content)
+                elif isinstance(content, str):
+                    candidate = content
+        if candidate.strip() == expected:
+            return True
+    return False
+
+
+async def _wait_for_voice_transcript(
+    checkpoint: _VoiceTranscriptCheckpoint | None,
+    text: str,
+) -> bool | None:
+    """Wait for delivery proof; ``None`` means no transcript was available."""
+    if checkpoint is None:
+        return None
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _VOICE_TRANSCRIPT_CONFIRM_TIMEOUT
+    while True:
+        if await asyncio.to_thread(_transcript_contains_voice_text, checkpoint, text):
+            return True
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return False
+        await asyncio.sleep(min(_VOICE_TRANSCRIPT_CONFIRM_POLL, remaining))
 
 
 def _enqueue_voice(
@@ -882,17 +977,32 @@ async def _process_voice(
     # bash-capture, interactive-UI check, card repost) once the text is
     # known. No voice-specific reply; the transcribed text just becomes
     # this message's text, same as if the user had typed it.
-    await _dispatch_text_to_active(update, context, user.id, wid, text)
+    transcript_checkpoint = _voice_transcript_checkpoint(wid)
+    dispatched = await _dispatch_text_to_active(update, context, user.id, wid, text)
+    if dispatched is False:
+        return False
 
-    # Post-send verification. The pre-send check above is a single snapshot;
-    # a prompt can surface in the gap between it and the Enter keystroke (or
-    # the transcription lands right as claude raises one — common on this host
-    # where a managed policy blocks bypass mode, so Bash/sub-agent prompts are
-    # frequent). If the pane is showing an interactive prompt shortly after we
-    # sent, our keystrokes almost certainly landed in it and the voice was
-    # eaten — notify so the user resends instead of waiting on dead air.
-    await asyncio.sleep(1.5)
+    # A prompt appearing after send is not proof that the voice was eaten: it
+    # can be an approval raised by the successfully delivered turn, especially
+    # for the second voice in a queue. Prefer the authoritative transcript and
+    # only use the pane heuristic when no matching user row appears.
+    transcript_confirmed = await _wait_for_voice_transcript(transcript_checkpoint, text)
+    if transcript_confirmed is True:
+        logger.info(
+            "Voice delivery confirmed by transcript user=%d window=%s",
+            user.id,
+            wid,
+        )
+        return True
+    if transcript_confirmed is None:
+        await asyncio.sleep(1.5)
     if await _pane_has_interactive_ui(wid):
+        logger.warning(
+            "Voice delivery unconfirmed while interactive UI is visible "
+            "user=%d window=%s",
+            user.id,
+            wid,
+        )
         try:
             await safe_reply(update.message, _voice_lost_notice)
         except Exception:
@@ -1100,7 +1210,7 @@ async def _dispatch_text_to_active(
     user_id: int,
     wid: str,
     text: str,
-) -> None:
+) -> bool:
     """Send the user's text to ``wid``'s pane and run the post-send
     bookkeeping under the repost-intent bracket.
 
@@ -1159,7 +1269,7 @@ async def _dispatch_text_to_active(
         if not success:
             metrics.inc("tg_send_failures")
             await safe_reply(update.message, f"❌ {message}")
-            return
+            return False
         if (
             sess is not None
             and sess.backend == "codex"
@@ -1170,7 +1280,7 @@ async def _dispatch_text_to_active(
                 update.message,
                 "❌ Codex kept the text in its input field; the prompt was not sent.",
             )
-            return
+            return False
 
         # Immediate typing-indicator so the user sees feedback within
         # ~500 ms of sending — claude can take 5-30 s before emitting
@@ -1204,7 +1314,7 @@ async def _dispatch_text_to_active(
                 await handle_interactive_ui(context.bot, user_id, wid)
 
         if sess is None:
-            return
+            return True
 
         if not owns_card:
             # Background session (voice pinned here, user moved on).
@@ -1215,7 +1325,7 @@ async def _dispatch_text_to_active(
                     await refresh_panel(context.bot, user_id)
                 except Exception as e:
                     logger.debug("refresh_panel after bg dispatch failed: %s", e)
-            return
+            return True
 
         # Put the live card below the user's message (the card_position
         # setting was ripped out — always-in-front is the single
@@ -1237,6 +1347,7 @@ async def _dispatch_text_to_active(
                 await repost_card(context.bot, user_id, sess)
             except Exception as e:
                 logger.debug("repost_card failed: %s", e)
+        return True
     finally:
         if intent_sess_id is not None:
             end_repost_intent(user_id, intent_sess_id)

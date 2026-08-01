@@ -22,6 +22,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -62,6 +64,53 @@ def _make_text_update(user_id: int = 1, text: str = "follow-up") -> MagicMock:
 
 
 class TestVoiceMessageOrdering:
+    @pytest.mark.asyncio
+    async def test_second_voice_waits_and_both_are_dispatched(self):
+        first = _make_voice_update()
+        second = _make_voice_update()
+        context = _make_context()
+        first_started = asyncio.Event()
+        release_first = asyncio.Event()
+        events: list[str] = []
+        calls = 0
+
+        async def _process(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            label = "first" if calls == 1 else "second"
+            events.append(f"{label}-start")
+            if calls == 1:
+                first_started.set()
+                await release_first.wait()
+            events.append(f"{label}-delivered")
+            return True
+
+        with (
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.active_window", return_value="@5"),
+            patch("ccbot.bot.messages.resolve_voice_backend", return_value="whisper"),
+            patch(
+                "ccbot.bot.messages._process_voice",
+                new=AsyncMock(side_effect=_process),
+            ),
+        ):
+            from ccbot.bot.messages import voice_handler
+
+            first_task = asyncio.create_task(voice_handler(first, context))
+            await first_started.wait()
+            second_task = asyncio.create_task(voice_handler(second, context))
+            await asyncio.sleep(0)
+            assert events == ["first-start"]
+            release_first.set()
+            await asyncio.gather(first_task, second_task)
+
+        assert events == [
+            "first-start",
+            "first-delivered",
+            "second-start",
+            "second-delivered",
+        ]
+
     @pytest.mark.asyncio
     async def test_text_waits_until_prior_voice_is_dispatched(self):
         """A later text update cannot reach its routing path before the
@@ -247,6 +296,160 @@ class TestVoiceDownloadRetry:
         assert voice.get_file.await_count == 3
         failed_file.download_as_bytearray.assert_awaited_once()
         good_file.download_as_bytearray.assert_awaited_once()
+
+
+class TestVoiceTranscriptConfirmation:
+    def test_codex_confirmation_reads_only_appended_user_rows(
+        self, tmp_path: Path
+    ) -> None:
+        from ccbot.bot.messages import (
+            _VoiceTranscriptCheckpoint,
+            _transcript_contains_voice_text,
+        )
+
+        rollout = tmp_path / "rollout.jsonl"
+        rollout.write_text(json.dumps({"type": "session_meta"}) + "\n")
+        checkpoint = _VoiceTranscriptCheckpoint(
+            path=rollout, offset=rollout.stat().st_size, backend="codex"
+        )
+        with rollout.open("a") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "type": "event_msg",
+                        "payload": {"type": "user_message", "message": "voice text"},
+                    }
+                )
+                + "\n"
+            )
+
+        assert _transcript_contains_voice_text(checkpoint, "voice text") is True
+        assert _transcript_contains_voice_text(checkpoint, "different") is False
+
+    def test_claude_confirmation_reads_structured_user_text(
+        self, tmp_path: Path
+    ) -> None:
+        from ccbot.bot.messages import (
+            _VoiceTranscriptCheckpoint,
+            _transcript_contains_voice_text,
+        )
+
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text("{}\n")
+        checkpoint = _VoiceTranscriptCheckpoint(
+            path=transcript, offset=transcript.stat().st_size, backend="claude"
+        )
+        with transcript.open("a") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "type": "user",
+                        "message": {
+                            "content": [{"type": "text", "text": "voice text"}]
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+        assert _transcript_contains_voice_text(checkpoint, "voice text") is True
+
+    @pytest.mark.asyncio
+    async def test_confirmed_transcript_beats_post_send_interactive_prompt(self):
+        update = _make_voice_update()
+        context = _make_context()
+        mock_sm = MagicMock()
+        mock_sm.find_session_by_window.return_value = None
+        mock_tmux = MagicMock()
+        mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock(window_id="@5"))
+        notice = AsyncMock()
+        pane_check = AsyncMock(return_value=True)
+
+        with (
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.resolve_voice_backend", return_value="whisper"),
+            patch("ccbot.bot.messages.session_manager", mock_sm),
+            patch("ccbot.bot.messages.tmux_manager", mock_tmux),
+            patch(
+                "ccbot.bot.messages.transcribe_voice",
+                new=AsyncMock(return_value="voice text"),
+            ),
+            patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
+            patch(
+                "ccbot.bot.messages._intercept_if_pending_ui",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "ccbot.bot.messages._dispatch_text_to_active",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "ccbot.bot.messages._voice_transcript_checkpoint",
+                return_value=object(),
+            ),
+            patch(
+                "ccbot.bot.messages._wait_for_voice_transcript",
+                new=AsyncMock(return_value=True),
+            ),
+            patch("ccbot.bot.messages._pane_has_interactive_ui", new=pane_check),
+            patch("ccbot.bot.messages.safe_reply", new=notice),
+        ):
+            from ccbot.bot.messages import _process_voice
+
+            delivered = await _process_voice(update, context, pinned_wid="@5")
+
+        assert delivered is True
+        pane_check.assert_not_awaited()
+        notice.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_unconfirmed_transcript_with_interactive_prompt_reports_loss(self):
+        update = _make_voice_update()
+        context = _make_context()
+        mock_sm = MagicMock()
+        mock_sm.find_session_by_window.return_value = None
+        mock_tmux = MagicMock()
+        mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock(window_id="@5"))
+        notice = AsyncMock()
+
+        with (
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.resolve_voice_backend", return_value="whisper"),
+            patch("ccbot.bot.messages.session_manager", mock_sm),
+            patch("ccbot.bot.messages.tmux_manager", mock_tmux),
+            patch(
+                "ccbot.bot.messages.transcribe_voice",
+                new=AsyncMock(return_value="voice text"),
+            ),
+            patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
+            patch(
+                "ccbot.bot.messages._intercept_if_pending_ui",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "ccbot.bot.messages._dispatch_text_to_active",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "ccbot.bot.messages._voice_transcript_checkpoint",
+                return_value=object(),
+            ),
+            patch(
+                "ccbot.bot.messages._wait_for_voice_transcript",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "ccbot.bot.messages._pane_has_interactive_ui",
+                new=AsyncMock(return_value=True),
+            ),
+            patch("ccbot.bot.messages.safe_reply", new=notice),
+        ):
+            from ccbot.bot.messages import _process_voice
+
+            delivered = await _process_voice(update, context, pinned_wid="@5")
+
+        assert delivered is False
+        notice.assert_awaited_once()
 
 
 class TestVoiceSessionPinning:

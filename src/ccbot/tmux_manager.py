@@ -85,32 +85,47 @@ class TmuxManager:
 
     @staticmethod
     def _accept_codex_directory_trust(pane: object) -> bool:
-        """Accept only Codex's exact initial directory-trust prompt.
+        """Handle only Codex's known directory startup prompts.
 
         Codex can show this before its normal input box even in full-access
         mode. The bot already owns the selected working directory, so leaving
-        the TUI blocked here makes Telegram input appear broken. Poll briefly
-        because the Node wrapper needs a moment to draw the prompt.
+        the TUI blocked here makes Telegram input appear broken. A resumed
+        rollout can also remember a different directory; in that case choose
+        the current directory that the user selected for this bot session.
+        Poll briefly because the Node wrapper needs a moment to draw prompts.
         """
         capture = getattr(pane, "capture_pane", None)
         send_keys = getattr(pane, "send_keys", None)
         if not callable(capture) or not callable(send_keys):
             return False
-        for _ in range(20):
+        accepted = False
+        for _ in range(30):
             time.sleep(0.15)
             try:
                 lines = capture()
                 text = "\n".join(lines) if isinstance(lines, list) else str(lines)
             except Exception:
-                return False
+                return accepted
             if _CODEX_TRUST_PROMPT in text and _CODEX_TRUST_YES in text:
                 send_keys("", enter=True)
                 logger.info("Accepted Codex directory trust prompt")
-                return True
+                accepted = True
+                continue
+            if (
+                "Choose working directory to resume this session" in text
+                and "1. Use session directory" in text
+                and "2. Use current directory" in text
+                and "Press enter to continue" in text
+            ):
+                send_keys("Down", enter=False)
+                send_keys("", enter=True)
+                logger.info("Selected current directory for Codex resume")
+                accepted = True
+                continue
             # The regular input box is ready, so there is no trust prompt.
             if "OpenAI Codex" in text and "›" in text:
-                return False
-        return False
+                return accepted
+        return accepted
 
     @property
     def server(self) -> libtmux.Server:

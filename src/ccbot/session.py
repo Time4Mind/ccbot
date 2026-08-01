@@ -103,6 +103,9 @@ class SessionManager:
     """
 
     window_states: dict[str, WindowState] = field(default_factory=dict)
+    _session_map_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock, init=False, repr=False
+    )
     user_window_offsets: dict[int, dict[str, int]] = field(default_factory=dict)
     # DM mode: routing key for inbound user text.
     # user_id -> Session.id (short hex). Single active session per user.
@@ -344,6 +347,11 @@ class SessionManager:
         return False
 
     async def load_session_map(self) -> None:
+        """Serialize map reconciliation against bot-owned restore publication."""
+        async with self._session_map_lock:
+            await self._load_session_map_unlocked()
+
+    async def _load_session_map_unlocked(self) -> None:
         """Read session_map.json and update window_states with new session associations.
 
         Accepts canonical (``<source>:<wid>``) and grouped-session
@@ -427,6 +435,50 @@ class SessionManager:
         if changed:
             self.save_state()
 
+    async def publish_codex_restore_binding(
+        self,
+        *,
+        sess: Session,
+        user_id: int,
+        window_id: str,
+        window_name: str,
+        transcript_path: Path,
+    ) -> None:
+        """Publish a native Codex resume before exposing it as active.
+
+        ``load_session_map`` used to delete the provisional WindowState before
+        Codex emitted its first hook. The manager lock covers the complete
+        file-publish + in-memory bind transaction, while the store's flock
+        coordinates the file update with the external hook process.
+        """
+        if not transcript_path.is_file():
+            raise RuntimeError(f"Codex rollout does not exist: {transcript_path}")
+        from .session_map_store import upsert_session_map_entry
+
+        key = f"{config.tmux_session_name}:{window_id}"
+        entry = {
+            "session_id": sess.claude_session_id,
+            "cwd": sess.workdir,
+            "window_name": window_name,
+            "backend": "codex",
+            "transcript_path": str(transcript_path),
+        }
+        async with self._session_map_lock:
+            await asyncio.to_thread(
+                upsert_session_map_entry,
+                config.session_map_file,
+                key,
+                entry,
+            )
+            state = self.get_window_state(window_id)
+            state.session_id = sess.claude_session_id
+            state.cwd = sess.workdir
+            state.window_name = window_name
+            state.backend = "codex"
+            state.transcript_path = str(transcript_path)
+            self.set_session_window(sess.id, window_id)
+            self.set_active_session(user_id, sess.id)
+
     # --- Window state management ---
 
     def get_window_state(self, window_id: str) -> WindowState:
@@ -461,8 +513,16 @@ class SessionManager:
         if not state.session_id or not state.cwd:
             return None
 
-        io = codex_session_io if state.backend == "codex" else session_claude_io
-        session = await io.get_session_direct(state.session_id, state.cwd)
+        if state.backend == "codex":
+            session = await codex_session_io.get_session_direct(
+                state.session_id,
+                state.cwd,
+                state.transcript_path or None,
+            )
+        else:
+            session = await session_claude_io.get_session_direct(
+                state.session_id, state.cwd
+            )
         if session:
             return session
 

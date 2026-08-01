@@ -104,6 +104,41 @@ def test_codex_ready_prompt_is_not_auto_confirmed(
     assert TmuxManager._accept_codex_directory_trust(Pane()) is False
 
 
+def test_codex_resume_uses_selected_current_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    screens = iter(
+        [
+            ["Starting Codex…"],
+            [
+                "Choose working directory to resume this session",
+                "› 1. Use session directory (/old/project)",
+                "  2. Use current directory (/safe/staging/project)",
+                "Press enter to continue",
+            ],
+            ["OpenAI Codex", "›"],
+        ]
+    )
+
+    class Pane:
+        def __init__(self) -> None:
+            self.sent: list[tuple[str, bool]] = []
+
+        def capture_pane(self) -> list[str]:
+            return next(screens)
+
+        def send_keys(self, value: str, enter: bool = True) -> None:
+            self.sent.append((value, enter))
+
+    pane = Pane()
+    monkeypatch.setattr("ccbot.tmux_manager.time.sleep", lambda _delay: None)
+
+    accepted = TmuxManager._accept_codex_directory_trust(pane)
+
+    assert accepted is True
+    assert pane.sent == [("Down", False), ("", True)]
+
+
 def test_claude_transcript_converts_to_portable_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -246,6 +281,17 @@ async def test_restore_codex_archive_does_not_wait_for_hook(
     )
     mgr.sessions[sess.id] = sess
 
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": sid}}) + "\n"
+    )
+    monkeypatch.setattr(config, "session_map_file", tmp_path / "session_map.json")
+    monkeypatch.setattr(
+        codex_session_io,
+        "build_session_file_path",
+        lambda _sid, _cwd: rollout,
+    )
+
     tmux = MagicMock()
     tmux.create_window = AsyncMock(return_value=(True, "ok", "project", "@9"))
     monkeypatch.setattr(archive, "tmux_manager", tmux)
@@ -258,7 +304,19 @@ async def test_restore_codex_archive_does_not_wait_for_hook(
     assert ws.session_id == sid
     assert ws.cwd == str(workdir)
     assert ws.backend == "codex"
+    assert ws.transcript_path == str(rollout)
     assert sess.window_id == "@9"
+    session_map = json.loads(config.session_map_file.read_text())
+    assert session_map["ccbot:@9"] == {
+        "session_id": sid,
+        "cwd": str(workdir),
+        "window_name": "project",
+        "backend": "codex",
+        "transcript_path": str(rollout),
+    }
+
+    await mgr.load_session_map()
+    assert mgr.get_window_state("@9").session_id == sid
 
 
 @pytest.mark.asyncio
@@ -374,6 +432,62 @@ async def test_codex_rollout_discovery_uses_session_meta(
     assert found is not None
     assert found.file_path == str(rollout)
     assert found.summary == "hello"
+
+
+@pytest.mark.asyncio
+async def test_codex_rollout_exact_path_survives_resume_in_different_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "sessions"
+    rollout = root / "2026" / "01" / "02" / "rollout-original.jsonl"
+    rollout.parent.mkdir(parents=True)
+    original_cwd = tmp_path / "original"
+    resumed_cwd = tmp_path / "safe-copy"
+    sid = "550e8400-e29b-41d4-a716-446655440000"
+    rows = [
+        _line("session_meta", {"id": sid, "cwd": str(original_cwd)}),
+        _line("event_msg", {"type": "user_message", "message": "history"}),
+    ]
+    rollout.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setattr(config, "codex_sessions_path", root)
+
+    without_path = await codex_session_io.get_session_direct(sid, str(resumed_cwd))
+    with_path = await codex_session_io.get_session_direct(
+        sid, str(resumed_cwd), rollout
+    )
+
+    assert without_path is None
+    assert with_path is not None
+    assert with_path.file_path == str(rollout)
+
+
+@pytest.mark.asyncio
+async def test_manager_resolves_restored_codex_rollout_by_exact_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
+    mgr = SessionManager()
+    monkeypatch.setattr(mgr, "save_state", lambda: None)
+    root = tmp_path / "sessions"
+    rollout = root / "2026" / "01" / "02" / "rollout-original.jsonl"
+    rollout.parent.mkdir(parents=True)
+    sid = "550e8400-e29b-41d4-a716-446655440000"
+    rollout.write_text(
+        json.dumps(_line("session_meta", {"id": sid, "cwd": "/original"})) + "\n"
+    )
+    monkeypatch.setattr(config, "codex_sessions_path", root)
+    state = mgr.get_window_state("@9")
+    state.session_id = sid
+    state.cwd = "/safe-copy"
+    state.backend = "codex"
+    state.transcript_path = str(rollout)
+
+    found = await mgr.resolve_session_for_window("@9")
+
+    assert found is not None
+    assert found.file_path == str(rollout)
+    assert state.session_id == sid
+    assert state.cwd == "/safe-copy"
 
 
 @pytest.mark.asyncio

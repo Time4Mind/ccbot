@@ -2063,15 +2063,6 @@ STALL_NOTE = (
     "the Claude process may have stalled or exited."
 )
 
-# Editing the live card is not a Telegram notification: if the chat is not
-# open, the user gets no push and a stalled heavy session can sit unnoticed
-# for hours.  Send a separate message after the card is finalized so the
-# exceptional state is visible outside the chat as well.
-STALL_ALERT = (
-    "⚠️ {session_name}: no activity after an unfinished tool call. "
-    "The session may be stalled - open it, tap Stop, then retry the last step."
-)
-
 
 async def maybe_finalize_stalled(
     bot: Bot,
@@ -2150,22 +2141,6 @@ async def maybe_finalize_stalled(
         },
     )
     await finalize_task(bot, user_id, sess, STALL_NOTE)
-    try:
-        await safe_send(
-            bot,
-            user_id,
-            STALL_ALERT.format(session_name=sess.name or sess.id),
-        )
-    except Exception as exc:
-        # The card was still finalized successfully. A transient Telegram
-        # failure must not make status_polling retry the whole transition and
-        # produce duplicate final events on the next tick.
-        logger.warning(
-            "stall alert failed user=%d sess=%s: %s",
-            user_id,
-            sess.id,
-            exc,
-        )
     # Arm the false-positive recovery: if a real assistant turn arrives
     # after this, the next ``update_session_card`` / ``finalize_task``
     # spawns a fresh card below the stalled stub instead of silently

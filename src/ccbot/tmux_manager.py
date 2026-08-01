@@ -427,7 +427,13 @@ class TmuxManager:
         """Whether Codex still shows ``text`` in its bottom input prompt."""
         lines = pane_text.splitlines()
         prompt_idx = -1
-        for i in range(len(lines) - 1, max(-1, len(lines) - 20), -1):
+        # Long voice transcriptions can wrap to far more than 20 terminal
+        # rows.  Looking only at the pane tail then misses the opening ``>``
+        # even though the entire transcription is still sitting unsent in
+        # the input field.  The last prompt marker in the captured pane is
+        # the live input; submitted turns are followed by a newer, empty
+        # prompt once Codex returns to idle.
+        for i in range(len(lines) - 1, -1, -1):
             if re.match(r"^\s*[›>](?:\s|$)", lines[i]):
                 prompt_idx = i
                 break
@@ -455,7 +461,9 @@ class TmuxManager:
         the TUI has had a tick; only retry when the exact text is still there,
         which avoids duplicating an already-submitted turn.
         """
-        await asyncio.sleep(0.8)
+        # Give Codex enough time to process a large bracketed paste before
+        # deciding that the first Enter was swallowed by the TUI.
+        await asyncio.sleep(2.0)
         pane = await self.capture_pane(window_id)
         if not pane or not self._codex_prompt_contains(pane, text):
             return True

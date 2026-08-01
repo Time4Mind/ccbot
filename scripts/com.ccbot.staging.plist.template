@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ccbot.staging</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PROJECT_DIR__/.venv/bin/ccbot</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__PROJECT_DIR__</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>NetworkState</key>
+        <true/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__STAGING_DIR__/logs/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>__STAGING_DIR__/logs/launchd.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__STAGING_DIR__/workspaces</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+        <key>CCBOT_DIR</key>
+        <string>__STAGING_DIR__</string>
+        <key>TMUX_SESSION_NAME</key>
+        <string>ccbot-staging</string>
+        <key>TMUX_TMPDIR</key>
+        <string>__STAGING_DIR__/tmux</string>
+        <key>CCBOT_AGENT_BACKEND</key>
+        <string>codex</string>
+        <key>CODEX_HOME</key>
+        <string>__CODEX_HOME__</string>
+        <key>CCBOT_CODEX_SESSIONS_PATH</key>
+        <string>__CODEX_HOME__/sessions</string>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

@@ -427,13 +427,7 @@ class TmuxManager:
         """Whether Codex still shows ``text`` in its bottom input prompt."""
         lines = pane_text.splitlines()
         prompt_idx = -1
-        # Long voice transcriptions can wrap to far more than 20 terminal
-        # rows.  Looking only at the pane tail then misses the opening ``>``
-        # even though the entire transcription is still sitting unsent in
-        # the input field.  The last prompt marker in the captured pane is
-        # the live input; submitted turns are followed by a newer, empty
-        # prompt once Codex returns to idle.
-        for i in range(len(lines) - 1, -1, -1):
+        for i in range(len(lines) - 1, max(-1, len(lines) - 20), -1):
             if re.match(r"^\s*[›>](?:\s|$)", lines[i]):
                 prompt_idx = i
                 break
@@ -454,31 +448,21 @@ class TmuxManager:
         return needle[-64:] in prompt or needle[:64] in prompt
 
     async def ensure_codex_prompt_submitted(self, window_id: str, text: str) -> bool:
-        """Retry Enter while Codex leaves the just-typed prompt pending.
+        """Retry Enter once when Codex left the just-typed prompt pending.
 
         ``send_keys`` can successfully deliver bytes while Codex treats the
         first Enter as an input-layout event.  Verify the bottom prompt after
-        the TUI has had a tick; before every retry, require the exact text to
-        still be present. This avoids duplicate turns while tolerating more
-        than one swallowed Enter (observed with long voice transcriptions).
+        the TUI has had a tick; only retry when the exact text is still there,
+        which avoids duplicating an already-submitted turn.
         """
-        # Give Codex enough time to process a large bracketed paste before
-        # deciding that the first Enter was swallowed by the TUI.
-        await asyncio.sleep(2.0)
-        max_retries = 3
-        for attempt in range(1, max_retries + 1):
-            pane = await self.capture_pane(window_id)
-            if not pane or not self._codex_prompt_contains(pane, text):
-                return True
-            logger.warning(
-                "Codex prompt still pending in %s; retrying Enter (%d/%d)",
-                window_id,
-                attempt,
-                max_retries,
-            )
-            if not await self.send_keys(window_id, "Enter", enter=False, literal=False):
-                return False
-            await asyncio.sleep(2.0)
+        await asyncio.sleep(0.8)
+        pane = await self.capture_pane(window_id)
+        if not pane or not self._codex_prompt_contains(pane, text):
+            return True
+        logger.warning("Codex prompt still pending in %s; retrying Enter", window_id)
+        if not await self.send_keys(window_id, "Enter", enter=False, literal=False):
+            return False
+        await asyncio.sleep(0.5)
         pane = await self.capture_pane(window_id)
         return not pane or not self._codex_prompt_contains(pane, text)
 

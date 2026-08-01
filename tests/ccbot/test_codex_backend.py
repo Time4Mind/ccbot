@@ -419,6 +419,37 @@ def test_codex_completed_prompt_is_not_treated_as_pending() -> None:
 
 
 @pytest.mark.asyncio
+async def test_codex_pending_prompt_retries_until_it_is_submitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = TmuxManager()
+    pending = "old output\n\n› a long voice prompt\n\n  model · ~/project"
+    manager.capture_pane = AsyncMock(side_effect=[pending, pending, "› "])
+    manager.send_keys = AsyncMock(return_value=True)
+    sleep = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    assert await manager.ensure_codex_prompt_submitted("@5", "a long voice prompt")
+    assert manager.send_keys.await_count == 2
+    manager.send_keys.assert_awaited_with("@5", "Enter", enter=False, literal=False)
+    assert sleep.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_codex_pending_prompt_stops_after_bounded_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = TmuxManager()
+    pending = "› voice prompt\n\n  model · ~/project"
+    manager.capture_pane = AsyncMock(return_value=pending)
+    manager.send_keys = AsyncMock(return_value=True)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    assert not await manager.ensure_codex_prompt_submitted("@5", "voice prompt")
+    assert manager.send_keys.await_count == 3
+
+
+@pytest.mark.asyncio
 async def test_codex_rollout_discovery_uses_session_meta(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

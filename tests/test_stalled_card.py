@@ -19,7 +19,7 @@ interactive UI / kb prompt, menu navigation, too-recent event).
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
@@ -54,6 +54,14 @@ def stub_finalize(monkeypatch):
 
     monkeypatch.setattr(notifications, "finalize_task", _fake_finalize)
     return calls
+
+
+@pytest.fixture(autouse=True)
+def stub_stall_alert(monkeypatch):
+    """Keep tests offline while exposing the separate push notification."""
+    send = AsyncMock()
+    monkeypatch.setattr(notifications, "safe_send", send)
+    return send
 
 
 def _make_sess(sid: str = "s1") -> Session:
@@ -98,7 +106,9 @@ def _seed_card(
 
 class TestStallFires:
     @pytest.mark.asyncio
-    async def test_idle_nonterminal_tail_finalizes(self, stub_finalize):
+    async def test_idle_nonterminal_tail_finalizes(
+        self, stub_finalize, stub_stall_alert
+    ):
         """Card non-finalized + pane idle + last event stale + no UI/menu
         => stalled-finalize path invoked with the stall note."""
         user_id, sess = 42, _make_sess()
@@ -115,6 +125,11 @@ class TestStallFires:
 
         assert fired is True
         assert stub_finalize == [(user_id, sess.id, STALL_NOTE)]
+        stub_stall_alert.assert_awaited_once_with(
+            ANY,
+            user_id,
+            notifications.STALL_ALERT.format(session_name=sess.name),
+        )
 
     @pytest.mark.asyncio
     async def test_tool_use_tail_finalizes(self, stub_finalize):

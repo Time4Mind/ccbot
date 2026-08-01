@@ -20,6 +20,23 @@ service_loaded() {
     launchctl print "${domain}/${label}" >/dev/null 2>&1
 }
 
+bot_lock_free() {
+    "${project_dir}/.venv/bin/python" - "${staging_dir}/ccbot.lock" <<'PY'
+import fcntl
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.parent.mkdir(parents=True, exist_ok=True)
+with path.open("a+") as handle:
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit(1) from None
+    fcntl.flock(handle, fcntl.LOCK_UN)
+PY
+}
+
 require_isolation() {
     [ "$project_dir" = "/Users/a-s-nosko/pet_projects/ccbot-staging" ] \
         || die "refusing to run outside the staging worktree: ${project_dir}"
@@ -135,9 +152,16 @@ stop_staging() {
     require_isolation
     if service_loaded; then
         launchctl bootout "${domain}/${label}"
-        echo "Stopped ${label}"
+        local waited=0
+        while ! bot_lock_free && [ "$waited" -lt 50 ]; do
+            sleep 0.2
+            waited=$((waited + 1))
+        done
+        bot_lock_free || die "${label} stopped but its lock is still held"
+        echo "Stopped ${label}; lock released"
     else
-        echo "${label} is already stopped"
+        bot_lock_free || die "${label} is unloaded but its lock is still held"
+        echo "${label} is already stopped; lock is free"
     fi
 }
 

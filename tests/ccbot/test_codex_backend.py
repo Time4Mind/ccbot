@@ -246,6 +246,17 @@ async def test_restore_codex_archive_does_not_wait_for_hook(
     )
     mgr.sessions[sess.id] = sess
 
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": sid}}) + "\n"
+    )
+    monkeypatch.setattr(config, "session_map_file", tmp_path / "session_map.json")
+    monkeypatch.setattr(
+        codex_session_io,
+        "build_session_file_path",
+        lambda _sid, _cwd: rollout,
+    )
+
     tmux = MagicMock()
     tmux.create_window = AsyncMock(return_value=(True, "ok", "project", "@9"))
     monkeypatch.setattr(archive, "tmux_manager", tmux)
@@ -258,7 +269,19 @@ async def test_restore_codex_archive_does_not_wait_for_hook(
     assert ws.session_id == sid
     assert ws.cwd == str(workdir)
     assert ws.backend == "codex"
+    assert ws.transcript_path == str(rollout)
     assert sess.window_id == "@9"
+    session_map = json.loads(config.session_map_file.read_text())
+    assert session_map["ccbot:@9"] == {
+        "session_id": sid,
+        "cwd": str(workdir),
+        "window_name": "project",
+        "backend": "codex",
+        "transcript_path": str(rollout),
+    }
+
+    await mgr.load_session_map()
+    assert mgr.get_window_state("@9").session_id == sid
 
 
 @pytest.mark.asyncio

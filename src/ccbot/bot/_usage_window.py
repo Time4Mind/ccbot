@@ -311,7 +311,10 @@ async def _poll_codex_status(wid: str) -> object | None:
                 pane = await _capture_with_scrollback(wid)
                 if not pane:
                     continue
-                if "refresh requested; run /status again shortly" in pane.lower():
+                lower = pane.lower()
+                if "refresh requested; run /status again shortly" in lower or (
+                    "limits may be stale" in lower and "run /status again" in lower
+                ):
                     refresh_requested = True
                     break
                 info = parse_codex_status_output(pane)

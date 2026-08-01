@@ -102,8 +102,24 @@ def build_session_file_path(session_id: str, cwd: str = "") -> Path | None:
     return None
 
 
-async def get_session_direct(session_id: str, cwd: str) -> ClaudeSession | None:
-    """Find a Codex rollout by metadata id, optionally verifying its cwd."""
+async def get_session_direct(
+    session_id: str,
+    cwd: str,
+    transcript_path: str | Path | None = None,
+) -> ClaudeSession | None:
+    """Find a Codex rollout by id, preferring its persisted exact path.
+
+    A resumed rollout keeps its original metadata cwd even when Codex is
+    explicitly resumed in another directory. The restore binding records the
+    validated rollout path, so use that path before the cwd-filtered scan.
+    """
+    if transcript_path:
+        path = Path(transcript_path).expanduser()
+        if path.is_file():
+            meta = await asyncio.to_thread(_read_meta, path)
+            if str(meta.get("id") or "") == session_id:
+                return await asyncio.to_thread(_parse_rollout, path, session_id)
+
     wanted_cwd = str(Path(cwd).expanduser().resolve()) if cwd else ""
     for path in await asyncio.to_thread(_rollouts):
         meta = await asyncio.to_thread(_read_meta, path)

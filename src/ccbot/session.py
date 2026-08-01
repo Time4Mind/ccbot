@@ -513,8 +513,16 @@ class SessionManager:
         if not state.session_id or not state.cwd:
             return None
 
-        io = codex_session_io if state.backend == "codex" else session_claude_io
-        session = await io.get_session_direct(state.session_id, state.cwd)
+        if state.backend == "codex":
+            session = await codex_session_io.get_session_direct(
+                state.session_id,
+                state.cwd,
+                state.transcript_path or None,
+            )
+        else:
+            session = await session_claude_io.get_session_direct(
+                state.session_id, state.cwd
+            )
         if session:
             return session
 

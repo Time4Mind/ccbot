@@ -545,13 +545,27 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
     # self-heal the persisted map. Claude resume remains on the old wait path
     # because Claude can report a transient new session id before we override
     # it back to the resumed transcript id.
+    codex_restore_published = False
     if resume_session_id and target_backend == "codex":
-        ws = session_manager.get_window_state(created_wid)
-        ws.session_id = resume_session_id
-        ws.cwd = workdir
-        ws.window_name = created_wname
-        ws.backend = "codex"
-        session_manager.save_state()
+        from ..codex_session_io import build_session_file_path
+
+        transcript_path = build_session_file_path(resume_session_id, workdir)
+        if transcript_path is None or not transcript_path.is_file():
+            await tmux_manager.kill_window(created_wid)
+            return False, "Codex rollout not found; restore was cancelled"
+        try:
+            await session_manager.publish_codex_restore_binding(
+                sess=sess,
+                user_id=user_id,
+                window_id=created_wid,
+                window_name=created_wname,
+                transcript_path=transcript_path,
+            )
+        except (OSError, RuntimeError) as e:
+            await tmux_manager.kill_window(created_wid)
+            logger.warning("Codex restore binding failed for %s: %s", created_wid, e)
+            return False, "Could not publish Codex restore binding"
+        codex_restore_published = True
     else:
         await session_manager.wait_for_session_map_entry(created_wid, timeout=15.0)
 
@@ -578,8 +592,9 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
         sess.claude_session_id = ws.session_id
         session_manager.save_state()
 
-    session_manager.set_session_window(sess.id, created_wid)
-    session_manager.set_active_session(user_id, sess.id)
+    if not codex_restore_published:
+        session_manager.set_session_window(sess.id, created_wid)
+        session_manager.set_active_session(user_id, sess.id)
     if session_manager.get_user_settings(user_id).get("local_terminal") == "auto":
         from ..local_terminal import open_terminal_for_window
 

@@ -139,3 +139,29 @@ async def test_codex_status_retries_after_refresh_request(
     assert info is not None
     assert info.weekly is not None
     assert info.weekly.used_percent == 12
+
+
+@pytest.mark.asyncio
+async def test_codex_status_retries_provider_stale_warning(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    frames = iter(
+        [
+            "OpenAI Codex\n›",
+            (
+                "Weekly limit: 86% left (resets 18:04 on 6 Aug)\n"
+                "Warning: limits may be stale - run /status again"
+            ),
+            "Weekly limit: 98% left (resets 10:11 on 8 Aug)",
+            "Weekly limit: 98% left (resets 10:11 on 8 Aug)",
+        ]
+    )
+    monkeypatch.setattr(
+        _usage_window, "_capture_with_scrollback", _capture_returning(frames)
+    )
+
+    info = await _usage_window._poll_codex_status("@2")
+
+    assert info is not None
+    assert info.weekly is not None
+    assert info.weekly.used_percent == 2

@@ -55,9 +55,34 @@ class TestToRichMarkdown:
         text = "```bash\nprintf '%s\\n' 'a<b'\n```"
         assert rich.to_rich_markdown(text) == "`printf '%s\\n' 'a<b'`"
 
-    def test_multiline_fence_stays_fenced(self) -> None:
+    def test_multiline_shell_fence_becomes_rich_code(self) -> None:
         text = "```bash\nuv sync\nuv run ccbot\n```"
-        assert rich.to_rich_markdown(text) == text
+        assert rich.to_rich_markdown(text) == "<code>uv sync\nuv run ccbot</code>"
+
+    def test_multiline_shell_fence_becomes_copyable_rich_code(self) -> None:
+        assert (
+            rich.to_rich_markdown("```bash\nuv sync\nuv run ccbot\n```")
+            == "<code>uv sync\nuv run ccbot</code>"
+        )
+        assert (
+            rich.to_rich_markdown("```\ngit fetch origin\ngit status\n```")
+            == "<code>git fetch origin\ngit status</code>"
+        )
+
+    def test_single_line_and_non_shell_fences_stay_rich(self) -> None:
+        assert rich.to_rich_markdown("```bash\nuv run ccbot\n```") == "`uv run ccbot`"
+        assert (
+            rich.to_rich_markdown("```python\nimport os\nprint(os.getcwd())\n```")
+            == "```python\nimport os\nprint(os.getcwd())\n```"
+        )
+
+    def test_multiline_shell_code_escapes_html_metacharacters(self) -> None:
+        assert rich.to_rich_markdown(
+            "```sh\nprintf '<ok>' && echo done > out\nprintf 'a&b'\n```"
+        ) == (
+            "<code>printf '&lt;ok&gt;' &amp;&amp; echo done &gt; out\n"
+            "printf 'a&amp;b'</code>"
+        )
 
     def test_single_line_fence_with_backtick_stays_fenced(self) -> None:
         text = "```bash\necho `date`\n```"
@@ -229,6 +254,40 @@ class TestSafeSendRichPath:
         bot.send_message.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_multiline_shell_command_stays_rich_and_becomes_code(
+        self, rich_on: None
+    ) -> None:
+        bot = _FakeBot(post_result=_sent_message_json())
+        text = (
+            "**Deploy:**\n\n```bash\n"
+            "git fetch origin\n"
+            "git pull --ff-only origin main\n"
+            "```"
+        )
+
+        await message_sender.safe_send(bot, 449, text)  # type: ignore[arg-type]
+
+        assert len(bot.posts) == 1
+        markdown = bot.posts[0][1]["rich_message"]["markdown"]
+        assert markdown.startswith("**Deploy:**")
+        assert (
+            "<code>git fetch origin\ngit pull --ff-only origin main</code>" in markdown
+        )
+        bot.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_multiline_non_shell_block_preserves_rich_formatting(
+        self, rich_on: None
+    ) -> None:
+        bot = _FakeBot(post_result=_sent_message_json())
+        text = "**Example:**\n\n```python\nimport os\nprint(os.getcwd())\n```"
+
+        await message_sender.safe_send(bot, 449, text)  # type: ignore[arg-type]
+
+        assert len(bot.posts) == 1
+        bot.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_retry_after_propagates(self, rich_on: None) -> None:
         from telegram.error import RetryAfter
 
@@ -287,6 +346,23 @@ class TestSafeEditRichPath:
         target = _FakeMessage(bot)
         await message_sender.safe_edit(target, "hello")
         bot.edit_message_text.assert_called_once()  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_multiline_shell_command_edit_stays_rich(self, rich_on: None) -> None:
+        bot = _FakeBot(post_result=True)
+        bot.edit_message_text = AsyncMock()  # type: ignore[attr-defined]
+        target = _FakeMessage(bot)
+
+        await message_sender.safe_edit(
+            target, "```sh\nsystemctl daemon-reload\nsystemctl restart ccbot\n```"
+        )
+
+        assert len(bot.posts) == 1
+        markdown = bot.posts[0][1]["rich_message"]["markdown"]
+        assert markdown == (
+            "<code>systemctl daemon-reload\nsystemctl restart ccbot</code>"
+        )
+        bot.edit_message_text.assert_not_called()  # type: ignore[attr-defined]
 
 
 class TestTryRichEditRaw:

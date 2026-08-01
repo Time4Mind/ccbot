@@ -50,6 +50,7 @@ from ..handlers.message_sender import (
 from ..handlers.notifications import (
     begin_repost_intent,
     card_is_below,
+    clear_card,
     end_repost_intent,
     enter_kb_mode,
     get_card_state,
@@ -452,16 +453,20 @@ async def forward_command_handler(
     async with _card_repost_bracket(context.bot, user.id, sess) as repost:
         success, message = await session_manager.send_to_window(wid, cc_slash)
         if success:
-            repost.commit()
             # /clear: drop the session association so we re-detect once a
             # new session id is written by the next user message.
             if cc_slash.strip().lower() == "/clear":
                 logger.info("Clearing session for window %s after /clear", display)
                 session_manager.clear_window_session(wid)
+                if sess is not None:
+                    await clear_card(context.bot, user.id, sess)
+                    await resume_card_view(context.bot, user.id, sess)
                 await safe_reply(
                     update.message,
                     "🧹 Context cleared. Next message starts a fresh Claude session.",
                 )
+            else:
+                repost.commit()
         else:
             await safe_reply(update.message, f"❌ {message}")
 

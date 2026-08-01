@@ -96,12 +96,19 @@ class TestForwardCommand:
             patch("ccbot.bot._common.session_manager", mock_sm),
             patch("ccbot.bot.messages.tmux_manager") as mock_tmux,
             patch("ccbot.bot.messages.safe_reply", new_callable=AsyncMock),
+            patch(
+                "ccbot.bot.messages.clear_card", new_callable=AsyncMock
+            ) as clear_card,
+            patch(
+                "ccbot.bot.messages.resume_card_view", new_callable=AsyncMock
+            ) as resume_card,
         ):
             mock_sm.get_active_window.return_value = "@5"
             mock_sm.get_display_name.return_value = "project"
             mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock())
             mock_tmux.capture_pane = AsyncMock(return_value="")
-            mock_sm.find_session_by_window.return_value = None
+            sess = MagicMock(id="sess")
+            mock_sm.find_session_by_window.return_value = sess
             mock_sm.send_to_window = AsyncMock(return_value=(True, "ok"))
 
             from ccbot.bot import forward_command_handler
@@ -110,3 +117,6 @@ class TestForwardCommand:
 
             mock_sm.send_to_window.assert_called_once_with("@5", "/clear")
             mock_sm.clear_window_session.assert_called_once_with("@5")
+            clear_card.assert_awaited_once_with(context.bot, 1, sess)
+            # Once on bracket entry, once after the card is cleared.
+            assert resume_card.await_count == 2

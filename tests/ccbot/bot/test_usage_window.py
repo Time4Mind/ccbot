@@ -43,6 +43,9 @@ def _fast_and_isolated(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_usage_window.asyncio, "sleep", _noop_sleep)
     monkeypatch.setattr(_usage_window.tmux_manager, "send_keys", _noop_send)
     monkeypatch.setattr(_usage_window, "_clear_pane_history", _noop_clear)
+    _usage_window._live_usage_cache.clear()
+    yield
+    _usage_window._live_usage_cache.clear()
 
 
 def _capture_returning(frames: Iterator[str]):
@@ -165,3 +168,26 @@ async def test_codex_status_retries_provider_stale_warning(
     assert info is not None
     assert info.weekly is not None
     assert info.weekly.used_percent == 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_live_usage_caches_last_settled_value(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from ccbot.codex_usage import CodexRateLimitWindow, CodexUsageInfo
+    from ccbot.session import session_manager
+
+    info = CodexUsageInfo(
+        weekly=CodexRateLimitWindow(
+            used_percent=3, duration_minutes=10_080, resets_at=123
+        )
+    )
+    monkeypatch.setattr(session_manager, "agent_backend", "codex")
+    monkeypatch.setattr(_usage_window, "fetch_codex_usage", lambda: _async_value(info))
+
+    assert await _usage_window.fetch_live_usage() == info
+    assert _usage_window.get_cached_live_usage() == info
+
+
+async def _async_value(value: object) -> object:
+    return value

@@ -27,6 +27,14 @@ logger = logging.getLogger(__name__)
 USAGE_WINDOW_NAME = "ccbot-usage"
 CODEX_USAGE_WINDOW_NAME = "ccbot-codex-usage"
 _usage_window_lock = asyncio.Lock()
+_live_usage_cache: dict[str, object] = {}
+
+
+def get_cached_live_usage() -> object | None:
+    """Return the last settled quota read for the selected backend."""
+    from ..session import session_manager
+
+    return _live_usage_cache.get(session_manager.agent_backend)
 
 
 async def _confirm_trust_dialog_if_present(wid: str) -> None:
@@ -360,6 +368,11 @@ async def fetch_live_usage() -> object | None:
     """Fetch quota data for the currently selected agent backend."""
     from ..session import session_manager
 
-    if session_manager.agent_backend == "codex":
-        return await fetch_codex_usage()
-    return await fetch_claude_usage()
+    backend = session_manager.agent_backend
+    if backend == "codex":
+        info = await fetch_codex_usage()
+    else:
+        info = await fetch_claude_usage()
+    if info is not None:
+        _live_usage_cache[backend] = info
+    return info

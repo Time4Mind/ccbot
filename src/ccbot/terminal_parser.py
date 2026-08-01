@@ -191,6 +191,8 @@ UI_PATTERNS: list[UIPattern] = [
             re.compile(r"Esc to cancel"),
             re.compile(r"Esc to exit"),
             re.compile(r"Enter to confirm"),
+            # Codex 0.146 reasoning-level picker after /model.
+            re.compile(r"Press enter to confirm or esc to go back", re.IGNORECASE),
             re.compile(r"^\s*Type to filter"),
         ),
     ),

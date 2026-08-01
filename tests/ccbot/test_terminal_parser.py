@@ -263,6 +263,22 @@ class TestExtractInteractiveContent:
         assert result.name == "Settings"
         assert "Enter to confirm" in result.content
 
+    def test_codex_reasoning_picker_go_back_bottom(self):
+        pane = (
+            "  Select Reasoning Level for gpt-5.6-sol\n"
+            "\n"
+            "  1. Low (default)     Fast responses with lighter reasoning\n"
+            "› 2. Medium (current)  Balances speed and reasoning depth\n"
+            "  3. High              Greater reasoning depth\n"
+            "\n"
+            "  Press enter to confirm or esc to go back\n"
+        )
+        result = extract_interactive_content(pane)
+        assert result is not None
+        assert result.name == "Settings"
+        assert "Select Reasoning Level" in result.content
+        assert "esc to go back" in result.content
+
     @pytest.mark.parametrize(
         "pane",
         [

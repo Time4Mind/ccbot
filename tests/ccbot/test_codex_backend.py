@@ -404,6 +404,15 @@ def test_codex_pending_prompt_detection_only_matches_bottom_input() -> None:
     assert not TmuxManager._codex_prompt_contains(pane, "different prompt")
 
 
+def test_codex_pending_long_prompt_beyond_twenty_rows_is_detected() -> None:
+    text = " ".join(f"word-{i}" for i in range(120))
+    wrapped = "\n  ".join(" ".join(text.split()[i : i + 5]) for i in range(0, 120, 5))
+    pane = f"old output\n\n› {wrapped}\n\n  model · ~/project"
+
+    assert len(pane.splitlines()) > 20
+    assert TmuxManager._codex_prompt_contains(pane, text)
+
+
 def test_codex_completed_prompt_is_not_treated_as_pending() -> None:
     pane = "› send the report now\n\n• Working (2s)\n"
     assert not TmuxManager._codex_prompt_contains(pane, "send the report now")

@@ -18,7 +18,6 @@ Core responsibilities:
 Key functions: to_rich_markdown, send_rich_message, edit_rich_message.
 """
 
-import html
 import re
 from typing import Any, cast
 
@@ -49,13 +48,6 @@ _SINGLE_LINE_FENCE_RE = re.compile(
     r"(?m)^[ \t]*```([^\n`]*)\n([^\n`]+)\n[ \t]*```[ \t]*$"
 )
 _COPYABLE_SHELL_LANGS = {"", "bash", "sh", "zsh", "shell", "console"}
-
-# Telegram Android exposes its native tap/copy interaction for a multi-line
-# Rich ``<code>`` span, but not for a Rich fenced block.  Convert shell fences
-# only; non-shell fences retain their language highlighting and layout.
-_FENCED_BLOCK_RE = re.compile(
-    r"(?ms)^[ \t]*```([^\n`]*)\n(.*?)\n[ \t]*```[ \t]*(?=\n|$)"
-)
 
 # HTML tags the Rich Markdown parser supports (see "Rich HTML style" in the
 # Bot API docs). A `<` starting one of these is left alone; any other `<`
@@ -124,31 +116,6 @@ def _inline_single_line_fences(text: str) -> str:
         return f"`{match.group(2)}`"
 
     return _SINGLE_LINE_FENCE_RE.sub(replace, text)
-
-
-def _multiline_shell_fences_to_code(text: str) -> str:
-    """Render multi-line shell fences as copyable Rich ``code`` spans."""
-
-    def replace(match: re.Match[str]) -> str:
-        language = match.group(1).strip().lower()
-        body = match.group(2)
-        if language not in _COPYABLE_SHELL_LANGS or "\n" not in body:
-            return match.group(0)
-        # An unlabelled fence can also carry a literal table or prose. Keep a
-        # pipe-table fenced: treating it as shell would change established
-        # rendering even though it is not a command.
-        body_lines = [line.strip() for line in body.splitlines() if line.strip()]
-        if (
-            not language
-            and body_lines
-            and all(line.startswith("|") for line in body_lines)
-        ):
-            return match.group(0)
-        # Rich Markdown parses HTML inside <code>, so protect shell operators
-        # and redirections while leaving quotes and newlines untouched.
-        return f"<code>{html.escape(body, quote=False)}</code>"
-
-    return _FENCED_BLOCK_RE.sub(replace, text)
 
 
 # A GFM table separator cell: dashes with optional alignment colons.
@@ -274,8 +241,7 @@ def to_rich_markdown(text: str) -> str:
     text = _escape_outside_code(text)
     text = _EXPHEADED_RE.sub(_render_details_headed, text)
     text = _EXPQUOTE_RE.sub(_render_details, text)
-    text = _sub_wrap_tables(text)
-    return _multiline_shell_fences_to_code(text)
+    return _sub_wrap_tables(text)
 
 
 def _input_rich_message(markdown: str) -> dict[str, Any]:

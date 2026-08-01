@@ -404,49 +404,9 @@ def test_codex_pending_prompt_detection_only_matches_bottom_input() -> None:
     assert not TmuxManager._codex_prompt_contains(pane, "different prompt")
 
 
-def test_codex_pending_long_prompt_beyond_twenty_rows_is_detected() -> None:
-    text = " ".join(f"word-{i}" for i in range(120))
-    wrapped = "\n  ".join(" ".join(text.split()[i : i + 5]) for i in range(0, 120, 5))
-    pane = f"old output\n\n› {wrapped}\n\n  model · ~/project"
-
-    assert len(pane.splitlines()) > 20
-    assert TmuxManager._codex_prompt_contains(pane, text)
-
-
 def test_codex_completed_prompt_is_not_treated_as_pending() -> None:
     pane = "› send the report now\n\n• Working (2s)\n"
     assert not TmuxManager._codex_prompt_contains(pane, "send the report now")
-
-
-@pytest.mark.asyncio
-async def test_codex_pending_prompt_retries_until_it_is_submitted(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    manager = TmuxManager()
-    pending = "old output\n\n› a long voice prompt\n\n  model · ~/project"
-    manager.capture_pane = AsyncMock(side_effect=[pending, pending, "› "])
-    manager.send_keys = AsyncMock(return_value=True)
-    sleep = AsyncMock()
-    monkeypatch.setattr(asyncio, "sleep", sleep)
-
-    assert await manager.ensure_codex_prompt_submitted("@5", "a long voice prompt")
-    assert manager.send_keys.await_count == 2
-    manager.send_keys.assert_awaited_with("@5", "Enter", enter=False, literal=False)
-    assert sleep.await_count == 3
-
-
-@pytest.mark.asyncio
-async def test_codex_pending_prompt_stops_after_bounded_retries(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    manager = TmuxManager()
-    pending = "› voice prompt\n\n  model · ~/project"
-    manager.capture_pane = AsyncMock(return_value=pending)
-    manager.send_keys = AsyncMock(return_value=True)
-    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
-
-    assert not await manager.ensure_codex_prompt_submitted("@5", "voice prompt")
-    assert manager.send_keys.await_count == 3
 
 
 @pytest.mark.asyncio

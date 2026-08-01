@@ -41,3 +41,18 @@ isolated `CODEX_HOME`. Do not copy production auth or rollout state into it.
 
 Production `com.ccbot`, `~/.ccbot`, the `ccbot` tmux session, and the primary
 checkout are outside this script's targets.
+
+## Snapshot production archives
+
+The importer copies complete JSONL records into staging and creates an archived
+Session record whose workdir is under the staging home. It never resumes against
+the production rollout file or production workdir. Stop staging before import:
+
+```bash
+./scripts/ccbot-staging.sh stop
+.venv/bin/python scripts/staging_import_archives.py --name "gmw summary" --allow-live-snapshot
+./scripts/ccbot-staging.sh start
+```
+
+Live production sessions require the explicit `--allow-live-snapshot` flag. The
+result is a point-in-time copy; subsequent staging turns append only to the copy.

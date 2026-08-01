@@ -1191,8 +1191,9 @@ async def clear_card(bot: Bot, user_id: int, sess: Session) -> None:
     """Wipe the live card's body in response to a user-driven /clear.
 
     Edits the existing message to a header-only "(cleared)" snapshot
-    so the user sees the previous tool log disappear, then drops the
-    cached state so the next claude event spawns a fresh card.
+    and keeps an empty, seed-latched state. Dropping the state here would let
+    ``resume_card_view`` immediately re-seed the old JSONL transcript and make
+    the cleared Telegram history reappear.
     No-op when there is no live card.
     """
     state = _cards.get((user_id, sess.id))
@@ -1203,11 +1204,20 @@ async def clear_card(bot: Bot, user_id: int, sess: Session) -> None:
         state.pending_edit.cancel()
     state.pending_edit = None
     state.events = []
+    state.current_page_idx = None
+    state.context_pct = 0
+    state.is_continuation = False
+    state.in_menu_view = False
+    state.kb_prompt = ""
+    state.kb_ui_name = ""
+    state.in_kb_mode = False
+    state.seed_attempted = True
+    state.seed_mtime = -1.0
+    state.stall_finalized = False
     state.last_rendered = ""
     text = _render_card(sess, state, footer="(cleared)", user_id=user_id)
     cleared_kb = build_footer_keyboard(user_id, screen="main", is_busy=False)
     await _edit_card(bot, user_id, state, text=text, reply_markup=cleared_kb)
-    reset_card(user_id, sess.id)
 
 
 async def _send_card(

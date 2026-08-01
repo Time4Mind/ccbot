@@ -160,6 +160,7 @@ _quota_alerts_task: asyncio.Task[None] | None = None
 _metrics_flush_task: asyncio.Task[None] | None = None
 _heartbeat_task: asyncio.Task[None] | None = None
 _auth_preflight_task: asyncio.Task[None] | None = None
+_usage_prewarm_task: asyncio.Task[None] | None = None
 
 
 async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") -> None:
@@ -172,6 +173,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
         _metrics_flush_task, \
         _heartbeat_task, \
         _auth_preflight_task, \
+        _usage_prewarm_task, \
         _last_heartbeat, \
         _conflict_app
 
@@ -222,6 +224,23 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
         ensure_codex_auth_on_start(application.bot)
     )
     logger.info("Agent auth preflight scheduled")
+
+    async def _prewarm_live_usage() -> None:
+        """Populate Status cache off the user interaction path after auth."""
+        try:
+            if _auth_preflight_task is not None:
+                await _auth_preflight_task
+            from ._usage_window import fetch_live_usage
+
+            info = await fetch_live_usage()
+            logger.info("Live usage cache pre-warmed ok=%s", info is not None)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.debug("Live usage cache pre-warm failed: %s", e)
+
+    _usage_prewarm_task = asyncio.create_task(_prewarm_live_usage())
+    logger.info("Live usage cache pre-warm scheduled")
 
     # Pre-fill global rate limiter bucket on restart. AsyncLimiter starts at
     # _level=0 (full burst capacity), but Telegram's server-side counter
@@ -378,7 +397,14 @@ async def post_shutdown(
         _quota_alerts_task, \
         _metrics_flush_task, \
         _heartbeat_task, \
-        _auth_preflight_task
+        _auth_preflight_task, \
+        _usage_prewarm_task
+
+    if _usage_prewarm_task:
+        if not _usage_prewarm_task.done():
+            _usage_prewarm_task.cancel()
+        await asyncio.gather(_usage_prewarm_task, return_exceptions=True)
+        _usage_prewarm_task = None
 
     if _auth_preflight_task:
         if not _auth_preflight_task.done():

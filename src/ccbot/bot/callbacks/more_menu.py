@@ -35,7 +35,7 @@ from ...handlers.notifications import paint_card_on_carrier
 from ...i18n import t
 from ...session import session_manager
 from .._common import set_view
-from .._usage_window import fetch_live_usage
+from .._usage_window import fetch_live_usage, get_cached_live_usage
 from ..commands.info import emit_screenshot_compact
 
 logger = logging.getLogger(__name__)
@@ -123,21 +123,27 @@ async def handle(
     if data == CB_MM_STATUS:
         await query.answer()
 
+        from ...usage import format_usage_breakdown_compact
+
         base = build_footer_keyboard(user.id, screen="more", exclude_more="status")
         base_rows = list(base.inline_keyboard) if base is not None else []
         refresh_row = [
             InlineKeyboardButton(t(user.id, "btn.refresh"), callback_data=CB_MM_STATUS)
         ]
         kb = InlineKeyboardMarkup([refresh_row] + [list(r) for r in base_rows])
-        await safe_edit(query, t(user.id, "usage.fetching"), reply_markup=kb)
+        cached_info = get_cached_live_usage()
+        cached_block = format_usage_breakdown_compact(user.id, cached_info)
+        shown_text = cached_block or t(user.id, "usage.fetching")
+        await safe_edit(query, shown_text, reply_markup=kb)
         usage_info = await fetch_live_usage()
-        from ...usage import format_usage_breakdown_compact
-
-        live_block = format_usage_breakdown_compact(user.id, usage_info)
+        live_block = format_usage_breakdown_compact(
+            user.id, usage_info if usage_info is not None else cached_info
+        )
         # Status is a read-only operation. Failure to load quota data must not
         # start or replace the user's otherwise-working Codex authorization.
         text = live_block or t(user.id, "usage.unavailable")
-        await safe_edit(query, text, reply_markup=kb)
+        if text != shown_text:
+            await safe_edit(query, text, reply_markup=kb)
         return True
 
     if data == CB_MM_SHOT:

@@ -738,7 +738,8 @@ class TmuxManager:
                         # deployments (e.g. Mac + arm64 box).
                         env_prefix = (
                             "CCBOT_INTERFACE=telegram "
-                            f"CCBOT_AGENT_BACKEND={selected_backend}"
+                            f"CCBOT_AGENT_BACKEND={selected_backend} "
+                            f"CCBOT_DIR={shlex.quote(str(config.config_dir))}"
                         )
                         if config.bot_username:
                             env_prefix += f" CCBOT_BOT_USERNAME={shlex.quote(config.bot_username)}"

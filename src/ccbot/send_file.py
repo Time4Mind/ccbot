@@ -1,10 +1,11 @@
 """``ccbot send-file`` — on-demand outbound delivery for a running session.
 
 A session hands the user a file (image, document, archive, report, etc.)
-by calling this directly — ``ccbot send-file <path>``. The CLI relays the
-request over a local Unix socket to the already-running ccbot daemon, which
-owns the initialized Telegram client and has host network access. This keeps
-delivery working when the agent itself runs in a network-restricted sandbox.
+by calling this directly — ``ccbot send-file <path>``. The CLI writes a small
+request into a per-deployment relay directory under ``/tmp``; the already-
+running ccbot daemon picks it up, uses its initialized Telegram client, and
+writes the real delivery result back. A filesystem relay works inside managed
+agent sandboxes that block both external network and cross-process sockets.
 
 Target chat resolution, in order:
   1. ``--chat-id ID`` — explicit override.
@@ -26,13 +27,17 @@ import json
 import logging
 import os
 import sys
+import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 _PHOTO_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-_IPC_TIMEOUT_SECONDS = 180.0
-_MAX_IPC_LINE_BYTES = 64 * 1024
+_RELAY_TIMEOUT_SECONDS = 180.0
+_RELAY_POLL_SECONDS = 0.1
+_RELAY_READY_MAX_AGE_SECONDS = 5.0
+_RELAY_CLEANUP_AGE_SECONDS = 3600.0
 
 logger = logging.getLogger(__name__)
 
@@ -40,24 +45,21 @@ Reporter = Callable[[str, bool], None]
 
 
 class SendFileDaemonUnavailable(ConnectionError):
-    """The local ccbot daemon socket could not be reached."""
+    """The local ccbot daemon relay is absent or stale."""
 
 
-def send_file_socket_path() -> Path:
-    """Return a sandbox-reachable, per-deployment Unix socket path.
+def send_file_relay_dir() -> Path:
+    """Return the sandbox-writable, per-deployment relay directory.
 
-    Managed Codex profiles allow local Unix sockets but enforce filesystem
-    access on the socket path. ``$CCBOT_DIR`` normally lives under the home
-    directory and is read-only to a session, so connecting to a socket there
-    fails with ``EPERM``. ``/tmp`` is an explicit writable sandbox root. The
-    config-dir digest keeps production and staging sockets separate for the
-    same Unix user.
+    ``/tmp`` is an explicit writable root in managed Codex profiles. The
+    config-dir digest keeps production and staging queues separate for the
+    same Unix user without exposing their config paths in request filenames.
     """
     from .utils import ccbot_dir
 
     deployment = str(ccbot_dir().expanduser().resolve())
     digest = hashlib.sha256(deployment.encode("utf-8")).hexdigest()[:12]
-    return Path("/tmp") / f"ccbot-send-file-{os.getuid()}-{digest}.sock"
+    return Path("/tmp") / f"ccbot-send-file-{os.getuid()}-{digest}"
 
 
 def resolve_chat_ids(
@@ -163,34 +165,39 @@ async def _send_via_daemon(
     path: Path,
     caption: str | None,
     chat_ids: list[int],
-    socket_path: Path | None = None,
+    relay_dir: Path | None = None,
 ) -> bool:
-    """Ask the running bot daemon to send a file and relay its result lines."""
-    target = socket_path or send_file_socket_path()
-    try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_unix_connection(str(target)), timeout=3.0
-        )
-    except (
-        FileNotFoundError,
-        ConnectionRefusedError,
-        OSError,
-        asyncio.TimeoutError,
-    ) as e:
-        raise SendFileDaemonUnavailable(str(e)) from e
+    """Queue a file for the running daemon and relay its result lines."""
+    from .utils import atomic_write_json
 
+    target = relay_dir or send_file_relay_dir()
+    ready_path = target / ".ready"
+    try:
+        ready_age = time.time() - ready_path.stat().st_mtime
+    except OSError as e:
+        raise SendFileDaemonUnavailable("relay is not running") from e
+    if ready_age > _RELAY_READY_MAX_AGE_SECONDS:
+        raise SendFileDaemonUnavailable(f"relay heartbeat is stale ({ready_age:.1f}s)")
+
+    request_id = uuid.uuid4().hex
+    request_path = target / f"{request_id}.request.json"
+    response_path = target / f"{request_id}.response.json"
     request = {
+        "request_id": request_id,
         "path": str(path.resolve()),
         "caption": caption,
         "chat_ids": chat_ids,
     }
     try:
-        writer.write(json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n")
-        await writer.drain()
-        raw = await asyncio.wait_for(reader.readline(), timeout=_IPC_TIMEOUT_SECONDS)
-        if not raw:
-            raise RuntimeError("ccbot daemon closed the connection without a result")
-        response = json.loads(raw)
+        atomic_write_json(request_path, request)
+        deadline = asyncio.get_running_loop().time() + _RELAY_TIMEOUT_SECONDS
+        while not response_path.is_file():
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("ccbot daemon did not return a delivery result")
+            await asyncio.sleep(min(_RELAY_POLL_SECONDS, remaining))
+
+        response = json.loads(response_path.read_text(encoding="utf-8"))
         if not isinstance(response, dict):
             raise RuntimeError("invalid response from ccbot daemon")
         reports = response.get("reports", [])
@@ -208,28 +215,40 @@ async def _send_via_daemon(
             print(f"send-file FAILED ({response['error']})", file=sys.stderr)
         return bool(response.get("ok"))
     finally:
-        writer.close()
-        await writer.wait_closed()
+        for cleanup_path in (request_path, response_path):
+            try:
+                cleanup_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
-async def _handle_send_file_client(
-    reader: asyncio.StreamReader,
-    writer: asyncio.StreamWriter,
+async def _process_relay_request(
+    request_path: Path,
     *,
     bot: Any,
     allowed_users: set[int],
 ) -> None:
-    """Serve one local send-file request from an agent session."""
+    """Claim and process one filesystem-relay request."""
+    from .utils import atomic_write_json
+
+    request_id = request_path.name.removesuffix(".request.json")
+    processing_path = request_path.with_name(f"{request_id}.processing.json")
+    response_path = request_path.with_name(f"{request_id}.response.json")
     response: dict[str, Any]
     try:
-        raw = await asyncio.wait_for(reader.readline(), timeout=10.0)
-        if not raw:
-            raise ValueError("empty request")
-        if len(raw) > _MAX_IPC_LINE_BYTES:
-            raise ValueError("request is too large")
-        request = json.loads(raw)
+        request_path.rename(processing_path)
+    except FileNotFoundError:
+        return
+    except OSError as e:
+        logger.warning("Could not claim send-file request %s: %s", request_path, e)
+        return
+
+    try:
+        request = json.loads(processing_path.read_text(encoding="utf-8"))
         if not isinstance(request, dict):
             raise ValueError("request must be a JSON object")
+        if request.get("request_id") != request_id:
+            raise ValueError("request_id does not match request filename")
 
         raw_path = request.get("path")
         if not isinstance(raw_path, str) or not raw_path:
@@ -260,62 +279,83 @@ async def _handle_send_file_client(
         ok = await deliver(bot, path, caption, chat_ids, reporter=collect_report)
         response = {"ok": ok, "reports": reports}
     except Exception as e:
-        logger.exception("Local send-file request failed: %s", e)
+        logger.exception("Filesystem send-file request failed: %s", e)
         response = {"ok": False, "error": str(e), "reports": []}
 
     try:
-        writer.write(json.dumps(response, ensure_ascii=False).encode("utf-8") + b"\n")
-        await writer.drain()
-    except (ConnectionError, OSError):
-        logger.debug("send-file client disconnected before receiving the result")
+        atomic_write_json(response_path, response)
+    except OSError as e:
+        logger.error("Could not write send-file response %s: %s", response_path, e)
     finally:
-        writer.close()
-        await writer.wait_closed()
+        try:
+            processing_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
-async def start_send_file_server(
+async def send_file_relay_loop(
     bot: Any,
     *,
-    socket_path: Path | None = None,
+    relay_dir: Path | None = None,
     allowed_users: set[int] | None = None,
-) -> asyncio.AbstractServer:
-    """Start the daemon-side Unix socket and return its asyncio server."""
-    from functools import partial
-
+) -> None:
+    """Continuously process sandbox-authored send-file request files."""
     from .config import config
 
-    target = socket_path or send_file_socket_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
+    target = relay_dir or send_file_relay_dir()
+    target.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target.chmod(0o700)
+    ready_path = target / ".ready"
+    effective_allowed_users = set(allowed_users or config.allowed_users)
+
+    # Recover requests claimed by a daemon that stopped before producing a
+    # response. This can duplicate a Telegram send only in the tiny crash
+    # window after Telegram accepted it but before the response file landed.
+    for processing_path in target.glob("*.processing.json"):
+        request_id = processing_path.name.removesuffix(".processing.json")
+        request_path = target / f"{request_id}.request.json"
+        if not request_path.exists():
+            processing_path.rename(request_path)
+
+    logger.info("send-file filesystem relay watching %s", target)
+    pending_tasks: set[asyncio.Task[None]] = set()
+    next_heartbeat = 0.0
+    next_cleanup = 0.0
     try:
-        target.unlink()
-    except FileNotFoundError:
-        pass
+        while True:
+            now = asyncio.get_running_loop().time()
+            if now >= next_heartbeat:
+                ready_path.touch()
+                next_heartbeat = now + 1.0
+            for request_path in sorted(target.glob("*.request.json")):
+                task = asyncio.create_task(
+                    _process_relay_request(
+                        request_path,
+                        bot=bot,
+                        allowed_users=effective_allowed_users,
+                    )
+                )
+                pending_tasks.add(task)
+                task.add_done_callback(pending_tasks.discard)
 
-    server = await asyncio.start_unix_server(
-        partial(
-            _handle_send_file_client,
-            bot=bot,
-            allowed_users=set(allowed_users or config.allowed_users),
-        ),
-        path=str(target),
-        limit=_MAX_IPC_LINE_BYTES,
-    )
-    target.chmod(0o600)
-    logger.info("send-file IPC server listening on %s", target)
-    return server
-
-
-async def stop_send_file_server(
-    server: asyncio.AbstractServer, socket_path: Path | None = None
-) -> None:
-    """Stop the daemon-side server and remove its socket file."""
-    target = socket_path or send_file_socket_path()
-    server.close()
-    await server.wait_closed()
-    try:
-        target.unlink()
-    except FileNotFoundError:
-        pass
+            if now >= next_cleanup:
+                cutoff = time.time() - _RELAY_CLEANUP_AGE_SECONDS
+                for stale_path in target.glob("*.response.json"):
+                    try:
+                        if stale_path.stat().st_mtime < cutoff:
+                            stale_path.unlink()
+                    except FileNotFoundError:
+                        pass
+                next_cleanup = now + 60.0
+            await asyncio.sleep(_RELAY_POLL_SECONDS)
+    finally:
+        for task in pending_tasks:
+            task.cancel()
+        await asyncio.gather(*pending_tasks, return_exceptions=True)
+        try:
+            ready_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 async def _send_all(path: Path, caption: str | None, chat_ids: list[int]) -> bool:

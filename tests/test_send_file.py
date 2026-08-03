@@ -19,6 +19,7 @@ from ccbot.send_file import (
     _send_via_daemon,
     deliver,
     resolve_chat_ids,
+    send_file_socket_path,
     start_send_file_server,
     stop_send_file_server,
 )
@@ -38,6 +39,13 @@ def test_falls_back_to_broadcast() -> None:
 
 def test_no_target_is_empty_list() -> None:
     assert resolve_chat_ids(None, None, set()) == []
+
+
+def test_default_socket_is_in_sandbox_writable_tmp(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("CCBOT_DIR", str(tmp_path / "deployment"))
+    socket_path = send_file_socket_path()
+    assert socket_path.parent == Path("/tmp")
+    assert socket_path.name.startswith(f"ccbot-send-file-{os.getuid()}-")
 
 
 @pytest.mark.asyncio

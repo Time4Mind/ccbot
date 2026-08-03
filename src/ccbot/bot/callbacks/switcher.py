@@ -24,11 +24,11 @@ from ...handlers.directory_browser import (
 )
 from ...handlers.message_sender import safe_edit, safe_send
 from ...handlers.notifications import (
+    activate_card_on_carrier,
     enter_kb_mode,
     get_card_state,
     paint_card_on_carrier,
     pause_card_view,
-    transfer_card_to_carrier,
 )
 from ...session import session_manager
 from ...terminal_parser import extract_interactive_content, is_interactive_ui
@@ -71,21 +71,22 @@ async def handle(
         )
 
         # Hand the carrier message off from the previously-active session
-        # to the newly-active one BEFORE flipping ``active_sessions``.
-        # Otherwise the old session's pending events would still edit the
-        # carrier (clobbering the preview we're about to paint), and the
-        # detach-only fix from #29 created stray chat messages instead.
-        # Pausing FROM + claiming TO keeps everything on the same carrier.
+        # to the newly-active one behind the carrier-edit barrier.  This
+        # drains an old editMessageText already in flight, then pauses FROM,
+        # claims TO, and flips ``active_sessions`` atomically so a late update
+        # from FROM cannot overwrite the target after it is painted.
         old_active = session_manager.get_active_session(user.id)
         old_active_id = old_active.id if old_active is not None else None
         orphan_msg_id: int | None = None
         if query.message is not None:
-            orphan_msg_id = transfer_card_to_carrier(
+            orphan_msg_id = await activate_card_on_carrier(
                 user.id,
                 old_active_id,
                 target_id,
                 query.message.message_id,
             )
+        else:
+            session_manager.set_active_session(user.id, target_id)
         # The TO session already had a live card on a DIFFERENT message
         # (typical after a voice message pinned to it finished landing
         # while the user was elsewhere). It just lost ownership to the
@@ -99,8 +100,6 @@ async def handle(
                 )
             except Exception as e:
                 logger.debug("orphan switcher strip failed: %s", e)
-
-        session_manager.set_active_session(user.id, target_id)
 
         # The session we just LEFT is now bg. Seed its panel row from
         # JSONL — but only for the "working" case. If the inferred

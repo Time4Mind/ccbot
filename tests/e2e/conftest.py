@@ -54,6 +54,7 @@ def clean_state():
         session_manager.summary_cache.clear()
         notifications._cards.clear()
         notifications._card_locks.clear()
+        notifications._carrier_edit_locks.clear()
         notifications._repost_intent.clear()
         notifications._msg_to_session.clear()
         bg_status._bg.clear()

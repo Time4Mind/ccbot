@@ -6,7 +6,7 @@ states (idle/archived/completed/lost) still show the real state.
 
 from __future__ import annotations
 
-from ccbot.handlers.card_model import CardState, _render_card
+from ccbot.handlers.card_model import CardState, Event, _render_card
 from ccbot.handlers.switcher import build_session_preview
 from ccbot.session_models import Session
 
@@ -48,12 +48,17 @@ class TestCardHeaderDirLabel:
 
 
 class TestVoicePendingMarker:
-    def test_marker_shown_when_pending(self) -> None:
+    def test_marker_is_trailing_user_row_not_header(self) -> None:
         sess = _session()
         state = CardState()
+        state.events.append(
+            Event(type="final_text", text="previous answer", started_at=1.0)
+        )
         state.voice_pending = True
         text = _render_card(sess, state)
-        assert "🎙 voice message received" in text
+        assert "🎙" not in text.splitlines()[0]
+        assert "👤 🎙 Voice message is being transcribed…" in text
+        assert text.index("previous answer") < text.index("👤 🎙")
 
     def test_marker_absent_when_not_pending(self) -> None:
         sess = _session()

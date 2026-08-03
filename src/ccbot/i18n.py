@@ -41,6 +41,7 @@ _EN: dict[str, str] = {
         "🎙 The voice message couldn't be recognized and didn't reach the "
         "session. Please send it again."
     ),
+    "voice.transcribing": "🎙 Voice message is being transcribed…",
     "voice.queued_dropped": "Messages sent after it didn't reach the session either.",
     # Footer buttons
     "btn.stop": "⏹ Stop",
@@ -536,6 +537,7 @@ _RU: dict[str, str] = {
         "🎙 Голосовое не удалось распознать, и оно не дошло до сессии. "
         "Отправь его ещё раз."
     ),
+    "voice.transcribing": "🎙 Голосовое распознаётся…",
     "voice.queued_dropped": "Последующие сообщения тоже не дошли до сессии.",
     "btn.stop": "⏹ Стоп",
     "btn.kill": "💀 Убить",
@@ -1002,6 +1004,7 @@ _ZH: dict[str, str] = {
         "请重新发送语音消息。"
     ),
     "voice.transcription_failed": "🎙 语音无法识别且未送达会话。请重新发送。",
+    "voice.transcribing": "🎙 正在转写语音消息…",
     "voice.queued_dropped": "之后发送的消息也未送达会话。",
     "btn.stop": "⏹ 停止",
     "btn.kill": "💀 终止",

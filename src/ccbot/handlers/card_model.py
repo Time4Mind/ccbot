@@ -30,6 +30,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
+from ..i18n import t
 from ..session import Session, session_manager
 from ..session_monitor import NewMessage
 from . import bg_status
@@ -219,10 +220,11 @@ class CardState:
     stall_finalized: bool = False
     # Set by voice_handler right when a voice message is pinned to this
     # session, before download/transcribe (which can take many seconds).
-    # Rendered as a header line so an immediate repost_card shows "yes,
-    # your voice landed here" using the normal card surface instead of a
-    # separate reply message. Cleared once the transcribed text is
-    # actually dispatched (or transcription fails).
+    # Rendered as a synthetic trailing ``user_msg`` row so an immediate
+    # repost_card shows "yes, your voice landed here" in the same place
+    # typed prompts appear, rather than adding transient state to the card
+    # header. Cleared once the transcribed text is actually dispatched (or
+    # transcription fails).
     voice_pending: bool = False
 
 
@@ -1152,8 +1154,6 @@ def _render_card(
     header = f"{emoji} *{name_part}* · {state_label}{cont_marker}{ts_suffix}"
     if sess.goal:
         header += f"\ngoal: {sess.goal}"
-    if state.voice_pending:
-        header += "\n🎙 voice message received — transcribing…"
 
     # kb-mode view: card msg shows the interactive prompt content + kb
     # keyboard. The regular event log is BELOW the keyboard (footer'd by
@@ -1216,6 +1216,17 @@ def _render_card(
     if len(page_events) < len(pages[idx]):
         dropped = len(pages[idx]) - len(page_events)
         body = f"… (+{dropped} events trimmed to fit)\n{body}"
+    if state.voice_pending:
+        pending_row = render_event(
+            Event(
+                type="user_msg",
+                text=t(user_id or 0, "voice.transcribing"),
+                started_at=time.time(),
+            ),
+            in_flight=False,
+            now=time.time(),
+        )
+        body = _EVENT_JOINER.join(part for part in (body, pending_row) if part)
 
     parts = [header, "─────"]
     if body:

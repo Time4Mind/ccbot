@@ -173,6 +173,30 @@ def _card_lock(user_id: int, session_id: str) -> asyncio.Lock:
     return lock
 
 
+# Per-user barrier for Telegram edits of the shared live-card carrier.
+#
+# A switch reuses the same Telegram message for another session.  The old
+# session may already have an editMessageText request in flight when the user
+# taps the switcher; cancelling its deferred task is then too late.  Without a
+# barrier that old request can finish after the target session is painted and
+# overwrite the carrier with the previous session's text.
+#
+# Every ``_edit_card`` holds this lock for the whole Telegram request.  The
+# switch hand-off acquires it before pausing the old owner and flipping the
+# active-session pointer, so all older edits finish first and all newer old-
+# session edits observe ``in_menu_view=True`` before they can reach Telegram.
+_carrier_edit_locks: dict[int, asyncio.Lock] = {}
+
+
+def _carrier_edit_lock(user_id: int) -> asyncio.Lock:
+    """Get-or-create the cross-session carrier-edit lock for one user."""
+    lock = _carrier_edit_locks.get(user_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _carrier_edit_locks[user_id] = lock
+    return lock
+
+
 # Per-user spawn lock. ``_send_card`` holds it across the whole
 # "send the message → strip every other card's keyboard → record the new
 # switcher carrier" sequence, so two *different sessions* spawning cards
@@ -948,6 +972,35 @@ def transfer_card_to_carrier(
     return None
 
 
+async def activate_card_on_carrier(
+    user_id: int,
+    from_session_id: str | None,
+    to_session_id: str,
+    target_message_id: int,
+) -> int | None:
+    """Atomically hand the live carrier to a newly-active session.
+
+    The carrier-edit lock is a barrier against an edit from the previous
+    active session that is already in flight.  Once the barrier opens, pause
+    the old card, claim the carrier for the target, and flip ``active_sessions``
+    before another card edit can start.  The caller paints the target after
+    this returns; any queued old-session edit then sees the paused state and
+    becomes a no-op.
+
+    Returns the target session's orphaned previous card message id, matching
+    :func:`transfer_card_to_carrier`.
+    """
+    async with _carrier_edit_lock(user_id):
+        orphan_msg_id = transfer_card_to_carrier(
+            user_id,
+            from_session_id,
+            to_session_id,
+            target_message_id,
+        )
+        session_manager.set_active_session(user_id, to_session_id)
+        return orphan_msg_id
+
+
 def card_is_below(user_id: int, session_id: str, message_id: int) -> bool:
     """True when the session's live card already sits *below*
     ``message_id`` in the chat.
@@ -1338,6 +1391,25 @@ async def _send_card_locked(
 
 
 async def _edit_card(
+    bot: Bot,
+    user_id: int,
+    state: CardState,
+    *,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> bool:
+    """Serialize Telegram edits with cross-session carrier hand-offs."""
+    async with _carrier_edit_lock(user_id):
+        return await _edit_card_unlocked(
+            bot,
+            user_id,
+            state,
+            text=text,
+            reply_markup=reply_markup,
+        )
+
+
+async def _edit_card_unlocked(
     bot: Bot,
     user_id: int,
     state: CardState,

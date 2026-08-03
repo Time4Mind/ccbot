@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import io
 import json
 import logging
@@ -43,10 +44,20 @@ class SendFileDaemonUnavailable(ConnectionError):
 
 
 def send_file_socket_path() -> Path:
-    """Return the per-deployment Unix socket used for outbound delivery."""
+    """Return a sandbox-reachable, per-deployment Unix socket path.
+
+    Managed Codex profiles allow local Unix sockets but enforce filesystem
+    access on the socket path. ``$CCBOT_DIR`` normally lives under the home
+    directory and is read-only to a session, so connecting to a socket there
+    fails with ``EPERM``. ``/tmp`` is an explicit writable sandbox root. The
+    config-dir digest keeps production and staging sockets separate for the
+    same Unix user.
+    """
     from .utils import ccbot_dir
 
-    return ccbot_dir() / "send-file.sock"
+    deployment = str(ccbot_dir().expanduser().resolve())
+    digest = hashlib.sha256(deployment.encode("utf-8")).hexdigest()[:12]
+    return Path("/tmp") / f"ccbot-send-file-{os.getuid()}-{digest}.sock"
 
 
 def resolve_chat_ids(

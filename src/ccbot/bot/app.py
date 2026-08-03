@@ -161,7 +161,7 @@ _metrics_flush_task: asyncio.Task[None] | None = None
 _heartbeat_task: asyncio.Task[None] | None = None
 _auth_preflight_task: asyncio.Task[None] | None = None
 _usage_prewarm_task: asyncio.Task[None] | None = None
-_send_file_server: asyncio.AbstractServer | None = None
+_send_file_relay_task: asyncio.Task[None] | None = None
 
 
 async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") -> None:
@@ -175,7 +175,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
         _heartbeat_task, \
         _auth_preflight_task, \
         _usage_prewarm_task, \
-        _send_file_server, \
+        _send_file_relay_task, \
         _last_heartbeat, \
         _conflict_app
 
@@ -183,11 +183,11 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     # path (Conflict updates carry no chat, so ``update`` is not an Update).
     _conflict_app = application
 
-    # Agent sessions may be network-restricted even though this daemon is not.
-    # Accept local Unix-socket requests and perform Telegram delivery here.
-    from ..send_file import start_send_file_server
+    # Agent sessions may have neither network nor cross-process socket access.
+    # Consume filesystem-relay requests and perform Telegram delivery here.
+    from ..send_file import send_file_relay_loop
 
-    _send_file_server = await start_send_file_server(application.bot)
+    _send_file_relay_task = asyncio.create_task(send_file_relay_loop(application.bot))
 
     # Cache bot username so ``tmux_manager.create_window`` can surface it
     # to Claude via ``CCBOT_BOT_USERNAME``. ``application.bot.username``
@@ -407,7 +407,7 @@ async def post_shutdown(
         _heartbeat_task, \
         _auth_preflight_task, \
         _usage_prewarm_task, \
-        _send_file_server
+        _send_file_relay_task
 
     if _usage_prewarm_task:
         if not _usage_prewarm_task.done():
@@ -422,12 +422,11 @@ async def post_shutdown(
         _auth_preflight_task = None
     await shutdown_auth_flows()
 
-    if _send_file_server:
-        from ..send_file import stop_send_file_server
-
-        await stop_send_file_server(_send_file_server)
-        _send_file_server = None
-        logger.info("send-file IPC server stopped")
+    if _send_file_relay_task:
+        _send_file_relay_task.cancel()
+        await asyncio.gather(_send_file_relay_task, return_exceptions=True)
+        _send_file_relay_task = None
+        logger.info("send-file filesystem relay stopped")
 
     if _status_poll_task:
         _status_poll_task.cancel()

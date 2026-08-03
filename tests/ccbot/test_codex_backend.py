@@ -649,6 +649,7 @@ async def test_tmux_builds_codex_resume_command(
     assert ok is True
     assert wid == "@7"
     assert "CCBOT_AGENT_BACKEND=codex" in sent[0]
+    assert f"CCBOT_DIR={config.config_dir}" in sent[0]
     assert "CCBOT_CHAT_ID=42" in sent[0]
     assert "/data/data/com.termux/files/usr/bin/codex" in sent[0]
     assert " resume 550e8400-e29b-41d4-a716-446655440000" in sent[0]

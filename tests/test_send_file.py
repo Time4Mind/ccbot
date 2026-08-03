@@ -8,6 +8,7 @@ calling Bash tool call actually sees it went wrong.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -19,9 +20,8 @@ from ccbot.send_file import (
     _send_via_daemon,
     deliver,
     resolve_chat_ids,
-    send_file_socket_path,
-    start_send_file_server,
-    stop_send_file_server,
+    send_file_relay_dir,
+    send_file_relay_loop,
 )
 
 
@@ -41,11 +41,11 @@ def test_no_target_is_empty_list() -> None:
     assert resolve_chat_ids(None, None, set()) == []
 
 
-def test_default_socket_is_in_sandbox_writable_tmp(monkeypatch, tmp_path: Path) -> None:
+def test_default_relay_is_in_sandbox_writable_tmp(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CCBOT_DIR", str(tmp_path / "deployment"))
-    socket_path = send_file_socket_path()
-    assert socket_path.parent == Path("/tmp")
-    assert socket_path.name.startswith(f"ccbot-send-file-{os.getuid()}-")
+    relay_dir = send_file_relay_dir()
+    assert relay_dir.parent == Path("/tmp")
+    assert relay_dir.name.startswith(f"ccbot-send-file-{os.getuid()}-")
 
 
 @pytest.mark.asyncio
@@ -85,17 +85,18 @@ async def test_daemon_sends_file_and_returns_result(tmp_path: Path) -> None:
     f = tmp_path / "report.txt"
     f.write_text("hello")
     bot = AsyncMock()
-    socket_path = Path("/tmp") / f"ccbot-send-file-{os.getpid()}-{id(bot)}.sock"
-    server = await start_send_file_server(
-        bot, socket_path=socket_path, allowed_users={111}
+    relay_dir = tmp_path / "relay"
+    relay_task = asyncio.create_task(
+        send_file_relay_loop(bot, relay_dir=relay_dir, allowed_users={111})
     )
+    await asyncio.sleep(0)
     try:
-        ok = await _send_via_daemon(f, "caption", [111], socket_path)
+        ok = await _send_via_daemon(f, "caption", [111], relay_dir)
     finally:
-        await stop_send_file_server(server, socket_path)
+        relay_task.cancel()
+        await asyncio.gather(relay_task, return_exceptions=True)
 
     assert ok is True
-    assert not socket_path.exists()
     bot.send_document.assert_awaited_once()
     assert bot.send_document.call_args.kwargs["chat_id"] == 111
     assert bot.send_document.call_args.kwargs["caption"] == "caption"
@@ -106,14 +107,16 @@ async def test_daemon_rejects_chat_outside_allowed_users(tmp_path: Path) -> None
     f = tmp_path / "report.txt"
     f.write_text("hello")
     bot = AsyncMock()
-    socket_path = Path("/tmp") / f"ccbot-send-file-{os.getpid()}-{id(bot)}.sock"
-    server = await start_send_file_server(
-        bot, socket_path=socket_path, allowed_users={111}
+    relay_dir = tmp_path / "relay"
+    relay_task = asyncio.create_task(
+        send_file_relay_loop(bot, relay_dir=relay_dir, allowed_users={111})
     )
+    await asyncio.sleep(0)
     try:
-        ok = await _send_via_daemon(f, None, [222], socket_path)
+        ok = await _send_via_daemon(f, None, [222], relay_dir)
     finally:
-        await stop_send_file_server(server, socket_path)
+        relay_task.cancel()
+        await asyncio.gather(relay_task, return_exceptions=True)
 
     assert ok is False
     bot.send_document.assert_not_awaited()

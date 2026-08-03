@@ -650,9 +650,14 @@ class TestVoicePendingCardMarker:
         from ccbot.handlers.card_model import CardState
 
         state = CardState()
+        state.current_page_idx = 0
 
         async def _repost_card(bot, user_id, sess):
-            events.append(f"repost_card:voice_pending={state.voice_pending}")
+            events.append(
+                "repost_card:"
+                f"voice_pending={state.voice_pending}:"
+                f"page={state.current_page_idx}"
+            )
 
         async def _transcribe(*args, **kwargs):
             events.append(f"transcribe:voice_pending={state.voice_pending}")
@@ -689,9 +694,9 @@ class TestVoicePendingCardMarker:
         # transcription started. An in-place edit is not enough: the card
         # sits above the voice message the user just sent, so the user
         # would see nothing at all for the whole transcription.
-        assert "repost_card:voice_pending=True" in events
+        assert "repost_card:voice_pending=True:page=None" in events
         assert "transcribe:voice_pending=True" in events
-        assert events.index("repost_card:voice_pending=True") < events.index(
+        assert events.index("repost_card:voice_pending=True:page=None") < events.index(
             "transcribe:voice_pending=True"
         )
         # Cleared again once transcription finished.

@@ -780,7 +780,7 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def _clear_voice_pending_marker(bot: Bot, user_id: int, sess: Session) -> None:
-    """Repaint the card without the voice_pending header line.
+    """Repaint the card without the temporary voice_pending user row.
 
     Only needed on the transcription-failure paths — the success path's
     ``_dispatch_text_to_active`` already reposts unconditionally, which
@@ -872,8 +872,9 @@ async def _process_voice(
     # that sits ABOVE the voice message, which the user never sees; the
     # symptom was 35-50 s of apparent dead air while whisper ran (they
     # re-recorded, switched sessions, assumed it was broken).
-    # ``voice_pending`` adds a header line so the reposted card says
-    # "voice received, already bound here".
+    # ``voice_pending`` adds a synthetic trailing user row so the reposted
+    # card says "voice received, already bound here" exactly where a typed
+    # prompt would appear. The header remains stable.
     #
     # The cross-session repost race that made an earlier revision back
     # this out is handled properly now: ``_send_card`` serializes spawns
@@ -884,6 +885,10 @@ async def _process_voice(
     card_state = get_card_state(user.id, sess) if sess is not None else None
     if sess is not None and card_state is not None:
         card_state.voice_pending = True
+        # A pagination tap may have left the card on an older page. A new
+        # voice message is a new user turn, so focus the latest page just as
+        # the normal prompt flow does before showing the pending row.
+        card_state.current_page_idx = None
         try:
             await repost_card(context.bot, user.id, sess)
         except Exception as e:
@@ -1342,7 +1347,7 @@ async def _dispatch_text_to_active(
             # The card is already in front of this message — the voice
             # flow reposted it at receipt. Repost again and the user
             # gets two cards' worth of churn for one voice; an in-place
-            # edit is enough to drain the buffer and drop the 🎙 marker.
+            # edit is enough to drain the buffer and drop the pending row.
             try:
                 await resume_card_view(context.bot, user_id, sess)
             except Exception as e:

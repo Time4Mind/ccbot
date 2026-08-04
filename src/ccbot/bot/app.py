@@ -189,6 +189,14 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
 
     _send_file_relay_task = asyncio.create_task(send_file_relay_loop(application.bot))
 
+    # Warm the directory browser's recursive index off the startup path. The
+    # picker itself always paints from cache/shallow metadata and never waits
+    # for this scan.
+    from ..handlers.directory_browser import prewarm_directory_recency
+
+    prewarm_directory_recency()
+    logger.info("Directory-recency cache pre-warm scheduled")
+
     # Cache bot username so ``tmux_manager.create_window`` can surface it
     # to Claude via ``CCBOT_BOT_USERNAME``. ``application.bot.username``
     # triggers a ``getMe`` if not already populated; with ``initialize()``

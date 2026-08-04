@@ -245,9 +245,9 @@ directory browser, you pick the project, and a tmux window with
 the selected agent starts there. Subsequent text in the DM is routed to the
 **active** session.
 
-Directory rows are ordered by the newest meaningful file change anywhere in
-their nested contents. Generated dependency/cache trees are ignored, and the
-scan runs off the Telegram event loop with a short cache.
+Directory rows paint immediately from cached or shallow filesystem/Git
+metadata. One background pass computes nested-content recency for every
+visited directory at once; generated dependency/cache trees are ignored.
 
 Sessions are named after the directory basename and renamed once after
 the first message of ≥ 20 chars by a small separate request: Haiku for

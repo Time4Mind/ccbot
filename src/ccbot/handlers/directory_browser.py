@@ -40,10 +40,11 @@ from .callback_data import (
 )
 
 
-_RECENCY_CACHE_TTL_S = 30.0
+_RECENCY_CACHE_TTL_S = 120.0
 _RECENCY_MAX_DEPTH = 8
 _RECENCY_MAX_ENTRIES = 150_000
 _RECENCY_CACHE: dict[str, tuple[float, float]] = {}
+_RECENCY_REFRESH_TASKS: dict[str, asyncio.Task[None]] = {}
 
 # Generated dependencies, caches and platform stores should not make a project
 # look recently edited. Pruning them also keeps a home-directory scan bounded.
@@ -93,13 +94,8 @@ def _git_recency(git_dir: Path) -> float:
     return best
 
 
-def _scan_dir_recency(d: Path) -> float:
-    """Return the newest meaningful mtime in ``d``'s nested contents.
-
-    Symlinks are never followed. Expensive generated trees are pruned, while
-    Git activity is represented by a handful of metadata markers. Depth and
-    entry caps protect the picker from pathological filesystem trees.
-    """
+def _metadata_recency(d: Path) -> float:
+    """Cheap non-recursive fallback from directory and direct-entry metadata."""
     try:
         best = d.stat().st_mtime
     except OSError:
@@ -107,18 +103,56 @@ def _scan_dir_recency(d: Path) -> float:
     if d.name in _RECENCY_PRUNE_DIRS:
         return best
 
-    stack: list[tuple[Path, int]] = [(d, 0)]
-    scanned = 0
-    while stack and scanned < _RECENCY_MAX_ENTRIES:
-        current, depth = stack.pop()
+    try:
+        entries = os.scandir(d)
+    except OSError:
+        return best
+    with entries:
+        for entry in entries:
+            try:
+                is_dir = entry.is_dir(follow_symlinks=False)
+            except OSError:
+                continue
+            if is_dir and entry.name == ".git":
+                best = max(best, _git_recency(Path(entry.path)))
+                continue
+            if is_dir and entry.name in _RECENCY_PRUNE_DIRS:
+                continue
+            try:
+                best = max(best, entry.stat(follow_symlinks=False).st_mtime)
+            except OSError:
+                continue
+    return best
+
+
+def _refresh_recency_tree(root: Path) -> float:
+    """Index one tree and cache aggregate recency for every visited directory.
+
+    A single bottom-up pass makes later navigation into child directories a
+    cache lookup instead of another recursive walk. Symlinks are never
+    followed; generated trees are pruned; global depth/entry caps bound I/O.
+    """
+    refreshed_at = time.monotonic()
+    remaining = [_RECENCY_MAX_ENTRIES]
+
+    def visit(d: Path, depth: int) -> float:
         try:
-            entries = os.scandir(current)
+            best = d.stat().st_mtime
         except OSError:
-            continue
+            return 0.0
+        if d.name in _RECENCY_PRUNE_DIRS or remaining[0] <= 0:
+            _RECENCY_CACHE[str(d)] = (refreshed_at, best)
+            return best
+
+        try:
+            entries = os.scandir(d)
+        except OSError:
+            _RECENCY_CACHE[str(d)] = (refreshed_at, best)
+            return best
         with entries:
             for entry in entries:
-                scanned += 1
-                if scanned > _RECENCY_MAX_ENTRIES:
+                remaining[0] -= 1
+                if remaining[0] < 0:
                     break
                 try:
                     is_dir = entry.is_dir(follow_symlinks=False)
@@ -129,42 +163,63 @@ def _scan_dir_recency(d: Path) -> float:
                     continue
                 if is_dir and entry.name in _RECENCY_PRUNE_DIRS:
                     continue
+                if is_dir and depth < _RECENCY_MAX_DEPTH:
+                    best = max(best, visit(Path(entry.path), depth + 1))
+                    continue
                 try:
-                    stat = entry.stat(follow_symlinks=False)
+                    best = max(best, entry.stat(follow_symlinks=False).st_mtime)
                 except OSError:
                     continue
-                best = max(best, stat.st_mtime)
-                if not is_dir:
-                    continue
-                if depth >= _RECENCY_MAX_DEPTH:
-                    continue
-                stack.append((Path(entry.path), depth + 1))
-    return best
+        _RECENCY_CACHE[str(d)] = (refreshed_at, best)
+        return best
+
+    return visit(root, 0)
 
 
-def _dir_recency(d: Path) -> float:
-    """Cached recursive content recency for one directory-picker row."""
-    key = str(d)
+def _sorted_subdirs_fast(path: Path) -> tuple[list[str], bool]:
+    """Sort instantly from cache, falling back to shallow metadata only."""
     now = time.monotonic()
-    cached = _RECENCY_CACHE.get(key)
-    if cached is not None and now - cached[0] < _RECENCY_CACHE_TTL_S:
-        return cached[1]
-    recency = _scan_dir_recency(d)
-    _RECENCY_CACHE[key] = (now, recency)
-    return recency
-
-
-def _sorted_subdirs(path: Path) -> list[str]:
-    """List visible child directories, newest nested content first."""
     candidates: list[tuple[float, str]] = []
+    refresh_needed = False
     for d in path.iterdir():
         if not d.is_dir():
             continue
         if not config.show_hidden_dirs and d.name.startswith("."):
             continue
-        candidates.append((_dir_recency(d), d.name))
+        cached = _RECENCY_CACHE.get(str(d))
+        if cached is None:
+            recency = _metadata_recency(d)
+            refresh_needed = True
+        else:
+            recency = cached[1]
+            if now - cached[0] >= _RECENCY_CACHE_TTL_S:
+                refresh_needed = True
+        candidates.append((recency, d.name))
     candidates.sort(key=lambda item: (-item[0], item[1].lower()))
-    return [name for _, name in candidates]
+    return [name for _, name in candidates], refresh_needed
+
+
+def _schedule_recency_refresh(path: Path) -> None:
+    """Refresh ``path`` in a worker without delaying the current UI paint."""
+    key = str(path)
+    existing = _RECENCY_REFRESH_TASKS.get(key)
+    if existing is not None and not existing.done():
+        return
+
+    async def refresh() -> None:
+        try:
+            await asyncio.to_thread(_refresh_recency_tree, path)
+        except Exception as e:
+            logger.debug("directory recency refresh failed for %s: %s", path, e)
+        finally:
+            _RECENCY_REFRESH_TASKS.pop(key, None)
+
+    _RECENCY_REFRESH_TASKS[key] = asyncio.create_task(refresh())
+
+
+def prewarm_directory_recency(path: Path | None = None) -> None:
+    """Schedule a non-blocking recursive index, normally for the home tree."""
+    _schedule_recency_refresh(path or Path.home())
 
 
 # Directories per page in directory browser
@@ -280,9 +335,11 @@ async def build_directory_browser(
         path = Path.home()
 
     try:
-        # Recursive stats can be I/O-heavy, so never block Telegram's event
-        # loop while calculating the order.
-        subdirs = await asyncio.to_thread(_sorted_subdirs, path)
+        # UI work is metadata-only. A stale/missing recursive index is served
+        # immediately and refreshed in the background for the next paint.
+        subdirs, refresh_needed = await asyncio.to_thread(_sorted_subdirs_fast, path)
+        if refresh_needed:
+            _schedule_recency_refresh(path)
     except (PermissionError, OSError):
         subdirs = []
 

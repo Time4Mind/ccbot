@@ -1,6 +1,7 @@
 """Tests for session_claude_io — encode_cwd + path-builder pure logic."""
 
 from pathlib import Path
+import json
 
 import pytest
 
@@ -34,6 +35,33 @@ class TestBuildSessionFilePath:
         assert p is not None
         assert p.name == "uuid-123.jsonl"
         assert "-x-y-z" in str(p)
+
+
+class TestParseSessionFile:
+    def test_picker_description_uses_user_message_not_model_summary(
+        self, tmp_path: Path
+    ) -> None:
+        transcript = tmp_path / "session.jsonl"
+        rows = [
+            {"type": "summary", "summary": "model generated description"},
+            {
+                "type": "user",
+                "message": {"content": "Верни описание из моего сообщения"},
+            },
+            {
+                "type": "user",
+                "message": {"content": "<system-reminder>internal</system-reminder>"},
+            },
+        ]
+        transcript.write_text(
+            "\n".join(json.dumps(row, ensure_ascii=False) for row in rows),
+            encoding="utf-8",
+        )
+
+        parsed = session_claude_io._parse_session_file(transcript, "sid")
+
+        assert parsed is not None
+        assert parsed.summary == "Верни описание из моего сообщения"
 
 
 @pytest.mark.asyncio

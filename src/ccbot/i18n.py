@@ -141,7 +141,6 @@ _EN: dict[str, str] = {
         "*Settings*\n\n"
         "Agent: `{agent}`\n"
         "Language: `{language}`\n"
-        "Previews: `{previews}`\n"
         "Live lag: `{live_lag}s`\n"
         "Voice: `{voice}`\n\n"
         "_Tap a group to change._"
@@ -149,17 +148,9 @@ _EN: dict[str, str] = {
     # Settings — group labels (in the main grid)
     "settings.group.agent": "Agent",
     "settings.group.language": "Language",
-    "settings.group.previews": "Previews",
     "settings.group.live_lag": "Live lag",
     "settings.group.voice": "Voice",
     # Settings — group sub-screen descriptions
-    "settings.previews.body": (
-        "*Previews*\n\n"
-        "How session names are rendered in the picker:\n"
-        "• `economical` — local fallback, no extra model calls\n"
-        "• `readable` — cached summaries via Haiku (Claude) or the "
-        "lightweight Codex model"
-    ),
     "settings.lag.body": (
         "*Live preview lag*\n\n"
         "Coalescing window for live-card edits.\n"
@@ -635,23 +626,14 @@ _RU: dict[str, str] = {
         "*Настройки*\n\n"
         "Агент: `{agent}`\n"
         "Язык: `{language}`\n"
-        "Превью: `{previews}`\n"
         "Лаг карточки: `{live_lag}с`\n"
         "Голос: `{voice}`\n\n"
         "_Тапни группу, чтобы изменить._"
     ),
     "settings.group.agent": "Агент",
     "settings.group.language": "Язык",
-    "settings.group.previews": "Превью",
     "settings.group.live_lag": "Лаг карточки",
     "settings.group.voice": "Голос",
-    "settings.previews.body": (
-        "*Превью*\n\n"
-        "Как именуются сессии в пикере:\n"
-        "• `economical` — локальный fallback, без обращений к модели\n"
-        "• `readable` — кэшируемые саммари через Haiku (Claude) или "
-        "лёгкую модель Codex"
-    ),
     "settings.lag.body": (
         "*Лаг карточки*\n\n"
         "Окно сглаживания правок live-карточки.\n"
@@ -1091,22 +1073,14 @@ _ZH: dict[str, str] = {
         "*设置*\n\n"
         "代理: `{agent}`\n"
         "语言: `{language}`\n"
-        "预览: `{previews}`\n"
         "卡片延迟: `{live_lag}秒`\n"
         "语音: `{voice}`\n\n"
         "_点击分组进行更改。_"
     ),
     "settings.group.agent": "代理",
     "settings.group.language": "语言",
-    "settings.group.previews": "预览",
     "settings.group.live_lag": "卡片延迟",
     "settings.group.voice": "语音",
-    "settings.previews.body": (
-        "*预览*\n\n"
-        "选择器中如何呈现会话名:\n"
-        "• `economical` — 本地回退,不额外调用模型\n"
-        "• `readable` — 通过 Haiku (Claude) 或轻量 Codex 模型生成并缓存摘要"
-    ),
     "settings.lag.body": (
         "*实时预览延迟*\n\n"
         "实时卡片编辑的合并窗口。\n"

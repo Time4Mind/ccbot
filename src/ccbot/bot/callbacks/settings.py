@@ -26,7 +26,6 @@ from ...handlers.callback_data import (
     CB_ST_LCLAUDE,
     CB_ST_LOCAL,
     CB_ST_LTERM,
-    CB_ST_PREV,
     CB_ST_VOICE,
     CB_ST_VOICE_INSTALL_GO,
     CB_ST_VOICE_INSTALL_NO,
@@ -203,7 +202,6 @@ async def _run_voice_install(query: CallbackQuery, user_id: int) -> None:
 _GROUP_TO_SCREEN: dict[str, Screen] = {
     "agent_backend": "settings_agent",
     "language": "settings_language",
-    "previews": "settings_previews",
     "live_lag": "settings_lag",
     "voice": "settings_voice",
     "weekly_reset_day": "settings_weeklyday",
@@ -286,7 +284,6 @@ async def handle(
 
     setter_prefixes = (
         CB_ST_AGENT,
-        CB_ST_PREV,
         CB_ST_LAG,
         CB_ST_VOICE,
         CB_ST_LANG,
@@ -313,11 +310,6 @@ async def handle(
                 await query.answer(t(user.id, "toast.agent_live"), show_alert=True)
                 return True
         screen_name = "settings_agent"
-    elif data.startswith(CB_ST_PREV):
-        value = data[len(CB_ST_PREV) :]
-        if value in ("economical", "readable"):
-            session_manager.update_user_setting(user.id, "previews", value)
-        screen_name = "settings_previews"
     elif data.startswith(CB_ST_LAG):
         try:
             lag = int(data[len(CB_ST_LAG) :])

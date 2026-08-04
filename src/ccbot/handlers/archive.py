@@ -40,10 +40,6 @@ from .cleanup import clear_session_state
 # soft length budget kicks in. Archived JSONLs are append-frozen so a
 # single scan covers the session's lifetime in archive.
 _BLURB_CACHE: dict[str, str] = {}
-# Session ids with a background readable-preview request in flight. Archive
-# rendering must stay local and instant; model output is persisted in the
-# shared summary cache and appears on the next paint.
-_BLURB_SUMMARY_INFLIGHT: set[str] = set()
 # Hard character cap on the combined blurb (all included messages
 # plus their hard-break separators). When the first message alone
 # exceeds this, it gets truncated with ``…`` on a word boundary;
@@ -256,64 +252,22 @@ async def _collect_user_messages(sess: Session) -> str:
     return _format_blurb(messages)
 
 
-async def _archive_blurb(sess: Session, user_id: int | None = None) -> str:
+async def _archive_blurb(sess: Session) -> str:
     """Return the "what was this session about" line for an archived row.
 
-    Economical mode uses the user's own first 1-3 messages from the JSONL.
-    Readable mode first checks the persistent model-summary cache and, on a
-    miss, starts a non-blocking lightweight request: Haiku for Claude or
-    ``CODEX_NAMING_MODEL`` for Codex. The local blurb is returned immediately,
-    so opening Archive never waits for a model; the generated summary appears
-    on the next paint.
+    Source: the user's own first 1-3 messages from the JSONL transcript.
+    No model-generated summary may replace those words. The result is cached
+    per agent session id because archived transcripts are append-frozen.
     """
     sid = sess.claude_session_id
     if not sid:
         return ""
     cached = _BLURB_CACHE.get(sid)
-    if cached is None:
-        cached = await _collect_user_messages(sess)
-        _BLURB_CACHE[sid] = cached
-
-    if user_id is None:
+    if cached is not None:
         return cached
-    settings = session_manager.get_user_settings(user_id)
-    if settings.get("previews", "economical") != "readable":
-        return cached
-
-    # Archived transcripts are append-frozen. ``archived_at`` is therefore a
-    # stable, zero-I/O cache version; when a restored session is archived
-    # again the timestamp changes and naturally invalidates the old summary.
-    mtime = sess.archived_at or sess.last_event_at or 0.0
-    readable = session_manager.get_cached_summary(sid, mtime)
-    if readable:
-        return readable
-    if not cached or sid in _BLURB_SUMMARY_INFLIGHT:
-        return cached
-
-    backend = sess.backend if sess.backend in ("claude", "codex") else "claude"
-    _BLURB_SUMMARY_INFLIGHT.add(sid)
-
-    async def generate_readable() -> None:
-        try:
-            from ..naming import generate_name
-
-            name = await generate_name(cached, backend=backend)
-            if name:
-                session_manager.set_cached_summary(sid, name, mtime)
-        except Exception as e:
-            logger.debug(
-                "%s archive readable-preview failed for %s: %s",
-                backend,
-                sid,
-                e,
-            )
-        finally:
-            _BLURB_SUMMARY_INFLIGHT.discard(sid)
-
-    import asyncio
-
-    asyncio.create_task(generate_readable())
-    return cached
+    blurb = await _collect_user_messages(sess)
+    _BLURB_CACHE[sid] = blurb
+    return blurb
 
 
 def _display_name(sess: Session) -> str:
@@ -386,7 +340,7 @@ async def build_archive_page(
     blurbs: dict[str, str] = {}
     for sess in chunk:
         try:
-            blurbs[sess.id] = await _archive_blurb(sess, user_id)
+            blurbs[sess.id] = await _archive_blurb(sess)
         except Exception as e:
             logger.debug("archive blurb fetch failed for %s: %s", sess.id, e)
             blurbs[sess.id] = ""

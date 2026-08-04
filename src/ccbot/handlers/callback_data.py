@@ -97,7 +97,6 @@ CB_MM_BACK = "mm:back"  # back to default footer
 # Settings (toggle screens)
 CB_ST_GRP = "st:grp:"  # st:grp:<name>  open a per-group settings screen
 CB_ST_LANG = "st:lng:"  # st:lng:<code>
-CB_ST_PREV = "st:prev:"  # st:prev:<value>
 CB_ST_LAG = "st:lag:"  # st:lag:<value>
 CB_ST_VOICE = "st:voice:"  # st:voice:<value>
 CB_ST_WDAY = "st:wday:"  # st:wday:<mon|tue|...|sun>

@@ -12,6 +12,7 @@ Key components:
   - clear_browse_state: Clear browsing state from user_data
 """
 
+import asyncio
 import logging
 import os
 import time
@@ -39,30 +40,131 @@ from .callback_data import (
 )
 
 
-def _dir_recency(d: Path) -> float:
-    """Best-effort "last touched" timestamp for a directory.
+_RECENCY_CACHE_TTL_S = 30.0
+_RECENCY_MAX_DEPTH = 8
+_RECENCY_MAX_ENTRIES = 150_000
+_RECENCY_CACHE: dict[str, tuple[float, float]] = {}
 
-    A directory's own mtime only changes when an entry is added,
-    removed, or renamed directly inside it — editing an existing file's
-    content, or ``git commit`` (which only touches objects/refs under
-    ``.git/``), leaves the project root's own mtime untouched. That
-    silently buried actively-worked-on git repos under stale scratch
-    dirs in the picker. Take the max of the directory's own mtime and
-    its ``.git/HEAD`` / ``.git/index`` mtimes (updated by nearly every
-    git operation: commit, checkout, add, merge, rebase, reset) without
-    doing a full recursive tree walk.
-    """
-    try:
-        best = d.stat().st_mtime
-    except OSError:
-        return 0.0
-    git_dir = d / ".git"
-    for marker in ("HEAD", "index"):
+# Generated dependencies, caches and platform stores should not make a project
+# look recently edited. Pruning them also keeps a home-directory scan bounded.
+_RECENCY_PRUNE_DIRS = frozenset(
+    {
+        ".cache",
+        ".git",
+        ".hg",
+        ".mypy_cache",
+        ".next",
+        ".nox",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".svn",
+        ".tox",
+        ".venv",
+        "Applications",
+        "DerivedData",
+        "Library",
+        "Pods",
+        "__pycache__",
+        "build",
+        "dist",
+        "node_modules",
+        "target",
+        "venv",
+    }
+)
+
+_GIT_ACTIVITY_MARKERS = (
+    "HEAD",
+    "index",
+    "packed-refs",
+    "logs/HEAD",
+    "FETCH_HEAD",
+)
+
+
+def _git_recency(git_dir: Path) -> float:
+    """Newest cheap Git activity marker without walking object storage."""
+    best = 0.0
+    for marker in _GIT_ACTIVITY_MARKERS:
         try:
             best = max(best, (git_dir / marker).stat().st_mtime)
         except OSError:
             continue
     return best
+
+
+def _scan_dir_recency(d: Path) -> float:
+    """Return the newest meaningful mtime in ``d``'s nested contents.
+
+    Symlinks are never followed. Expensive generated trees are pruned, while
+    Git activity is represented by a handful of metadata markers. Depth and
+    entry caps protect the picker from pathological filesystem trees.
+    """
+    try:
+        best = d.stat().st_mtime
+    except OSError:
+        return 0.0
+    if d.name in _RECENCY_PRUNE_DIRS:
+        return best
+
+    stack: list[tuple[Path, int]] = [(d, 0)]
+    scanned = 0
+    while stack and scanned < _RECENCY_MAX_ENTRIES:
+        current, depth = stack.pop()
+        try:
+            entries = os.scandir(current)
+        except OSError:
+            continue
+        with entries:
+            for entry in entries:
+                scanned += 1
+                if scanned > _RECENCY_MAX_ENTRIES:
+                    break
+                try:
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                except OSError:
+                    continue
+                if is_dir and entry.name == ".git":
+                    best = max(best, _git_recency(Path(entry.path)))
+                    continue
+                if is_dir and entry.name in _RECENCY_PRUNE_DIRS:
+                    continue
+                try:
+                    stat = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                best = max(best, stat.st_mtime)
+                if not is_dir:
+                    continue
+                if depth >= _RECENCY_MAX_DEPTH:
+                    continue
+                stack.append((Path(entry.path), depth + 1))
+    return best
+
+
+def _dir_recency(d: Path) -> float:
+    """Cached recursive content recency for one directory-picker row."""
+    key = str(d)
+    now = time.monotonic()
+    cached = _RECENCY_CACHE.get(key)
+    if cached is not None and now - cached[0] < _RECENCY_CACHE_TTL_S:
+        return cached[1]
+    recency = _scan_dir_recency(d)
+    _RECENCY_CACHE[key] = (now, recency)
+    return recency
+
+
+def _sorted_subdirs(path: Path) -> list[str]:
+    """List visible child directories, newest nested content first."""
+    candidates: list[tuple[float, str]] = []
+    for d in path.iterdir():
+        if not d.is_dir():
+            continue
+        if not config.show_hidden_dirs and d.name.startswith("."):
+            continue
+        candidates.append((_dir_recency(d), d.name))
+    candidates.sort(key=lambda item: (-item[0], item[1].lower()))
+    return [name for _, name in candidates]
 
 
 # Directories per page in directory browser
@@ -166,7 +268,7 @@ def clear_session_picker_state(user_data: dict[str, Any] | None) -> None:
         user_data.pop(SESSIONS_KEY, None)
 
 
-def build_directory_browser(
+async def build_directory_browser(
     current_path: str, page: int = 0, *, user_id: int
 ) -> tuple[str, InlineKeyboardMarkup, list[str]]:
     """Build directory browser UI.
@@ -178,17 +280,9 @@ def build_directory_browser(
         path = Path.home()
 
     try:
-        # Sort by mtime descending — most recently changed directories first.
-        # Fall back to alphabetical for any directory whose stat fails.
-        candidates: list[tuple[float, str]] = []
-        for d in path.iterdir():
-            if not d.is_dir():
-                continue
-            if not config.show_hidden_dirs and d.name.startswith("."):
-                continue
-            candidates.append((_dir_recency(d), d.name))
-        candidates.sort(key=lambda t: (-t[0], t[1].lower()))
-        subdirs = [name for _, name in candidates]
+        # Recursive stats can be I/O-heavy, so never block Telegram's event
+        # loop while calculating the order.
+        subdirs = await asyncio.to_thread(_sorted_subdirs, path)
     except (PermissionError, OSError):
         subdirs = []
 

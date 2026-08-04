@@ -246,7 +246,7 @@ async def handle(
         clear_window_picker_state(context.user_data)
         clear_session_picker_state(context.user_data)
         start_path = str(Path.home())
-        msg_text, keyboard, subdirs = build_directory_browser(
+        msg_text, keyboard, subdirs = await build_directory_browser(
             start_path, user_id=user.id
         )
         if context.user_data is not None:

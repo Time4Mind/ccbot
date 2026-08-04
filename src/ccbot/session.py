@@ -832,8 +832,6 @@ class SessionManager:
 
     DEFAULT_USER_SETTINGS: ClassVar[dict[str, Any]] = {
         "language": "en",  # "en" | "ru" | "zh" — UI strings
-        # ``readable`` uses Haiku for Claude or CODEX_NAMING_MODEL for Codex.
-        "previews": "economical",
         "live_lag": 4,  # seconds, see PREVIEW_LIVE_LAG
         "voice": "auto",  # "auto" | "whisper" | "apple" | "off"
         # Day-of-week the Anthropic weekly window resets on. Drives the %/d

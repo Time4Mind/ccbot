@@ -55,7 +55,6 @@ from .callback_data import (
     CB_ST_LCLAUDE,
     CB_ST_LOCAL,
     CB_ST_LTERM,
-    CB_ST_PREV,
     CB_ST_VOICE,
     CB_ST_WDAY,
     CB_SW_NEW,
@@ -74,7 +73,6 @@ Screen = Literal[
     "settings_cat_terminal",
     "settings_cat_behavior",
     # Individual setting sub-screens.
-    "settings_previews",
     "settings_lag",
     "settings_voice",
     "settings_language",
@@ -95,7 +93,6 @@ Screen = Literal[
 _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
     ("agent_backend", "settings.group.agent", "settings_agent", "agent_backend"),
     ("language", "settings.group.language", "settings_language", "language"),
-    ("previews", "settings.group.previews", "settings_previews", "previews"),
     ("live_lag", "settings.group.live_lag", "settings_lag", "live_lag"),
     ("voice", "settings.group.voice", "settings_voice", "voice"),
     (
@@ -171,7 +168,6 @@ SETTINGS_CATEGORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         "settings.cat.card",
         "settings_cat_card",
         (
-            "previews",
             "live_lag",
             "card_history",
             "card_page_lines",
@@ -483,27 +479,6 @@ def _settings_category_grid(
         ]
     )
     return rows
-
-
-def _settings_previews_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
-    cur = session_manager.get_user_settings(user_id).get("previews", "economical")
-    return [
-        [
-            InlineKeyboardButton(
-                _highlight("economical", cur == "economical"),
-                callback_data=f"{CB_ST_PREV}economical",
-            ),
-            InlineKeyboardButton(
-                _highlight("readable", cur == "readable"),
-                callback_data=f"{CB_ST_PREV}readable",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                t(user_id, "btn.back"), callback_data=_parent_cat_cb("previews")
-            )
-        ],
-    ]
 
 
 def _settings_lag_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
@@ -860,8 +835,6 @@ def build_footer_keyboard(
         rows.extend(_more_grid(user_id, exclude=exclude_more))
     elif screen == "settings":
         rows.extend(_settings_main_grid(user_id))
-    elif screen == "settings_previews":
-        rows.extend(_settings_previews_grid(user_id))
     elif screen == "settings_lag":
         rows.extend(_settings_lag_grid(user_id))
     elif screen == "settings_voice":
@@ -974,7 +947,6 @@ def render_settings_text(user_id: int) -> str:
         "settings.body",
         agent=session_manager.agent_backend.capitalize(),
         language=s.get("language", "en"),
-        previews=s.get("previews", "economical"),
         live_lag=int(s.get("live_lag", 4)),
         voice=s.get("voice", "auto"),
     )
@@ -982,7 +954,6 @@ def render_settings_text(user_id: int) -> str:
 
 _GROUP_TEXT_KEYS: dict[str, str] = {
     "settings_agent": "settings.agent.body",
-    "settings_previews": "settings.previews.body",
     "settings_lag": "settings.lag.body",
     "settings_voice": "settings.voice.body",
     "settings_language": "settings.lang.body",

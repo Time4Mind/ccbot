@@ -74,7 +74,7 @@ Additional modules:
   screenshot.py       ─ Terminal text → PNG rendering (ANSI color, font fallback)
   transcribe.py       ─ Voice-to-text transcription via whisper.cpp / Apple Speech
   i18n.py             ─ Per-user UI strings (en / ru / zh)
-  naming.py           ─ Haiku-generated session names + readable summaries
+  naming.py           ─ lightweight-model-generated session names
   usage.py            ─ Token usage aggregator + per-session token alerts
   main.py             ─ CLI entry point (ccbot / ccbot hook / ccbot send-file)
   config.py           ─ Env-var loader (singleton `config`), .env priority
@@ -125,13 +125,13 @@ bot/ package (was bot.py before A1, split per CLAUDE.md size budget):
   commands/auth.py         ─ /login re-auth flow (+ maybe_consume_code,
                             notify_auth_expired)
   callbacks/__init__.py    ─ Top-level dispatcher; tries each handler in order
-  callbacks/dir_browser.py ─ CB_DIR_*, CB_SESSION_*  (+ Haiku summary cache)
+  callbacks/dir_browser.py ─ CB_DIR_*, CB_SESSION_*
   callbacks/window_picker.py ─ CB_WIN_*
   callbacks/switcher.py    ─ CB_SW_*
   callbacks/archive.py     ─ CB_ARC_*
   callbacks/footer.py      ─ CB_FT_STOP/KILL/CLEAR/MORE
   callbacks/more_menu.py   ─ CB_MM_LIST/STATUS/SHOT/NEW/ARCHIVE/SETTINGS/BACK
-  callbacks/settings.py    ─ CB_ST_GRP + CB_ST_PREV/LAG/VOICE/LANG/WDAY/APPROVE
+  callbacks/settings.py    ─ CB_ST_GRP + CB_ST_LAG/VOICE/LANG/WDAY/APPROVE
   callbacks/confirm.py     ─ CB_CONF_KILL/DONE/DEL × YES/NO
   callbacks/history_pagination.py ─ CB_HISTORY_PREV/NEXT
   callbacks/interactive_ui.py     ─ CB_ASK_*  (Up/Down/Left/Right/Esc/Enter/...)
@@ -184,7 +184,7 @@ Handler modules (handlers/):
 
 State files (~/.ccbot/ or $CCBOT_DIR/):
   state.json         ─ window states + display names + read offsets + user
-                      settings (previews / live_lag / voice / card_history /
+                      settings (live_lag / voice / card_history /
                       card_page_lines / card_inline_screenshots /
                       bg_notify_finished / bg_notify_error /
                       bg_notify_needs_action / language / weekly_reset_day /

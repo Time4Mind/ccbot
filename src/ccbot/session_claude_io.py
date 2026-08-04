@@ -26,6 +26,20 @@ from .transcript_parser import TranscriptParser
 
 logger = logging.getLogger(__name__)
 
+_RE_INJECTED_USER_MSG = re.compile(
+    r"<(bash-input|bash-stdout|bash-stderr|local-command-caveat|system-reminder)"
+)
+_RE_SYSTEM_UI_TEXT = re.compile(
+    r"^\s*(?:"
+    r"\[[^\]\n]+\]\s*$"
+    r"|Set (?:model|effort|thinking) to\b"
+    r"|Compact(?:ed|ing)\b"
+    r"|Cleared\b"
+    r"|Memory (?:updated|file)\b"
+    r")",
+    re.IGNORECASE,
+)
+
 
 def encode_cwd(cwd: str) -> str:
     """Encode a cwd path to match Claude Code's project-directory naming.
@@ -49,14 +63,13 @@ def build_session_file_path(session_id: str, cwd: str) -> Path | None:
 
 
 def _parse_session_file(file_path: Path, session_id: str) -> ClaudeSession | None:
-    """Synchronously walk a JSONL once → summary, last user msg, tokens, count.
+    """Synchronously walk a JSONL once → last user msg, tokens, count.
 
     Kept sync (called via ``asyncio.to_thread``) because a single bulk
     ``read_text`` + per-line ``json.loads`` is several times faster than
     ``aiofiles``' ``async for line`` executor round-trips on large
     transcripts (multi-MB session files dominate the dir-picker path).
     """
-    summary = ""
     last_user_msg = ""
     message_count = 0
     token_total = 0
@@ -73,21 +86,24 @@ def _parse_session_file(file_path: Path, session_id: str) -> ClaudeSession | Non
             data = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if data.get("type") == "summary":
-            s = data.get("summary", "")
-            if s:
-                summary = s
-        elif data.get("type") == "assistant":
+        if data.get("type") == "assistant":
             usage = (data.get("message") or {}).get("usage") or {}
             token_total += int(usage.get("input_tokens", 0) or 0)
             token_total += int(usage.get("output_tokens", 0) or 0)
         elif TranscriptParser.is_user_message(data):
             parsed = TranscriptParser.parse_message(data)
-            if parsed and parsed.text.strip():
-                last_user_msg = parsed.text.strip()
+            if not parsed or parsed.message_type != "user":
+                continue
+            text = parsed.text.strip()
+            if (
+                not text
+                or _RE_INJECTED_USER_MSG.search(text)
+                or _RE_SYSTEM_UI_TEXT.match(text)
+            ):
+                continue
+            last_user_msg = " ".join(text.split())
 
-    if not summary:
-        summary = last_user_msg[:50] if last_user_msg else "Untitled"
+    summary = last_user_msg[:50] if last_user_msg else "Untitled"
 
     return ClaudeSession(
         session_id=session_id,
@@ -101,8 +117,9 @@ def _parse_session_file(file_path: Path, session_id: str) -> ClaudeSession | Non
 async def get_session_direct(session_id: str, cwd: str) -> ClaudeSession | None:
     """Load a ``ClaudeSession`` from session_id + cwd, with glob fallback.
 
-    Walks the JSONL once (in a worker thread) to extract the latest
-    summary, last user message, cumulative token usage, and message count.
+    Walks the JSONL once (in a worker thread) to extract the last user
+    message, cumulative token usage, and message count. Model-generated
+    ``summary`` rows are intentionally ignored for the picker description.
     """
     file_path = build_session_file_path(session_id, cwd)
     if not file_path or not file_path.exists():

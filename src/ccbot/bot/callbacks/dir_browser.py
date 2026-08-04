@@ -1,13 +1,7 @@
-"""Directory browser + session picker callbacks (CB_DIR_*, CB_SESSION_*).
-
-Also owns the readable-session-summary cache machinery used when the
-user has Settings → Previews set to ``readable``.
-"""
+"""Directory browser + session picker callbacks (CB_DIR_*, CB_SESSION_*)."""
 
 from __future__ import annotations
 
-import asyncio
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -41,71 +35,17 @@ from ...handlers.directory_browser import (
     clear_session_picker_state,
 )
 from ...handlers.message_sender import safe_edit
-from ...naming import generate_name
 from ...session import session_manager
 from .._common import open_more_in_place
 from ..messages import create_and_activate_session
-
-logger = logging.getLogger(__name__)
 
 
 async def resolve_session_summaries(
     sessions: list[Any], *, user_id: int
 ) -> dict[str, str]:
-    """Agent session id → display summary, honoring user Previews setting.
-
-    ``readable`` uses the active backend's lightweight naming model:
-    Haiku for Claude, ``CODEX_NAMING_MODEL`` for Codex. The picker only
-    contains sessions discovered for the globally selected backend, so one
-    backend value applies to the whole batch.
-    """
-    settings = session_manager.get_user_settings(user_id)
-    mode = settings.get("previews", "economical")
-    backend = (
-        session_manager.agent_backend
-        if session_manager.agent_backend in ("claude", "codex")
-        else "claude"
-    )
-    out: dict[str, str] = {}
-    if mode != "readable":
-        for s in sessions:
-            out[s.session_id] = s.summary or "untitled"
-        return out
-
-    pending: list[tuple[str, str, float]] = []  # (sid, seed, mtime)
-    for s in sessions:
-        try:
-            mtime = Path(s.file_path).stat().st_mtime
-        except OSError:
-            mtime = 0.0
-        cached = session_manager.get_cached_summary(s.session_id, mtime)
-        if cached:
-            out[s.session_id] = cached
-        else:
-            out[s.session_id] = s.summary or "untitled"
-            seed = (s.summary or "")[:200]
-            if seed:
-                pending.append((s.session_id, seed, mtime))
-
-    if pending:
-
-        async def _bg() -> None:
-            for sid, seed, mtime in pending:
-                try:
-                    name = await generate_name(seed, backend=backend)
-                    if name:
-                        readable = name.replace("-", " ")
-                        session_manager.set_cached_summary(sid, readable, mtime)
-                except Exception as e:
-                    logger.debug(
-                        "%s readable-preview resolve failed for %s: %s",
-                        backend,
-                        sid,
-                        e,
-                    )
-
-        asyncio.create_task(_bg())
-    return out
+    """Agent session id → description taken from the user's messages."""
+    del user_id  # Kept in the API because callers already have it available.
+    return {s.session_id: s.summary or "untitled" for s in sessions}
 
 
 async def emit_session_picker(

@@ -107,7 +107,7 @@ ccbot                           # 前台;生产环境用 systemd 单元
 | `CLAUDE_FLAGS`              | `--dangerously-skip-permissions` | 附加给 `claude` 的 flag |
 | `CODEX_COMMAND`             | `codex`      | Codex CLI 二进制 |
 | `CODEX_FLAGS`               | bypass + hooks + `--no-alt-screen` | 附加给 `codex` 的 flag |
-| `CODEX_NAMING_MODEL`        | `gpt-5.6-luna` | 用于 Codex 自动命名和可读预览的轻量模型 |
+| `CODEX_NAMING_MODEL`        | `gpt-5.6-luna` | 用于 Codex 自动命名会话的轻量模型 |
 | `SESSION_IDLE_TTL`          | `4h`         | 闲置多久后 active → archived |
 | `ARCHIVE_PURGE_AFTER`       | `14d`        | 归档会话从 state 中清除的时长 |
 | `QUOTA_ALERT_POLL_INTERVAL` | `10m`        | 实时 `/usage` 弹窗的采样间隔 |
@@ -237,8 +237,8 @@ transcript 表面触手可及。多数用户一旦发现菜单,就再也不打 s
 路由到该会话,但不更改活动会话。
 
 *菜单 → Archive* 显示带编号的历史会话列表,每行两个按钮。每行
-携带一段简短描述(Claude 自己的 `type=summary` 条目,或第一条
-用户消息),这样一眼就能看出会话是关于什么的。点击会话,carrier
+携带一段只取自用户最初消息的简短描述,这样一眼就能看出会话是
+关于什么的;模型生成的摘要不会替换这些文字。点击会话,carrier
 会画出直接从磁盘 JSONL 读取的真实转录;*Restore* / *Delete*
 保留在底部。
 
@@ -282,7 +282,6 @@ Enter / Esc 键盘。
 | `卡片历史` | `20` | 从 JSONL 预加载进新卡片的 end-of-turn 边界数(机器人重启后仍在) |
 | `页面大小` | `20` 行 | 每页最多行数;长正文按段落/句子边界跨页切分 |
 | `内联截图` | `off` | 卡片变为图片 + 说明文字,图片是实时面板渲染(说明限 1024 字符,需相应调小页面大小) |
-| `预览` | `economical` | 切换器预览的详细程度 |
 | `实时延迟` | `4s` | 预览更新的合并窗口 |
 
 Telegram 聊天头部的 **`正在输入…`** 指示由真实的 claude 事件驱动。

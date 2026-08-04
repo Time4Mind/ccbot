@@ -37,7 +37,6 @@ def test_agent_backend_is_exposed_in_settings(
         "get_user_settings",
         lambda _uid: {
             "language": "en",
-            "previews": "economical",
             "live_lag": 4,
             "voice": "auto",
         },
@@ -320,9 +319,7 @@ async def test_restore_codex_archive_does_not_wait_for_hook(
 
 
 @pytest.mark.asyncio
-async def test_codex_readable_previews_use_lightweight_codex_model(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_codex_picker_description_uses_user_message(tmp_path: Path) -> None:
     rollout = tmp_path / "rollout.jsonl"
     rollout.write_text("{}\n")
     session = SimpleNamespace(
@@ -330,31 +327,9 @@ async def test_codex_readable_previews_use_lightweight_codex_model(
         summary="investigate archive latency",
         file_path=str(rollout),
     )
-    monkeypatch.setattr(session_manager, "agent_backend", "codex")
-    monkeypatch.setattr(
-        session_manager,
-        "get_user_settings",
-        lambda _uid: {"previews": "readable"},
-    )
-    monkeypatch.setattr(session_manager, "get_cached_summary", lambda *_args: None)
-
-    generated = AsyncMock(return_value="archive latency")
-    monkeypatch.setattr(dir_browser_cb, "generate_name", generated)
-    cached: list[tuple[str, str, float]] = []
-    cache_written = asyncio.Event()
-
-    def set_cached(sid: str, summary: str, mtime: float) -> None:
-        cached.append((sid, summary, mtime))
-        cache_written.set()
-
-    monkeypatch.setattr(session_manager, "set_cached_summary", set_cached)
-
     initial = await dir_browser_cb.resolve_session_summaries([session], user_id=42)
-    await asyncio.wait_for(cache_written.wait(), timeout=1.0)
 
     assert initial == {"codex-session": "investigate archive latency"}
-    generated.assert_awaited_once_with("investigate archive latency", backend="codex")
-    assert cached[0][:2] == ("codex-session", "archive latency")
 
 
 def test_codex_rollout_normalizes_text_and_tools() -> None:

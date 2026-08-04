@@ -22,9 +22,7 @@ Two CommonMark traps fired in sequence under the rich-message renderer:
 
 from __future__ import annotations
 
-import asyncio
 import time
-from unittest.mock import AsyncMock
 from unittest.mock import patch
 
 import pytest
@@ -255,10 +253,8 @@ class TestArchiveBlurbCollectsUserMessages:
         from ccbot.handlers import archive
 
         archive._BLURB_CACHE.clear()
-        archive._BLURB_SUMMARY_INFLIGHT.clear()
         yield
         archive._BLURB_CACHE.clear()
-        archive._BLURB_SUMMARY_INFLIGHT.clear()
 
     @pytest.mark.asyncio
     async def test_three_short_messages_all_included(
@@ -360,12 +356,10 @@ class TestArchiveBlurbCollectsUserMessages:
         assert out == long_msg
 
     @pytest.mark.asyncio
-    async def test_readable_codex_blurb_generates_cached_summary_in_background(
+    async def test_archive_blurb_always_uses_user_messages(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Archive opens on the local blurb, while Codex Luna fills the
-        persistent readable-preview cache without blocking the page."""
-        from ccbot import naming
+        """A stale model-summary cache cannot replace the user's words."""
         from ccbot.handlers import archive
 
         sess = Session(
@@ -382,37 +376,12 @@ class TestArchiveBlurbCollectsUserMessages:
             "_collect_user_messages",
             _fake_collect(local),
         )
-        monkeypatch.setattr(
-            archive.session_manager,
-            "get_user_settings",
-            lambda _uid: {"previews": "readable"},
-        )
-        monkeypatch.setattr(
-            archive.session_manager,
-            "get_cached_summary",
-            lambda *_args: None,
-        )
-        generated = AsyncMock(return_value="archive latency")
-        monkeypatch.setattr(naming, "generate_name", generated)
-        cache_written = asyncio.Event()
-        cached: list[tuple[str, str, float]] = []
+        archive.session_manager.summary_cache["codex-5"] = {
+            "summary": "archive latency",
+            "mtime": 0.0,
+        }
 
-        def set_cached(sid: str, summary: str, mtime: float) -> None:
-            cached.append((sid, summary, mtime))
-            cache_written.set()
-
-        monkeypatch.setattr(
-            archive.session_manager,
-            "set_cached_summary",
-            set_cached,
-        )
-
-        initial = await archive._archive_blurb(sess, user_id=42)
-        await asyncio.wait_for(cache_written.wait(), timeout=1.0)
-
-        assert initial == local
-        generated.assert_awaited_once_with(local, backend="codex")
-        assert cached[0][:2] == ("codex-5", "archive latency")
+        assert await archive._archive_blurb(sess) == local
 
     @pytest.mark.asyncio
     async def test_codex_blurb_reads_user_messages_from_rollout(

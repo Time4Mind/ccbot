@@ -1174,7 +1174,7 @@ async def _resolve_active_window(
         # The pending text is held in user_data and forwarded after creation.
         logger.info("No active session: showing directory browser (user=%d)", user_id)
         start_path = str(Path.home())
-        msg_text, keyboard, subdirs = build_directory_browser(
+        msg_text, keyboard, subdirs = await build_directory_browser(
             start_path, user_id=user_id
         )
         if context.user_data is not None:

@@ -245,6 +245,10 @@ directory browser, you pick the project, and a tmux window with
 the selected agent starts there. Subsequent text in the DM is routed to the
 **active** session.
 
+Directory rows are ordered by the newest meaningful file change anywhere in
+their nested contents. Generated dependency/cache trees are ignored, and the
+scan runs off the Telegram event loop with a short cache.
+
 Sessions are named after the directory basename and renamed once after
 the first message of ≥ 20 chars by a small separate request: Haiku for
 Claude or `CODEX_NAMING_MODEL` for Codex (default `gpt-5.6-luna`). The

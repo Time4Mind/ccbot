@@ -117,7 +117,7 @@ async def handle(
             context.user_data[BROWSE_PATH_KEY] = new_path_str
             context.user_data[BROWSE_PAGE_KEY] = 0
 
-        msg_text, keyboard, subdirs = build_directory_browser(
+        msg_text, keyboard, subdirs = await build_directory_browser(
             new_path_str, user_id=user.id
         )
         if context.user_data is not None:
@@ -138,7 +138,7 @@ async def handle(
             context.user_data[BROWSE_PATH_KEY] = parent_path
             context.user_data[BROWSE_PAGE_KEY] = 0
 
-        msg_text, keyboard, subdirs = build_directory_browser(
+        msg_text, keyboard, subdirs = await build_directory_browser(
             parent_path, user_id=user.id
         )
         if context.user_data is not None:
@@ -162,7 +162,7 @@ async def handle(
         if context.user_data is not None:
             context.user_data[BROWSE_PAGE_KEY] = pg
 
-        msg_text, keyboard, subdirs = build_directory_browser(
+        msg_text, keyboard, subdirs = await build_directory_browser(
             current_path, pg, user_id=user.id
         )
         if context.user_data is not None:
@@ -187,7 +187,7 @@ async def handle(
                 "Directory selection expired — pick again", show_alert=True
             )
             start_path = str(Path.home())
-            msg_text, keyboard, subdirs = build_directory_browser(
+            msg_text, keyboard, subdirs = await build_directory_browser(
                 start_path, user_id=user.id
             )
             if context.user_data is not None:
@@ -292,7 +292,7 @@ async def handle(
             context.user_data.pop("_selected_path", None)
             context.user_data.pop(SESSIONS_PAGE_KEY, None)
 
-        msg_text, keyboard, subdirs = build_directory_browser(
+        msg_text, keyboard, subdirs = await build_directory_browser(
             selected_path, user_id=user.id
         )
         if context.user_data is not None:

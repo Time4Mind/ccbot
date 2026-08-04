@@ -1,19 +1,13 @@
-"""Regression test for the session-creation directory picker's sort order.
-
-A directory's own mtime only changes when an entry is added, removed, or
-renamed directly inside it — editing a tracked file's content, or a plain
-``git commit`` (which only touches objects/refs under ``.git/``), never
-touches it. Sorting by the raw ``st_mtime`` alone silently buried
-actively-committed git repos under stale scratch directories in the
-"most recent first" picker. ``_dir_recency`` additionally checks
-``.git/HEAD`` / ``.git/index``.
-"""
+"""Session-creation directories sort by newest meaningful nested content."""
 
 from __future__ import annotations
 
 import os
 import time
 
+import pytest
+
+from ccbot.handlers import directory_browser
 from ccbot.handlers.directory_browser import build_directory_browser, _dir_recency
 
 
@@ -22,6 +16,12 @@ def _touch(path: str, mtime: float) -> None:
 
 
 class TestDirRecency:
+    @pytest.fixture(autouse=True)
+    def clear_cache(self):
+        directory_browser._RECENCY_CACHE.clear()
+        yield
+        directory_browser._RECENCY_CACHE.clear()
+
     def test_plain_directory_uses_own_mtime(self, tmp_path) -> None:
         d = tmp_path / "scratch"
         d.mkdir()
@@ -54,9 +54,42 @@ class TestDirRecency:
         _touch(str(d), 2000.0)
         assert _dir_recency(d) == 2000.0
 
+    def test_nested_file_mtime_wins(self, tmp_path) -> None:
+        project = tmp_path / "project"
+        nested = project / "src" / "package"
+        nested.mkdir(parents=True)
+        source = nested / "feature.py"
+        source.write_text("print('new')")
+        for path in (project, project / "src", nested):
+            _touch(str(path), 1000.0)
+        _touch(str(source), 7000.0)
+
+        assert _dir_recency(project) == 7000.0
+
+    def test_generated_dependency_tree_does_not_win(self, tmp_path) -> None:
+        project = tmp_path / "project"
+        project.mkdir()
+        source = project / "app.py"
+        source.write_text("old")
+        dependency = project / ".venv" / "lib" / "package.py"
+        dependency.parent.mkdir(parents=True)
+        dependency.write_text("generated")
+        _touch(str(project), 1000.0)
+        _touch(str(source), 3000.0)
+        _touch(str(dependency), 9000.0)
+
+        assert _dir_recency(project) == 3000.0
+
 
 class TestBuildDirectoryBrowserOrder:
-    def test_actively_committed_repo_sorts_above_stale_scratch_dir(
+    @pytest.fixture(autouse=True)
+    def clear_cache(self):
+        directory_browser._RECENCY_CACHE.clear()
+        yield
+        directory_browser._RECENCY_CACHE.clear()
+
+    @pytest.mark.asyncio
+    async def test_actively_committed_repo_sorts_above_stale_scratch_dir(
         self, tmp_path, monkeypatch
     ) -> None:
         monkeypatch.setattr(
@@ -79,5 +112,29 @@ class TestBuildDirectoryBrowserOrder:
         scratch.mkdir()
         _touch(str(scratch), now - 86400)  # touched 1 day ago
 
-        _, _, subdirs = build_directory_browser(str(tmp_path), user_id=1)
+        _, _, subdirs = await build_directory_browser(str(tmp_path), user_id=1)
         assert subdirs.index("aaa-old-repo") < subdirs.index("zzz-scratch")
+
+    @pytest.mark.asyncio
+    async def test_nested_content_sorts_container_first(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "ccbot.handlers.directory_browser.config.show_hidden_dirs", False
+        )
+        active = tmp_path / "aaa-container"
+        nested = active / "project" / "src"
+        nested.mkdir(parents=True)
+        changed = nested / "changed.py"
+        changed.write_text("latest")
+        stale = tmp_path / "zzz-directly-touched"
+        stale.mkdir()
+
+        for path in (active, active / "project", nested):
+            _touch(str(path), 1000.0)
+        _touch(str(changed), 5000.0)
+        _touch(str(stale), 3000.0)
+
+        _, _, subdirs = await build_directory_browser(str(tmp_path), user_id=1)
+
+        assert subdirs.index("aaa-container") < subdirs.index("zzz-directly-touched")

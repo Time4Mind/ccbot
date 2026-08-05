@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 
@@ -200,6 +201,7 @@ async def test_restore_claude_archive_imports_into_codex(
     monkeypatch.setattr(mgr, "save_state", lambda: None)
     mgr.agent_backend = "codex"
     mgr.wait_for_session_map_entry = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    mgr.mark_window_starting = MagicMock()  # type: ignore[method-assign]
     monkeypatch.setattr(archive, "session_manager", mgr)
     monkeypatch.setattr(config, "config_dir", tmp_path / "ccbot")
     monkeypatch.setattr(config, "claude_projects_path", tmp_path / "claude-projects")
@@ -265,6 +267,7 @@ async def test_restore_codex_archive_does_not_wait_for_hook(
     monkeypatch.setattr(mgr, "save_state", lambda: None)
     mgr.agent_backend = "codex"
     mgr.wait_for_session_map_entry = AsyncMock(return_value=False)  # type: ignore[method-assign]
+    mgr.mark_window_starting = MagicMock()  # type: ignore[method-assign]
     monkeypatch.setattr(archive, "session_manager", mgr)
 
     sid = "550e8400-e29b-41d4-a716-446655440000"
@@ -298,6 +301,9 @@ async def test_restore_codex_archive_does_not_wait_for_hook(
     ok, _message = await archive.restore_session(MagicMock(), 42, sess)
 
     assert ok is True
+    mgr.mark_window_starting.assert_called_once_with(  # type: ignore[attr-defined]
+        "@9", backend="codex", resume=True, bot=ANY, user_id=42
+    )
     mgr.wait_for_session_map_entry.assert_not_awaited()  # type: ignore[attr-defined]
     ws = mgr.get_window_state("@9")
     assert ws.session_id == sid
@@ -582,6 +588,8 @@ async def test_tmux_builds_codex_resume_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sent: list[str] = []
+    trust_started = threading.Event()
+    release_trust = threading.Event()
 
     class Pane:
         def send_keys(self, value: str, enter: bool = True) -> None:
@@ -601,6 +609,13 @@ async def test_tmux_builds_codex_resume_command(
 
     mgr = TmuxManager()
     monkeypatch.setattr(mgr, "get_or_create_session", lambda: Session())
+
+    def wait_for_trust(_pane: object) -> bool:
+        trust_started.set()
+        release_trust.wait(timeout=2.0)
+        return True
+
+    monkeypatch.setattr(mgr, "_accept_codex_directory_trust", wait_for_trust)
 
     async def no_existing(_name: str):
         return None
@@ -629,3 +644,11 @@ async def test_tmux_builds_codex_resume_command(
     assert "/data/data/com.termux/files/usr/bin/codex" in sent[0]
     assert " resume 550e8400-e29b-41d4-a716-446655440000" in sent[0]
     assert "--resume" not in sent[0]
+    # create_window returned even though its startup-prompt worker is still
+    # blocked. Trust handling must never hold the Telegram callback open.
+    assert await asyncio.to_thread(trust_started.wait, 1.0)
+    startup_tasks = tuple(mgr._startup_tasks)
+    assert len(startup_tasks) == 1
+    assert not startup_tasks[0].done()
+    release_trust.set()
+    await asyncio.gather(*startup_tasks)

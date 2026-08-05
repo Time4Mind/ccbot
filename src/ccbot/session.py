@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 from .config import config
 from .session_models import ClaudeSession, Session, SessionState, WindowState
-from .terminal_parser import parse_status_line
+from .terminal_parser import is_interactive_ui, parse_status_line
 from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
 from .utils import atomic_write_json
@@ -1070,6 +1070,30 @@ class SessionManager:
         supplied, the watcher also keeps Telegram's TYPING indicator alive
         so the chat doesn't look frozen during a long compaction.
         """
+        self.mark_window_starting(
+            window_id,
+            backend=self.agent_backend,
+            resume=True,
+            bot=bot,
+            user_id=user_id,
+        )
+
+    def mark_window_starting(
+        self,
+        window_id: str,
+        *,
+        backend: str,
+        resume: bool,
+        bot: "Bot | None" = None,
+        user_id: int | None = None,
+    ) -> None:
+        """Gate sends until a newly-created agent pane can accept input.
+
+        The Session record and Telegram card may be published immediately;
+        ``send_to_window`` queues prompts in arrival order while this watcher
+        waits for the real TUI input prompt. ``resume=True`` preserves the
+        extra Claude compaction settle window.
+        """
         if config.resume_settle_timeout <= 0:
             return
         if window_id in self._resuming_windows:
@@ -1083,8 +1107,10 @@ class SessionManager:
             return
         self._resuming_windows.add(window_id)
         self._resume_settle_tasks[window_id] = loop.create_task(
-            self._watch_resume_settle(window_id, bot, user_id),
-            name=f"resume-settle:{window_id}",
+            self._watch_resume_settle(
+                window_id, bot, user_id, backend=backend, resume=resume
+            ),
+            name=f"startup-ready:{window_id}",
         )
 
     async def _watch_resume_settle(
@@ -1092,6 +1118,9 @@ class SessionManager:
         window_id: str,
         bot: "Bot | None",
         user_id: int | None,
+        *,
+        backend: str,
+        resume: bool,
     ) -> None:
         """Background watcher for a resuming window.
 
@@ -1128,29 +1157,49 @@ class SessionManager:
             _typing_keepalive(), name=f"resume-settle-typing:{window_id}"
         )
         try:
-            settled = await self._wait_for_resume_settle(window_id)
+            settled = await self._wait_for_resume_settle(
+                window_id, backend=backend, resume=resume
+            )
             logger.info(
-                "resume-settle gate cleared for window %s (settled=%s, background)",
+                "startup gate cleared for window %s "
+                "(settled=%s backend=%s resume=%s, background)",
                 window_id,
                 settled,
+                backend,
+                resume,
             )
-            pending = self._pending_sends.pop(window_id, [])
-            for i, text in enumerate(pending):
-                ok = await tmux_manager.send_keys(window_id, text)
-                if not ok:
-                    logger.warning(
-                        "resume-settle: failed to drain pending send #%d "
-                        "for window %s (text_len=%d)",
-                        i,
-                        window_id,
-                        len(text),
-                    )
-                if i < len(pending) - 1:
+            drained = 0
+            while True:
+                pending = self._pending_sends.pop(window_id, [])
+                if not pending:
+                    # No await between the final empty check and clearing the
+                    # gate: a concurrent send either joined the batch above or
+                    # observes the cleared gate and sends normally.
+                    self._resuming_windows.discard(window_id)
+                    break
+                for text in pending:
+                    ok = await tmux_manager.send_keys(window_id, text)
+                    if ok and backend == "codex":
+                        ok = await tmux_manager.ensure_codex_prompt_submitted(
+                            window_id, text
+                        )
+                    if not ok:
+                        logger.warning(
+                            "startup gate: failed to drain pending send #%d "
+                            "for window %s (text_len=%d)",
+                            drained,
+                            window_id,
+                            len(text),
+                        )
+                    drained += 1
+                    # Give the TUI one render tick before submitting another
+                    # queued prompt. A new arrival during this sleep is picked
+                    # up by the next outer-loop batch.
                     await asyncio.sleep(_RESUME_SETTLE_DRAIN_GAP)
-            if pending:
+            if drained:
                 logger.info(
-                    "resume-settle: drained %d pending send(s) for window %s",
-                    len(pending),
+                    "startup gate: drained %d pending send(s) for window %s",
+                    drained,
                     window_id,
                 )
         except Exception as e:
@@ -1169,7 +1218,35 @@ class SessionManager:
             # that didn't get drained so they can't leak forever.
             self._pending_sends.pop(window_id, None)
 
-    async def _wait_for_resume_settle(self, window_id: str) -> bool:
+    @staticmethod
+    def _pane_has_ready_input(pane: str, backend: str) -> bool:
+        """Whether the visible pane ends in the agent's real input box."""
+        if not pane or is_interactive_ui(pane) or parse_status_line(pane) is not None:
+            return False
+        lower = pane.lower()
+        if backend == "codex" and (
+            "do you trust the contents of this directory?" in lower
+            or "choose working directory to resume this session" in lower
+            or "sign in with chatgpt" in lower
+            or "sign in with device code" in lower
+            or "provide your own api key" in lower
+        ):
+            return False
+        marker = "›" if backend == "codex" else "❯"
+        # The live input row is pinned near the bottom. Restricting detection
+        # to the tail avoids mistaking a historical user row for readiness
+        # while a resumed transcript is still being restored.
+        return any(
+            line.lstrip().startswith(marker) for line in pane.strip().splitlines()[-6:]
+        )
+
+    async def _wait_for_resume_settle(
+        self,
+        window_id: str,
+        *,
+        backend: str = "claude",
+        resume: bool = True,
+    ) -> bool:
         """Block until a just-resumed window is safe to type into.
 
         A ``claude --resume`` of a near-limit transcript auto-compacts before
@@ -1194,10 +1271,21 @@ class SessionManager:
             pane = await tmux_manager.capture_pane(window_id)
             now = loop.time()
             busy = bool(pane) and parse_status_line(pane) is not None
+            ready = bool(pane) and self._pane_has_ready_input(pane or "", backend)
             if busy:
                 saw_busy = True
                 idle_since = None
             else:
+                # Fresh sessions and Codex resumes are ready the moment the
+                # actual input box appears. Claude resume keeps the historical
+                # grace/stability rule because compaction may start shortly
+                # after an initially-idle frame.
+                if ready and (not resume or backend == "codex"):
+                    return True
+                if not ready:
+                    idle_since = None
+                    await asyncio.sleep(_RESUME_SETTLE_POLL)
+                    continue
                 if idle_since is None:
                     idle_since = now
                 if saw_busy and (now - idle_since) >= _RESUME_SETTLE_IDLE_STABLE:
@@ -1214,14 +1302,22 @@ class SessionManager:
         )
         return False
 
+    def cancel_window_startup(self, window_id: str) -> None:
+        """Cancel a readiness gate after its tmux window was rolled back."""
+        task = self._resume_settle_tasks.pop(window_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+        self._resuming_windows.discard(window_id)
+        self._pending_sends.pop(window_id, None)
+
     async def send_to_window(self, window_id: str, text: str) -> tuple[bool, str]:
         """Send text to a tmux window by ID.
 
-        For windows mid-resume (``mark_window_resuming`` was called and
-        the background watcher hasn't settled yet), the text is buffered
-        into ``_pending_sends`` and we return success immediately — the
-        watcher drains the buffer when the pane is ready. This keeps the
-        message handler off the hot path of a 60-200s compaction wait.
+        For newly-created windows whose TUI is still booting, the text is
+        buffered into ``_pending_sends`` and success is returned immediately.
+        The background watcher drains the buffer in arrival order once the
+        real input prompt appears. This covers both ordinary startup and a
+        long resume compaction without holding the Telegram handler open.
         """
         display = self.get_display_name(window_id)
         logger.debug(
@@ -1238,12 +1334,12 @@ class SessionManager:
             queue.append(text)
             logger.info(
                 "send_to_window buffered: window=%s pending=%d text_len=%d "
-                "(resume in progress)",
+                "(startup in progress)",
                 window_id,
                 len(queue),
                 len(text),
             )
-            return True, f"Queued for {display} (session restoring)"
+            return True, f"Queued for {display} (session starting)"
         success = await tmux_manager.send_keys(window.window_id, text)
         if success:
             return True, f"Sent to {display}"

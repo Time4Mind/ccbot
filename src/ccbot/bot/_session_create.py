@@ -91,64 +91,28 @@ async def create_and_activate_session(
         user.id,
         resume_session_id,
     )
-    # `claude --resume` records a new session_id in the hook, but messages
-    # still write to the resumed JSONL. The card seeds from that existing
-    # transcript, so for a resume we must resolve the canonical session_id
-    # BEFORE painting — wait for the hook (or fall back to the known resume
-    # id on timeout), then override window_state to track it.
-    #
-    # A fresh session has nothing to seed, so this pre-paint wait is
-    # skipped entirely (see below): the empty card goes up the instant the
-    # window exists instead of blocking on claude's 2-5s boot + the
-    # SessionStart hook. The hook is confirmed (and the fresh session_id
-    # bound) after the paint, before any pending text is forwarded.
+    # Publish the session immediately, while the agent process boots in the
+    # pane. Every send is queued until the real TUI input prompt appears.
+    # This covers fresh starts, normal resumes, and long resume compaction
+    # with one ordering-preserving gate.
+    session_manager.mark_window_starting(
+        created_wid,
+        backend=session_manager.agent_backend,
+        resume=resume_session_id is not None,
+        bot=context.bot,
+        user_id=user.id,
+    )
+
+    # A resumed transcript id is already authoritative. Bind it before paint
+    # instead of waiting up to 15 seconds for a lifecycle hook; the hook is
+    # reconciled in the background below.
     if resume_session_id:
-        # A near-limit transcript auto-compacts on resume (60-110s); flag
-        # the window so any prompt that arrives while we're still
-        # compacting buffers into _pending_sends instead of being typed
-        # mid-compaction. The background watcher drains the buffer after
-        # the pane settles AND refreshes Telegram TYPING in the meantime
-        # so the chat doesn't look frozen.
-        if session_manager.agent_backend == "claude":
-            session_manager.mark_window_resuming(
-                created_wid, bot=context.bot, user_id=user.id
-            )
         ws = session_manager.get_window_state(created_wid)
-        if session_manager.agent_backend == "codex":
-            # ``codex resume`` preserves the rollout id, so binding it is
-            # deterministic and must not wait for a SessionStart hook that can
-            # arrive only after the CLI finishes booting.
-            ws.session_id = resume_session_id
-            ws.cwd = str(selected_path)
-            ws.window_name = created_wname
-            ws.backend = "codex"
-            session_manager.save_state()
-            hook_ok = True
-        else:
-            hook_ok = await session_manager.wait_for_session_map_entry(
-                created_wid, timeout=15.0
-            )
-        if not hook_ok:
-            logger.warning(
-                "Hook timed out for resume window %s, "
-                "manually setting session_id=%s cwd=%s",
-                created_wid,
-                resume_session_id,
-                selected_path,
-            )
-            ws.session_id = resume_session_id
-            ws.cwd = str(selected_path)
-            ws.window_name = created_wname
-            session_manager.save_state()
-        elif ws.session_id != resume_session_id:
-            logger.info(
-                "Resume override: window %s session_id %s -> %s",
-                created_wid,
-                ws.session_id,
-                resume_session_id,
-            )
-            ws.session_id = resume_session_id
-            session_manager.save_state()
+        ws.session_id = resume_session_id
+        ws.cwd = str(selected_path)
+        ws.window_name = created_wname
+        ws.backend = session_manager.agent_backend
+        session_manager.save_state()
 
     # Register Session record and make it active. Honor /new <name> if any.
     pending_name = (
@@ -163,9 +127,6 @@ async def create_and_activate_session(
     if ws.session_id:
         session_manager.set_session_claude_id(sess.id, ws.session_id)
     session_manager.set_active_session(user.id, sess.id)
-
-    if session_manager.get_user_settings(user.id).get("local_terminal") == "auto":
-        await open_terminal_for_window(created_wid, user_id=user.id)
 
     # Transition the carrier from dir-browser to the new session's
     # empty live card in place. No separate "Created. Send messages
@@ -183,16 +144,40 @@ async def create_and_activate_session(
             # the stale dir-browser body when paint fails.
             await safe_edit(query, f"✅ {message}")
 
-    # Fresh session: claude is still booting, so the hook hasn't written
-    # the session_id yet. Confirm it now (card already on screen) and bind
-    # it onto the Session record so the monitor + history follow the right
-    # transcript and notifications reverse-map to this user — all before
-    # any pending text is forwarded below.
-    if not resume_session_id:
-        await session_manager.wait_for_session_map_entry(created_wid, timeout=5.0)
-        ws = session_manager.get_window_state(created_wid)
-        if ws.session_id and not sess.claude_session_id:
-            session_manager.set_session_claude_id(sess.id, ws.session_id)
+    async def _bind_lifecycle_in_background() -> None:
+        """Attach the hook-written session id without delaying Telegram UI."""
+        try:
+            await session_manager.wait_for_session_map_entry(created_wid, timeout=15.0)
+            live_ws = session_manager.get_window_state(created_wid)
+            if resume_session_id:
+                # Claude may expose a transient new id for ``--resume``;
+                # messages still belong to the requested transcript.
+                if live_ws.session_id != resume_session_id:
+                    live_ws.session_id = resume_session_id
+                    live_ws.cwd = str(selected_path)
+                    live_ws.window_name = created_wname
+                    live_ws.backend = session_manager.agent_backend
+                    session_manager.save_state()
+            elif live_ws.session_id and not sess.claude_session_id:
+                session_manager.set_session_claude_id(sess.id, live_ws.session_id)
+        except Exception as e:
+            logger.warning(
+                "Background lifecycle bind failed for window %s: %s",
+                created_wid,
+                e,
+            )
+
+    asyncio.create_task(
+        _bind_lifecycle_in_background(), name=f"session-bind:{created_wid}"
+    )
+
+    # Desktop Terminal is a convenience side-effect, never part of the
+    # session-start critical path.
+    if session_manager.get_user_settings(user.id).get("local_terminal") == "auto":
+        asyncio.create_task(
+            open_terminal_for_window(created_wid, user_id=user.id),
+            name=f"local-terminal:{created_wid}",
+        )
 
     # Forward any pending text held while the picker was up. ``take_pending_text``
     # drops a stale stash (older than PENDING_TEXT_TTL_S) so a message typed

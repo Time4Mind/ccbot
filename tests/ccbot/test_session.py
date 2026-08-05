@@ -184,6 +184,8 @@ class TestActiveSessions:
 _BUSY_PANE = "✻ Compacting conversation…\n" + "─" * 26 + "\n❯\n" + "─" * 26
 # A settled pane: input chrome only, no spinner line.
 _IDLE_PANE = "─" * 26 + "\n❯\n" + "─" * 26
+_CODEX_STARTING_PANE = "Starting Codex…"
+_CODEX_READY_PANE = "OpenAI Codex\n\n› Write tests for @filename"
 
 
 class TestResumeSettleGate:
@@ -205,8 +207,69 @@ class TestResumeSettleGate:
         mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock(window_id="@1"))
         mock_tmux.capture_pane = AsyncMock(side_effect=capture_side_effect)
         mock_tmux.send_keys = AsyncMock(return_value=True)
+        mock_tmux.ensure_codex_prompt_submitted = AsyncMock(return_value=True)
         monkeypatch.setattr("ccbot.session.tmux_manager", mock_tmux)
         return mock_tmux
+
+    @pytest.mark.asyncio
+    async def test_fresh_codex_start_queues_until_real_prompt(
+        self, mgr: SessionManager, monkeypatch, fast_gate
+    ) -> None:
+        """A message sent immediately after window creation is held until
+        Codex has drawn its input box, then submitted exactly once."""
+        panes = iter([_CODEX_STARTING_PANE, _CODEX_READY_PANE])
+        mock_tmux = self._mock_tmux(monkeypatch, lambda _w: next(panes))
+        mgr.mark_window_starting("@1", backend="codex", resume=False)
+
+        ok, message = await mgr.send_to_window("@1", "fix startup")
+
+        assert ok is True
+        assert message.startswith("Queued for ")
+        mock_tmux.send_keys.assert_not_awaited()
+        task = mgr._resume_settle_tasks["@1"]
+        await task
+        mock_tmux.send_keys.assert_awaited_once_with("@1", "fix startup")
+        mock_tmux.ensure_codex_prompt_submitted.assert_awaited_once_with(
+            "@1", "fix startup"
+        )
+
+    @pytest.mark.asyncio
+    async def test_message_arriving_during_drain_is_not_lost(
+        self, mgr: SessionManager, monkeypatch, fast_gate
+    ) -> None:
+        """The gate keeps draining batches that arrive while a prior queued
+        prompt is being submitted."""
+        mock_tmux = self._mock_tmux(monkeypatch, lambda _w: _CODEX_READY_PANE)
+        second_queued = False
+
+        async def submit(_wid: str, text: str) -> bool:
+            nonlocal second_queued
+            if text == "first" and not second_queued:
+                second_queued = True
+                ok, _ = await mgr.send_to_window("@1", "second")
+                assert ok is True
+            return True
+
+        mock_tmux.ensure_codex_prompt_submitted.side_effect = submit
+        mgr.mark_window_starting("@1", backend="codex", resume=False)
+        ok, _ = await mgr.send_to_window("@1", "first")
+        assert ok is True
+
+        await mgr._resume_settle_tasks["@1"]
+
+        sent = [call.args[1] for call in mock_tmux.send_keys.await_args_list]
+        assert sent == ["first", "second"]
+
+    @pytest.mark.parametrize(
+        "pane",
+        [
+            "Do you trust the contents of this directory?\n› 1. Yes, continue",
+            "Choose working directory to resume this session\n› 1. Use session directory",
+            "Sign in with ChatGPT\n› 1. Continue",
+        ],
+    )
+    def test_codex_startup_screens_are_not_ready(self, pane: str) -> None:
+        assert SessionManager._pane_has_ready_input(pane, "codex") is False
 
     @pytest.mark.asyncio
     async def test_holds_until_compaction_ends(

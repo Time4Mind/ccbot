@@ -12,6 +12,7 @@ Interactive UI:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -459,8 +460,6 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
     resume_session_id = sess.claude_session_id or None
     initial_prompt: str | None = None
     if cross_backend:
-        import asyncio
-
         from ..session_import import build_import_context, import_prompt
 
         try:
@@ -482,29 +481,30 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
     if not success:
         return False, message
 
-    # A near-limit transcript auto-compacts on resume (60-110s) before it
-    # accepts input. Flag the window so any prompts that arrive while
-    # we're still compacting buffer into _pending_sends instead of being
-    # typed mid-compaction. The background watcher drains the buffer
-    # once the pane settles AND keeps Telegram TYPING refreshed so the
-    # chat doesn't look frozen during the wait.
-    if resume_session_id and target_backend == "claude":
-        session_manager.mark_window_resuming(created_wid, bot=bot, user_id=user_id)
+    # Publish the restored window immediately. Prompts sent from Telegram now
+    # queue until the real TUI input box appears (including long compaction).
+    session_manager.mark_window_starting(
+        created_wid,
+        backend=target_backend,
+        resume=resume_session_id is not None or initial_prompt is not None,
+        bot=bot,
+        user_id=user_id,
+    )
 
     # Codex ``resume <id>`` keeps the same authoritative rollout id. We
     # already know everything needed to bind the window, while its SessionStart
     # hook may not run until the CLI has finished booting. Waiting 15 seconds
     # here made a normal archive restore look frozen for exactly that long.
     # Bind Codex immediately; the hook will later add transcript_path and
-    # self-heal the persisted map. Claude resume remains on the old wait path
-    # because Claude can report a transient new session id before we override
-    # it back to the resumed transcript id.
+    # self-heal the persisted map. Claude's original id is also known, so it
+    # can be published immediately and reconciled after the hook in background.
     codex_restore_published = False
     if resume_session_id and target_backend == "codex":
         from ..codex_session_io import build_session_file_path
 
         transcript_path = build_session_file_path(resume_session_id, workdir)
         if transcript_path is None or not transcript_path.is_file():
+            session_manager.cancel_window_startup(created_wid)
             await tmux_manager.kill_window(created_wid)
             return False, "Codex rollout not found; restore was cancelled"
         try:
@@ -516,11 +516,12 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
                 transcript_path=transcript_path,
             )
         except (OSError, RuntimeError) as e:
+            session_manager.cancel_window_startup(created_wid)
             await tmux_manager.kill_window(created_wid)
             logger.warning("Codex restore binding failed for %s: %s", created_wid, e)
             return False, "Could not publish Codex restore binding"
         codex_restore_published = True
-    else:
+    elif cross_backend:
         await session_manager.wait_for_session_map_entry(created_wid, timeout=15.0)
 
     # If we did a --resume, override window_state to original sid (Claude allocates a new sid for the resume).
@@ -530,10 +531,12 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
             ws.session_id = resume_session_id
             ws.cwd = workdir
             ws.window_name = created_wname
+            ws.backend = target_backend
             session_manager.save_state()
     elif cross_backend:
         ws = session_manager.get_window_state(created_wid)
         if not ws.session_id:
+            session_manager.cancel_window_startup(created_wid)
             await tmux_manager.kill_window(created_wid)
             return (
                 False,
@@ -549,10 +552,39 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
     if not codex_restore_published:
         session_manager.set_session_window(sess.id, created_wid)
         session_manager.set_active_session(user_id, sess.id)
+
+    if resume_session_id and not codex_restore_published:
+
+        async def _reconcile_resume_binding() -> None:
+            try:
+                await session_manager.wait_for_session_map_entry(
+                    created_wid, timeout=15.0
+                )
+                live_ws = session_manager.get_window_state(created_wid)
+                if live_ws.session_id != resume_session_id:
+                    live_ws.session_id = resume_session_id
+                    live_ws.cwd = workdir
+                    live_ws.window_name = created_wname
+                    live_ws.backend = target_backend
+                    session_manager.save_state()
+            except Exception as e:
+                logger.warning(
+                    "Background archive binding failed for %s: %s",
+                    created_wid,
+                    e,
+                )
+
+        asyncio.create_task(
+            _reconcile_resume_binding(), name=f"archive-bind:{created_wid}"
+        )
+
     if session_manager.get_user_settings(user_id).get("local_terminal") == "auto":
         from ..local_terminal import open_terminal_for_window
 
-        await open_terminal_for_window(created_wid, user_id=user_id)
+        asyncio.create_task(
+            open_terminal_for_window(created_wid, user_id=user_id),
+            name=f"local-terminal:{created_wid}",
+        )
     note = ""
     if resume_session_id:
         note = " — if it was a large session it may compact for a minute; your first message is held until it's ready."

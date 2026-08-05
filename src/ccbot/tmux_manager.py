@@ -69,6 +69,11 @@ class TmuxManager:
         # both messages into one and firing a spurious Enter. See
         # send_keys.
         self._send_locks: dict[str, asyncio.Lock] = {}
+        # Codex directory-trust handling used to block ``create_window`` for
+        # up to 4.5 seconds. Keep the pollers alive in the background instead;
+        # session readiness/queued input is handled independently by
+        # SessionManager's startup gate.
+        self._startup_tasks: set[asyncio.Task[bool]] = set()
 
     def _send_lock_for(self, window_id: str) -> asyncio.Lock:
         """Return the per-window send lock, creating it on first use.
@@ -698,7 +703,10 @@ class TmuxManager:
             counter += 1
 
         # Create window in thread
+        created_pane: object | None = None
+
         def _create_and_start() -> tuple[bool, str, str, str]:
+            nonlocal created_pane
             session = self.get_or_create_session()
             try:
                 # Create new window
@@ -716,6 +724,7 @@ class TmuxManager:
                 if start_claude:
                     pane = window.active_pane
                     if pane:
+                        created_pane = pane
                         if selected_backend == "codex":
                             cmd = config.codex_command
                             if config.codex_flags:
@@ -756,8 +765,6 @@ class TmuxManager:
                         else:
                             cmd = f"{env_prefix} {cmd}"
                         pane.send_keys(cmd, enter=True)
-                        if selected_backend == "codex":
-                            self._accept_codex_directory_trust(pane)
 
                 logger.info(
                     "Created window '%s' (id=%s) at %s",
@@ -776,7 +783,26 @@ class TmuxManager:
                 logger.error(f"Failed to create window: {e}")
                 return False, f"Failed to create window: {e}", "", ""
 
-        return await asyncio.to_thread(_create_and_start)
+        result = await asyncio.to_thread(_create_and_start)
+        if result[0] and selected_backend == "codex" and created_pane is not None:
+            # Do not hold the Telegram callback open while the Node wrapper
+            # draws its startup UI. The background task accepts only the two
+            # known directory prompts; normal input is never confirmed.
+            task = asyncio.create_task(
+                asyncio.to_thread(self._accept_codex_directory_trust, created_pane),
+                name=f"codex-startup-trust:{result[3]}",
+            )
+            self._startup_tasks.add(task)
+
+            def _finish_startup_task(done: asyncio.Task[bool]) -> None:
+                self._startup_tasks.discard(done)
+                try:
+                    done.result()
+                except Exception as e:
+                    logger.warning("Codex startup prompt handler failed: %s", e)
+
+            task.add_done_callback(_finish_startup_task)
+        return result
 
 
 # Global instance with default session name

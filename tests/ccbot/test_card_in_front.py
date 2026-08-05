@@ -181,6 +181,40 @@ class TestBackgroundDispatchKeepsQuiet:
 
 class TestActiveDispatchPutsCardInFront:
     @pytest.mark.asyncio
+    async def test_codex_startup_queue_skips_early_submit_check(self):
+        update = _make_update(message_id=500)
+        context = _make_context()
+        active = MagicMock(id="sessA", backend="codex")
+        mock_sm = MagicMock()
+        mock_sm.find_session_by_window.return_value = active
+        mock_sm.send_to_window = AsyncMock(
+            return_value=(True, "Queued for project (session starting)")
+        )
+        ensure = AsyncMock(return_value=False)
+
+        with (
+            patch("ccbot.bot.messages.session_manager", mock_sm),
+            patch("ccbot.bot.messages.is_active_for_user", return_value=True),
+            patch("ccbot.bot.messages.card_is_below", return_value=True),
+            patch("ccbot.bot.messages.repost_card", new=AsyncMock()),
+            patch("ccbot.bot.messages.resume_card_view", new=AsyncMock()),
+            patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
+            patch("ccbot.bot.messages.get_interactive_window", return_value=None),
+            patch(
+                "ccbot.bot.messages.tmux_manager.ensure_codex_prompt_submitted",
+                new=ensure,
+            ),
+        ):
+            from ccbot.bot.messages import _dispatch_text_to_active
+
+            ok = await _dispatch_text_to_active(
+                update, context, 1, "@5", "sent during startup"
+            )
+
+        assert ok is True
+        ensure.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_card_above_user_message_is_reposted(self):
         update = _make_update(message_id=500)
         context = _make_context()

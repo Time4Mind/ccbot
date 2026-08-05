@@ -197,6 +197,22 @@ class TestExtractInteractiveContent:
         assert "YT_PROXY=hahn" in result.content
         assert "Press enter to confirm" in result.content
 
+    def test_codex_command_approval_header_and_yes_choices_scrolled_off(self):
+        # Long command previews can leave only choice 3 and the footer in the
+        # visible tmux pane.  This must stay a CodexApproval so auto-approve
+        # uses the off-screen but still active ``y`` hotkey.
+        pane = (
+            '     print(json.dumps([{"id": r.get("id")} for r in items]))\n'
+            "  3. No, and tell Codex what to do differently (esc)\n"
+            "\n"
+            "  Press enter to confirm or esc to cancel\n"
+        )
+        result = extract_interactive_content(pane)
+        assert result is not None
+        assert result.name == "CodexApproval"
+        assert "3. No, and tell Codex" in result.content
+        assert "Press enter to confirm" in result.content
+
     def test_codex_numbered_permission_cursor_is_recognized(self):
         pane = (
             "› 1. Yes, proceed (y)\n  2. Yes, and don't ask again (p)\n  3. No (esc)\n"

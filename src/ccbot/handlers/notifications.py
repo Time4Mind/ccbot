@@ -1108,24 +1108,18 @@ async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
     """Drop the menu-pause so future events render again, and re-paint
     the carrier with the buffered events.
 
-    CRITICAL: clears ``in_menu_view`` UNCONDITIONALLY when the state
-    exists — even when ``msg_id`` was lost (carrier stale / deleted /
-    not yet created). Earlier this returned early without clearing
-    the pause, leaving the card stuck in ``must_buffer=True`` forever
-    (symptom: chronic ``card_update buffered`` log, body never updates
-    even though claude is producing events). When ``msg_id`` is None
-    we still clear the flag; the next claude event spawns a fresh
-    card via ``_send_card`` because ``state.msg_id is None``.
+    For the currently-active session, clears ``in_menu_view`` even when
+    ``msg_id`` was lost (carrier stale / deleted / not yet created). Earlier
+    this returned early without clearing the pause, leaving the active card
+    stuck in ``must_buffer=True`` forever. A background session is the one
+    exception: its pause and carrier binding must remain untouched so a late
+    voice dispatch cannot reclaim the newly-active session's carrier.
     """
     # ``setdefault`` so a session with no card-state yet (just-switched
     # bg session via Shot's switcher) still lands on a visible surface.
     # Without this, resume_card_view silently bailed and Back left the
     # user staring at empty chat.
     state = _cards.setdefault((user_id, sess.id), CardState())
-    state.in_menu_view = False
-    if state.pending_edit is not None and not state.pending_edit.done():
-        state.pending_edit.cancel()
-    state.pending_edit = None
 
     async def _spawn_fresh() -> None:
         await _ensure_seeded(user_id, sess, state)
@@ -1140,25 +1134,44 @@ async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
     # during ``_ensure_seeded`` / ``_send_card`` can race and produce a
     # duplicate card via ``update_session_card``.
     async with _card_lock(user_id, sess.id):
-        if state.msg_id is None:
-            # No carrier — spawn a fresh card now so the user lands on a
-            # visible surface immediately (used by Shot → Back after #51's
-            # ``close_card_view`` drops msg_id). Previously we waited for
-            # the next claude event; on quiet sessions that left the user
-            # staring at empty chat.
+        # The active-session check and the Telegram edit share the same
+        # cross-session barrier as switcher hand-off.  A slow voice dispatch
+        # may have started while this session was active and resumed after the
+        # carrier moved elsewhere; it must not clear the old card's pause or
+        # repaint the new owner's carrier.
+        async with _carrier_edit_lock(user_id):
+            if not is_active_for_user(user_id, sess):
+                logger.info(
+                    "card_resume skip user=%d sess=%s reason=background",
+                    user_id,
+                    sess.id,
+                )
+                return
+            state.in_menu_view = False
+            if state.pending_edit is not None and not state.pending_edit.done():
+                state.pending_edit.cancel()
+            state.pending_edit = None
+            if state.msg_id is None:
+                # No carrier — spawn a fresh card now so the user lands on a
+                # visible surface immediately (used by Shot → Back after #51's
+                # ``close_card_view`` drops msg_id). Previously we waited for
+                # the next claude event; on quiet sessions that left the user
+                # staring at empty chat.
+                await _spawn_fresh()
+                return
+            text = _render_card(sess, state, user_id=user_id)
+            keyboard = build_footer_keyboard(user_id, screen="main", is_busy=True)
+            if await _edit_card_unlocked(
+                bot, user_id, state, text=text, reply_markup=keyboard
+            ):
+                state.last_rendered = text
+                state.last_edit_ts = time.monotonic()
+                return
+            # ``_edit_card_unlocked`` returned False — the carrier was lost
+            # (stale msg, already-deleted, or bot can't edit it) and already
+            # reset msg_id internally. Spawn a fresh card so the user still
+            # lands on a visible live surface.
             await _spawn_fresh()
-            return
-        text = _render_card(sess, state, user_id=user_id)
-        keyboard = build_footer_keyboard(user_id, screen="main", is_busy=True)
-        if await _edit_card(bot, user_id, state, text=text, reply_markup=keyboard):
-            state.last_rendered = text
-            state.last_edit_ts = time.monotonic()
-            return
-        # ``_edit_card`` returned False — the carrier was lost (stale msg,
-        # already-deleted, or bot can't edit it) and ``_edit_card`` has
-        # already reset msg_id internally. Spawn a fresh card so the user
-        # still lands on a visible live surface.
-        await _spawn_fresh()
 
 
 async def paint_card_on_carrier(

@@ -1306,6 +1306,12 @@ async def _dispatch_text_to_active(
             )
 
         sess = session_manager.find_session_by_window(wid)
+        # ``send_to_window`` and Codex's submit verification can take long
+        # enough for the user to switch sessions.  The ``owns_card`` value
+        # captured before those awaits is no longer authoritative: using it
+        # below would let the old session resume/repost the carrier that the
+        # switcher has already handed to the new active session.
+        owns_card = sess is not None and is_active_for_user(user_id, sess)
         if sess is not None:
             session_manager.touch_session(sess.id)
             # ``maybe_auto_name`` honours the user's ``haiku_naming``
@@ -1326,6 +1332,9 @@ async def _dispatch_text_to_active(
         if sess is None:
             return True
 
+        # Re-check immediately before the card mutation as well.  Auto-name,
+        # interactive-UI handling, and other post-send work above may await.
+        owns_card = is_active_for_user(user_id, sess)
         if not owns_card:
             # Background session (voice pinned here, user moved on).
             # Its only chat surface is a row in the active card's

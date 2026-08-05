@@ -128,3 +128,27 @@ async def test_inflight_old_edit_finishes_before_target_owns_carrier(monkeypatch
     assert rendered[0] == "old-session late update"
     assert "target-session" in rendered[1]
     assert target_state.in_menu_view is False
+
+
+@pytest.mark.asyncio
+async def test_late_resume_cannot_reclaim_background_carrier(monkeypatch):
+    """A voice dispatch that resumes after hand-off must leave the old
+    session paused and must not edit the carrier now owned by the target."""
+    user_id = 42
+    carrier_msg_id = 8000
+    old = _session("session-a", "old-session", "@1")
+    target = _session("session-b", "target-session", "@2")
+    session_manager.sessions.update({old.id: old, target.id: target})
+    session_manager.active_sessions[user_id] = target.id
+
+    old_state = CardState(msg_id=carrier_msg_id, in_menu_view=True)
+    notifications._cards[(user_id, old.id)] = old_state
+    monkeypatch.setattr(session_manager, "save_state", lambda: None)
+    rich_edit = AsyncMock(return_value=True)
+    monkeypatch.setattr(message_sender, "try_rich_edit", rich_edit)
+
+    await notifications.resume_card_view(AsyncMock(), user_id, old)
+
+    assert old_state.in_menu_view is True
+    assert old_state.msg_id == carrier_msg_id
+    rich_edit.assert_not_awaited()

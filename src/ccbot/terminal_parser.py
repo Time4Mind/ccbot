@@ -104,6 +104,20 @@ UI_PATTERNS: list[UIPattern] = [
         ),
     ),
     UIPattern(
+        # A tall Codex approval can push its header and the first two choices
+        # above the visible tmux viewport.  The negative third choice and the
+        # footer remain pinned at the bottom, so use that pair as the fallback
+        # signature.  Keep the CodexApproval classification: auto-approve must
+        # send Codex's documented ``y`` hotkey even though the visible pane no
+        # longer contains the ``1. Yes, proceed (y)`` line.
+        name="CodexApproval",
+        top=(re.compile(r"^\s*3\.\s*No\b.*\(esc\)\s*$", re.IGNORECASE),),
+        bottom=(
+            re.compile(r"^\s*Press enter to confirm or esc to cancel", re.IGNORECASE),
+        ),
+        min_gap=1,
+    ),
+    UIPattern(
         # Permission menu with numbered choices (no "Esc to cancel" line)
         name="PermissionPrompt",
         top=(re.compile(r"^\s*[❯›>]\s*1\.\s*Yes"),),

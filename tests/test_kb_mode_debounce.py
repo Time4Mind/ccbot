@@ -224,6 +224,28 @@ async def test_codex_approval_uses_documented_y_hotkey_without_enter():
 
 
 @pytest.mark.asyncio
+async def test_truncated_codex_approval_uses_documented_y_hotkey_without_enter():
+    pane = (
+        "tail of a long command preview\n"
+        "  3. No, and tell Codex what to do differently (esc)\n"
+        "\n"
+        "Press enter to confirm or esc to cancel\n"
+    )
+    send_keys = AsyncMock()
+    with (
+        patch.object(
+            status_polling.session_manager,
+            "get_user_settings",
+            lambda u: {"auto_approve": "on"},
+        ),
+        patch.object(status_polling.tmux_manager, "send_keys", send_keys),
+    ):
+        assert await _maybe_auto_approve(1, "@1", pane) is True
+
+    send_keys.assert_awaited_once_with("@1", "y", enter=False, literal=True)
+
+
+@pytest.mark.asyncio
 async def test_auto_approve_distinct_prompts_never_escalate():
     """Different prompts (distinct signatures) each get a one-shot auto-Yes;
     the counter resets per prompt so legitimate approvals aren't throttled."""

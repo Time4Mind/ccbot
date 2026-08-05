@@ -122,6 +122,62 @@ class TestBackgroundDispatchKeepsQuiet:
 
         begin.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_switch_during_dispatch_rechecks_before_repainting(self):
+        """The session starts active, but loses the carrier while Codex is
+        accepting the prompt. A stale pre-send owns_card value must not wake
+        its paused card after the switch."""
+        update = _make_update()
+        context = _make_context()
+
+        pinned = MagicMock()
+        pinned.id = "sessA"
+        pinned.backend = "codex"
+        active = True
+
+        async def _send_and_switch(*args, **kwargs):
+            nonlocal active
+            active = False
+            return True, "ok"
+
+        mock_sm = MagicMock()
+        mock_sm.find_session_by_window.return_value = pinned
+        mock_sm.send_to_window = AsyncMock(side_effect=_send_and_switch)
+
+        repost = AsyncMock()
+        resume = AsyncMock()
+        refresh = AsyncMock()
+
+        with (
+            patch("ccbot.bot.messages.session_manager", mock_sm),
+            patch(
+                "ccbot.bot.messages.is_active_for_user",
+                side_effect=lambda user_id, sess: active,
+            ),
+            patch("ccbot.bot.messages.repost_card", new=repost),
+            patch("ccbot.bot.messages.resume_card_view", new=resume),
+            patch("ccbot.bot.messages.refresh_panel", new=refresh),
+            patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
+            patch("ccbot.bot.messages.get_interactive_window", return_value=None),
+            patch(
+                "ccbot.bot.messages.tmux_manager.ensure_codex_prompt_submitted",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "ccbot.handlers.bg_status.update_status", return_value=True
+            ) as bg_update,
+        ):
+            from ccbot.bot.messages import _dispatch_text_to_active
+
+            await _dispatch_text_to_active(update, context, 1, "@5", "hi there")
+
+        # Entry wakes the then-active card once. After the switch no second
+        # resume/repost is allowed; only the new active card's bg panel moves.
+        assert resume.await_count == 1
+        repost.assert_not_awaited()
+        bg_update.assert_called_once_with(1, "sessA", "working")
+        refresh.assert_awaited_once()
+
 
 class TestActiveDispatchPutsCardInFront:
     @pytest.mark.asyncio

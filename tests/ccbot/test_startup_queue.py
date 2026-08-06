@@ -166,6 +166,16 @@ def test_shell_prompt_is_not_codex_readiness() -> None:
     )
 
 
+def test_resumed_codex_without_visible_header_is_ready() -> None:
+    pane = (
+        "• Previous assistant output after a long restored transcript\n\n"
+        "› Improve documentation in @filename\n\n"
+        "  gpt-5.6-sol high · ~/pet_projects/ccbot"
+    )
+
+    assert SessionManager._pane_has_ready_input(pane, "codex")
+
+
 @pytest.mark.asyncio
 async def test_session_map_poll_keeps_fresh_bound_window_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -282,6 +282,13 @@ _EN: dict[str, str] = {
     ),
     "approve.off": "off",
     "approve.on": "on",
+    "settings.group.session_idle_hours": "Auto-archive after",
+    "settings.idle_archive.body": (
+        "*Session auto-archive*\n\n"
+        "Archive a live session after this many hours without activity. "
+        "Archived sessions remain available through Menu → Archive and can be restored."
+    ),
+    "settings.value.hours": "{value}h",
     # Local terminal — 3-state (off / manual / auto).
     "local.off": "off",
     "local.manual": "manual",
@@ -433,7 +440,7 @@ _EN: dict[str, str] = {
         "• *Reply-quote.* Reply to a non-active session's bot message — "
         "your text is routed there for that one message only.\n"
         "• *Done.* `/done [name]` archives a session as completed.\n"
-        "• *Idle TTL.* Sessions auto-archive after 4h with no input.\n"
+        "• *Idle TTL.* Sessions auto-archive after the selected 6/12/24h without activity.\n"
         "• *Restore.* ≡ Menu → 📦 Archive → tap *Restore*."
     ),
     "help.body.menu": (
@@ -757,6 +764,13 @@ _RU: dict[str, str] = {
     ),
     "approve.off": "выкл",
     "approve.on": "вкл",
+    "settings.group.session_idle_hours": "Автоархив через",
+    "settings.idle_archive.body": (
+        "*Автоархивация сессий*\n\n"
+        "Через сколько часов без активности архивировать живую сессию. "
+        "Архив остаётся доступен через Меню → Архив, сессию можно восстановить."
+    ),
+    "settings.value.hours": "{value} ч",
     # Local terminal — 3-state (off / manual / auto).
     "local.off": "выкл",
     "local.manual": "по кнопке",
@@ -897,7 +911,7 @@ _RU: dict[str, str] = {
         "неактивной сессии — твой текст уйдёт туда разово, без смены "
         "активной.\n"
         "• *Закрыть.* `/done [имя]` — отмечает сессию как готовую.\n"
-        "• *Idle TTL.* Без ввода 4 часа — авто-архив.\n"
+        "• *Idle TTL.* Автоархив через выбранные 6/12/24ч без активности.\n"
         "• *Восстановить.* ≡ Меню → 📦 Archive → *Restore*."
     ),
     "help.body.menu": (
@@ -1192,6 +1206,13 @@ _ZH: dict[str, str] = {
     ),
     "approve.off": "关",
     "approve.on": "开",
+    "settings.group.session_idle_hours": "自动归档时间",
+    "settings.idle_archive.body": (
+        "*会话自动归档*\n\n"
+        "实时会话无活动达到所选小时数后自动归档。"
+        "归档会话仍可通过菜单 → 归档恢复。"
+    ),
+    "settings.value.hours": "{value}小时",
     # Local terminal — 3-state (off / manual / auto).
     "local.off": "关",
     "local.manual": "按钮",
@@ -1296,7 +1317,7 @@ _ZH: dict[str, str] = {
         "• *引用回复。* 回复非活动会话的机器人消息 — 你的文本\n"
         "只单次路由到该会话,不更改活动状态。\n"
         "• *完成。* `/done [name]` — 标记并归档。\n"
-        "• *闲置 TTL。* 4 小时无输入自动归档。\n"
+        "• *闲置 TTL。* 无活动达到所选 6/12/24 小时后自动归档。\n"
         "• *恢复。* ≡ 菜单 → 📦 Archive → *Restore*。"
     ),
     "help.body.menu": (

@@ -21,6 +21,7 @@ from ...handlers.callback_data import (
     CB_ST_SCREENS,
     CB_ST_GRP,
     CB_ST_HAIKU,
+    CB_ST_IDLE,
     CB_ST_LAG,
     CB_ST_LANG,
     CB_ST_LCLAUDE,
@@ -206,6 +207,7 @@ _GROUP_TO_SCREEN: dict[str, Screen] = {
     "voice": "settings_voice",
     "weekly_reset_day": "settings_weeklyday",
     "auto_approve": "settings_approve",
+    "session_idle_hours": "settings_idle_archive",
     "local_terminal": "settings_local",
     "card_history": "settings_cardhist",
     "card_page_lines": "settings_pagesize",
@@ -296,6 +298,7 @@ async def handle(
         CB_ST_SCREENS,
         CB_ST_BGNOTIFY,
         CB_ST_HAIKU,
+        CB_ST_IDLE,
     )
     if not any(data.startswith(p) for p in setter_prefixes):
         return False
@@ -345,6 +348,16 @@ async def handle(
         if value in ("off", "on"):
             session_manager.update_user_setting(user.id, "auto_approve", value)
         screen_name = "settings_approve"
+    elif data.startswith(CB_ST_IDLE):
+        from ...session import IDLE_ARCHIVE_HOUR_CHOICES
+
+        try:
+            value = int(data[len(CB_ST_IDLE) :])
+        except ValueError:
+            value = 0
+        if value in IDLE_ARCHIVE_HOUR_CHOICES:
+            session_manager.update_user_setting(user.id, "session_idle_hours", value)
+        screen_name = "settings_idle_archive"
     elif data.startswith(CB_ST_LOCAL):
         value = data[len(CB_ST_LOCAL) :]
         if value in ("off", "manual", "auto"):

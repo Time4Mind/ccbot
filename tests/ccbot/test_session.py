@@ -122,6 +122,15 @@ class TestLocalTerminalSetting:
         assert mgr.get_user_settings(1).get("local_terminal") == "auto"
 
 
+class TestIdleArchiveSetting:
+    def test_default_is_six_hours(self, mgr: SessionManager) -> None:
+        assert mgr.get_user_settings(1).get("session_idle_hours") == 6
+
+    def test_explicit_value_is_persisted(self, mgr: SessionManager) -> None:
+        mgr.update_user_setting(1, "session_idle_hours", 12)
+        assert mgr.get_user_settings(1).get("session_idle_hours") == 12
+
+
 class TestGlobalAgentBackend:
     def test_switch_persists_bot_wide_value(
         self, mgr: SessionManager, monkeypatch: pytest.MonkeyPatch

@@ -78,14 +78,14 @@ A session is defined by its goal, not by its working directory. The user can `cd
 ### Lifecycle
 
 ```
-[create] -> active -> idle (4h no input) -> archived -> [restore | purged at 14d]
+[create] -> active -> idle (selected 6/12/24h) -> archived -> [restore | purged at 14d]
             ^                                   |
             +-----------------------------------+
                           restore
 ```
 
 - **active**: tmux window alive, selected agent process running, in the inline switcher
-- **idle**: tmux window alive, no input from user for >4h. Promoted to archived after the same threshold (kill window, persist state)
+- **idle**: tmux window alive, no activity for the user-selected 6/12/24h. Promoted to archived after that threshold (kill window, persist state)
 - **archived**: tmux window killed, backend and native session id stored.
   Same-backend restore uses `claude --resume <id>` or
   `codex resume <thread-id>`. Cross-backend restore creates a fresh target
@@ -495,7 +495,7 @@ CODEX_NAMING_MODEL=gpt-5.6-luna
 # CCBOT_CODEX_SESSIONS_PATH=~/.codex/sessions
 
 # Sessions
-SESSION_IDLE_TTL=4h            # active -> archived
+# Active -> archived TTL is selected per user in Settings: 6h / 12h / 24h.
 ARCHIVE_PURGE_AFTER=14d
 
 # Quota alerts
@@ -549,7 +549,7 @@ The fork ships when all of the following are true on a fresh Linux arm64 VPS ins
 3. Inline switcher in the most recent bot message correctly toggles active session, edits the message in place with context preview, and stops further updates on stale messages.
 4. Reply-quote on a non-active session's message routes a one-shot to that session without changing active.
 5. Three concurrent sessions can run long-running tasks in parallel; switching between them does not pause any of them.
-6. After 4h with no input, a session auto-archives. `/archive` shows it. `Restore` brings it back via `claude --resume`.
+6. After the selected 6h, 12h, or 24h without activity, a session auto-archives. `/archive` shows it. `Restore` brings it back via `claude --resume`.
 7. Voice message is transcribed locally via whisper.cpp; no OpenAI key configured.
 8. Photo / document upload lands in `.ccbot-inbox` and the active session receives the relative path (optionally prefixed by the user's caption).
 9. Menu → Status reflects Claude's live `/usage` modal (5h / weekly / Sonnet) — JSONL-derived counters were retired. Per-session ``context: N%`` is rendered on the card (JSONL approximation, ±10 % from `/context`).

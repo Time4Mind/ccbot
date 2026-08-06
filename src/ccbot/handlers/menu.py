@@ -45,6 +45,7 @@ from .callback_data import (
     CB_ST_BACK,
     CB_ST_BGNOTIFY,
     CB_ST_HAIKU,
+    CB_ST_IDLE,
     CB_ST_CAT,
     CB_ST_CHIST,
     CB_ST_PAGESIZE,
@@ -87,6 +88,7 @@ Screen = Literal[
     "settings_bg_notify_error",
     "settings_bg_notify_needs_action",
     "settings_haiku",
+    "settings_idle_archive",
 ]
 
 # Group key -> (label translation key, sub-screen name, settings-dict key)
@@ -106,6 +108,12 @@ _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
         "settings.group.auto_approve",
         "settings_approve",
         "auto_approve",
+    ),
+    (
+        "session_idle_hours",
+        "settings.group.session_idle_hours",
+        "settings_idle_archive",
+        "session_idle_hours",
     ),
     (
         "local_terminal",
@@ -197,7 +205,13 @@ SETTINGS_CATEGORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "settings.cat.behavior",
         "settings_cat_behavior",
-        ("agent_backend", "auto_approve", "haiku_naming", "language"),
+        (
+            "agent_backend",
+            "auto_approve",
+            "session_idle_hours",
+            "haiku_naming",
+            "language",
+        ),
     ),
 )
 
@@ -399,6 +413,12 @@ def _format_setting_value(user_id: int, value_key: str, cur: object) -> str:
         return t(user_id, f"day.{cur}") if cur else "?"
     if value_key == "auto_approve":
         return t(user_id, f"approve.{cur}") if cur else "?"
+    if value_key == "session_idle_hours":
+        try:
+            hours = int(str(cur))
+        except (TypeError, ValueError):
+            return "?"
+        return t(user_id, "settings.value.hours", value=hours)
     if value_key == "local_terminal":
         return t(user_id, f"local.{cur}") if cur else "?"
     if value_key == "card_history":
@@ -567,6 +587,33 @@ def _settings_approve_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
         [
             InlineKeyboardButton(
                 t(user_id, "btn.back"), callback_data=_parent_cat_cb("auto_approve")
+            )
+        ],
+    ]
+
+
+def _settings_idle_archive_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
+    from ..session import DEFAULT_IDLE_ARCHIVE_HOURS, IDLE_ARCHIVE_HOUR_CHOICES
+
+    raw = session_manager.get_user_settings(user_id).get(
+        "session_idle_hours", DEFAULT_IDLE_ARCHIVE_HOURS
+    )
+    try:
+        cur = int(raw)
+    except (TypeError, ValueError):
+        cur = DEFAULT_IDLE_ARCHIVE_HOURS
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(t(user_id, "settings.value.hours", value=v), cur == v),
+                callback_data=f"{CB_ST_IDLE}{v}",
+            )
+            for v in IDLE_ARCHIVE_HOUR_CHOICES
+        ],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("session_idle_hours"),
             )
         ],
     ]
@@ -847,6 +894,8 @@ def build_footer_keyboard(
         rows.extend(_settings_weeklyday_grid(user_id))
     elif screen == "settings_approve":
         rows.extend(_settings_approve_grid(user_id))
+    elif screen == "settings_idle_archive":
+        rows.extend(_settings_idle_archive_grid(user_id))
     elif screen == "settings_local":
         rows.extend(_settings_local_grid(user_id))
     elif screen == "settings_cardhist":
@@ -972,6 +1021,7 @@ _GROUP_TEXT_KEYS: dict[str, str] = {
     "settings_bg_notify_error": "settings.bg_notify.error.body",
     "settings_bg_notify_needs_action": "settings.bg_notify.needs_action.body",
     "settings_haiku": "settings.haiku.body",
+    "settings_idle_archive": "settings.idle_archive.body",
 }
 
 

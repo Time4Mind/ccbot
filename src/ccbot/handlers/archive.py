@@ -1,7 +1,7 @@
 """Archive listing UI and lifecycle helpers.
 
 Periodic sweeps:
-  - idle_archive_sweep: when SESSION_IDLE_TTL is exceeded, archive a session.
+  - idle_archive_sweep: archive a session after the user's selected idle TTL.
   - purge_sweep: drop state.json records older than ARCHIVE_PURGE_AFTER.
     Transcripts on disk are kept for audit.
 
@@ -25,7 +25,12 @@ from pathlib import Path
 
 from ..config import config
 from ..i18n import t
-from ..session import Session, session_manager
+from ..session import (
+    DEFAULT_IDLE_ARCHIVE_HOURS,
+    IDLE_ARCHIVE_HOUR_CHOICES,
+    Session,
+    session_manager,
+)
 from ..session_claude_io import build_session_file_path
 from ..tmux_manager import tmux_manager
 from ..transcript_parser import TranscriptParser
@@ -596,13 +601,20 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
 
 
 async def idle_archive_sweep(bot: Bot, user_id: int) -> int:
-    """Archive any of the user's sessions that exceeded SESSION_IDLE_TTL.
+    """Archive sessions that exceeded the user's selected idle TTL.
 
     Returns number of sessions archived.
     """
-    if config.session_idle_ttl <= 0:
-        return 0
-    candidates = session_manager.find_idle_to_archive(config.session_idle_ttl)
+    raw_hours = session_manager.get_user_settings(user_id).get(
+        "session_idle_hours", DEFAULT_IDLE_ARCHIVE_HOURS
+    )
+    try:
+        idle_hours = int(raw_hours)
+    except (TypeError, ValueError):
+        idle_hours = DEFAULT_IDLE_ARCHIVE_HOURS
+    if idle_hours not in IDLE_ARCHIVE_HOUR_CHOICES:
+        idle_hours = DEFAULT_IDLE_ARCHIVE_HOURS
+    candidates = session_manager.find_idle_to_archive(idle_hours * 3600.0)
     archived = 0
     for sess in candidates:
         wid = sess.window_id

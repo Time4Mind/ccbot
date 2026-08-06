@@ -5,7 +5,7 @@ monitoring intervals from environment variables (with .env support).
 .env loading priority: local .env (cwd) > $CCBOT_DIR/.env (default ~/.ccbot).
 The module-level `config` instance is imported by nearly every other module.
 
-DM mode adds: SESSION_IDLE_TTL, ARCHIVE_PURGE_AFTER, MAX_SESSIONS,
+DM mode adds: ARCHIVE_PURGE_AFTER, MAX_SESSIONS,
 PREVIEW_*, BG_NOTIFY_MODE, VOICE_BACKEND, WHISPER_MODEL_PATH,
 INBOX_TTL_HOURS, QUOTA_ALERT_POLL_INTERVAL.
 
@@ -153,9 +153,6 @@ class Config:
 
         # --- DM multi-session mode ---
         # Sessions
-        self.session_idle_ttl: float = _parse_duration(
-            os.getenv("SESSION_IDLE_TTL", "4h"), 4 * 3600
-        )
         self.archive_purge_after: float = _parse_duration(
             os.getenv("ARCHIVE_PURGE_AFTER", "14d"), 14 * 86400
         )

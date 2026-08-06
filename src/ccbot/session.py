@@ -65,6 +65,12 @@ _RESUME_SETTLE_DRAIN_GAP = 0.3
 # fire_typing's own throttle and Telegram's ~5s indicator decay.
 _RESUME_SETTLE_TYPING_REFRESH = 4.0
 
+# Per-user idle auto-archive choices exposed in Settings. Keep the accepted
+# values central so UI, callback validation, and the archive sweep cannot
+# drift apart.
+IDLE_ARCHIVE_HOUR_CHOICES: tuple[int, ...] = (6, 12, 24)
+DEFAULT_IDLE_ARCHIVE_HOURS = 6
+
 
 def key_matches_window(key: str, window_id: str) -> bool:
     """True if a session_map.json key targets ``window_id`` in our tmux server.
@@ -844,6 +850,9 @@ class SessionManager:
         "language": "en",  # "en" | "ru" | "zh" — UI strings
         "live_lag": 4,  # seconds, see PREVIEW_LIVE_LAG
         "voice": "auto",  # "auto" | "whisper" | "apple" | "off"
+        # Hours without activity before a live session is archived. 6h is the
+        # closest supported migration from the historical global 4h default.
+        "session_idle_hours": DEFAULT_IDLE_ARCHIVE_HOURS,
         # Day-of-week the Anthropic weekly window resets on. Drives the %/d
         # burn-rate computation in Menu → Status. Values: "mon".."sun".
         "weekly_reset_day": "mon",

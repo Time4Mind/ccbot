@@ -522,7 +522,9 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     # a new-session flow is open; while open it captures the update and stops
     # it from leaking to the previously-active session.
     application.add_handler(
-        MessageHandler(filters.ALL & ~filters.StatusUpdate.ALL, capture_startup_message),
+        MessageHandler(
+            filters.ALL & ~filters.StatusUpdate.ALL, capture_startup_message
+        ),
         group=-1,
     )
 

@@ -189,7 +189,9 @@ async def test_session_map_poll_keeps_fresh_bound_window_state(
 
 
 @pytest.mark.asyncio
-async def test_first_turn_can_be_confirmed_after_binding_appears(tmp_path: Path) -> None:
+async def test_first_turn_can_be_confirmed_after_binding_appears(
+    tmp_path: Path,
+) -> None:
     from ccbot.bot.messages import _wait_for_voice_transcript
 
     transcript = tmp_path / "rollout.jsonl"

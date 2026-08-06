@@ -198,11 +198,7 @@ async def _wait_for_voice_transcript(
             await session_manager.load_session_map()
             state = session_manager.window_states.get(wid)
             if isinstance(state, WindowState) and state.session_id:
-                path = (
-                    Path(state.transcript_path)
-                    if state.transcript_path
-                    else None
-                )
+                path = Path(state.transcript_path) if state.transcript_path else None
                 if path is None or not path.is_file():
                     if state.backend == "codex":
                         from ..codex_session_io import build_session_file_path
@@ -669,9 +665,7 @@ async def unsupported_content_handler(
             return False
         sess = session_manager.find_session_by_window(wid)
         async with _card_repost_bracket(context.bot, user.id, sess) as repost:
-            success, message = await _send_with_delivery_proof(
-                wid, text_to_send, sess
-            )
+            success, message = await _send_with_delivery_proof(wid, text_to_send, sess)
             if not success:
                 await safe_reply(msg, f"❌ {message}")
                 return False

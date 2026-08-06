@@ -429,7 +429,9 @@ class SessionManager:
         # is accepted.  Keep provisional state for every bot Session still
         # bound to a window; deleting it here removed the transcript binding
         # and made first-turn delivery impossible to prove.
-        bound_wids = {sess.window_id for sess in self.sessions.values() if sess.window_id}
+        bound_wids = {
+            sess.window_id for sess in self.sessions.values() if sess.window_id
+        }
         stale_wids = [
             w
             for w in self.window_states

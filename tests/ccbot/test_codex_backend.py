@@ -104,6 +104,37 @@ def test_codex_ready_prompt_is_not_auto_confirmed(
     assert TmuxManager._accept_codex_directory_trust(Pane()) is False
 
 
+def test_codex_update_prompt_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    screens = iter(
+        [
+            [
+                "Update available! 0.146.0 -> 0.146.1",
+                "› 1. Update now (runs npm install)",
+                "  2. Skip",
+                "  3. Skip until next version",
+                "Press enter to continue",
+            ],
+            ["OpenAI Codex", "›"],
+        ]
+    )
+
+    class Pane:
+        def __init__(self) -> None:
+            self.sent: list[tuple[str, bool]] = []
+
+        def capture_pane(self) -> list[str]:
+            return next(screens)
+
+        def send_keys(self, value: str, enter: bool = True) -> None:
+            self.sent.append((value, enter))
+
+    pane = Pane()
+    monkeypatch.setattr("ccbot.tmux_manager.time.sleep", lambda _delay: None)
+
+    assert TmuxManager._accept_codex_directory_trust(pane) is True
+    assert pane.sent == [("Down", False), ("", True)]
+
+
 def test_codex_resume_uses_selected_current_directory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -610,12 +641,12 @@ async def test_tmux_builds_codex_resume_command(
     mgr = TmuxManager()
     monkeypatch.setattr(mgr, "get_or_create_session", lambda: Session())
 
-    def wait_for_trust(_pane: object) -> bool:
+    async def wait_for_trust(_pane: object) -> bool:
         trust_started.set()
-        release_trust.wait(timeout=2.0)
+        await asyncio.to_thread(release_trust.wait, 2.0)
         return True
 
-    monkeypatch.setattr(mgr, "_accept_codex_directory_trust", wait_for_trust)
+    monkeypatch.setattr(mgr, "_watch_codex_startup_screens", wait_for_trust)
 
     async def no_existing(_name: str):
         return None

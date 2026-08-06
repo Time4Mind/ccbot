@@ -214,9 +214,15 @@ async def handle(
         return True
 
     if data == CB_DIR_CANCEL:
+        from ...startup_queue import cancel_startup_queue
+
+        unsent = cancel_startup_queue(user.id)
         clear_browse_state(context.user_data)
         await _close_modal(query, user.id, context)
-        await query.answer()
+        await query.answer(
+            f"Cancelled; {unsent} queued item(s) were not sent" if unsent else None,
+            show_alert=bool(unsent),
+        )
         return True
 
     if data.startswith(CB_SESSION_SELECT):
@@ -272,13 +278,19 @@ async def handle(
         return True
 
     if data == CB_SESSION_CANCEL:
+        from ...startup_queue import cancel_startup_queue
+
+        unsent = cancel_startup_queue(user.id)
         clear_session_picker_state(context.user_data)
         if context.user_data is not None:
             context.user_data.pop("_selected_path", None)
             context.user_data.pop(SESSIONS_PAGE_KEY, None)
         clear_browse_state(context.user_data)
         await _close_modal(query, user.id, context)
-        await query.answer()
+        await query.answer(
+            f"Cancelled; {unsent} queued item(s) were not sent" if unsent else None,
+            show_alert=bool(unsent),
+        )
         return True
 
     if data == CB_SESSION_BACK:

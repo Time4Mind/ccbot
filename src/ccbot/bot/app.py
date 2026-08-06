@@ -25,6 +25,8 @@ from telegram.ext import (
     filters,
 )
 
+from ..startup_queue import capture_startup_message
+
 from ..config import config
 from ..handlers.quota_alerts import quota_alerts_loop
 from ..handlers.notifications import card_timer_loop
@@ -515,6 +517,14 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
         ).get_updates_request(HTTPXRequest(proxy=config.tg_proxy_url))
         logger.info("TG proxy enabled: %s", config.tg_proxy_url)
     application = builder.build()
+
+    # Group -1 runs before commands and content handlers. It is a no-op unless
+    # a new-session flow is open; while open it captures the update and stops
+    # it from leaking to the previously-active session.
+    application.add_handler(
+        MessageHandler(filters.ALL & ~filters.StatusUpdate.ALL, capture_startup_message),
+        group=-1,
+    )
 
     # Visible menu commands.
     application.add_handler(CommandHandler("history", history_command))

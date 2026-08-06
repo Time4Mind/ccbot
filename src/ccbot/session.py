@@ -1252,18 +1252,34 @@ class SessionManager:
         ):
             return False
         marker = "›" if backend == "codex" else "❯"
+        lines = pane.strip().splitlines()
         if backend == "codex" and "openai codex" not in lower:
-            # Artem's shell prompt also starts with `›`.  Marker-only
-            # detection cleared the startup queue while the pane was still a
-            # shell, causing the first Telegram turn to be typed into startup
-            # chrome and discarded.
-            return False
+            # A fresh pane exposes the OpenAI Codex header, but a resumed long
+            # transcript scrolls that header out of capture-pane before the
+            # input becomes ready.  Its bottom status row is still stable:
+            # ``<model> <effort> · <cwd>``.  Accept that as Codex evidence so
+            # resume cannot remain gated forever, while still rejecting
+            # Artem's shell prompt (which also starts with ``›``).
+            efforts = {"low", "medium", "high", "xhigh", "max", "ultra"}
+            has_codex_footer = False
+            for line in lines[-8:]:
+                parts = [part.strip() for part in line.split("·")]
+                if len(parts) < 2:
+                    continue
+                model_effort = parts[0].split()
+                if not model_effort or model_effort[-1].lower() not in efforts:
+                    continue
+                if any(
+                    part == "~" or part.startswith(("~/", "/")) for part in parts[1:]
+                ):
+                    has_codex_footer = True
+                    break
+            if not has_codex_footer:
+                return False
         # The live input row is pinned near the bottom. Restricting detection
         # to the tail avoids mistaking a historical user row for readiness
         # while a resumed transcript is still being restored.
-        return any(
-            line.lstrip().startswith(marker) for line in pane.strip().splitlines()[-6:]
-        )
+        return any(line.lstrip().startswith(marker) for line in lines[-6:])
 
     async def wait_for_window_ready(self, window_id: str) -> bool:
         """Wait until the startup gate has observed the real agent input UI."""
@@ -1336,8 +1352,8 @@ class SessionManager:
                     return True
             await asyncio.sleep(_RESUME_SETTLE_POLL)
         logger.warning(
-            "resume-settle timed out for window %s after %.0fs (saw_busy=%s) — "
-            "sending anyway",
+            "resume-settle timed out for window %s after %.0fs (saw_busy=%s); "
+            "readiness remains unproven",
             window_id,
             config.resume_settle_timeout,
             saw_busy,

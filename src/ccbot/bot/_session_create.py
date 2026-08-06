@@ -16,15 +16,13 @@ import logging
 
 from telegram.ext import ContextTypes
 
-from ..handlers.directory_browser import take_pending_text
-from ..handlers.message_sender import safe_edit, safe_send
+from ..handlers.message_sender import safe_edit
 from ..handlers.notifications import (
     detach_paused_cards_at_message,
     paint_card_on_carrier,
 )
 from ..i18n import t
 from ..local_terminal import open_terminal_for_window
-from ..naming import maybe_auto_name
 from ..session import session_manager
 from ..tmux_manager import tmux_manager
 
@@ -79,8 +77,6 @@ async def create_and_activate_session(
     )
     if not success:
         await safe_edit(query, f"❌ {message}")
-        if context.user_data is not None:
-            context.user_data.pop("_pending_text", None)
         return
 
     logger.info(
@@ -127,6 +123,13 @@ async def create_and_activate_session(
     if ws.session_id:
         session_manager.set_session_claude_id(sess.id, ws.session_id)
     session_manager.set_active_session(user.id, sess.id)
+
+    # Every inbound captured since the user pressed Start is now owned by
+    # this window. The drain waits for proven TUI readiness and replays the
+    # original Telegram updates in order.
+    from ..startup_queue import bind_startup_queue
+
+    bind_startup_queue(user.id, created_wid)
 
     # Transition the carrier from dir-browser to the new session's
     # empty live card in place. No separate "Created. Send messages
@@ -178,33 +181,3 @@ async def create_and_activate_session(
             open_terminal_for_window(created_wid, user_id=user.id),
             name=f"local-terminal:{created_wid}",
         )
-
-    # Forward any pending text held while the picker was up. ``take_pending_text``
-    # drops a stale stash (older than PENDING_TEXT_TTL_S) so a message typed
-    # hours ago against a since-gone session can never be injected here — the
-    # 2026-06-28 "medical insurance" misroute.
-    pending_text = take_pending_text(context.user_data)
-    if pending_text:
-        logger.debug(
-            "Forwarding pending text to window %s (len=%d)",
-            created_wname,
-            len(pending_text),
-        )
-        send_ok, send_msg = await session_manager.send_to_window(
-            created_wid, pending_text
-        )
-        if not send_ok:
-            logger.warning("Failed to forward pending text: %s", send_msg)
-            await safe_send(
-                context.bot,
-                user.id,
-                f"❌ Failed to send pending message: {send_msg}",
-            )
-        elif len(pending_text) >= 20:
-            # Name the session from its actual first human message (this
-            # pending text), not from whatever inbound happens to land
-            # first. ``maybe_auto_name`` is one-shot (re-entrancy guard),
-            # so a later message can't override it.
-            asyncio.create_task(
-                maybe_auto_name(sess.id, pending_text, getattr(user, "id", None))
-            )

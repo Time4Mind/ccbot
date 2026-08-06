@@ -425,8 +425,18 @@ class SessionManager:
                     self.window_display_names[window_id] = new_wname
                     changed = True
 
-        # Clean up window_states entries not in current session_map.
-        stale_wids = [w for w in self.window_states if w and w not in valid_wids]
+        # A fresh Codex window has no session_map entry until its first prompt
+        # is accepted.  Keep provisional state for every bot Session still
+        # bound to a window; deleting it here removed the transcript binding
+        # and made first-turn delivery impossible to prove.
+        bound_wids = {
+            sess.window_id for sess in self.sessions.values() if sess.window_id
+        }
+        stale_wids = [
+            w
+            for w in self.window_states
+            if w and w not in valid_wids and w not in bound_wids
+        ]
         for wid in stale_wids:
             logger.info("Removing stale window_state: %s", wid)
             del self.window_states[wid]
@@ -1072,7 +1082,7 @@ class SessionManager:
         """
         self.mark_window_starting(
             window_id,
-            backend=self.agent_backend,
+            backend="claude",
             resume=True,
             bot=bot,
             user_id=user_id,
@@ -1157,9 +1167,17 @@ class SessionManager:
             _typing_keepalive(), name=f"resume-settle-typing:{window_id}"
         )
         try:
-            settled = await self._wait_for_resume_settle(
-                window_id, backend=backend, resume=resume
-            )
+            settled = False
+            while not settled:
+                settled = await self._wait_for_resume_settle(
+                    window_id, backend=backend, resume=resume
+                )
+                if not settled:
+                    logger.error(
+                        "startup gate remains closed for window %s; "
+                        "TUI readiness is still unproven",
+                        window_id,
+                    )
             logger.info(
                 "startup gate cleared for window %s "
                 "(settled=%s backend=%s resume=%s, background)",
@@ -1230,15 +1248,39 @@ class SessionManager:
             or "sign in with chatgpt" in lower
             or "sign in with device code" in lower
             or "provide your own api key" in lower
+            or "update available!" in lower
         ):
             return False
         marker = "›" if backend == "codex" else "❯"
+        if backend == "codex" and "openai codex" not in lower:
+            # Artem's shell prompt also starts with `›`.  Marker-only
+            # detection cleared the startup queue while the pane was still a
+            # shell, causing the first Telegram turn to be typed into startup
+            # chrome and discarded.
+            return False
         # The live input row is pinned near the bottom. Restricting detection
         # to the tail avoids mistaking a historical user row for readiness
         # while a resumed transcript is still being restored.
         return any(
             line.lstrip().startswith(marker) for line in pane.strip().splitlines()[-6:]
         )
+
+    async def wait_for_window_ready(self, window_id: str) -> bool:
+        """Wait until the startup gate has observed the real agent input UI."""
+        while window_id in self._resuming_windows:
+            task = self._resume_settle_tasks.get(window_id)
+            if task is None:
+                await asyncio.sleep(_RESUME_SETTLE_POLL)
+                continue
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                return False
+            except Exception:
+                logger.exception("startup readiness task failed: %s", window_id)
+                return False
+        window = await tmux_manager.find_window_by_id(window_id)
+        return window is not None
 
     async def _wait_for_resume_settle(
         self,

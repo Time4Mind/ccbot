@@ -89,8 +89,51 @@ class TmuxManager:
         return lock
 
     @staticmethod
-    def _accept_codex_directory_trust(pane: object) -> bool:
-        """Handle only Codex's known directory startup prompts.
+    def _handle_codex_startup_screen(pane: object) -> tuple[bool, bool]:
+        """Handle one captured startup screen.
+
+        Returns ``(acted, terminal)``. Terminal means the normal Codex input
+        is ready or the pane can no longer be inspected.
+        """
+        capture = getattr(pane, "capture_pane", None)
+        send_keys = getattr(pane, "send_keys", None)
+        if not callable(capture) or not callable(send_keys):
+            return False, True
+        try:
+            lines = capture()
+            text = "\n".join(lines) if isinstance(lines, list) else str(lines)
+        except Exception:
+            return False, True
+        if _CODEX_TRUST_PROMPT in text and _CODEX_TRUST_YES in text:
+            send_keys("", enter=True)
+            logger.info("Accepted Codex directory trust prompt")
+            return True, False
+        if (
+            "Choose working directory to resume this session" in text
+            and "1. Use session directory" in text
+            and "2. Use current directory" in text
+            and "Press enter to continue" in text
+        ):
+            send_keys("Down", enter=False)
+            send_keys("", enter=True)
+            logger.info("Selected current directory for Codex resume")
+            return True, False
+        if (
+            "Update available!" in text
+            and "1. Update now" in text
+            and "2. Skip" in text
+            and "Press enter to continue" in text
+        ):
+            # Never mutate the host toolchain from a Telegram session.
+            send_keys("Down", enter=False)
+            send_keys("", enter=True)
+            logger.info("Skipped Codex CLI update prompt")
+            return True, False
+        return False, "OpenAI Codex" in text and "›" in text
+
+    @classmethod
+    def _accept_codex_directory_trust(cls, pane: object) -> bool:
+        """Synchronously handle known prompts (small helper/test surface).
 
         Codex can show this before its normal input box even in full-access
         mode. The bot already owns the selected working directory, so leaving
@@ -99,36 +142,27 @@ class TmuxManager:
         the current directory that the user selected for this bot session.
         Poll briefly because the Node wrapper needs a moment to draw prompts.
         """
-        capture = getattr(pane, "capture_pane", None)
-        send_keys = getattr(pane, "send_keys", None)
-        if not callable(capture) or not callable(send_keys):
-            return False
         accepted = False
         for _ in range(30):
             time.sleep(0.15)
-            try:
-                lines = capture()
-                text = "\n".join(lines) if isinstance(lines, list) else str(lines)
-            except Exception:
+            acted, terminal = cls._handle_codex_startup_screen(pane)
+            accepted = accepted or acted
+            if terminal:
                 return accepted
-            if _CODEX_TRUST_PROMPT in text and _CODEX_TRUST_YES in text:
-                send_keys("", enter=True)
-                logger.info("Accepted Codex directory trust prompt")
-                accepted = True
-                continue
-            if (
-                "Choose working directory to resume this session" in text
-                and "1. Use session directory" in text
-                and "2. Use current directory" in text
-                and "Press enter to continue" in text
-            ):
-                send_keys("Down", enter=False)
-                send_keys("", enter=True)
-                logger.info("Selected current directory for Codex resume")
-                accepted = True
-                continue
-            # The regular input box is ready, so there is no trust prompt.
-            if "OpenAI Codex" in text and "›" in text:
+        return accepted
+
+    @classmethod
+    async def _watch_codex_startup_screens(cls, pane: object) -> bool:
+        """Cancellation-safe long watcher for cold Codex launches."""
+        accepted = False
+        attempts = max(30, int(max(config.resume_settle_timeout, 4.5) / 0.15))
+        for _ in range(attempts):
+            await asyncio.sleep(0.15)
+            acted, terminal = await asyncio.to_thread(
+                cls._handle_codex_startup_screen, pane
+            )
+            accepted = accepted or acted
+            if terminal:
                 return accepted
         return accepted
 
@@ -789,7 +823,7 @@ class TmuxManager:
             # draws its startup UI. The background task accepts only the two
             # known directory prompts; normal input is never confirmed.
             task = asyncio.create_task(
-                asyncio.to_thread(self._accept_codex_directory_trust, created_pane),
+                self._watch_codex_startup_screens(created_pane),
                 name=f"codex-startup-trust:{result[3]}",
             )
             self._startup_tasks.add(task)
@@ -798,6 +832,8 @@ class TmuxManager:
                 self._startup_tasks.discard(done)
                 try:
                     done.result()
+                except asyncio.CancelledError:
+                    return
                 except Exception as e:
                     logger.warning("Codex startup prompt handler failed: %s", e)
 

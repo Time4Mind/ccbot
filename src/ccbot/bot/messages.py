@@ -35,7 +35,6 @@ from ..handlers.directory_browser import (
     STATE_SELECTING_SESSION,
     STATE_SELECTING_WINDOW,
     build_directory_browser,
-    stash_pending_text,
 )
 from ..handlers.interactive_ui import (
     get_interactive_window,
@@ -173,19 +172,87 @@ def _transcript_contains_voice_text(
 async def _wait_for_voice_transcript(
     checkpoint: _VoiceTranscriptCheckpoint | None,
     text: str,
+    *,
+    wid: str | None = None,
 ) -> bool | None:
-    """Wait for delivery proof; ``None`` means no transcript was available."""
-    if checkpoint is None:
+    """Wait for exact delivery proof in the target session transcript.
+
+    A fresh Codex session has no rollout/session_map binding before its first
+    accepted prompt. In that case keep polling the binding and scan the new
+    transcript from byte zero instead of treating "no checkpoint" as success.
+    """
+    if checkpoint is None and wid is None:
         return None
+    if checkpoint is None and wid is not None:
+        provisional = session_manager.window_states.get(wid)
+        if not isinstance(provisional, WindowState):
+            # A real fresh-session flow always publishes provisional state
+            # before exposing the card. Missing state means this is a legacy
+            # caller (or a focused unit-test double), so transcript proof is
+            # not available on this path.
+            return None
     loop = asyncio.get_running_loop()
     deadline = loop.time() + _VOICE_TRANSCRIPT_CONFIRM_TIMEOUT
     while True:
-        if await asyncio.to_thread(_transcript_contains_voice_text, checkpoint, text):
+        if checkpoint is None and wid is not None:
+            await session_manager.load_session_map()
+            state = session_manager.window_states.get(wid)
+            if isinstance(state, WindowState) and state.session_id:
+                path = Path(state.transcript_path) if state.transcript_path else None
+                if path is None or not path.is_file():
+                    if state.backend == "codex":
+                        from ..codex_session_io import build_session_file_path
+                    else:
+                        from ..session_claude_io import build_session_file_path
+                    path = build_session_file_path(state.session_id, state.cwd)
+                if path is not None and path.is_file():
+                    checkpoint = _VoiceTranscriptCheckpoint(
+                        path=path, offset=0, backend=state.backend
+                    )
+        if checkpoint is not None and await asyncio.to_thread(
+            _transcript_contains_voice_text, checkpoint, text
+        ):
             return True
         remaining = deadline - loop.time()
         if remaining <= 0:
             return False
         await asyncio.sleep(min(_VOICE_TRANSCRIPT_CONFIRM_POLL, remaining))
+
+
+async def _send_with_delivery_proof(
+    wid: str, text: str, sess: Session | None
+) -> tuple[bool, str]:
+    """Send one prompt and require an exact Codex transcript acknowledgement."""
+    transcript_checkpoint = _voice_transcript_checkpoint(wid)
+    message = ""
+    for attempt in range(1, 3):
+        success, message = await session_manager.send_to_window(wid, text)
+        if not success:
+            continue
+        if message.startswith("Queued for "):
+            return True, message
+        if sess is None or sess.backend != "codex":
+            return True, message
+        if not await tmux_manager.ensure_codex_prompt_submitted(wid, text):
+            message = "Codex kept the text in its input field"
+            continue
+        # TUI slash commands do not become ordinary user_message rows.
+        if text.lstrip().startswith("/"):
+            return True, message
+        confirmed = await _wait_for_voice_transcript(
+            transcript_checkpoint, text, wid=wid
+        )
+        if confirmed is True or confirmed is None:
+            return True, message
+        logger.warning(
+            "Codex delivery absent from transcript; retrying exact prompt "
+            "window=%s attempt=%d/2 text_len=%d",
+            wid,
+            attempt,
+            len(text),
+        )
+        message = "Prompt did not appear in the Codex transcript"
+    return False, message or "Delivery was not acknowledged"
 
 
 def _enqueue_voice(
@@ -417,13 +484,13 @@ async def _intercept_if_pending_ui(
 
 async def forward_command_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+) -> bool:
     """Forward an unhandled /command as a slash to the active Claude session."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
-        return
+        return False
     if not update.message:
-        return
+        return False
 
     cmd_text = update.message.text or ""
     cc_slash = cmd_text.split("@")[0]  # strip bot mention
@@ -432,15 +499,15 @@ async def forward_command_handler(
         await safe_reply(
             update.message, "❌ No active session. Use /new to create one."
         )
-        return
+        return False
     if not await _await_prior_voice(user.id, wid):
-        return
+        return False
 
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
         display = session_manager.get_display_name(wid)
         await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
-        return
+        return False
 
     display = session_manager.get_display_name(wid)
     logger.info(
@@ -448,10 +515,10 @@ async def forward_command_handler(
     )
     await fire_typing(context.bot, user.id, "forward_command", window_id=wid)
     if await _intercept_if_pending_ui(context.bot, user.id, wid, update.message):
-        return
+        return False
     sess = session_manager.find_session_by_window(wid)
     async with _card_repost_bracket(context.bot, user.id, sess) as repost:
-        success, message = await session_manager.send_to_window(wid, cc_slash)
+        success, message = await _send_with_delivery_proof(wid, cc_slash, sess)
         if success:
             # /clear: drop the session association so we re-detect once a
             # new session id is written by the next user message.
@@ -469,6 +536,8 @@ async def forward_command_handler(
                 repost.commit()
         else:
             await safe_reply(update.message, f"❌ {message}")
+            return False
+    return True
 
 
 # --- non-text catch-all ---
@@ -541,7 +610,7 @@ def _hidden_link_urls(msg: Any) -> list[str]:
 
 async def unsupported_content_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+) -> bool:
     """Catch-all for messages without a dedicated handler.
 
     When the message carries a caption (typical for forwarded channel
@@ -554,15 +623,15 @@ async def unsupported_content_handler(
     caption to salvage.
     """
     if not update.message:
-        return
+        return False
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
-        return
+        return False
     msg = update.message
     wid_for_queue = active_window(user.id)
     if wid_for_queue is not None:
         if not await _await_prior_voice(user.id, wid_for_queue):
-            return
+            return False
 
     caption = (msg.caption or "").strip()
     if caption:
@@ -572,7 +641,7 @@ async def unsupported_content_handler(
                 msg,
                 "❌ No active session. Send a text message first or use /new.",
             )
-            return
+            return False
         w = await tmux_manager.find_window_by_id(wid)
         if not w:
             display = session_manager.get_display_name(wid)
@@ -581,7 +650,7 @@ async def unsupported_content_handler(
                 f"❌ Window '{display}' no longer exists.\n"
                 "Send a message to start a new session.",
             )
-            return
+            return False
 
         prefix = _forward_attribution(msg)
         hidden_urls = _hidden_link_urls(msg)
@@ -593,19 +662,19 @@ async def unsupported_content_handler(
 
         await fire_typing(context.bot, user.id, "caption_forward", window_id=wid)
         if await _intercept_if_pending_ui(context.bot, user.id, wid, msg):
-            return
+            return False
         sess = session_manager.find_session_by_window(wid)
         async with _card_repost_bracket(context.bot, user.id, sess) as repost:
-            success, message = await session_manager.send_to_window(wid, text_to_send)
+            success, message = await _send_with_delivery_proof(wid, text_to_send, sess)
             if not success:
                 await safe_reply(msg, f"❌ {message}")
-                return
+                return False
             if sess is not None:
                 session_manager.touch_session(sess.id)
             repost.commit()
         # No success reply — the user just sent the message; they know
         # they sent it. Errors above still surface.
-        return
+        return True
 
     logger.debug("Unsupported content from user %d", user.id)
     await safe_reply(
@@ -613,6 +682,7 @@ async def unsupported_content_handler(
         "⚠ Only text, photo, and voice messages are supported. "
         "Stickers, video, and other media cannot be forwarded to Claude Code.",
     )
+    return True
 
 
 # --- inbox file plumbing (photo + document share this) ---
@@ -646,10 +716,10 @@ async def _forward_inbox_file(
         rel_path = str(file_path)
     text_to_send = f"{caption}\n\n{rel_path}" if caption.strip() else rel_path
     await fire_typing(bot, user_id, "inbox_file_forward", window_id=wid, label=label)
-    return await session_manager.send_to_window(wid, text_to_send)
+    return await _send_with_delivery_proof(wid, text_to_send, sess)
 
 
-async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Drop the user's photo into the active session's inbox + notify Claude."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -657,10 +727,10 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         # allowlist is private; unauthorized senders should see the bot
         # as inert (no "not authorized" copy that signals "you found the
         # right bot, just not the right user").
-        return
+        return False
 
     if not update.message or not update.message.photo:
-        return
+        return False
 
     wid = active_window(user.id)
     if wid is None:
@@ -668,9 +738,9 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             update.message,
             "❌ No active session. Send a text message first or use /new.",
         )
-        return
+        return False
     if not await _await_prior_voice(user.id, wid):
-        return
+        return False
 
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
@@ -680,7 +750,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"❌ Window '{display}' no longer exists.\n"
             "Send a message to start a new session.",
         )
-        return
+        return False
 
     sess = session_manager.find_session_by_window(wid)
     workdir = sess.workdir if sess and sess.workdir else str(ccbot_dir() / "images")
@@ -691,7 +761,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except BadRequest as e:
         if _is_file_too_big(e):
             await safe_reply(update.message, _FILE_TOO_BIG_MSG)
-            return
+            return False
         raise
     filename = f"{photo.file_unique_id}.jpg"
 
@@ -702,18 +772,19 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     caption = update.message.caption or ""
     if await _intercept_if_pending_ui(context.bot, user.id, wid, update.message):
-        return
+        return False
     async with _card_repost_bracket(context.bot, user.id, sess) as repost:
         success, message = await _forward_inbox_file(
             user.id, wid, user.id, file_path, caption, "image", context.bot
         )
         if not success:
             await safe_reply(update.message, f"❌ {message}")
-            return
+            return False
         repost.commit()
+    return True
 
 
-async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Drop the user's document into the active session's inbox + notify Claude."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -721,10 +792,10 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         # allowlist is private; unauthorized senders should see the bot
         # as inert (no "not authorized" copy that signals "you found the
         # right bot, just not the right user").
-        return
+        return False
 
     if not update.message or not update.message.document:
-        return
+        return False
 
     wid = active_window(user.id)
     if wid is None:
@@ -732,9 +803,9 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             update.message,
             "❌ No active session. Send a text message first or use /new.",
         )
-        return
+        return False
     if not await _await_prior_voice(user.id, wid):
-        return
+        return False
 
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
@@ -744,7 +815,7 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             f"❌ Window '{display}' no longer exists.\n"
             "Send a message to start a new session.",
         )
-        return
+        return False
 
     doc = update.message.document
     sess = session_manager.find_session_by_window(wid)
@@ -755,7 +826,7 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     except BadRequest as e:
         if _is_file_too_big(e):
             await safe_reply(update.message, _FILE_TOO_BIG_MSG)
-            return
+            return False
         raise
 
     async def _fetch(target: Path) -> None:
@@ -765,15 +836,16 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     caption = update.message.caption or ""
     if await _intercept_if_pending_ui(context.bot, user.id, wid, update.message):
-        return
+        return False
     async with _card_repost_bracket(context.bot, user.id, sess) as repost:
         success, message = await _forward_inbox_file(
             user.id, wid, user.id, file_path, caption, "document", context.bot
         )
         if not success:
             await safe_reply(update.message, f"❌ {message}")
-            return
+            return False
         repost.commit()
+    return True
 
 
 # --- voice ---
@@ -792,7 +864,7 @@ async def _clear_voice_pending_marker(bot: Bot, user_id: int, sess: Session) -> 
         logger.debug("voice-pending marker clear failed: %s", e)
 
 
-async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Queue a voice turn, then transcribe it without letting later messages pass."""
     user = update.effective_user
     if (
@@ -802,24 +874,23 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         or not update.message.voice
         or resolve_voice_backend(user.id) == "off"
     ):
-        await _process_voice(update, context)
-        return
+        return await _process_voice(update, context)
 
     wid = active_window(user.id)
     if wid is None:
-        await _process_voice(update, context)
-        return
+        return await _process_voice(update, context)
 
     previous, barrier = _enqueue_voice(user.id, wid)
     delivered = False
     try:
         if previous is not None and not await _wait_for_voice(previous):
-            return
+            return False
         delivered = await _process_voice(
             update, context, pinned_wid=wid, queue_barrier=barrier
         )
     finally:
         _release_voice(user.id, wid, barrier, delivered=delivered)
+    return delivered
 
 
 async def _process_voice(
@@ -996,7 +1067,9 @@ async def _process_voice(
     # can be an approval raised by the successfully delivered turn, especially
     # for the second voice in a queue. Prefer the authoritative transcript and
     # only use the pane heuristic when no matching user row appears.
-    transcript_confirmed = await _wait_for_voice_transcript(transcript_checkpoint, text)
+    transcript_confirmed = await _wait_for_voice_transcript(
+        transcript_checkpoint, text, wid=wid
+    )
     if transcript_confirmed is True:
         logger.info(
             "Voice delivery confirmed by transcript user=%d window=%s",
@@ -1164,14 +1237,17 @@ async def _resolve_active_window(
     Returns the window id when there is a live active session window.
     Returns None when ``text_handler`` must ``return`` instead — either
     because there is no active session (a directory browser is opened
-    with the pending text stashed) or because the active session's
+    with the message queued) or because the active session's
     window is gone (it's marked lost, state cleared, and the user told).
     """
     assert update.message is not None
     wid = active_window(user_id)
     if wid is None:
         # No active session — start a directory browser to create one.
-        # The pending text is held in user_data and forwarded after creation.
+        from ..startup_queue import begin_startup_queue, enqueue_startup_message
+
+        begin_startup_queue(user_id)
+        enqueue_startup_message(update, context)
         logger.info("No active session: showing directory browser (user=%d)", user_id)
         start_path = str(Path.home())
         msg_text, keyboard, subdirs = await build_directory_browser(
@@ -1182,7 +1258,6 @@ async def _resolve_active_window(
             context.user_data[BROWSE_PATH_KEY] = start_path
             context.user_data[BROWSE_PAGE_KEY] = 0
             context.user_data[BROWSE_DIRS_KEY] = subdirs
-            stash_pending_text(context.user_data, text)
         await safe_reply(update.message, msg_text, reply_markup=keyboard)
         return None
 
@@ -1273,25 +1348,12 @@ async def _dispatch_text_to_active(
     intent_sess_id = sess.id if (owns_card and sess is not None) else None
     try:
         _t0 = _time.time()
-        success, message = await session_manager.send_to_window(wid, text)
+        success, message = await _send_with_delivery_proof(wid, text, sess)
         metrics.observe("tg_to_claude_latency_ms", (_time.time() - _t0) * 1000.0)
         metrics.inc("tg_messages_in")
         if not success:
             metrics.inc("tg_send_failures")
-            await safe_reply(update.message, f"❌ {message}")
-            return False
-        queued_for_startup = message.startswith("Queued for ")
-        if (
-            sess is not None
-            and sess.backend == "codex"
-            and not queued_for_startup
-            and not await tmux_manager.ensure_codex_prompt_submitted(wid, text)
-        ):
-            metrics.inc("tg_send_failures")
-            await safe_reply(
-                update.message,
-                "❌ Codex kept the text in its input field; the prompt was not sent.",
-            )
+            await safe_reply(update.message, f"❌ Delivery not confirmed: {message}")
             return False
 
         # Immediate typing-indicator so the user sees feedback within
@@ -1374,29 +1436,29 @@ async def _dispatch_text_to_active(
             end_repost_intent(user_id, intent_sess_id)
 
 
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         # Drop the message silently — no reply, no callback ack. The
         # allowlist is private; unauthorized senders should see the bot
         # as inert (no "not authorized" copy that signals "you found the
         # right bot, just not the right user").
-        return
+        return False
 
     if not update.message or not update.message.text:
-        return
+        return False
 
     text = update.message.text
     queued_wid = active_window(user.id)
     if queued_wid is not None:
         if not await _await_prior_voice(user.id, queued_wid):
-            return
+            return False
 
     # A pending /login flow owns the next message: it's the OAuth code, not a
     # prompt. Must run before session routing — the code would otherwise be
     # typed into a pane (and echoed into that session's transcript).
     if await maybe_consume_code(update, context):
-        return
+        return True
 
     # Ignore text while a picker UI is mid-flight.
     state = context.user_data.get(STATE_KEY) if context.user_data else None
@@ -1406,14 +1468,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         STATE_SELECTING_SESSION,
     ):
         await safe_reply(update.message, "Please use the picker above, or tap Cancel.")
-        return
+        return False
 
     if await _route_reply_quote(update, user.id, text):
-        return
+        return True
 
     wid = await _resolve_active_window(update, context, user.id, text)
     if wid is None:
-        return
+        return False
 
     await fire_typing(context.bot, user.id, "text_handler", window_id=wid)
 
@@ -1425,9 +1487,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # Enter submits). Surface the prompt to the user and bail before
     # send_to_window — the user must answer via the keyboard.
     if await _intercept_if_pending_ui(context.bot, user.id, wid, update.message):
-        return
+        return False
 
-    await _dispatch_text_to_active(update, context, user.id, wid, text)
+    return await _dispatch_text_to_active(update, context, user.id, wid, text)
 
 
 # Re-export so existing callers (callbacks/dir_browser.py) keep working.

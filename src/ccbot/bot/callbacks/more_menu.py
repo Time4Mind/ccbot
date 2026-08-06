@@ -45,6 +45,9 @@ async def _emit_new_flow(
     query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
 ) -> None:
     """Open the directory browser from the Menu screen."""
+    from ...startup_queue import begin_startup_queue
+
+    begin_startup_queue(user.id)
     from ...handlers.directory_browser import (
         BROWSE_DIRS_KEY,
         BROWSE_PAGE_KEY,

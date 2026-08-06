@@ -24,9 +24,8 @@ from ...handlers.directory_browser import (
     UNBOUND_WINDOWS_KEY,
     build_directory_browser,
     clear_window_picker_state,
-    take_pending_text,
 )
-from ...handlers.message_sender import safe_edit, safe_send
+from ...handlers.message_sender import safe_edit
 from ...session import session_manager
 from ...tmux_manager import tmux_manager
 from .._common import open_more_in_place
@@ -78,22 +77,16 @@ async def handle(
 
         await safe_edit(query, f"✅ Bound to window `{display}`")
 
-        pending_text = take_pending_text(context.user_data)
-        if pending_text:
-            send_ok, send_msg = await session_manager.send_to_window(
-                selected_wid, pending_text
-            )
-            if not send_ok:
-                logger.warning("Failed to forward pending text: %s", send_msg)
-                await safe_send(
-                    context.bot,
-                    user.id,
-                    f"❌ Failed to send pending message: {send_msg}",
-                )
+        from ...startup_queue import bind_startup_queue
+
+        bind_startup_queue(user.id, selected_wid)
         await query.answer("Bound")
         return True
 
     if data == CB_WIN_NEW:
+        from ...startup_queue import begin_startup_queue
+
+        begin_startup_queue(user.id)
         clear_window_picker_state(context.user_data)
         start_path = str(Path.home())
         msg_text, keyboard, subdirs = await build_directory_browser(
@@ -109,11 +102,15 @@ async def handle(
         return True
 
     if data == CB_WIN_CANCEL:
+        from ...startup_queue import cancel_startup_queue
+
+        unsent = cancel_startup_queue(user.id)
         clear_window_picker_state(context.user_data)
-        if context.user_data is not None:
-            context.user_data.pop("_pending_text", None)
         await open_more_in_place(query, user.id)
-        await query.answer()
+        await query.answer(
+            f"Cancelled; {unsent} queued item(s) were not sent" if unsent else None,
+            show_alert=bool(unsent),
+        )
         return True
 
     return False

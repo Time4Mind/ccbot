@@ -74,7 +74,7 @@ async def test_text_routes_to_active_session_window(fake_tmux, fake_bot):
 @pytest.mark.asyncio
 async def test_text_with_no_active_session_opens_dir_browser(fake_tmux, fake_bot):
     # No active session at all → handler must NOT send_keys; it opens the
-    # directory browser instead (pending text stashed in user_data).
+    # directory browser instead (pending update retained in startup queue).
     user = FakeUser(USER_ID)
     msg = FakeReplyMessage(
         message_id=5002, chat_id=USER_ID, bot=fake_bot, text="hello there"
@@ -85,11 +85,10 @@ async def test_text_with_no_active_session_opens_dir_browser(fake_tmux, fake_bot
     await text_handler(update, ctx)
 
     assert fake_tmux.sent == []
-    # The pending text is held (timestamped) for forwarding after session
-    # creation; ``take_pending_text`` reads it back with a freshness guard.
-    from ccbot.handlers.directory_browser import take_pending_text
+    from ccbot.startup_queue import cancel_startup_queue, pending_startup_count
 
-    assert take_pending_text(ctx.user_data) == "hello there"
+    assert pending_startup_count(USER_ID) == 1
+    assert cancel_startup_queue(USER_ID) == 1
 
 
 @pytest.mark.asyncio

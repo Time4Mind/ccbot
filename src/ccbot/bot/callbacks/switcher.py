@@ -239,6 +239,9 @@ async def handle(
         # Pause the active session first so its events buffer silently
         # while the user picks a directory; events catch up when the
         # user switches back via the switcher.
+        from ...startup_queue import begin_startup_queue
+
+        begin_startup_queue(user.id)
         active = session_manager.get_active_session(user.id)
         if active is not None:
             pause_card_view(user.id, active.id)

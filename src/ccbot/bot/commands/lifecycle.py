@@ -35,6 +35,7 @@ from ...handlers.message_sender import safe_reply
 from ...i18n import t
 from ...session import Session, session_manager
 from ...tmux_manager import tmux_manager
+from ...startup_queue import begin_startup_queue, bind_startup_queue
 from .._common import (
     active_window,
     is_user_allowed,
@@ -60,6 +61,10 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not update.message:
         return
 
+    # Open capture before authentication, filesystem and Telegram awaits.
+    # Non-blocking voice handlers can otherwise race into the old session.
+    begin_startup_queue(user.id)
+
     args = (update.message.text or "").split(maxsplit=2)
     name_arg = args[1] if len(args) > 1 else ""
     path_arg = args[2] if len(args) > 2 else ""
@@ -84,10 +89,13 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if not success:
             await safe_reply(update.message, f"❌ {message}")
             return
-        hook_ok = await session_manager.wait_for_session_map_entry(
-            created_wid, timeout=5.0
+        session_manager.mark_window_starting(
+            created_wid,
+            backend=session_manager.agent_backend,
+            resume=False,
+            bot=context.bot,
+            user_id=user.id,
         )
-        del hook_ok
         sess = session_manager.create_session(
             name=name_arg or created_wname or "",
             window_id=created_wid,
@@ -97,10 +105,15 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if ws.session_id:
             session_manager.set_session_claude_id(sess.id, ws.session_id)
         session_manager.set_active_session(user.id, sess.id)
+        bind_startup_queue(user.id, created_wid)
         if session_manager.get_user_settings(user.id).get("local_terminal") == "auto":
             from ...local_terminal import open_terminal_for_window
+            import asyncio
 
-            await open_terminal_for_window(created_wid, user_id=user.id)
+            asyncio.create_task(
+                open_terminal_for_window(created_wid, user_id=user.id),
+                name=f"local-terminal:{created_wid}",
+            )
         await safe_reply(
             update.message,
             f"✅ Session `{sess.name}` ({sess.id}) created at {target_path}",

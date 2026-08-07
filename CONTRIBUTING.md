@@ -68,8 +68,10 @@ fix the offending content — never bypass with `--no-verify`.
   This is what the optional `CCBOT_LOG_FORMAT=json` mode uses to
   produce one JSON line per record. One-shot logs from rare paths can
   stay as plain strings.
-- **600-LOC ceiling** under `src/ccbot/bot/`. Files in `src/ccbot/` may
-  go up to 800 LOC temporarily; over that, decompose in the same PR.
+- **Hard module budgets.** Files under `src/ccbot/bot/` are capped at
+  600 physical lines; every other Python module under `src/ccbot/` is capped
+  at 800. `python scripts/check_module_size.py` enforces both limits in CI.
+  Prefer splitting around one reason to change before a file reaches its cap.
 - **No comments explaining "what"** — the code says that. Only write
   comments when the *why* is non-obvious (a hidden constraint, a
   workaround, surprising behaviour).

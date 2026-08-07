@@ -395,9 +395,8 @@ async def handle(
             session_manager.update_user_setting(
                 user.id, "card_inline_screenshots", new_val
             )
-            # Soft reset: nuke msg_id for all user's cards so the next
-            # event creates a fresh msg of the correct type (photo+caption
-            # vs text). Old artefacts stay in chat as frozen.
+            # Soft reset: the next event creates a fresh carrier with the
+            # requested rich-media layout. Old artefacts stay frozen.
             from ...handlers.notifications import (
                 reset_card_msg_id_for_user,
             )

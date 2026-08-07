@@ -73,7 +73,8 @@
 Additional modules:
   screenshot.py       ─ Terminal text → PNG rendering (ANSI color, font fallback)
   transcribe.py       ─ Voice-to-text transcription via whisper.cpp / Apple Speech
-  i18n.py             ─ Per-user UI strings (en / ru / zh)
+  i18n.py             ─ Compatibility facade for per-user translations
+  i18n_locales/       ─ English / Russian / Chinese translation catalogs
   naming.py           ─ lightweight-model-generated session names
   usage.py            ─ Token usage aggregator + per-session token alerts
   main.py             ─ CLI entry point (ccbot / ccbot hook / ccbot send-file)
@@ -83,9 +84,16 @@ Additional modules:
                        --chat-id > $CCBOT_CHAT_ID > all ALLOWED_USERS)
   utils.py            ─ Shared utilities (ccbot_dir, atomic_write_json)
   session_models.py   ─ Session / WindowState / ClaudeSession dataclasses
+  session_state.py    ─ active routing, lifecycle, settings, persistence helpers
+  session_map.py      ─ hook map reconciliation and transcript resolution
   session_recovery.py ─ Startup hygiene: reconcile w/ tmux + resolve stale window IDs
   session_claude_io.py─ Read-only Claude transcript discovery (encode_cwd, list, get)
   transcript_format.py─ Tool-summary + tool-result formatting (was inside TranscriptParser)
+  transcript_types.py ─ ParsedEntry / ParsedMessage / pending-tool DTOs
+  transcript_message.py / transcript_codex.py ─ backend-specific normalization
+  terminal_usage.py   ─ /usage models and terminal-output parsing
+  tmux_process.py     ─ orphan process cleanup
+  tmux_window.py      ─ backend command assembly and tmux window creation
   logging_setup.py    ─ Logging config (level via LOG_LEVEL, JSON via CCBOT_LOG_FORMAT)
   metrics.py          ─ In-process counters → metrics.json
   rich.py             ─ Bot API 10.1 rich messages via raw Bot._post
@@ -106,7 +114,9 @@ Additional modules:
 
 bot/ package (was bot.py before A1, split per CLAUDE.md size budget):
   __init__.py         ─ Re-exports create_bot, forward_command_handler
-  app.py              ─ create_bot, post_init/shutdown, handler registration
+  app.py              ─ Compatibility facade + watchdog/error handling
+  _app_lifecycle.py   ─ post_init/post_shutdown orchestration
+  _app_routes.py      ─ Application construction and handler registration
   _common.py          ─ is_user_allowed, active_window, resolve_ident,
                        render_session_preview, set_view, open_more_in_place,
                        is_window_busy, shorten_workdir, CC_COMMANDS
@@ -116,8 +126,11 @@ bot/ package (was bot.py before A1, split per CLAUDE.md size budget):
                         modal body; parser picks the LAST modal header
                         in the buffer to ignore stale prior attempts)
   _session_create.py  ─ create_and_activate_session (dir-browser → tmux flow)
-  messages.py         ─ text/voice/photo/document handlers, forward_command_handler,
-                       bash !cmd capture
+  messages.py         ─ Compatibility facade for inbound message handlers
+  _messages_shared.py ─ delivery proof, card bracketing, prompt interception
+  _messages_text.py   ─ text routing and bash capture
+  _messages_voice.py  ─ voice checkpoint/transcription routing
+  _messages_media.py  ─ photo/document/forwarded content handling
   session_events.py   ─ handle_new_message — claude → TG dispatch
   commands/lifecycle.py    ─ /new /kill /done /stop /menu /archive
                             (+ archive_session shared helper)
@@ -141,11 +154,11 @@ bot/ package (was bot.py before A1, split per CLAUDE.md size budget):
 
 Handler modules (handlers/):
   message_sender.py   ─ safe_reply/safe_edit/safe_send + send_with_fallback
-  message_queue.py    ─ Per-user queue + worker (merge, status dedup)
   status_polling.py   ─ Background status line polling (1s interval) +
                        auto-approve hook for interactive prompts +
                        bg-window interactive-UI detection (suppress + stash)
-  notifications.py    ─ Live card per session + push events + completion +
+  status_approval.py  ─ pure auto-approval parsing/signature helpers
+  notifications.py    ─ Compatibility facade for live-card orchestration +
                        bg-status panel injection +
                        refresh_panel + repost_card (always-repost behaviour:
                        every user-msg replaces the card by a fresh one below)
@@ -156,7 +169,9 @@ Handler modules (handlers/):
                        Persisted in state.json (status/last_change/context_pct;
                        pending UI re-detected after restart by terminal_parser).
   archive.py          ─ /archive page rendering + restore + idle/purge sweeps
-  history.py          ─ Paginated /history rendering (with optional extra rows)
+  archive_blurb.py    ─ archive summary text cleanup and formatting
+  history.py          ─ Live paginated /history cache and presentation
+  history_archive.py  ─ archived transcript/card page rendering
   quota_alerts.py     ─ Background /usage modal poll (default 10 min) →
                        5h/weekly band crossings 50/75/90 %
   inbox.py            ─ photo/document inbox under <workdir>/.ccbot-inbox/
@@ -166,21 +181,31 @@ Handler modules (handlers/):
                        via notifications.enter_kb_mode on the claimed carrier.
   directory_browser.py─ Directory + session picker UI builders
   switcher.py         ─ Inline session-switcher keyboard
-  menu.py             ─ Footer / More / Settings keyboard composition;
+  menu.py             ─ Footer / More keyboard composition and settings facade;
                        [+ new] [≡ Menu] share the bottom row on screen="main"
   cleanup.py          ─ Per-window state cleanup on archive
   callback_data.py    ─ Callback data prefix constants
   tg_format.py        ─ Table/code overflow → file attachment
-  card_model.py       ─ Event/CardState dataclasses + render/paginate/seed
-                       helpers (pure model layer split from notifications.py;
-                       notifications.py re-exports its names as a facade)
+  card_model.py       ─ Compatibility facade for card types/render/pagination
+  card_types.py       ─ Event/CardState data only
+  card_events.py      ─ monitor message → card event conversion
+  card_text.py        ─ transcript text parsing and sanitization
+  card_budget.py      ─ line/byte budgeting and chunking
+  card_event_render.py─ individual event rendering
+  card_pagination.py  ─ page boundaries and user-specific page sizing
+  card_layout.py      ─ complete card body composition
+  card_registry.py    ─ mutable card ownership, locks, and message registry
+  card_seed.py        ─ JSONL seeding
+  card_carrier.py     ─ pause/transfer/restore carrier lifecycle
+  card_transport.py   ─ Telegram send/edit/photo operations
+  card_updates.py     ─ event application/finalization/attachments
+  card_stall.py       ─ stall detection and repost recovery
+  card_surface.py     ─ timers, panel refresh, and receipt scheduling
   kb_mode.py          ─ kb-mode keyboard builder + pane-capture-to-PNG helper
   typing.py           ─ Per-user throttle in front of send_chat_action(TYPING)
                        (status_polling + session_events share one timer)
-  response_builder.py ─ Paginated response builder (display truncation)
-  context_poll.py     ─ Background /context poller — PRESENT but DISABLED;
-                       JSONL math (usage.context_pct_for_session) is the live
-                       path (see bot/app.py)
+
+Responsibility-level extension guide: `doc/refactor-architecture.md`.
 
 State files (~/.ccbot/ or $CCBOT_DIR/):
   state.json         ─ window states + display names + read offsets + user

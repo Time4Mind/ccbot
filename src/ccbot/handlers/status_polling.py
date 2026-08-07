@@ -16,7 +16,6 @@ Key components:
 
 import asyncio
 import logging
-import re
 import time
 from typing import TYPE_CHECKING
 
@@ -50,10 +49,12 @@ from .notifications import (
     maybe_finalize_stalled,
     refresh_panel,
 )
+from .status_approval import (
+    auto_approve_progress as _auto_approve_progress,
+    auto_approve_signature as _auto_approve_signature_impl,
+    parse_best_yes_option as _parse_best_yes_option,
+)
 from .typing import fire_typing
-
-# Match option lines like "  1. Yes" / " ❯ 2. Yes, and don't ask again".
-_OPTION_LINE_RE = re.compile(r"^[\s❯›>]*?(\d+)\.\s+(.+?)\s*$")
 
 # kb-mode teardown debounce. terminal_parser detection over a live TUI
 # flickers: a single redraw frame, a partial pane capture, or the cursor
@@ -110,83 +111,14 @@ AUTO_APPROVE_MAX_ATTEMPTS = 3
 # (user_id, window_id) -> (prompt_signature, progress_marker, attempts)
 _auto_approve_attempts: dict[tuple[int, str], tuple[str, str, int]] = {}
 
-# Volatile per-frame counters (token totals, elapsed timers on the running
-# agent rows) tick every poll even while a prompt sits unanswered. Normalising
-# every run of digits to ``#`` keeps those ticks from reading as real progress,
-# while genuine new output (tool results, day names, paths) still changes the
-# marker.
-_DIGIT_RUN_RE = re.compile(r"\d+")
-
-
-def _auto_approve_progress(pane_text: str) -> str:
-    """Progress marker: the pane minus its volatile digit counters.
-
-    Equal across two polls ⇒ nothing but timers ticked (no command ran).
-    Different ⇒ the transcript advanced (an approval landed and its tool
-    executed), so a same-looking follow-up prompt is a NEW one, not a stuck
-    repeat. Cheap and structural — no attempt to locate the prompt region.
-    """
-    return _DIGIT_RUN_RE.sub("#", pane_text)
-
-
-# A *durable* Yes label — approving it once suppresses the whole storm of
-# follow-up prompts of the same scope: a directory-scoped read grant, a
-# ``don't ask again`` for a command/domain, an allow-all-edits-this-session.
-# Preferring these over the one-shot "Yes" turns a per-file whack-a-mole into
-# a single approval, so the read-storm that used to trip the escalation
-# counter (a distinct file each poll behind an identical-looking dialog)
-# never recurs — the second read in that scope no longer prompts.
-_DURABLE_YES_RE = re.compile(
-    r"during this session|don'?t ask again|allow all|always allow|for the rest of",
-    re.IGNORECASE,
-)
-
-
-def _parse_best_yes_option(pane_text: str) -> str | None:
-    """Number of the Yes option to auto-select.
-
-    Prefers a *durable* Yes ("… during this session" / "… don't ask again" /
-    "allow all …") over the one-shot "Yes" so a single keystroke clears a
-    whole storm of same-scope prompts. Falls back to the first plain Yes when
-    no durable variant is offered (e.g. ExitPlanMode's two Yes rows, neither
-    of which is a scope grant).
-    """
-    first_yes: str | None = None
-    for raw in pane_text.splitlines():
-        m = _OPTION_LINE_RE.match(raw)
-        if not m:
-            continue
-        num, label = m.group(1), m.group(2)
-        if not label.lower().startswith("yes"):
-            continue
-        if first_yes is None:
-            first_yes = num
-        if _DURABLE_YES_RE.search(label):
-            return num
-    return first_yes
-
 
 def _auto_approve_signature(
     pane_text: str, content: InteractiveUIContent | None = None
 ) -> str:
-    """Stable identity of the on-screen prompt for attempt-tracking.
-
-    Prefers the extracted prompt body + name so distinct prompts (a
-    different fetch domain, a different file) don't share a counter, while
-    redraws of the SAME (spinner-free) permission dialog collapse to one
-    signature. Falls back to the numbered option block when extraction
-    returns None.
-    """
+    """Build a signature through the old module's patchable extractor seam."""
     if content is None:
         content = extract_interactive_content(pane_text)
-    if content is not None:
-        return f"{content.name}\x1f{content.content}"
-    opts = [
-        f"{m.group(1)}.{m.group(2)}"
-        for line in pane_text.splitlines()
-        if (m := _OPTION_LINE_RE.match(line))
-    ]
-    return "\n".join(opts)
+    return _auto_approve_signature_impl(pane_text, content)
 
 
 async def _maybe_auto_approve(user_id: int, window_id: str, pane_text: str) -> bool:

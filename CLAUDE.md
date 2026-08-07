@@ -32,6 +32,10 @@ ccbot hook --install                  # Auto-install Claude Code SessionStart ho
 ## Code Conventions
 
 - Every `.py` file starts with a module-level docstring: purpose clear within 10 lines, one-sentence summary first line, then core responsibilities and key components.
+- Hard module budgets: `src/ccbot/bot/**/*.py` is capped at 600 physical
+  lines; all other `src/ccbot/**/*.py` modules are capped at 800. Run
+  `python scripts/check_module_size.py`; split by reason to change rather than
+  creating generic helper dumps.
 - Telegram interaction: prefer inline keyboards over reply keyboards; use `edit_message_text` for in-place updates; keep callback data under 64 bytes; use `answer_callback_query` for instant feedback.
 
 ## Configuration

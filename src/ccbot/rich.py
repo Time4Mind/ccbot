@@ -1,4 +1,4 @@
-"""Bot API 10.1 rich-message calls (sendRichMessage / rich editMessageText).
+"""Bot API 10.2 rich-message calls (sendRichMessage / rich editMessageText).
 
 PTB 22.x wraps Bot API 10.0, so rich messages go through the raw
 ``Bot._post`` escape hatch until PTB ships native support; ``ExtBot``
@@ -12,8 +12,10 @@ Core responsibilities:
     swallows anything that looks like an unsupported HTML tag), and table
     cells are wrapped in <sub> so native tables render in a smaller font
     (the API exposes no font-size control; clients draw sub/sup smaller).
-  - send_rich_message / edit_rich_message: thin raw-API wrappers returning
-    PTB ``Message`` objects.
+  - send_rich_message / edit_rich_message: thin raw-API wrappers with optional
+    embedded photo upload/file-id reuse support.
+  - extract_rich_photo_file_id: recover the best reusable photo file_id from
+    a raw response or from the unknown-field payload in ``Message.api_kwargs``.
 
 Key functions: to_rich_markdown, send_rich_message, edit_rich_message.
 """
@@ -22,7 +24,7 @@ import html
 import re
 from typing import Any, cast
 
-from telegram import InlineKeyboardMarkup, Message
+from telegram import InlineKeyboardMarkup, InputFile, InputMediaPhoto, Message
 from telegram.ext import ExtBot
 
 from .transcript_format import (
@@ -33,8 +35,16 @@ from .transcript_format import (
     EXPANDABLE_QUOTE_START,
 )
 
-# Rich messages cap (Bot API 10.1): 32768 UTF-8 chars of text.
+# Rich messages cap (Bot API 10.2): 32768 UTF-8 chars of text.
 RICH_MAX_CHARS = 32768
+
+# One embedded terminal screenshot per rich message. The identifier connects
+# the final Markdown media block to InputRichMessage.media; for a fresh upload
+# it is also the multipart field name referenced via attach://.
+_RICH_PHOTO_ID = "terminal_screenshot"
+_RICH_PHOTO_UPLOAD_FIELD = _RICH_PHOTO_ID
+_RICH_PHOTO_MARKDOWN = f"![](tg://photo?id={_RICH_PHOTO_ID})"
+_RICH_PHOTO_FILENAME = "terminal_screenshot.png"
 
 # Fenced code blocks (tolerating an unterminated fence at EOF) and inline
 # code spans — `<` inside these is preserved verbatim by the rich parser.
@@ -278,8 +288,93 @@ def to_rich_markdown(text: str) -> str:
     return _multiline_shell_fences_to_code(text)
 
 
-def _input_rich_message(markdown: str) -> dict[str, Any]:
-    return {"markdown": markdown}
+def _input_rich_message(
+    markdown: str, photo_ref: str | None = None
+) -> dict[str, Any]:
+    if photo_ref is None:
+        return {"markdown": markdown}
+    media = InputMediaPhoto(media=photo_ref).to_dict()
+    return {
+        "markdown": f"{markdown.rstrip()}\n\n{_RICH_PHOTO_MARKDOWN}",
+        "media": [{"id": _RICH_PHOTO_ID, "media": media}],
+    }
+
+
+def _photo_request_parts(photo: bytes | str) -> tuple[str, InputFile | None]:
+    """Return the InputMediaPhoto reference and optional multipart upload."""
+    if isinstance(photo, bytes):
+        upload = InputFile(photo, filename=_RICH_PHOTO_FILENAME)
+        return f"attach://{_RICH_PHOTO_UPLOAD_FIELD}", upload
+    return photo, None
+
+
+def _rich_message_payload(response: object) -> object | None:
+    """Find the RichMessage object in a raw response or PTB Message."""
+    if isinstance(response, Message):
+        rich_message = getattr(response, "rich_message", None)
+        if rich_message is not None:
+            return rich_message
+        return response.api_kwargs.get("rich_message")
+    if isinstance(response, dict):
+        return response.get("rich_message", response)
+    api_kwargs = getattr(response, "api_kwargs", None)
+    if isinstance(api_kwargs, dict):
+        return api_kwargs.get("rich_message")
+    return None
+
+
+def extract_rich_photo_file_id(response: object) -> str | None:
+    """Return the best reusable photo ``file_id`` from a rich response.
+
+    Bot API 10.2 returns embedded photos inside ``rich_message.blocks`` rather
+    than the legacy top-level ``Message.photo`` field. PTB versions that don't
+    know RichMessage preserve that raw object in ``Message.api_kwargs``. This
+    walker supports both forms, including photos nested in collage/slideshow
+    blocks, and prefers the largest available PhotoSize by pixel area.
+    """
+    payload = _rich_message_payload(response)
+    candidates: list[tuple[int, int, int, str]] = []
+    order = 0
+
+    def visit(value: object) -> None:
+        nonlocal order
+        to_dict = getattr(value, "to_dict", None)
+        if callable(to_dict) and not isinstance(value, dict):
+            value = to_dict()
+        if isinstance(value, list | tuple):
+            for item in value:
+                visit(item)
+            return
+        if not isinstance(value, dict):
+            return
+        photo = value.get("photo")
+        if value.get("type") == "photo" and isinstance(photo, list):
+            for size in photo:
+                if not isinstance(size, dict):
+                    continue
+                file_id = size.get("file_id")
+                if not isinstance(file_id, str) or not file_id:
+                    continue
+                width = size.get("width")
+                height = size.get("height")
+                file_size = size.get("file_size")
+                area = (
+                    width * height
+                    if isinstance(width, int) and isinstance(height, int)
+                    else -1
+                )
+                size_bytes = file_size if isinstance(file_size, int) else -1
+                candidates.append((area, size_bytes, order, file_id))
+                order += 1
+        for nested in value.values():
+            if isinstance(nested, dict | list | tuple):
+                visit(nested)
+
+    if payload is not None:
+        visit(payload)
+    if not candidates:
+        return None
+    return max(candidates)[-1]
 
 
 async def send_rich_message(
@@ -288,14 +383,28 @@ async def send_rich_message(
     markdown: str,
     *,
     reply_markup: InlineKeyboardMarkup | None = None,
+    photo: bytes | str | None = None,
+    disable_notification: bool | None = None,
 ) -> Message:
-    """Send a rich message via the raw API; returns the sent Message."""
+    """Send rich content, optionally ending with one embedded photo.
+
+    ``photo`` accepts raw bytes for a multipart upload or a Telegram ``file_id``
+    for reuse. Omitting it preserves the pre-10.2 request shape exactly.
+    """
+    photo_ref: str | None = None
+    upload: InputFile | None = None
+    if photo is not None:
+        photo_ref, upload = _photo_request_parts(photo)
     data: dict[str, Any] = {
         "chat_id": chat_id,
-        "rich_message": _input_rich_message(markdown),
+        "rich_message": _input_rich_message(markdown, photo_ref),
     }
     if reply_markup is not None:
         data["reply_markup"] = reply_markup
+    if disable_notification is not None:
+        data["disable_notification"] = disable_notification
+    if upload is not None:
+        data[_RICH_PHOTO_UPLOAD_FIELD] = upload
     result = await bot._post("sendRichMessage", data)  # pyright: ignore[reportPrivateUsage]
     msg = Message.de_json(cast(dict[str, Any], result), bot)
     return msg
@@ -308,13 +417,28 @@ async def edit_rich_message(
     markdown: str,
     *,
     reply_markup: InlineKeyboardMarkup | None = None,
-) -> None:
-    """Replace a message's content with rich content via the raw API."""
+    photo: bytes | str | None = None,
+) -> Message | None:
+    """Replace a message with rich content and an optional embedded photo."""
+    photo_ref: str | None = None
+    upload: InputFile | None = None
+    if photo is not None:
+        photo_ref, upload = _photo_request_parts(photo)
     data: dict[str, Any] = {
         "chat_id": chat_id,
         "message_id": message_id,
-        "rich_message": _input_rich_message(markdown),
+        "rich_message": _input_rich_message(markdown, photo_ref),
     }
     if reply_markup is not None:
         data["reply_markup"] = reply_markup
-    await bot._post("editMessageText", data)  # pyright: ignore[reportPrivateUsage]
+    if upload is not None:
+        data[_RICH_PHOTO_UPLOAD_FIELD] = upload
+    result = await bot._post(  # pyright: ignore[reportPrivateUsage]
+        "editMessageText", data
+    )
+    if isinstance(result, Message):
+        return result
+    if isinstance(result, dict):
+        return Message.de_json(result, bot)
+    # Inline-message edits and lightweight test doubles may return True.
+    return None

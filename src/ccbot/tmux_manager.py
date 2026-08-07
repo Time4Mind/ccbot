@@ -17,7 +17,6 @@ import asyncio
 import logging
 import os
 import re
-import shlex
 import signal
 import subprocess
 import time
@@ -26,7 +25,9 @@ from pathlib import Path
 
 import libtmux
 
+from . import tmux_window as _tmux_window
 from .config import SENSITIVE_ENV_VARS, config
+from .tmux_process import kill_orphan_processes
 
 logger = logging.getLogger(__name__)
 
@@ -90,81 +91,33 @@ class TmuxManager:
 
     @staticmethod
     def _handle_codex_startup_screen(pane: object) -> tuple[bool, bool]:
-        """Handle one captured startup screen.
-
-        Returns ``(acted, terminal)``. Terminal means the normal Codex input
-        is ready or the pane can no longer be inspected.
-        """
-        capture = getattr(pane, "capture_pane", None)
-        send_keys = getattr(pane, "send_keys", None)
-        if not callable(capture) or not callable(send_keys):
-            return False, True
-        try:
-            lines = capture()
-            text = "\n".join(lines) if isinstance(lines, list) else str(lines)
-        except Exception:
-            return False, True
-        if _CODEX_TRUST_PROMPT in text and _CODEX_TRUST_YES in text:
-            send_keys("", enter=True)
-            logger.info("Accepted Codex directory trust prompt")
-            return True, False
-        if (
-            "Choose working directory to resume this session" in text
-            and "1. Use session directory" in text
-            and "2. Use current directory" in text
-            and "Press enter to continue" in text
-        ):
-            send_keys("Down", enter=False)
-            send_keys("", enter=True)
-            logger.info("Selected current directory for Codex resume")
-            return True, False
-        if (
-            "Update available!" in text
-            and "1. Update now" in text
-            and "2. Skip" in text
-            and "Press enter to continue" in text
-        ):
-            # Never mutate the host toolchain from a Telegram session.
-            send_keys("Down", enter=False)
-            send_keys("", enter=True)
-            logger.info("Skipped Codex CLI update prompt")
-            return True, False
-        return False, "OpenAI Codex" in text and "›" in text
+        """Handle one captured Codex startup screen."""
+        return _tmux_window.handle_codex_startup_screen(
+            pane,
+            trust_prompt=_CODEX_TRUST_PROMPT,
+            trust_yes=_CODEX_TRUST_YES,
+            logger_obj=logger,
+        )
 
     @classmethod
     def _accept_codex_directory_trust(cls, pane: object) -> bool:
-        """Synchronously handle known prompts (small helper/test surface).
-
-        Codex can show this before its normal input box even in full-access
-        mode. The bot already owns the selected working directory, so leaving
-        the TUI blocked here makes Telegram input appear broken. A resumed
-        rollout can also remember a different directory; in that case choose
-        the current directory that the user selected for this bot session.
-        Poll briefly because the Node wrapper needs a moment to draw prompts.
-        """
-        accepted = False
-        for _ in range(30):
-            time.sleep(0.15)
-            acted, terminal = cls._handle_codex_startup_screen(pane)
-            accepted = accepted or acted
-            if terminal:
-                return accepted
-        return accepted
+        """Synchronously handle known Codex startup prompts."""
+        return _tmux_window.accept_codex_directory_trust(
+            pane,
+            sleep=time.sleep,
+            handler=cls._handle_codex_startup_screen,
+        )
 
     @classmethod
     async def _watch_codex_startup_screens(cls, pane: object) -> bool:
         """Cancellation-safe long watcher for cold Codex launches."""
-        accepted = False
-        attempts = max(30, int(max(config.resume_settle_timeout, 4.5) / 0.15))
-        for _ in range(attempts):
-            await asyncio.sleep(0.15)
-            acted, terminal = await asyncio.to_thread(
-                cls._handle_codex_startup_screen, pane
-            )
-            accepted = accepted or acted
-            if terminal:
-                return accepted
-        return accepted
+        return await _tmux_window.watch_codex_startup_screens(
+            pane,
+            timeout=config.resume_settle_timeout,
+            sleep=asyncio.sleep,
+            to_thread=asyncio.to_thread,
+            handler=cls._handle_codex_startup_screen,
+        )
 
     @property
     def server(self) -> libtmux.Server:
@@ -625,71 +578,24 @@ class TmuxManager:
             logger.debug("kill grouped session %s failed: %s", target, e)
 
     async def kill_orphan_claude_processes(self, claude_session_id: str) -> int:
-        """SIGTERM any 'claude --resume <claude_session_id>' processes still alive.
-
-        Called after ``kill_window`` to catch processes that survived the
-        pane SIGHUP — observed when a window kill races a bot restart
-        and the pane shell exits cleanly but its claude child detaches.
-        Leaving the orphan alive corrupts the session's JSONL (multiple
-        writers, interleaved entries, broken tool_use ↔ tool_result
-        pairing) which surfaces as ghost activity / lag in the live card.
-
-        Returns the number of processes signalled.
-
-        Happy path: ``kill_window`` worked, pgrep finds nothing, no-op.
-        """
+        """SIGTERM any surviving claude resume process for this session."""
         if not _CLAUDE_SESSION_RE.match(claude_session_id):
             logger.warning(
                 "kill_orphan_claude_processes: invalid session id %r, skipping",
                 claude_session_id,
             )
             return 0
-
-        def _sync_kill_orphans() -> int:
-            try:
-                result = subprocess.run(
-                    ["pgrep", "-f", f"claude.*--resume {claude_session_id}"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-            except (subprocess.TimeoutExpired, OSError) as e:
-                logger.debug("pgrep failed: %s", e)
-                return 0
-            pids: list[int] = []
-            for line in result.stdout.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    pids.append(int(line))
-                except ValueError:
-                    continue
-            # Guard: never SIGTERM our own PID or our parent (we run inside
-            # tmux, so the pane shell is an ancestor; killing ourselves
-            # would self-destruct the bot).
-            own = os.getpid()
-            parent = os.getppid()
-            killed = 0
-            for pid in pids:
-                if pid == own or pid == parent:
-                    continue
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                    killed += 1
-                    logger.info(
-                        "kill_orphan_claude pid=%d session=%s",
-                        pid,
-                        claude_session_id,
-                    )
-                except ProcessLookupError:
-                    # Already dead between pgrep and kill — fine.
-                    continue
-                except PermissionError as e:
-                    logger.warning("kill_orphan_claude pid=%d denied: %s", pid, e)
-            return killed
-
-        return await asyncio.to_thread(_sync_kill_orphans)
+        return await asyncio.to_thread(
+            kill_orphan_processes,
+            claude_session_id,
+            run=subprocess.run,
+            kill=os.kill,
+            own_pid=os.getpid(),
+            parent_pid=os.getppid(),
+            sigterm=signal.SIGTERM,
+            timeout_error=subprocess.TimeoutExpired,
+            logger=logger,
+        )
 
     async def create_window(
         self,
@@ -701,144 +607,19 @@ class TmuxManager:
         backend: str | None = None,
         initial_prompt: str | None = None,
     ) -> tuple[bool, str, str, str]:
-        """Create a new tmux window and optionally start the configured agent.
-
-        Args:
-            work_dir: Working directory for the new window
-            window_name: Optional window name (defaults to directory name)
-            start_claude: Whether to start claude command
-            resume_session_id: If set, append --resume <id> to claude command
-            owner_user_id: Telegram user_id that created this session, if
-                known — exported as ``CCBOT_CHAT_ID`` so ``ccbot send-file``
-                (and Claude generally) knows which chat owns this session
-                without needing an explicit ``--chat-id``.
-
-        Returns:
-            Tuple of (success, message, window_name, window_id)
-        """
-        # Validate directory first
-        path = Path(work_dir).expanduser().resolve()
-        selected_backend = backend or config.agent_backend
-        if selected_backend not in ("claude", "codex"):
-            return False, f"Unsupported agent backend: {selected_backend}", "", ""
-        if not path.exists():
-            return False, f"Directory does not exist: {work_dir}", "", ""
-        if not path.is_dir():
-            return False, f"Not a directory: {work_dir}", "", ""
-
-        # Create window name, adding suffix if name already exists
-        final_window_name = window_name if window_name else path.name
-
-        # Check for existing window name
-        base_name = final_window_name
-        counter = 2
-        while await self.find_window_by_name(final_window_name):
-            final_window_name = f"{base_name}-{counter}"
-            counter += 1
-
-        # Create window in thread
-        created_pane: object | None = None
-
-        def _create_and_start() -> tuple[bool, str, str, str]:
-            nonlocal created_pane
-            session = self.get_or_create_session()
-            try:
-                # Create new window
-                window = session.new_window(
-                    window_name=final_window_name,
-                    start_directory=str(path),
-                )
-
-                wid = window.window_id or ""
-
-                # Prevent Claude Code from overriding window name
-                window.set_window_option("allow-rename", "off")
-
-                # Start Claude Code if requested
-                if start_claude:
-                    pane = window.active_pane
-                    if pane:
-                        created_pane = pane
-                        if selected_backend == "codex":
-                            cmd = config.codex_command
-                            if config.codex_flags:
-                                cmd = f"{cmd} {config.codex_flags}"
-                            if resume_session_id:
-                                cmd = f"{cmd} resume {shlex.quote(resume_session_id)}"
-                        else:
-                            cmd = config.claude_command
-                            if config.claude_flags:
-                                cmd = f"{cmd} {config.claude_flags}"
-                            if resume_session_id:
-                                cmd = f"{cmd} --resume {shlex.quote(resume_session_id)}"
-                        if initial_prompt:
-                            cmd = f"{cmd} {shlex.quote(initial_prompt)}"
-                        # Identify the runtime so Claude (via the
-                        # output-format guidance in CLAUDE.md) can
-                        # tailor its replies to the Telegram surface AND
-                        # know *which* bot / device hosts the session —
-                        # useful when the user runs multiple ccbot
-                        # deployments (e.g. Mac + arm64 box).
-                        env_prefix = (
-                            "CCBOT_INTERFACE=telegram "
-                            f"CCBOT_AGENT_BACKEND={selected_backend} "
-                            f"CCBOT_DIR={shlex.quote(str(config.config_dir))}"
-                        )
-                        if config.bot_username:
-                            env_prefix += f" CCBOT_BOT_USERNAME={shlex.quote(config.bot_username)}"
-                        if config.host_label:
-                            env_prefix += (
-                                f" CCBOT_HOST={shlex.quote(config.host_label)}"
-                            )
-                        if owner_user_id is not None:
-                            # Lets ``ccbot send-file`` target the right
-                            # chat with no argument needed.
-                            env_prefix += f" CCBOT_CHAT_ID={owner_user_id}"
-                        if config.is_sandbox:
-                            cmd = f"IS_SANDBOX=1 {env_prefix} {cmd}"
-                        else:
-                            cmd = f"{env_prefix} {cmd}"
-                        pane.send_keys(cmd, enter=True)
-
-                logger.info(
-                    "Created window '%s' (id=%s) at %s",
-                    final_window_name,
-                    wid,
-                    path,
-                )
-                return (
-                    True,
-                    f"Created window '{final_window_name}' at {path}",
-                    final_window_name,
-                    wid,
-                )
-
-            except Exception as e:
-                logger.error(f"Failed to create window: {e}")
-                return False, f"Failed to create window: {e}", "", ""
-
-        result = await asyncio.to_thread(_create_and_start)
-        if result[0] and selected_backend == "codex" and created_pane is not None:
-            # Do not hold the Telegram callback open while the Node wrapper
-            # draws its startup UI. The background task accepts only the two
-            # known directory prompts; normal input is never confirmed.
-            task = asyncio.create_task(
-                self._watch_codex_startup_screens(created_pane),
-                name=f"codex-startup-trust:{result[3]}",
-            )
-            self._startup_tasks.add(task)
-
-            def _finish_startup_task(done: asyncio.Task[bool]) -> None:
-                self._startup_tasks.discard(done)
-                try:
-                    done.result()
-                except asyncio.CancelledError:
-                    return
-                except Exception as e:
-                    logger.warning("Codex startup prompt handler failed: %s", e)
-
-            task.add_done_callback(_finish_startup_task)
-        return result
+        """Create a tmux window and optionally start the configured agent."""
+        return await _tmux_window.create_window(
+            self,
+            work_dir,
+            window_name=window_name,
+            start_claude=start_claude,
+            resume_session_id=resume_session_id,
+            owner_user_id=owner_user_id,
+            backend=backend,
+            initial_prompt=initial_prompt,
+            config_obj=config,
+            logger_obj=logger,
+        )
 
 
 # Global instance with default session name

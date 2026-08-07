@@ -1,13 +1,8 @@
-"""Archive listing UI and lifecycle helpers.
+"""Archive listing UI, restore lifecycle, and periodic cleanup sweeps.
 
-Periodic sweeps:
-  - idle_archive_sweep: archive a session after the user's selected idle TTL.
-  - purge_sweep: drop state.json records older than ARCHIVE_PURGE_AFTER.
-    Transcripts on disk are kept for audit.
-
-Interactive UI:
-  - build_archive_page: render an archived-sessions page with inline buttons.
-  - inspect, restore, delete callback handlers.
+Pure archive text normalization lives in ``archive_blurb``. Stateful helpers
+remain here to preserve historical imports and monkeypatch seams around
+``session_manager``, ``tmux_manager``, ``config`` and blurb collection.
 """
 
 from __future__ import annotations
@@ -15,13 +10,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import time
 
 import aiofiles
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
-
-from pathlib import Path
 
 from ..config import config
 from ..i18n import t
@@ -34,107 +26,25 @@ from ..session import (
 from ..session_claude_io import build_session_file_path
 from ..tmux_manager import tmux_manager
 from ..transcript_parser import TranscriptParser
-from .callback_data import (
-    CB_ARC_ALL,
-    CB_ARC_INSPECT,
-    CB_ARC_PAGE,
+from .archive_blurb import (
+    _RE_INJECTED_USER_MSG,
+    _RE_SYSTEM_UI_TEXT,
+    _clean_user_msg,
+    _display_name,
+    _shorten_workdir,
+    _truncate_at_word,
 )
+from .callback_data import CB_ARC_ALL, CB_ARC_INSPECT, CB_ARC_PAGE
 from .cleanup import clear_session_state
 
-# Per-session blurb cache — keyed by claude_session_id. The blurb is
-# the first 1-3 user messages of the session, concatenated until the
-# soft length budget kicks in. Archived JSONLs are append-frozen so a
-# single scan covers the session's lifetime in archive.
+logger = logging.getLogger(__name__)
+
 _BLURB_CACHE: dict[str, str] = {}
-# Hard character cap on the combined blurb (all included messages
-# plus their hard-break separators). When the first message alone
-# exceeds this, it gets truncated with ``…`` on a word boundary;
-# subsequent messages are skipped if including them would overshoot.
 _BLURB_TOTAL_BUDGET = 140
-# Hard cap on how many user messages can land in one blurb. Keeps the
-# row short for chatty intros ("hi" / "go" / "do it") that wouldn't hit
-# the byte budget on their own.
 _BLURB_MAX_MESSAGES = 3
-
-# Visible divider between session rows on a page. Unicode box-drawing
-# chars render the same in rich, MarkdownV2 fallback and plain text;
-# the CommonMark ``---`` thematic break would render as a true ``<hr>``
-# under rich but degrade to escaped ``\-\-\-`` in the MarkdownV2 path.
 _SESSION_DIVIDER = "─────"
-
-# Claude Code injects its own "user" messages — local-command caveats,
-# system reminders, bash plumbing chrome — alongside the genuine user
-# prompt. Skipping these when sniffing the first real message keeps the
-# archive blurb on-topic. Pattern matches the opening tag (same list as
-# ``TranscriptParser._RE_SYSTEM_TAGS``, kept local to avoid a private-
-# attribute lint warning).
-_RE_INJECTED_USER_MSG = re.compile(
-    r"<(bash-input|bash-stdout|bash-stderr|local-command-caveat|system-reminder)"
-)
-# Claude Code also writes "user"-typed JSONL rows for its own UI events:
-# ``[Request interrupted by user]`` after a Ctrl-C, slash-command echos
-# (``Set model to …``, ``Set effort to …``, ``Compacted``, ``Cleared``,
-# ``Memory updated``, ``Memory file …``), and bracket-only status
-# markers (``[Resumed]``, ``[2-hour limit reached …]``). These look
-# like the user typed them but they're CLI chrome — don't let them
-# leak into the archive blurb.
-_RE_SYSTEM_UI_TEXT = re.compile(
-    r"^\s*(?:"
-    r"\[[^\]\n]+\]\s*$"  # whole message is one bracketed marker
-    r"|Set (?:model|effort|thinking) to\b"
-    r"|Compact(?:ed|ing)\b"
-    r"|Cleared\b"
-    r"|Memory (?:updated|file)\b"
-    r")",
-    re.IGNORECASE,
-)
-
-
-def _shorten_workdir(path: str) -> str:
-    """Replace the user's home prefix with ``~`` so paths fit on one row.
-    Mirrors ``bot._common.shorten_workdir`` — kept here to avoid a
-    handlers→bot import inversion."""
-    if not path:
-        return ""
-    home = str(Path.home())
-    if path == home:
-        return "~"
-    if path.startswith(home + "/"):
-        return "~" + path[len(home) :]
-    return path
-
-
-def _clean_user_msg(text: str) -> str:
-    """Collapse whitespace and strip a leading slash-command prefix.
-
-    Doesn't truncate — the budget is handled at the accumulation level
-    in ``_collect_user_messages``. The leading-slash strip means a row
-    that starts with ``/resume real ask`` reads ``real ask`` (the
-    user's actual ask, not the dispatch verb).
-    """
-    if not text:
-        return ""
-    cleaned = " ".join(text.split())
-    if cleaned.startswith("/"):
-        head, _, rest = cleaned.partition(" ")
-        cleaned = rest if rest else head
-    return cleaned.strip("` ")
-
-
-def _truncate_at_word(text: str, budget: int) -> str:
-    """Clip ``text`` to ``budget`` chars on the nearest whole-word
-    boundary, appending ``…``.
-
-    Scans back from the budget to the previous space; falls back to a
-    hard cut only if no plausible word boundary exists in the last 24
-    chars (very long URLs / single-word messages).
-    """
-    if len(text) <= budget:
-        return text
-    cut = text.rfind(" ", 0, budget)
-    if cut < budget - 24:
-        cut = budget
-    return text[:cut].rstrip() + "…"
+PAGE_SIZE = 6
+DEFAULT_LOOKBACK_SECONDS = 72 * 3600
 
 
 def _format_blurb(messages: list[str]) -> str:
@@ -274,25 +184,6 @@ async def _archive_blurb(sess: Session) -> str:
     blurb = await _collect_user_messages(sess)
     _BLURB_CACHE[sid] = blurb
     return blurb
-
-
-def _display_name(sess: Session) -> str:
-    """Human-readable form of ``sess.name`` — Haiku produces kebab-case
-    (``archive-pagination-fix``); for the body row and the inline
-    button label we render it with spaces (``archive pagination fix``)
-    so it reads as a natural phrase. Directory-derived names
-    (``workdir-2``) pass through the same transform without harm.
-    """
-    return (sess.name or sess.id).replace("-", " ")
-
-
-logger = logging.getLogger(__name__)
-
-# How many archived sessions to render per /archive page.
-PAGE_SIZE = 6
-
-# Default lookback window for /archive (0-72h). /archive --all extends this.
-DEFAULT_LOOKBACK_SECONDS = 72 * 3600
 
 
 def _format_age(user_id: int, ts: float, now: float | None = None) -> str:

@@ -12,13 +12,12 @@ Tool-summary and tool-result formatting helpers live in
 Key classes: TranscriptParser (static methods), ParsedEntry, ParsedMessage, PendingToolInfo.
 """
 
-import json
 import logging
 import re
-from dataclasses import dataclass
 from typing import Any
 
 from . import transcript_format
+from .transcript_codex import normalize_codex_entry
 from .transcript_format import (
     EXPANDABLE_HEADED_END,
     EXPANDABLE_HEADED_SEP,
@@ -26,58 +25,21 @@ from .transcript_format import (
     EXPANDABLE_QUOTE_END,
     EXPANDABLE_QUOTE_START,
 )
+from .transcript_message import extract_text_only as _extract_text_only
+from .transcript_message import get_message_type as _get_message_type
+from .transcript_message import get_timestamp as _get_timestamp
+from .transcript_message import is_user_message as _is_user_message
+from .transcript_message import parse_line as _parse_line
+from .transcript_message import parse_message as _parse_message
+from .transcript_types import ParsedEntry, ParsedMessage, PendingToolInfo
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class ParsedMessage:
-    """Parsed message from a transcript."""
-
-    message_type: str  # "user", "assistant", "tool_use", "tool_result", etc.
-    text: str  # Extracted text content
-    tool_name: str | None = None  # For tool_use messages
-
-
-@dataclass
-class ParsedEntry:
-    """A single parsed message entry ready for display."""
-
-    role: str  # "user" | "assistant"
-    text: str  # Already formatted text
-    content_type: (
-        str  # "text" | "thinking" | "tool_use" | "tool_result" | "local_command"
-    )
-    tool_use_id: str | None = None
-    timestamp: str | None = None  # ISO timestamp from JSONL
-    tool_name: str | None = (
-        None  # For tool_use entries, the tool name (e.g. "AskUserQuestion")
-    )
-    image_data: list[tuple[str, bytes]] | None = (
-        None  # For tool_result entries with images: (media_type, raw_bytes)
-    )
-    stop_reason: str | None = (
-        None  # Assistant message stop_reason: "end_turn" | "tool_use" | etc.
-    )
-    # ``is_error=True`` when the tool_result block carried ``is_error: true``
-    # in the JSONL — propagates through NewMessage and lands on the matching
-    # tool_use Event so ``render_event`` can flip the leading glyph to ✗.
-    is_error: bool = False
-    # Claude Code marks its own synthetic error turns at the entry level:
-    # ``isApiErrorMessage: true`` plus an ``error`` code (e.g.
-    # "authentication_failed"). Carried through so consumers can tell a real
-    # API failure from an assistant that merely *talks about* one — matching
-    # error text against arbitrary assistant output produces false positives.
-    api_error: str = ""
-
-
-@dataclass
-class PendingToolInfo:
-    """Information about a pending tool_use waiting for its tool_result."""
-
-    summary: str  # Formatted tool summary (e.g. "**Read**(file.py)")
-    tool_name: str  # Tool name (e.g. "Read", "Edit")
-    input_data: Any = None  # Tool input parameters (for Edit to generate diff)
+# Preserve the historical pickle/introspection path of public value types even
+# though their definitions now live in a dependency-light sibling module.
+ParsedMessage.__module__ = __name__
+ParsedEntry.__module__ = __name__
+PendingToolInfo.__module__ = __name__
 
 
 class TranscriptParser:
@@ -106,66 +68,23 @@ class TranscriptParser:
 
     @staticmethod
     def parse_line(line: str) -> dict[str, Any] | None:
-        """Parse a single JSONL line.
-
-        Args:
-            line: A single line from the JSONL file
-
-        Returns:
-            Parsed dict[str, Any] or None if line is empty/invalid
-        """
-        line = line.strip()
-        if not line:
-            return None
-
-        try:
-            return json.loads(line)
-        except json.JSONDecodeError:
-            return None
+        """Parse one JSONL line, returning ``None`` when it is invalid."""
+        return _parse_line(line)
 
     @staticmethod
     def get_message_type(data: dict[str, Any]) -> str | None:
-        """Get the message type from parsed data.
-
-        Returns:
-            Message type: "user", "assistant", "file-history-snapshot", etc.
-        """
-        return data.get("type")
+        """Get the top-level transcript message type."""
+        return _get_message_type(data)
 
     @staticmethod
     def is_user_message(data: dict[str, Any]) -> bool:
-        """Check if this is a user message."""
-        return data.get("type") == "user"
+        """Return whether this is a user message."""
+        return _is_user_message(data)
 
     @staticmethod
     def extract_text_only(content_list: list[Any]) -> str:
-        """Extract only text content from structured content.
-
-        This is used for Telegram notifications where we only want
-        the actual text response, not tool calls or thinking.
-
-        Args:
-            content_list: List of content blocks
-
-        Returns:
-            Combined text content only
-        """
-        if not isinstance(content_list, list):  # pyright: ignore[reportUnnecessaryIsInstance]
-            if isinstance(content_list, str):
-                return content_list
-            return ""
-
-        texts = []
-        for item in content_list:
-            if isinstance(item, str):
-                texts.append(item)
-            elif isinstance(item, dict):
-                if item.get("type") == "text":
-                    text = item.get("text", "")
-                    if text:
-                        texts.append(text)
-
-        return "\n".join(texts)
+        """Extract text blocks, excluding tool calls and thinking blocks."""
+        return _extract_text_only(content_list)
 
     _RE_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -179,184 +98,17 @@ class TranscriptParser:
 
     @staticmethod
     def _normalize_codex_entry(data: dict[str, Any]) -> dict[str, Any] | None:
-        """Translate a stable subset of Codex rollout events to Claude blocks.
-
-        Codex emits user/agent text as ``event_msg`` rows and tool calls as
-        ``response_item`` rows.  Normalizing at this boundary lets the existing
-        history, live-card, tool-pairing, and Telegram formatting pipeline stay
-        unchanged.
-        """
-        top_type = data.get("type")
-        payload = data.get("payload")
-        if not isinstance(payload, dict):
-            return None
-        timestamp = data.get("timestamp")
-        if top_type == "event_msg":
-            event_type = payload.get("type")
-            if event_type == "user_message":
-                text = str(payload.get("message") or "")
-                return {
-                    "type": "user",
-                    "timestamp": timestamp,
-                    "message": {"content": [{"type": "text", "text": text}]},
-                }
-            if event_type == "agent_message":
-                text = str(payload.get("message") or "")
-                phase = str(payload.get("phase") or "")
-                return {
-                    "type": "assistant",
-                    "timestamp": timestamp,
-                    "message": {
-                        "content": [{"type": "text", "text": text}],
-                        "stop_reason": "end_turn"
-                        if phase in ("final_answer", "final")
-                        else None,
-                    },
-                }
-            return None
-        if top_type != "response_item":
-            return None
-        item_type = payload.get("type")
-        # Codex 0.147 stopped emitting the duplicate event_msg rows that used
-        # to carry user and assistant text. Its replacement message rows are
-        # numbered with an ordinal. Codex 0.146 also wrote unnumbered message
-        # response_items alongside event_msg rows, so accepting only numbered
-        # rows here preserves the old fallback without rendering every turn
-        # twice.
-        if item_type == "message" and data.get("ordinal") is not None:
-            role = str(payload.get("role") or "")
-            if role not in ("user", "assistant"):
-                return None
-            raw_content = payload.get("content", "")
-            content: list[dict[str, str]] = []
-            if isinstance(raw_content, list):
-                for block in raw_content:
-                    if not isinstance(block, dict):
-                        continue
-                    block_type = block.get("type")
-                    if block_type not in ("input_text", "output_text", "text"):
-                        continue
-                    text = str(block.get("text") or "")
-                    if text:
-                        content.append({"type": "text", "text": text})
-            elif isinstance(raw_content, str) and raw_content:
-                content.append({"type": "text", "text": raw_content})
-            if not content:
-                return None
-            phase = str(payload.get("phase") or "")
-            return {
-                "type": role,
-                "timestamp": timestamp,
-                "message": {
-                    "content": content,
-                    "stop_reason": "end_turn"
-                    if role == "assistant" and phase in ("final_answer", "final")
-                    else None,
-                },
-            }
-        if item_type in ("function_call", "custom_tool_call"):
-            arguments = payload.get("arguments")
-            if arguments is None:
-                arguments = payload.get("input")
-            if isinstance(arguments, str):
-                try:
-                    arguments = json.loads(arguments)
-                except json.JSONDecodeError:
-                    arguments = {"input": arguments}
-            if not isinstance(arguments, dict):
-                arguments = {"input": arguments}
-            return {
-                "type": "assistant",
-                "timestamp": timestamp,
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "id": str(
-                                payload.get("call_id") or payload.get("id") or ""
-                            ),
-                            "name": str(payload.get("name") or "tool"),
-                            "input": arguments,
-                        }
-                    ],
-                    "stop_reason": "tool_use",
-                },
-            }
-        if item_type in ("function_call_output", "custom_tool_call_output"):
-            return {
-                "type": "user",
-                "timestamp": timestamp,
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": str(
-                                payload.get("call_id") or payload.get("id") or ""
-                            ),
-                            "content": payload.get("output") or "",
-                        }
-                    ]
-                },
-            }
-        return None
+        """Normalize one supported Codex rollout row into Claude shape."""
+        return normalize_codex_entry(data)
 
     @classmethod
     def parse_message(cls, data: dict[str, Any]) -> ParsedMessage | None:
-        """Parse a message entry from the JSONL data.
-
-        Args:
-            data: Parsed JSON dict[str, Any] from a JSONL line
-
-        Returns:
-            ParsedMessage or None if not a parseable message
-        """
-        msg_type = cls.get_message_type(data)
-
-        if msg_type not in ("user", "assistant"):
-            return None
-
-        message = data.get("message")
-        if not isinstance(message, dict):
-            return None
-        content = message.get("content", "")
-
-        if isinstance(content, list):
-            text = cls.extract_text_only(content)
-        else:
-            text = str(content) if content else ""
-        text = cls._RE_ANSI_ESCAPE.sub("", text)
-
-        # Detect local command responses in user messages.
-        # These are rendered as bot replies: "❯ /cmd\n  ⎿  output"
-        if msg_type == "user" and text:
-            stdout_match = cls._RE_LOCAL_STDOUT.search(text)
-            if stdout_match:
-                stdout = stdout_match.group(1).strip()
-                cmd_match = cls._RE_COMMAND_NAME.search(text)
-                cmd = cmd_match.group(1) if cmd_match else None
-                return ParsedMessage(
-                    message_type="local_command",
-                    text=stdout,
-                    tool_name=cmd,  # reuse field for command name
-                )
-            # Pure command invocation (no stdout) — carry command name
-            cmd_match = cls._RE_COMMAND_NAME.search(text)
-            if cmd_match:
-                return ParsedMessage(
-                    message_type="local_command_invoke",
-                    text="",
-                    tool_name=cmd_match.group(1),
-                )
-
-        return ParsedMessage(
-            message_type=msg_type,
-            text=text,
-        )
+        return _parse_message(cls, data)
 
     @staticmethod
     def get_timestamp(data: dict[str, Any]) -> str | None:
         """Extract timestamp from message data."""
-        return data.get("timestamp")
+        return _get_timestamp(data)
 
     @classmethod
     def parse_entries(

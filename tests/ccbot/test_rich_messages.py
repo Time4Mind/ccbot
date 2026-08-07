@@ -1,4 +1,4 @@
-"""Tests for the Bot API 10.1 rich-message layer (rich.py + safe_* wiring).
+"""Tests for the Bot API 10.2 rich-message layer (rich.py + safe_* wiring).
 
 Covers to_rich_markdown escaping rules (bare ``<`` vs supported tags vs
 code spans), expandable-quote → <details> conversion, and the
@@ -187,6 +187,36 @@ def _sent_message_json() -> dict[str, Any]:
     }
 
 
+def _sent_rich_photo_json() -> dict[str, Any]:
+    return {
+        **_sent_message_json(),
+        "rich_message": {
+            "blocks": [
+                {"type": "paragraph", "text": {"text": "status"}},
+                {
+                    "type": "photo",
+                    "photo": [
+                        {
+                            "file_id": "photo-small",
+                            "file_unique_id": "small-unique",
+                            "width": 90,
+                            "height": 60,
+                            "file_size": 100,
+                        },
+                        {
+                            "file_id": "photo-large",
+                            "file_unique_id": "large-unique",
+                            "width": 1280,
+                            "height": 720,
+                            "file_size": 20_000,
+                        },
+                    ],
+                },
+            ]
+        },
+    }
+
+
 class _FakeBot:
     """Minimal stand-in for ExtBot: records _post calls."""
 
@@ -201,6 +231,141 @@ class _FakeBot:
         if self._post_error is not None:
             raise self._post_error
         return self._post_result
+
+
+class TestRichPhotoMedia:
+    @pytest.mark.asyncio
+    async def test_send_uploads_photo_as_separate_multipart_field(self) -> None:
+        from telegram import InputFile
+
+        photo_bytes = b"\x89PNG\r\n\x1a\nterminal screenshot"
+        bot = _FakeBot(post_result=_sent_rich_photo_json())
+
+        msg = await rich.send_rich_message(  # type: ignore[arg-type]
+            bot, 449, "**Status**\n", photo=photo_bytes
+        )
+
+        endpoint, data = bot.posts[0]
+        assert endpoint == "sendRichMessage"
+        assert data["rich_message"] == {
+            "markdown": (
+                "**Status**\n\n"
+                "![](tg://photo?id=terminal_screenshot)"
+            ),
+            "media": [
+                {
+                    "id": "terminal_screenshot",
+                    "media": {
+                        "type": "photo",
+                        "media": "attach://terminal_screenshot",
+                    },
+                }
+            ],
+        }
+        upload = data["terminal_screenshot"]
+        assert isinstance(upload, InputFile)
+        assert upload.input_file_content == photo_bytes
+        assert upload.filename == "terminal_screenshot.png"
+        assert upload.attach_name is None
+        assert rich.extract_rich_photo_file_id(msg) == "photo-large"
+
+    @pytest.mark.asyncio
+    async def test_send_reuses_photo_file_id_without_upload(self) -> None:
+        bot = _FakeBot(post_result=_sent_message_json())
+
+        await rich.send_rich_message(  # type: ignore[arg-type]
+            bot, 449, "Status", photo="existing-photo-file-id"
+        )
+
+        data = bot.posts[0][1]
+        assert "terminal_screenshot" not in data
+        assert data["rich_message"]["media"] == [
+            {
+                "id": "terminal_screenshot",
+                "media": {
+                    "type": "photo",
+                    "media": "existing-photo-file-id",
+                },
+            }
+        ]
+        assert data["rich_message"]["markdown"].endswith(
+            "\n\n![](tg://photo?id=terminal_screenshot)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_send_forwards_explicit_disable_notification_only(self) -> None:
+        quiet_bot = _FakeBot(post_result=_sent_message_json())
+        default_bot = _FakeBot(post_result=_sent_message_json())
+
+        await rich.send_rich_message(  # type: ignore[arg-type]
+            quiet_bot, 449, "Status", disable_notification=True
+        )
+        await rich.send_rich_message(  # type: ignore[arg-type]
+            default_bot, 449, "Status"
+        )
+
+        assert quiet_bot.posts[0][1]["disable_notification"] is True
+        assert "disable_notification" not in default_bot.posts[0][1]
+
+    @pytest.mark.asyncio
+    async def test_edit_accepts_true_result_with_photo_upload(self) -> None:
+        from telegram import InputFile
+
+        bot = _FakeBot(post_result=True)
+
+        result = await rich.edit_rich_message(  # type: ignore[arg-type]
+            bot, 449, 7, "Status", photo=b"photo"
+        )
+
+        assert result is None
+        endpoint, data = bot.posts[0]
+        assert endpoint == "editMessageText"
+        assert data["message_id"] == 7
+        assert isinstance(data["terminal_screenshot"], InputFile)
+        assert data["rich_message"]["media"][0]["media"]["media"] == (
+            "attach://terminal_screenshot"
+        )
+
+    @pytest.mark.asyncio
+    async def test_edit_returns_message_for_new_photo_file_id(self) -> None:
+        bot = _FakeBot(post_result=_sent_rich_photo_json())
+
+        msg = await rich.edit_rich_message(  # type: ignore[arg-type]
+            bot, 449, 7, "Status", photo=b"new photo"
+        )
+
+        assert msg is not None and msg.message_id == 42
+        assert rich.extract_rich_photo_file_id(msg) == "photo-large"
+
+    def test_extract_file_id_from_raw_rich_message(self) -> None:
+        raw = _sent_rich_photo_json()["rich_message"]
+
+        assert rich.extract_rich_photo_file_id(raw) == "photo-large"
+
+    def test_extract_file_id_handles_nested_and_missing_media(self) -> None:
+        raw = {
+            "blocks": [
+                {
+                    "type": "collage",
+                    "blocks": [
+                        {
+                            "type": "photo",
+                            "photo": [
+                                {
+                                    "file_id": "nested",
+                                    "width": 320,
+                                    "height": 200,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+
+        assert rich.extract_rich_photo_file_id(raw) == "nested"
+        assert rich.extract_rich_photo_file_id({"blocks": []}) is None
+        assert rich.extract_rich_photo_file_id(True) is None
 
 
 @pytest.fixture

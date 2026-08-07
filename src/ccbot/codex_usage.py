@@ -189,7 +189,11 @@ def read_latest_rollout_usage(
     try:
         paths = sorted(
             root.rglob("rollout-*.jsonl"),
-            key=lambda path: path.stat().st_mtime,
+            # Some filesystems assign the exact same timestamp even to two
+            # consecutive writes. Codex stores rollouts below YYYY/MM/DD and
+            # names them chronologically, so the full path is a deterministic
+            # newest-first tie-break instead of relying on rglob order.
+            key=lambda path: (path.stat().st_mtime_ns, path.as_posix()),
             reverse=True,
         )
     except OSError as e:

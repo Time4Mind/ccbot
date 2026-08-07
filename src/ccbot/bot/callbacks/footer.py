@@ -139,8 +139,15 @@ async def handle(
         if sess is None:
             await query.answer(t(user.id, "toast.no_session"), show_alert=False)
             return True
+        # Stop Telegram's button spinner before rendering or making the edit
+        # request. An expired answer must not prevent the actual page paint.
+        try:
+            await query.answer()
+        except Exception as e:
+            logger.debug("pagination callback answer failed: %s", e)
         state = get_card_state(user.id, sess)
         idx, total = card_page_info(state, user.id)
+        old_page_idx = state.current_page_idx
         if data == CB_PG_JUMP:
             # Jump to default-focus (= latest page when no answer-anchor
             # was set explicitly). ``None`` means "stick to latest".
@@ -152,11 +159,14 @@ async def handle(
             new_idx = min(total - 1, idx + 1)
             # Reaching the last page sticks the user to "auto-follow latest".
             state.current_page_idx = new_idx if new_idx < total - 1 else None
+        desired_page_idx = state.current_page_idx
+        refreshed = False
         try:
-            await refresh_panel(context.bot, user.id)
+            refreshed = await refresh_panel(context.bot, user.id, immediate=True)
         except Exception as e:
             logger.debug("pagination refresh failed: %s", e)
-        await query.answer()
+        if not refreshed and state.current_page_idx == desired_page_idx:
+            state.current_page_idx = old_page_idx
         return True
 
     if data == CB_KB_BACK:

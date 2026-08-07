@@ -330,7 +330,7 @@ Card knobs live under *Settings → 🃏 Card / view*:
 | ------- | ------- | ------ |
 | `Card history` | `20` | end-of-turn boundaries seeded into a fresh card from the JSONL (survives bot restarts) |
 | `Page size` | `20` lines | max lines per card page; longer bodies chunk across pages on paragraph/sentence boundaries |
-| `Inline screenshots` | `off` | card becomes photo + caption — the photo is the live pane render (caption limit is 1024 chars, so shrink page size to compensate) |
+| `Inline screenshots` | `off` | appends the live terminal pane as the final media block of the Rich Markdown card; older Bot API servers fall back to photo + caption |
 | `Live lag` | `4s` | coalescing window for preview updates |
 
 Telegram's chat-header **`typing…` indicator** is driven by real
@@ -437,20 +437,25 @@ half-rendered modal can't fire a phantom alert.
 
 ## Architecture
 
-The full module map is `.claude/rules/architecture.md`. At a glance:
+The full module map is `.claude/rules/architecture.md`; the responsibility-level
+extension guide is `doc/refactor-architecture.md`. At a glance:
 
 ```
 src/ccbot/
 ├── main.py                 — CLI entry point (`ccbot`, `ccbot hook`, `ccbot send-file`)
 ├── config.py               — env-var loader (singleton)
-├── session.py              — Session + SessionManager (state.json)
+├── session.py              — SessionManager compatibility facade / resume flow
+├── session_state.py        — routing, lifecycle, settings, state.json
+├── session_map.py          — hook/window binding reconciliation
 ├── session_monitor.py      — JSONL polling, NewMessage callbacks
 ├── codex_session_io.py     — Codex rollout JSONL discovery and reading
 ├── codex_auth.py           — account/read + device-code login
 ├── codex_usage.py          — Codex app-server rate limits
 ├── session_import.py       — cross-agent restore handoff
-├── transcript_parser.py    — JSONL turn parsing
+├── transcript_parser.py    — JSONL parser compatibility facade
+├── transcript_*.py         — message/Codex/type-specific parsing
 ├── terminal_parser.py      — interactive-UI + status-line detection
+├── terminal_usage.py       — /usage models and parsing
 ├── tmux_manager.py         — libtmux wrapper
 ├── rich.py                 — Bot API 10.1 rich messages (native markdown)
 ├── markdown_v2.py          — MD → Telegram MarkdownV2 (fallback path)
@@ -460,16 +465,20 @@ src/ccbot/
 ├── send_file.py            — `ccbot send-file` outbound delivery
 ├── local_terminal.py       — native-terminal attach helper
 ├── usage.py                — token aggregator, context %, alert logic
-├── i18n.py                 — en / ru / zh UI strings
+├── i18n.py                 — translation service compatibility facade
+├── i18n_locales/           — en / ru / zh UI catalogs
 ├── bot/                    — Telegram-facing handlers (≤ 600 LOC each)
-│   ├── app.py              — Application bootstrap, post_init / post_shutdown
-│   ├── messages.py         — text / voice / photo / document / forward
+│   ├── app.py              — bootstrap/watchdog compatibility facade
+│   ├── _app_*.py           — lifecycle and handler registration
+│   ├── messages.py         — inbound compatibility facade
+│   ├── _messages_*.py      — text / voice / media / shared delivery
 │   ├── session_events.py   — claude → TG dispatch
 │   ├── commands/           — slash command bodies
 │   └── callbacks/          — one file per CB_* prefix
 └── handlers/
-    ├── notifications.py    — live cards + push events
-    ├── card_model.py       — card state / render / paginate model layer
+    ├── notifications.py    — live-card compatibility facade
+    ├── card_model.py       — card-model compatibility facade
+    ├── card_*.py           — state / render / paginate / transport / lifecycle
     ├── bg_status.py        — background-session status panel
     ├── archive.py          — /archive page rendering + idle sweeps
     ├── quota_alerts.py     — background /usage poll

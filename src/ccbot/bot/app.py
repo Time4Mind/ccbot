@@ -30,7 +30,7 @@ from ..inbound_queue import shutdown_inbound_queues
 
 from ..config import config
 from ..handlers.quota_alerts import quota_alerts_loop
-from ..handlers.notifications import card_timer_loop
+from ..handlers.notifications import card_timer_loop, shutdown_card_surface_tasks
 from ..handlers.status_polling import status_poll_loop
 from ..metrics import metrics_flush_loop
 from ..session import session_manager
@@ -433,6 +433,7 @@ async def post_shutdown(
         _auth_preflight_task = None
     await shutdown_auth_flows()
     await shutdown_inbound_queues()
+    await shutdown_card_surface_tasks()
 
     if _send_file_relay_task:
         _send_file_relay_task.cancel()

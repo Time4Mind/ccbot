@@ -886,6 +886,7 @@ async def voice_handler(
     *,
     pinned_wid: str | None = None,
     ordered: bool = False,
+    surface_pending: bool = True,
 ) -> bool:
     """Queue a voice turn, then transcribe it without letting later messages pass."""
     user = update.effective_user
@@ -903,7 +904,12 @@ async def voice_handler(
         return await _process_voice(update, context)
 
     if ordered:
-        return await _process_voice(update, context, pinned_wid=wid)
+        return await _process_voice(
+            update,
+            context,
+            pinned_wid=wid,
+            surface_pending=surface_pending,
+        )
 
     previous, barrier = _enqueue_voice(user.id, wid)
     delivered = False
@@ -911,7 +917,11 @@ async def voice_handler(
         if previous is not None and not await _wait_for_voice(previous):
             return False
         delivered = await _process_voice(
-            update, context, pinned_wid=wid, queue_barrier=barrier
+            update,
+            context,
+            pinned_wid=wid,
+            queue_barrier=barrier,
+            surface_pending=surface_pending,
         )
     finally:
         _release_voice(user.id, wid, barrier, delivered=delivered)
@@ -924,6 +934,7 @@ async def _process_voice(
     *,
     pinned_wid: str | None = None,
     queue_barrier: asyncio.Future[bool] | None = None,
+    surface_pending: bool = True,
 ) -> bool:
     """Transcribe the voice and forward as text to the active session."""
     user = update.effective_user
@@ -987,9 +998,15 @@ async def _process_voice(
         card_state.current_page_idx = None
         if is_active_for_user(user.id, sess):
             try:
-                await repost_card(context.bot, user.id, sess)
+                if surface_pending:
+                    await repost_card(context.bot, user.id, sess)
+                else:
+                    # Fast intake already moved the card below the voice. Edit
+                    # that carrier to add the pending marker; reposting here
+                    # would create a second acknowledgement card.
+                    await resume_card_view(context.bot, user.id, sess)
             except Exception as e:
-                logger.debug("voice-pending card repost failed: %s", e)
+                logger.debug("voice-pending card surface failed: %s", e)
 
     try:
         ogg_data = await _download_voice_bytes(

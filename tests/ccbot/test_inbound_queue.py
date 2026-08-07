@@ -63,13 +63,17 @@ async def test_voice_and_followup_pin_before_first_await() -> None:
         events.append(("text", wid))
         return True
 
-    notice = AsyncMock()
+    surface = MagicMock()
     with (
         patch("ccbot.bot.inbound.is_user_allowed", return_value=True),
         patch("ccbot.bot.inbound.active_window", side_effect=lambda user_id: active),
         patch("ccbot.bot.inbound._run_voice", new=run_voice),
         patch("ccbot.bot.inbound._run_text", new=run_text),
-        patch("ccbot.bot.inbound._queue_notice", new=notice),
+        patch("ccbot.bot.inbound.schedule_card_after_message", new=surface),
+        patch(
+            "ccbot.bot.inbound.session_manager.find_session_by_window",
+            side_effect=lambda wid: SimpleNamespace(id=wid),
+        ),
     ):
         await voice_intake_handler(voice, context)
         await text_intake_handler(text, context)
@@ -77,7 +81,7 @@ async def test_voice_and_followup_pin_before_first_await() -> None:
         await voice_started.wait()
         await asyncio.sleep(0)
         assert events == [("voice-start", "@A")]
-        notice.assert_awaited_once_with(text, context, "@A", 1)
+        assert [call.args[3] for call in surface.call_args_list] == [1, 2]
 
         release_voice.set()
         while pending_inbound_count(42, "@A"):
@@ -134,6 +138,7 @@ async def test_reply_quote_is_pinned_to_quoted_session() -> None:
         patch("ccbot.bot.inbound.lookup_session_for_message", return_value="sessB"),
         patch("ccbot.bot.inbound.session_manager.get_session", return_value=target),
         patch("ccbot.bot.inbound._run_text", new=run_text),
+        patch("ccbot.bot.inbound.schedule_card_after_message"),
     ):
         await text_intake_handler(update, context)
         while pending_inbound_count(42, "@B"):
@@ -181,3 +186,19 @@ def test_application_registers_fast_blocking_intake_handlers() -> None:
 
     assert handlers["voice_intake_handler"]
     assert handlers["text_intake_handler"]
+
+
+@pytest.mark.asyncio
+async def test_ordered_voice_uses_intake_card_as_its_only_receipt() -> None:
+    from ccbot.bot import inbound
+
+    target = AsyncMock(return_value=True)
+    with patch("ccbot.bot.inbound.voice_handler", new=target):
+        await inbound._run_voice(_update(1, voice=True), _context(), "@A")
+
+    target.assert_awaited_once()
+    assert target.await_args.kwargs == {
+        "pinned_wid": "@A",
+        "ordered": True,
+        "surface_pending": False,
+    }

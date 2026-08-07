@@ -90,6 +90,8 @@ async def test_drain_includes_messages_arriving_while_window_becomes_ready() -> 
     first_started = asyncio.Event()
     release_first = asyncio.Event()
     seen: list[int] = []
+    sess = SimpleNamespace(id="fresh")
+    surface = MagicMock()
 
     async def replay(entry, window_id) -> bool:
         assert window_id == "@9"
@@ -104,6 +106,14 @@ async def test_drain_includes_messages_arriving_while_window_becomes_ready() -> 
             "ccbot.session.session_manager.wait_for_window_ready",
             new=AsyncMock(return_value=True),
         ),
+        patch(
+            "ccbot.session.session_manager.find_session_by_window",
+            return_value=sess,
+        ),
+        patch(
+            "ccbot.handlers.notifications.schedule_card_after_message",
+            new=surface,
+        ),
         patch("ccbot.startup_queue._replay", side_effect=replay),
     ):
         task = bind_startup_queue(42, "@9")
@@ -114,6 +124,7 @@ async def test_drain_includes_messages_arriving_while_window_becomes_ready() -> 
         await task
 
     assert seen == [1, 2]
+    surface.assert_called_once_with(context.bot, 42, sess, 2)
     assert not has_startup_queue(42)
 
 

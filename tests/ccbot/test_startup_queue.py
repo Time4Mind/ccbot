@@ -91,7 +91,8 @@ async def test_drain_includes_messages_arriving_while_window_becomes_ready() -> 
     release_first = asyncio.Event()
     seen: list[int] = []
 
-    async def replay(entry) -> bool:
+    async def replay(entry, window_id) -> bool:
+        assert window_id == "@9"
         seen.append(entry.sequence)
         if entry.sequence == 1:
             first_started.set()
@@ -117,7 +118,7 @@ async def test_drain_includes_messages_arriving_while_window_becomes_ready() -> 
 
 
 @pytest.mark.asyncio
-async def test_unconfirmed_head_is_retained_with_everything_behind_it() -> None:
+async def test_unconfirmed_head_does_not_stall_everything_behind_it() -> None:
     context = MagicMock()
     begin_startup_queue(42)
     enqueue_startup_message(_update(1, text="first"), context)
@@ -128,14 +129,32 @@ async def test_unconfirmed_head_is_retained_with_everything_behind_it() -> None:
             "ccbot.session.session_manager.wait_for_window_ready",
             new=AsyncMock(return_value=True),
         ),
-        patch("ccbot.startup_queue._replay", new=AsyncMock(return_value=False)),
+        patch(
+            "ccbot.startup_queue._replay",
+            new=AsyncMock(side_effect=[False, True]),
+        ) as replay,
     ):
         task = bind_startup_queue(42, "@9")
         assert task is not None
         await task
 
-    assert has_startup_queue(42)
-    assert pending_startup_count(42) == 2
+    assert replay.await_count == 2
+    assert not has_startup_queue(42)
+    assert pending_startup_count(42) == 0
+
+
+@pytest.mark.asyncio
+async def test_replay_pins_every_handler_to_bound_window() -> None:
+    context = MagicMock()
+    entry = SimpleNamespace(
+        update=_update(1, text="follow-up"), context=context, sequence=1
+    )
+    target = AsyncMock(return_value=True)
+
+    with patch("ccbot.bot.messages.text_handler", new=target):
+        assert await _replay(entry, "@A")
+
+    target.assert_awaited_once_with(entry.update, context, pinned_wid="@A")
 
 
 @pytest.mark.asyncio

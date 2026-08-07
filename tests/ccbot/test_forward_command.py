@@ -43,6 +43,7 @@ class TestForwardCommand:
             patch("ccbot.bot.messages.session_manager") as mock_sm,
             patch("ccbot.bot._common.session_manager", mock_sm),
             patch("ccbot.bot.messages.tmux_manager") as mock_tmux,
+            patch("ccbot.bot.messages.is_active_for_user", return_value=True),
             patch("ccbot.bot.messages.safe_reply", new_callable=AsyncMock),
         ):
             mock_sm.get_active_window.return_value = "@5"
@@ -95,6 +96,7 @@ class TestForwardCommand:
             patch("ccbot.bot.messages.session_manager") as mock_sm,
             patch("ccbot.bot._common.session_manager", mock_sm),
             patch("ccbot.bot.messages.tmux_manager") as mock_tmux,
+            patch("ccbot.bot.messages.is_active_for_user", return_value=True),
             patch("ccbot.bot.messages.safe_reply", new_callable=AsyncMock),
             patch(
                 "ccbot.bot.messages.clear_card", new_callable=AsyncMock

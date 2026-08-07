@@ -19,7 +19,10 @@ from .kb_mode import _capture_pane_png
 
 logger = logging.getLogger(__name__)
 
-_MEDIA_SPACER = "<p><br></p>"
+# Keep the same visible gap used between card events. Telegram collapses an
+# empty ``<p><br></p>`` around media, while a non-breaking-space paragraph is
+# preserved as its own rich block by every transport path.
+_MEDIA_SPACER = "\u00a0"
 
 
 @dataclass(frozen=True)

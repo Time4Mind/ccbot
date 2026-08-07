@@ -410,6 +410,81 @@ def test_codex_rollout_normalizes_text_and_tools() -> None:
     assert parsed[-1].stop_reason == "end_turn"
 
 
+def test_codex_0147_rollout_normalizes_numbered_message_items() -> None:
+    entries = [
+        {
+            **_line(
+                "response_item",
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "hidden"}],
+                },
+            ),
+            "ordinal": 1,
+        },
+        {
+            **_line(
+                "response_item",
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Are you there?"}],
+                },
+            ),
+            "ordinal": 2,
+        },
+        {
+            **_line(
+                "response_item",
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Yes."}],
+                    "phase": "final_answer",
+                },
+            ),
+            "ordinal": 3,
+        },
+    ]
+
+    parsed, pending = TranscriptParser.parse_entries(entries)
+
+    assert pending == {}
+    assert [(item.role, item.text) for item in parsed] == [
+        ("user", "Are you there?"),
+        ("assistant", "Yes."),
+    ]
+    assert parsed[-1].stop_reason == "end_turn"
+
+
+def test_codex_0146_unnumbered_message_items_do_not_duplicate_events() -> None:
+    entries = [
+        _line(
+            "response_item",
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Done."}],
+                "phase": "final_answer",
+            },
+        ),
+        _line(
+            "event_msg",
+            {
+                "type": "agent_message",
+                "message": "Done.",
+                "phase": "final_answer",
+            },
+        ),
+    ]
+
+    parsed, pending = TranscriptParser.parse_entries(entries)
+
+    assert pending == {}
+    assert [(item.role, item.text) for item in parsed] == [("assistant", "Done.")]
+
+
 def test_codex_pending_prompt_detection_only_matches_bottom_input() -> None:
     pane = "old output\n\n› send the report now\n\n  model · ~/project"
     assert TmuxManager._codex_prompt_contains(pane, "send the report now")

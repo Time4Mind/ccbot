@@ -217,6 +217,43 @@ class TranscriptParser:
         if top_type != "response_item":
             return None
         item_type = payload.get("type")
+        # Codex 0.147 stopped emitting the duplicate event_msg rows that used
+        # to carry user and assistant text. Its replacement message rows are
+        # numbered with an ordinal. Codex 0.146 also wrote unnumbered message
+        # response_items alongside event_msg rows, so accepting only numbered
+        # rows here preserves the old fallback without rendering every turn
+        # twice.
+        if item_type == "message" and data.get("ordinal") is not None:
+            role = str(payload.get("role") or "")
+            if role not in ("user", "assistant"):
+                return None
+            raw_content = payload.get("content", "")
+            content: list[dict[str, str]] = []
+            if isinstance(raw_content, list):
+                for block in raw_content:
+                    if not isinstance(block, dict):
+                        continue
+                    block_type = block.get("type")
+                    if block_type not in ("input_text", "output_text", "text"):
+                        continue
+                    text = str(block.get("text") or "")
+                    if text:
+                        content.append({"type": "text", "text": text})
+            elif isinstance(raw_content, str) and raw_content:
+                content.append({"type": "text", "text": raw_content})
+            if not content:
+                return None
+            phase = str(payload.get("phase") or "")
+            return {
+                "type": role,
+                "timestamp": timestamp,
+                "message": {
+                    "content": content,
+                    "stop_reason": "end_turn"
+                    if role == "assistant" and phase in ("final_answer", "final")
+                    else None,
+                },
+            }
         if item_type in ("function_call", "custom_tool_call"):
             arguments = payload.get("arguments")
             if arguments is None:

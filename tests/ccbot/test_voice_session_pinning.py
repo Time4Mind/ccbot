@@ -642,6 +642,7 @@ class TestVoicePendingCardMarker:
         pinned_sess.id = "sess1"
         pinned_sess.name = "scraper"
         mock_sm.find_session_by_window.return_value = pinned_sess
+        mock_sm.get_active_session.return_value = pinned_sess
 
         mock_tmux = MagicMock()
         mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock(window_id="@5"))
@@ -678,6 +679,7 @@ class TestVoicePendingCardMarker:
             patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
             patch("ccbot.bot.messages.safe_reply", new=AsyncMock()),
             patch("ccbot.bot.messages.get_card_state", return_value=state),
+            patch("ccbot.bot.messages.is_active_for_user", return_value=True),
             patch("ccbot.bot.messages.resume_card_view", new=AsyncMock()),
             patch(
                 "ccbot.bot.messages.repost_card",

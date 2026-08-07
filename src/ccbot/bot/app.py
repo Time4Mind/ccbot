@@ -26,6 +26,7 @@ from telegram.ext import (
 )
 
 from ..startup_queue import capture_startup_message
+from ..inbound_queue import shutdown_inbound_queues
 
 from ..config import config
 from ..handlers.quota_alerts import quota_alerts_loop
@@ -56,13 +57,13 @@ from .commands.lifecycle import (
     new_command,
     stop_command,
 )
-from .messages import (
-    document_handler,
-    forward_command_handler,
-    photo_handler,
-    text_handler,
-    unsupported_content_handler,
-    voice_handler,
+from .inbound import (
+    command_intake_handler,
+    document_intake_handler,
+    photo_intake_handler,
+    text_intake_handler,
+    unsupported_intake_handler,
+    voice_intake_handler,
 )
 from .session_events import handle_new_message
 
@@ -431,6 +432,7 @@ async def post_shutdown(
         await asyncio.gather(_auth_preflight_task, return_exceptions=True)
         _auth_preflight_task = None
     await shutdown_auth_flows()
+    await shutdown_inbound_queues()
 
     if _send_file_relay_task:
         _send_file_relay_task.cancel()
@@ -545,22 +547,20 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     application.add_handler(CommandHandler("login", login_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Forward any other /command to Claude Code.
-    application.add_handler(MessageHandler(filters.COMMAND, forward_command_handler))
+    application.add_handler(MessageHandler(filters.COMMAND, command_intake_handler))
     application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler)
+        MessageHandler(filters.TEXT & ~filters.COMMAND, text_intake_handler)
     )
-    application.add_handler(MessageHandler(filters.PHOTO, photo_handler))
-    application.add_handler(MessageHandler(filters.Document.ALL, document_handler))
-    # block=False keeps Telegram callbacks and other sessions responsive while
-    # Whisper works.  messages.py maintains a per-session voice barrier, so
-    # later content for this same session still arrives at the agent strictly
-    # after the transcription.
-    application.add_handler(MessageHandler(filters.VOICE, voice_handler, block=False))
+    application.add_handler(MessageHandler(filters.PHOTO, photo_intake_handler))
+    application.add_handler(
+        MessageHandler(filters.Document.ALL, document_intake_handler)
+    )
+    application.add_handler(MessageHandler(filters.VOICE, voice_intake_handler))
     # Catch-all: non-text content (stickers, video, etc.).
     application.add_handler(
         MessageHandler(
             ~filters.COMMAND & ~filters.TEXT & ~filters.StatusUpdate.ALL,
-            unsupported_content_handler,
+            unsupported_intake_handler,
         )
     )
 

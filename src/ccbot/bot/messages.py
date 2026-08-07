@@ -381,7 +381,7 @@ async def _card_repost_bracket(
     No-op when ``sess`` is None (orphan window / no Session record).
     """
     handle = _RepostHandle()
-    if sess is None:
+    if sess is None or not is_active_for_user(user_id, sess):
         yield handle
         return
     await resume_card_view(bot, user_id, sess)
@@ -389,7 +389,7 @@ async def _card_repost_bracket(
     try:
         yield handle
     finally:
-        if handle.do_repost:
+        if handle.do_repost and is_active_for_user(user_id, sess):
             try:
                 await repost_card(bot, user_id, sess)
             except Exception as e:
@@ -483,7 +483,10 @@ async def _intercept_if_pending_ui(
 
 
 async def forward_command_handler(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    pinned_wid: str | None = None,
 ) -> bool:
     """Forward an unhandled /command as a slash to the active Claude session."""
     user = update.effective_user
@@ -494,13 +497,13 @@ async def forward_command_handler(
 
     cmd_text = update.message.text or ""
     cc_slash = cmd_text.split("@")[0]  # strip bot mention
-    wid = active_window(user.id)
+    wid = pinned_wid or active_window(user.id)
     if not wid:
         await safe_reply(
             update.message, "❌ No active session. Use /new to create one."
         )
         return False
-    if not await _await_prior_voice(user.id, wid):
+    if pinned_wid is None and not await _await_prior_voice(user.id, wid):
         return False
 
     w = await tmux_manager.find_window_by_id(wid)
@@ -609,7 +612,10 @@ def _hidden_link_urls(msg: Any) -> list[str]:
 
 
 async def unsupported_content_handler(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    pinned_wid: str | None = None,
 ) -> bool:
     """Catch-all for messages without a dedicated handler.
 
@@ -628,14 +634,14 @@ async def unsupported_content_handler(
     if not user or not is_user_allowed(user.id):
         return False
     msg = update.message
-    wid_for_queue = active_window(user.id)
+    wid_for_queue = pinned_wid or active_window(user.id)
     if wid_for_queue is not None:
-        if not await _await_prior_voice(user.id, wid_for_queue):
+        if pinned_wid is None and not await _await_prior_voice(user.id, wid_for_queue):
             return False
 
     caption = (msg.caption or "").strip()
     if caption:
-        wid = active_window(user.id)
+        wid = pinned_wid or active_window(user.id)
         if wid is None:
             await safe_reply(
                 msg,
@@ -719,7 +725,12 @@ async def _forward_inbox_file(
     return await _send_with_delivery_proof(wid, text_to_send, sess)
 
 
-async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+async def photo_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    pinned_wid: str | None = None,
+) -> bool:
     """Drop the user's photo into the active session's inbox + notify Claude."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -732,14 +743,14 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> b
     if not update.message or not update.message.photo:
         return False
 
-    wid = active_window(user.id)
+    wid = pinned_wid or active_window(user.id)
     if wid is None:
         await safe_reply(
             update.message,
             "❌ No active session. Send a text message first or use /new.",
         )
         return False
-    if not await _await_prior_voice(user.id, wid):
+    if pinned_wid is None and not await _await_prior_voice(user.id, wid):
         return False
 
     w = await tmux_manager.find_window_by_id(wid)
@@ -784,7 +795,12 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> b
     return True
 
 
-async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+async def document_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    pinned_wid: str | None = None,
+) -> bool:
     """Drop the user's document into the active session's inbox + notify Claude."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -797,14 +813,14 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not update.message or not update.message.document:
         return False
 
-    wid = active_window(user.id)
+    wid = pinned_wid or active_window(user.id)
     if wid is None:
         await safe_reply(
             update.message,
             "❌ No active session. Send a text message first or use /new.",
         )
         return False
-    if not await _await_prior_voice(user.id, wid):
+    if pinned_wid is None and not await _await_prior_voice(user.id, wid):
         return False
 
     w = await tmux_manager.find_window_by_id(wid)
@@ -864,7 +880,13 @@ async def _clear_voice_pending_marker(bot: Bot, user_id: int, sess: Session) -> 
         logger.debug("voice-pending marker clear failed: %s", e)
 
 
-async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+async def voice_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    pinned_wid: str | None = None,
+    ordered: bool = False,
+) -> bool:
     """Queue a voice turn, then transcribe it without letting later messages pass."""
     user = update.effective_user
     if (
@@ -876,9 +898,12 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> b
     ):
         return await _process_voice(update, context)
 
-    wid = active_window(user.id)
+    wid = pinned_wid or active_window(user.id)
     if wid is None:
         return await _process_voice(update, context)
+
+    if ordered:
+        return await _process_voice(update, context, pinned_wid=wid)
 
     previous, barrier = _enqueue_voice(user.id, wid)
     delivered = False
@@ -960,10 +985,11 @@ async def _process_voice(
         # voice message is a new user turn, so focus the latest page just as
         # the normal prompt flow does before showing the pending row.
         card_state.current_page_idx = None
-        try:
-            await repost_card(context.bot, user.id, sess)
-        except Exception as e:
-            logger.debug("voice-pending card repost failed: %s", e)
+        if is_active_for_user(user.id, sess):
+            try:
+                await repost_card(context.bot, user.id, sess)
+            except Exception as e:
+                logger.debug("voice-pending card repost failed: %s", e)
 
     try:
         ogg_data = await _download_voice_bytes(
@@ -1230,7 +1256,12 @@ async def _route_reply_quote(update: Update, user_id: int, text: str) -> bool:
 
 
 async def _resolve_active_window(
-    update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, text: str
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    text: str,
+    *,
+    pinned_wid: str | None = None,
 ) -> str | None:
     """Resolve the active session's tmux window for the inbound text.
 
@@ -1241,7 +1272,7 @@ async def _resolve_active_window(
     window is gone (it's marked lost, state cleared, and the user told).
     """
     assert update.message is not None
-    wid = active_window(user_id)
+    wid = pinned_wid or active_window(user_id)
     if wid is None:
         # No active session — start a directory browser to create one.
         from ..startup_queue import begin_startup_queue, enqueue_startup_message
@@ -1268,7 +1299,8 @@ async def _resolve_active_window(
         sess = session_manager.find_session_by_window(wid)
         if sess is not None:
             session_manager.mark_session_lost(sess.id)
-        await clear_session_state(user_id, wid, context.bot)
+        if active_window(user_id) == wid:
+            await clear_session_state(user_id, wid, context.bot)
         await safe_reply(
             update.message,
             f"❌ Window '{display}' no longer exists.\n"
@@ -1436,7 +1468,12 @@ async def _dispatch_text_to_active(
             end_repost_intent(user_id, intent_sess_id)
 
 
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+async def text_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    pinned_wid: str | None = None,
+) -> bool:
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         # Drop the message silently — no reply, no callback ack. The
@@ -1449,9 +1486,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
         return False
 
     text = update.message.text
-    queued_wid = active_window(user.id)
+    queued_wid = pinned_wid or active_window(user.id)
     if queued_wid is not None:
-        if not await _await_prior_voice(user.id, queued_wid):
+        if pinned_wid is None and not await _await_prior_voice(user.id, queued_wid):
             return False
 
     # A pending /login flow owns the next message: it's the OAuth code, not a
@@ -1473,7 +1510,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
     if await _route_reply_quote(update, user.id, text):
         return True
 
-    wid = await _resolve_active_window(update, context, user.id, text)
+    wid = await _resolve_active_window(
+        update, context, user.id, text, pinned_wid=pinned_wid
+    )
     if wid is None:
         return False
 

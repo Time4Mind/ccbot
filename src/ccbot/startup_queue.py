@@ -6,9 +6,9 @@ message while the picker is open or the agent TUI is booting.  Once the new
 tmux window is genuinely ready, messages are replayed through the normal
 handlers in Telegram order.
 
-Entries are removed only after their handler reports success.  A failed entry
-and everything behind it stay queued, so a transient delivery failure cannot
-silently turn into message loss.
+Every replay is pinned to the window created for the flow. A failed entry is
+reported by its regular handler and removed so it cannot invisibly stall the
+rest of the queue.
 """
 
 from __future__ import annotations
@@ -40,6 +40,34 @@ class StartupFlow:
 
 
 _flows: dict[int, StartupFlow] = {}
+_notice_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _send_capture_notice(
+    entry: QueuedInbound, window_id: str, ahead: int
+) -> None:
+    from .bot._common import is_user_allowed
+    from .handlers.message_sender import safe_reply
+    from .i18n import t
+    from .session import session_manager
+
+    user = entry.update.effective_user
+    message = entry.update.message
+    if user is None or message is None or not is_user_allowed(user.id):
+        return
+    sess = session_manager.find_session_by_window(window_id)
+    label = (
+        (sess.name or sess.id)
+        if sess is not None
+        else session_manager.get_display_name(window_id)
+    )
+    try:
+        await safe_reply(
+            message,
+            t(user.id, "queue.accepted", session=label, ahead=ahead),
+        )
+    except Exception:
+        return
 
 
 def begin_startup_queue(user_id: int) -> StartupFlow:
@@ -117,6 +145,13 @@ def enqueue_startup_message(
     entry = QueuedInbound(update=update, context=context, sequence=flow.next_sequence)
     flow.next_sequence += 1
     flow.entries.append(entry)
+    if flow.window_id is not None and len(flow.entries) > 1:
+        task = asyncio.create_task(
+            _send_capture_notice(entry, flow.window_id, len(flow.entries) - 1),
+            name=f"startup-queue-ack:{user.id}:{entry.sequence}",
+        )
+        _notice_tasks.add(task)
+        task.add_done_callback(_notice_tasks.discard)
     logger.info(
         "startup queue captured user=%d seq=%d message_id=%s pending=%d",
         user.id,
@@ -127,7 +162,7 @@ def enqueue_startup_message(
     return entry
 
 
-async def _replay(entry: QueuedInbound) -> bool:
+async def _replay(entry: QueuedInbound, window_id: str | None = None) -> bool:
     """Replay one captured update through its regular inbound handler."""
     # Lazy import avoids a cycle: bot.messages imports the capture handler for
     # application registration.
@@ -143,19 +178,32 @@ async def _replay(entry: QueuedInbound) -> bool:
     message = entry.update.message
     if message is None:
         return True
+    pinned = {"pinned_wid": window_id} if window_id is not None else {}
     if message.voice:
-        result = await voice_handler(entry.update, entry.context)
+        if window_id is None:
+            result = await voice_handler(entry.update, entry.context)
+        else:
+            result = await voice_handler(
+                entry.update,
+                entry.context,
+                **pinned,
+                ordered=True,
+            )
     elif message.photo:
-        result = await photo_handler(entry.update, entry.context)
+        result = await photo_handler(entry.update, entry.context, **pinned)
     elif message.document:
-        result = await document_handler(entry.update, entry.context)
+        result = await document_handler(entry.update, entry.context, **pinned)
     elif message.text:
         if message.text.startswith("/"):
-            result = await forward_command_handler(entry.update, entry.context)
+            result = await forward_command_handler(
+                entry.update, entry.context, **pinned
+            )
         else:
-            result = await text_handler(entry.update, entry.context)
+            result = await text_handler(entry.update, entry.context, **pinned)
     else:
-        result = await unsupported_content_handler(entry.update, entry.context)
+        result = await unsupported_content_handler(
+            entry.update, entry.context, **pinned
+        )
     # Legacy handlers returned None on success.  New delivery-aware paths
     # return a bool; preserve compatibility while they are migrated.
     return result is not False
@@ -181,7 +229,7 @@ async def _drain(user_id: int, window_id: str) -> None:
         while flow.entries:
             entry = flow.entries[0]
             try:
-                delivered = await _replay(entry)
+                delivered = await _replay(entry, window_id)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -192,17 +240,19 @@ async def _drain(user_id: int, window_id: str) -> None:
                     entry.sequence,
                     exc,
                 )
-                return
+                flow.entries.popleft()
+                continue
             if not delivered:
                 logger.error(
-                    "startup queue delivery unconfirmed user=%d window=%s "
+                    "startup queue item failed; continuing user=%d window=%s "
                     "seq=%d pending=%d",
                     user_id,
                     window_id,
                     entry.sequence,
                     len(flow.entries),
                 )
-                return
+                flow.entries.popleft()
+                continue
             flow.entries.popleft()
             logger.info(
                 "startup queue delivered user=%d window=%s seq=%d remaining=%d",
@@ -242,6 +292,10 @@ def reset_startup_queues_for_test() -> None:
         if flow.drain_task is not None and not flow.drain_task.done():
             flow.drain_task.cancel()
     _flows.clear()
+    for task in _notice_tasks:
+        if not task.done():
+            task.cancel()
+    _notice_tasks.clear()
 
 
 __all__ = [

@@ -148,12 +148,27 @@ def _transcript_contains_voice_text(
         candidate = ""
         if checkpoint.backend == "codex":
             payload = row.get("payload")
-            if (
-                row.get("type") == "event_msg"
-                and isinstance(payload, dict)
-                and payload.get("type") == "user_message"
-            ):
-                candidate = str(payload.get("message") or "")
+            if isinstance(payload, dict):
+                if (
+                    row.get("type") == "event_msg"
+                    and payload.get("type") == "user_message"
+                ):
+                    candidate = str(payload.get("message") or "")
+                elif (
+                    row.get("type") == "response_item"
+                    and payload.get("type") == "message"
+                    and payload.get("role") == "user"
+                ):
+                    content = payload.get("content", "")
+                    if isinstance(content, list):
+                        candidate = "\n".join(
+                            str(item.get("text") or "")
+                            for item in content
+                            if isinstance(item, dict)
+                            and item.get("type") in ("input_text", "text")
+                        )
+                    elif isinstance(content, str):
+                        candidate = content
         elif row.get("type") == "user":
             message = row.get("message")
             if isinstance(message, dict):

@@ -1,4 +1,4 @@
-"""Rich Markdown transport for live cards with a trailing pane image."""
+"""Rich Markdown transport for live cards with an inline pane image."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ from .card_registry import lookup_session_for_message
 from .kb_mode import _capture_pane_png
 
 logger = logging.getLogger(__name__)
+
+_MEDIA_SPACER = "<p><br></p>"
 
 
 @dataclass(frozen=True)
@@ -132,13 +134,13 @@ async def edit_rich_media_card(
 
 
 def _rich_card_markdown(text: str, state: CardState) -> str:
-    """Insert the photo anchor before context/background service metadata."""
+    """Insert the spaced photo before context/background service metadata."""
     offset = state.media_anchor_offset
     if offset <= 0 or offset > len(text):
         return rich.to_rich_markdown(text)
     body = rich.to_rich_markdown(text[:offset]).rstrip()
     service_tail = rich.to_rich_markdown(text[offset:].lstrip()).lstrip()
-    parts = [body, rich.RICH_PHOTO_ANCHOR]
+    parts = [body, _MEDIA_SPACER, rich.RICH_PHOTO_ANCHOR, _MEDIA_SPACER]
     if service_tail:
         parts.append(service_tail)
     return "\n\n".join(parts)

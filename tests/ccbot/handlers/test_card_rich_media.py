@@ -41,6 +41,11 @@ async def test_send_uploads_pane_and_returns_reusable_file_id(
     assert markdown.index(card_rich_media.rich.RICH_PHOTO_ANCHOR) < markdown.index(
         "context: 42%"
     )
+    assert (
+        f"{card_rich_media._MEDIA_SPACER}\n\n"
+        f"{card_rich_media.rich.RICH_PHOTO_ANCHOR}\n\n"
+        f"{card_rich_media._MEDIA_SPACER}"
+    ) in markdown
 
 
 @pytest.mark.asyncio

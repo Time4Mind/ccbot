@@ -248,10 +248,7 @@ class TestRichPhotoMedia:
         endpoint, data = bot.posts[0]
         assert endpoint == "sendRichMessage"
         assert data["rich_message"] == {
-            "markdown": (
-                "**Status**\n\n"
-                "![](tg://photo?id=terminal_screenshot)"
-            ),
+            "markdown": ("**Status**\n\n![](tg://photo?id=terminal_screenshot)"),
             "media": [
                 {
                     "id": "terminal_screenshot",
@@ -295,11 +292,7 @@ class TestRichPhotoMedia:
     @pytest.mark.asyncio
     async def test_photo_anchor_places_media_before_service_tail(self) -> None:
         bot = _FakeBot(post_result=_sent_message_json())
-        markdown = (
-            "answer\n\n"
-            f"{rich.RICH_PHOTO_ANCHOR}\n\n"
-            "context: 42%\n\n─── фон ───"
-        )
+        markdown = f"answer\n\n{rich.RICH_PHOTO_ANCHOR}\n\ncontext: 42%\n\n─── фон ───"
 
         await rich.send_rich_message(  # type: ignore[arg-type]
             bot, 449, markdown, photo="existing-photo-file-id"

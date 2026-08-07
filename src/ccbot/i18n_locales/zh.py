@@ -249,11 +249,15 @@ ZH: dict[str, str] = {
     "settings.group.card_inline_screenshots": "卡片内嵌截图",
     "settings.screens.body": (
         "*卡片内嵌截图*\n\n"
-        "*开启* 时，终端 pane 截图会作为活动 Rich Markdown 卡片的\n"
-        "最后一个媒体块，位于回复、工具状态和折叠内容之后。文本和\n"
-        "截图持续在同一张 live 卡片中更新；你的下一条消息之后会在\n"
-        "下方出现一张新卡片。仅当 pane 变化时刷新，约 3 秒节流；\n"
-        "任务完成后截图会从卡片中移除。\n\n"
+        "*开启* 时,pane 仅在 turn 为 *RUNNING* 时显示:正文 → 间距 →\n"
+        "pane → 间距 → context → 后台面板。进入 *IDLE*、收到最终回答\n"
+        "或执行 /clear 时移除;下一轮开始后再次出现。pane 更新约 3 秒\n"
+        "节流。\n\n"
+        "Rich Bot API 将文本和媒体保留在同一条消息中;旧版 API 使用\n"
+        "图片 + 说明文字。发送失败依次回退到 legacy 图片和纯文本;\n"
+        "临时 edit 失败在下次更新重试,carrier 丢失则重建且不立即重复。\n\n"
+        "未完成的活动 turn 长时间无响应时保留 pane,不发送警告 push;后台\n"
+        "会话只在后台面板中标记 ⚠️。\n\n"
         "*关闭* 时，保持普通纯文本流程，Shot 可从顶部终端按钮打开。"
     ),
     "screens.on": "开",

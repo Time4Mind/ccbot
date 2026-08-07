@@ -293,12 +293,16 @@ EN: dict[str, str] = {
     "settings.group.card_inline_screenshots": "Inline screenshots",
     "settings.screens.body": (
         "*Inline screenshots*\n\n"
-        "When *on*, the terminal pane is appended as the final media "
-        "block of the active Rich Markdown card — after replies, tool "
-        "states and spoilers. Text and screenshot keep updating in that "
-        "same live card; after your next message, a fresh card appears "
-        "below it. The screenshot refreshes only when the pane changes, "
-        "with a ~3 sec throttle, and disappears when the task finishes.\n\n"
+        "When *on*, the terminal pane appears only while the turn is "
+        "*RUNNING*: body → gap → pane → gap → context → background. "
+        "It disappears on *IDLE*, final answer, or /clear, and returns "
+        "when the next turn starts. Pane changes are throttled to ~3 sec.\n\n"
+        "Rich Bot API keeps text and media in one message; older servers "
+        "use photo + caption. Failed sends fall back to legacy photo, then "
+        "text-only. Transient edits retry on the next update; a lost card "
+        "is recreated without an immediate duplicate.\n\n"
+        "A silent unfinished active turn keeps the pane without a warning "
+        "push; a background one is marked only with ⚠️ in the background panel.\n\n"
         "When *off*, the card keeps its normal text-only flow and Shot "
         "remains available from the top-row terminal button."
     ),

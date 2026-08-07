@@ -1,0 +1,4 @@
+interface:
+  display_name: "CCBot Send File"
+  short_description: "Send generated files through the CCBot relay"
+  default_prompt: "Use $ccbot-send-file to deliver a generated file to my Telegram chat."

@@ -330,8 +330,19 @@ Card knobs live under *Settings → 🃏 Card / view*:
 | ------- | ------- | ------ |
 | `Card history` | `20` | end-of-turn boundaries seeded into a fresh card from the JSONL (survives bot restarts) |
 | `Page size` | `20` lines | max lines per card page; longer bodies chunk across pages on paragraph/sentence boundaries |
-| `Inline screenshots` | `off` | appends the live terminal pane as the final media block of the Rich Markdown card; older Bot API servers fall back to photo + caption |
+| `Inline screenshots` | `off` | shows the live terminal pane inside the active card while a turn is running |
 | `Live lag` | `4s` | coalescing window for preview updates |
+
+The inline pane exists only in the **RUNNING** state. Its order is
+`body → gap → pane → gap → context → background panel`; it is removed on
+**IDLE**, final answer, and `/clear`, then appears again when the next turn
+starts. Rich-capable Bot API servers keep text and media in one Rich Markdown
+message. Older servers use photo + caption. A failed rich send falls back to
+legacy photo, then text-only; transient edits retry on the next update, and a
+lost carrier is recreated without posting an immediate duplicate.
+If an unfinished turn goes silent, the active card keeps its pane instead of
+inserting a warning or sending a push. The same condition on a background
+session is shown only as `⚠️` beside that session in the background panel.
 
 Telegram's chat-header **`typing…` indicator** is driven by real
 claude events. As long as the active session keeps emitting (tool

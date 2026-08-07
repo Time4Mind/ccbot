@@ -81,7 +81,6 @@ from .card_seed import (
     _ensure_seeded,
 )
 from .card_carrier import (
-    _recover_from_false_stall,
     cancel_pending_card_edits,
     close_card_view,
     set_card_context_pct,
@@ -119,8 +118,6 @@ from .card_stall import (
     is_card_busy,
     STALL_FINALIZE_AFTER_SECONDS,
     STALL_FINALIZE_TOOL_USE_SECONDS,
-    STALL_NOTE,
-    STALL_ALERT,
     maybe_finalize_stalled,
     is_active_for_user,
     repost_card,
@@ -206,7 +203,6 @@ __all__ = [
     "_seed_events_from_jsonl",
     "_transcript_mtime",
     "_ensure_seeded",
-    "_recover_from_false_stall",
     "cancel_pending_card_edits",
     "close_card_view",
     "set_card_context_pct",
@@ -238,8 +234,6 @@ __all__ = [
     "is_card_busy",
     "STALL_FINALIZE_AFTER_SECONDS",
     "STALL_FINALIZE_TOOL_USE_SECONDS",
-    "STALL_NOTE",
-    "STALL_ALERT",
     "maybe_finalize_stalled",
     "is_active_for_user",
     "repost_card",

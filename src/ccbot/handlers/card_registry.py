@@ -10,6 +10,7 @@ import logging
 from telegram import Bot
 
 from ..session import session_manager
+from .card_binding import clear_carrier
 from .card_model import (
     CardState,
 )
@@ -190,13 +191,8 @@ def reset_card_msg_id_for_user(user_id: int) -> None:
     for (uid, _sid), state in _cards.items():
         if uid != user_id:
             continue
-        state.msg_id = None
-        state.is_rich_media_msg = False
-        state.rich_media_file_id = ""
-        state.is_photo_msg = False
+        clear_carrier(state)
         state.last_rendered = ""
-        state.last_pane_hash = ""
-        state.last_photo_edit_ts = 0.0
 
 
 def _inline_screens_enabled(user_id: int | None) -> bool:

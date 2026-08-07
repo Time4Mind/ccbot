@@ -11,6 +11,7 @@ Status states (driven only by ``handle_new_message`` transitions):
   - "error"        ❌  error event while bg
   - "needs_action" ❓  AskUserQuestion / ExitPlanMode / permission
                        prompt detected on bg session
+  - "stalled"      ⚠️  unfinished turn stayed silent past its threshold
 
 The pending interactive UI itself is detected and remembered here
 (``pending_interactive_ui``) so the switcher-tap handler can render
@@ -51,7 +52,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-Status = Literal["working", "finished", "error", "needs_action"]
+Status = Literal["working", "finished", "error", "needs_action", "stalled"]
 
 
 _STATUS_EMOJI: dict[Status, str] = {
@@ -59,6 +60,7 @@ _STATUS_EMOJI: dict[Status, str] = {
     "finished": "✅",
     "error": "❌",
     "needs_action": "❓",
+    "stalled": "⚠️",
 }
 
 
@@ -345,7 +347,13 @@ def load_per_user(raw: dict[str, Any] | None) -> None:
             if not isinstance(data, dict):
                 continue
             status_val = data.get("status", "working")
-            if status_val not in ("working", "finished", "error", "needs_action"):
+            if status_val not in (
+                "working",
+                "finished",
+                "error",
+                "needs_action",
+                "stalled",
+            ):
                 continue
             try:
                 last_change = float(data.get("last_change", 0.0))

@@ -9,6 +9,7 @@ import time
 from telegram import Bot
 
 from ..session import Session, session_manager
+from .card_binding import clear_carrier, restore_carrier, snapshot_carrier
 from .card_model import (
     _latest_inflight_idx,
     _resolved_page_idx,
@@ -69,15 +70,15 @@ async def surface_card_after_message(
             # the live conversation.  Otherwise the old menu card would stay
             # above the message and acceptance would remain invisible.
             state.in_menu_view = False
-            old_msg_id = state.msg_id
-            state.msg_id = None
+            old_binding = snapshot_carrier(state)
+            old_msg_id = clear_carrier(state)
             text = _legacy("_render_card")(sess, state, user_id=user_id)
             await _legacy("_send_card")(bot, user_id, sess, state, text=text)
             new_msg_id = state.msg_id
             if new_msg_id is None:
                 # Telegram send failed: retain the existing carrier binding so
                 # later events can recover instead of orphaning a valid card.
-                state.msg_id = old_msg_id
+                restore_carrier(state, old_binding)
                 return False
             state.last_rendered = text
             state.last_edit_ts = time.monotonic()

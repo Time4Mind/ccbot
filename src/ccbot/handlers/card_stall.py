@@ -1,6 +1,4 @@
-"""Detect stalled turns and surface or repost their live cards safely."""
-
-from __future__ import annotations
+"""Keep silent unfinished turns observable through their live terminal pane."""
 
 from __future__ import annotations
 
@@ -10,9 +8,12 @@ import time
 from telegram import Bot
 
 from ..session import Session, session_manager
+from . import bg_status
+from .card_binding import clear_carrier, restore_carrier, snapshot_carrier
 from .card_model import (
     _card_is_busy,
 )
+from .card_types import TurnPhase
 
 from .card_registry import (
     _cards,
@@ -30,8 +31,6 @@ __all__ = [
     "is_card_busy",
     "STALL_FINALIZE_AFTER_SECONDS",
     "STALL_FINALIZE_TOOL_USE_SECONDS",
-    "STALL_NOTE",
-    "STALL_ALERT",
     "maybe_finalize_stalled",
     "is_active_for_user",
     "repost_card",
@@ -77,19 +76,11 @@ def is_card_busy(user_id: int, session_id: str) -> bool:
     return _card_is_busy(state)
 
 
-# ─── Stalled-session detection (bug A4) ───────────────────────────────
-#
-# When the upstream claude subprocess silently stalls or exits
-# mid-iteration, the JSONL stops growing with renderable turns (it may
-# still get ``last-prompt`` / ``ai-title`` metadata entries, which
-# transcript_parser filters out — see transcript_parser.py:260). The
-# session monitor therefore produces ZERO card updates and the live
-# card freezes on its last "thinking"/tool_use frame with no signal to
-# the user. ``maybe_finalize_stalled`` closes that gap: when an active
-# card has sat with a non-terminal tail event AND the pane spinner has
-# been idle (gone or frozen) for ``STALL_FINALIZE_AFTER_SECONDS``, it
-# finalises the card with a clear note so the user knows the process
-# may have stalled rather than the bot being broken.
+# ─── Silent unfinished-turn observation ──────────────────────────────
+# A silent turn must not be guessed complete. Once its conservative idle
+# threshold elapses, keep the active card RUNNING and periodically refresh its
+# terminal pane. The user can then see whether the process resumes or changes
+# without receiving a synthetic final answer or a separate warning push.
 
 # How long an active card may sit with a non-terminal tail event and an
 # idle (non-busy) pane before we declare it stalled and finalise it.
@@ -109,22 +100,7 @@ def is_card_busy(user_id: int, session_id: str) -> bool:
 STALL_FINALIZE_AFTER_SECONDS = 90.0
 STALL_FINALIZE_TOOL_USE_SECONDS = 300.0
 
-# Note appended to the card when a stall is detected. Card-body strings
-# in this module are not localized (header / "context:" / "goal:" are
-# all hard-coded English), so this note follows the same convention.
-STALL_NOTE = (
-    "⚠️ session went idle without a final reply — "
-    "the Claude process may have stalled or exited."
-)
-
-# Editing the live card is not a Telegram notification: if the chat is not
-# open, the user gets no push and a stalled heavy session can sit unnoticed
-# for hours.  Send a separate message after the card is finalized so the
-# exceptional state is visible outside the chat as well.
-STALL_ALERT = (
-    "⚠️ {session_name}: no activity after an unfinished tool call. "
-    "The session may be stalled - open it, tap Stop, then retry the last step."
-)
+_STALL_PANE_REFRESH_SECONDS = 3.0
 
 
 async def maybe_finalize_stalled(
@@ -137,7 +113,7 @@ async def maybe_finalize_stalled(
     in_menu: bool,
     now: float | None = None,
 ) -> bool:
-    """Finalise an ACTIVE session's frozen card when the subprocess stalled.
+    """Keep an active silent turn RUNNING and refresh only its live pane.
 
     Fires (returns True after finalising) ONLY when ALL hold:
 
@@ -160,16 +136,22 @@ async def maybe_finalize_stalled(
     only trip when the spinner has died AND the transcript stopped
     growing — the exact fingerprint of a stalled / exited subprocess.
 
-    Reuses ``finalize_task``: the stall note is appended as the turn's
-    final answer, so the card flips to the finalized (Kill, not Stop)
-    keyboard via the same path a normal completion takes.
+    No final event and no Telegram push are produced. An active session keeps
+    its pane visible; a background session gets only the ``stalled`` status
+    marker used by the background-session panel.
     """
-    if pane_busy or interactive_waiting or in_menu:
-        return False
     state = _cards.get((user_id, sess.id))
-    if state is None or state.msg_id is None or not state.events:
+    active = is_active_for_user(user_id, sess)
+    if state is not None and pane_busy and state.stall_watch_active:
+        state.stall_watch_active = False
+        state.last_stall_pane_refresh_ts = 0.0
+        if not active and bg_status.update_status(user_id, sess.id, "working"):
+            await _legacy("refresh_panel")(bot, user_id)
+    if pane_busy or interactive_waiting or (in_menu and active):
         return False
-    if state.in_menu_view or state.in_kb_mode:
+    if state is None or not state.events:
+        return False
+    if (active and state.in_menu_view) or state.in_kb_mode:
         return False
     # Already finalized — nothing frozen to rescue.
     tail_type = state.events[-1].type
@@ -185,49 +167,31 @@ async def maybe_finalize_stalled(
     )
     if (when - state.last_event_ts) < threshold:
         return False
-    logger.warning(
-        "stall_finalize user=%d sess=%s wid=%s idle=%.0fs tail=%s threshold=%.0fs",
-        user_id,
-        sess.id,
-        sess.window_id,
-        when - state.last_event_ts,
-        tail_type,
-        threshold,
-        extra={
-            "event": "stall_finalize",
-            "user_id": user_id,
-            "session_id": sess.id,
-            "window_id": sess.window_id,
-            "idle_seconds": round(when - state.last_event_ts),
-            "tail_type": tail_type,
-            "threshold_seconds": round(threshold),
-        },
-    )
-    await _legacy("finalize_task")(bot, user_id, sess, STALL_NOTE)
-    try:
-        await _legacy("safe_send")(
-            bot,
-            user_id,
-            STALL_ALERT.format(session_name=sess.name or sess.id),
-        )
-    except Exception as exc:
-        # The card was still finalized successfully. A transient Telegram
-        # failure must not make status_polling retry the whole transition and
-        # produce duplicate final events on the next tick.
+    if not state.stall_watch_active:
         logger.warning(
-            "stall alert failed user=%d sess=%s: %s",
+            "stall_watch user=%d sess=%s wid=%s idle=%.0fs tail=%s threshold=%.0fs",
             user_id,
             sess.id,
-            exc,
+            sess.window_id,
+            when - state.last_event_ts,
+            tail_type,
+            threshold,
         )
-    # Arm the false-positive recovery: if a real assistant turn arrives
-    # after this, the next ``update_session_card`` / ``finalize_task``
-    # spawns a fresh card below the stalled stub instead of silently
-    # editing it. ``finalize_task`` already ran and re-fetched ``state``,
-    # so re-read from ``_cards`` to set the flag on the same instance.
-    post_state = _cards.get((user_id, sess.id))
-    if post_state is not None:
-        post_state.stall_finalized = True
+    state.stall_watch_active = True
+    state.turn_phase = TurnPhase.RUNNING
+    if not active:
+        if bg_status.update_status(user_id, sess.id, "stalled"):
+            await _legacy("refresh_panel")(bot, user_id)
+        return True
+    if state.msg_id is None:
+        return False
+    refresh_now = time.monotonic()
+    if refresh_now - state.last_stall_pane_refresh_ts >= _STALL_PANE_REFRESH_SECONDS:
+        text = _legacy("_render_card")(sess, state, user_id=user_id)
+        if await _legacy("_edit_card")(bot, user_id, state, text=text):
+            state.last_rendered = text
+            state.last_edit_ts = refresh_now
+        state.last_stall_pane_refresh_ts = refresh_now
     return True
 
 
@@ -270,11 +234,13 @@ async def repost_card(bot: Bot, user_id: int, sess: Session) -> None:
     # can't see the brief ``msg_id is None`` window and spawn its own
     # card too — Task #50.
     async with _card_lock(user_id, sess.id):
-        old_msg_id = state.msg_id
-        state.msg_id = None  # force _send_card to create a fresh message
+        old_binding = snapshot_carrier(state)
+        old_msg_id = clear_carrier(state)  # force a fresh Telegram message
 
         text = _legacy("_render_card")(sess, state, user_id=user_id)
-        await _legacy("_send_card")(bot, user_id, sess, state, text=text)
+        sent = await _legacy("_send_card")(bot, user_id, sess, state, text=text)
+        if sent is False or state.msg_id is None:
+            restore_carrier(state, old_binding)
         state.last_rendered = text
         state.last_edit_ts = time.monotonic()
         # A freshly (re)posted card is brand new — reset the freshness

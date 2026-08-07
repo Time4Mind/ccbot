@@ -298,13 +298,13 @@ def _render_card(
         # non-breaking space survives — visibly DOUBLES the gap above
         # the ``context: N%`` row so it doesn't read glued onto the
         # last body event.
-        parts.append(" ")
+        parts.append("\u00a0")
         parts.append(f"context: {state.context_pct}%")
     if panel:
         # The panel carries its own ``─── фон ───`` label-separator
         # (pivot #39 feedback: previously the bg-row glued to the last
         # body line). Same nbsp-paragraph trick to widen the gap.
-        parts.append(" ")
+        parts.append("\u00a0")
         parts.append(panel)
     # Paragraph-break join (``\n\n``) — single ``\n`` is a CommonMark
     # soft break that the rich parser collapses to a space, glueing

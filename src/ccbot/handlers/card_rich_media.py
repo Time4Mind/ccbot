@@ -13,7 +13,8 @@ from telegram.error import BadRequest, RetryAfter
 from .. import rich
 from ..config import config
 from ..session import session_manager
-from .card_model import CardState
+from .card_binding import bind_carrier, clear_carrier
+from .card_types import CardState, CarrierKind
 from .card_registry import lookup_session_for_message
 from .kb_mode import _capture_pane_png
 
@@ -42,7 +43,7 @@ async def send_rich_media_card(
     *,
     reply_markup: InlineKeyboardMarkup | None,
 ) -> RichCardSend | None:
-    """Send a rich card ending in ``pane_png``; None requests legacy fallback."""
+    """Send a rich card containing ``pane_png``; None requests legacy fallback."""
     if not config.rich_messages:
         return None
     try:
@@ -75,8 +76,8 @@ async def edit_rich_media_card(
     min_photo_interval: float,
     refresh_pane: bool = True,
 ) -> bool:
-    """Edit text and keep the terminal screenshot as the final rich block."""
-    if state.msg_id is None:
+    """Edit text while keeping the terminal screenshot at its card anchor."""
+    if state.msg_id is None or not config.rich_messages:
         return False
 
     sess_id = lookup_session_for_message(user_id, state.msg_id)
@@ -89,16 +90,19 @@ async def edit_rich_media_card(
     uploaded_new_pane = False
     if window_id and (photo is None or refresh_pane and elapsed >= min_photo_interval):
         png, captured_hash = await _capture_pane_png(window_id)
-        if png is not None and captured_hash and (
-            photo is None or captured_hash != state.last_pane_hash
+        if (
+            png is not None
+            and captured_hash
+            and (photo is None or captured_hash != state.last_pane_hash)
         ):
             photo = png
             pane_hash = captured_hash
             uploaded_new_pane = True
 
     if photo is None:
-        logger.warning("rich-media card has no reusable pane photo msg=%s", state.msg_id)
-        state.msg_id = None
+        logger.warning(
+            "rich-media card has no reusable pane photo msg=%s", state.msg_id
+        )
         return False
 
     try:
@@ -117,8 +121,10 @@ async def edit_rich_media_card(
         if "message is not modified" in error.lower():
             return True
         if _is_lost_carrier(error):
-            logger.info("rich-media card lost carrier msg=%s err=%s", state.msg_id, error)
-            state.msg_id = None
+            logger.info(
+                "rich-media card lost carrier msg=%s err=%s", state.msg_id, error
+            )
+            clear_carrier(state)
             return False
         logger.warning("rich-media card edit failed msg=%s: %s", state.msg_id, error)
         return False
@@ -130,9 +136,14 @@ async def edit_rich_media_card(
         new_file_id = rich.extract_rich_photo_file_id(result)
         # If a local Bot API proxy returned only True, do not reuse the old
         # id on the next text edit: that would restore the previous image.
-        state.rich_media_file_id = new_file_id or ""
-        state.last_pane_hash = pane_hash
-        state.last_photo_edit_ts = time.monotonic()
+        bind_carrier(
+            state,
+            state.msg_id,
+            CarrierKind.RICH_MEDIA,
+            rich_media_file_id=new_file_id or "",
+            pane_hash=pane_hash,
+            photo_edit_ts=time.monotonic(),
+        )
     return True
 
 

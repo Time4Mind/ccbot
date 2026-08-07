@@ -11,6 +11,7 @@ from telegram.error import BadRequest
 from ccbot.config import config
 from ccbot.handlers import card_rich_media, card_transport, message_sender
 from ccbot.handlers.card_model import CardState
+from ccbot.handlers.card_types import TurnPhase
 
 
 @pytest.mark.asyncio
@@ -113,9 +114,16 @@ async def test_changed_pane_uploads_and_atomically_replaces_file_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _wire_session(monkeypatch)
-    response = {"rich_message": {"blocks": [{"type": "photo", "photo": [
-        {"file_id": "new-pane", "width": 100, "height": 100}
-    ]}]}}
+    response = {
+        "rich_message": {
+            "blocks": [
+                {
+                    "type": "photo",
+                    "photo": [{"file_id": "new-pane", "width": 100, "height": 100}],
+                }
+            ]
+        }
+    }
     edit = AsyncMock(return_value=response)
     monkeypatch.setattr(card_rich_media.rich, "edit_rich_message", edit)
     monkeypatch.setattr(
@@ -188,7 +196,7 @@ async def test_final_edit_removes_rich_pane_media(
         rich_media_file_id="pane-file",
         last_pane_hash="pane-hash",
         last_photo_edit_ts=10.0,
-        suppress_live_pane=True,
+        turn_phase=TurnPhase.IDLE,
     )
 
     assert await card_transport._edit_card_unlocked(
@@ -224,7 +232,7 @@ async def test_final_send_never_captures_or_attaches_pane(
     monkeypatch.setattr(
         card_transport.session_manager, "set_card_msg", lambda *_args: None
     )
-    state = CardState(suppress_live_pane=True)
+    state = CardState(turn_phase=TurnPhase.IDLE)
     session = SimpleNamespace(id="s1", window_id="@1")
 
     await card_transport._send_card_locked(

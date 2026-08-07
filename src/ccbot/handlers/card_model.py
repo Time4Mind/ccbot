@@ -15,6 +15,8 @@ from .card_types import (
     CARD_SEED_TURNS,
     Event,
     CardState,
+    CarrierKind,
+    TurnPhase,
 )
 from .card_text import (
     _trim,
@@ -98,7 +100,9 @@ __all__ = [
     "SPOILER_MAX_LINES",
     "STALE_CARD_SECONDS",
     "CardState",
+    "CarrierKind",
     "Event",
+    "TurnPhase",
     "_apply_tool_result",
     "_build_event",
     "_card_is_busy",

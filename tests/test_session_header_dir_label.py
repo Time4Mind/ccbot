@@ -6,6 +6,9 @@ states (idle/archived/completed/lost) still show the real state.
 
 from __future__ import annotations
 
+import pytest
+
+from ccbot.handlers import card_layout
 from ccbot.handlers.card_model import CardState, Event, _render_card
 from ccbot.handlers.switcher import build_session_preview
 from ccbot.session_models import Session
@@ -65,6 +68,27 @@ class TestVoicePendingMarker:
         state = CardState()
         text = _render_card(sess, state)
         assert "🎙" not in text
+
+
+def test_media_anchor_precedes_context_and_background_panel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        card_layout.bg_status,
+        "render_panel",
+        lambda *_args, **_kwargs: "─── фон ───\nbackground-session",
+    )
+    state = CardState(context_pct=42)
+    state.events.append(Event(type="final_text", text="answer", started_at=1.0))
+
+    text = _render_card(_session(), state, user_id=1)
+    body = text[: state.media_anchor_offset]
+    service_tail = text[state.media_anchor_offset :]
+
+    assert "answer" in body
+    assert "context:" not in body
+    assert "─── фон ───" not in body
+    assert service_tail.index("context: 42%") < service_tail.index("─── фон ───")
 
 
 class TestSwitcherPreviewDirLabel:

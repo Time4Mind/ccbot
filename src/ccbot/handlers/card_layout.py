@@ -232,7 +232,9 @@ def _render_card(
         # Paragraph-break join (same trap the bottom of this function
         # already handles): single ``\n`` between header / separator /
         # title would let the rich parser glue them onto one line.
-        return "\n\n".join(parts)
+        rendered = "\n\n".join(parts)
+        state.media_anchor_offset = len(rendered)
+        return rendered
 
     # Budget is in LINES (per user setting ``card_page_lines``).
     line_budget = _resolve_line_budget(user_id)
@@ -281,6 +283,11 @@ def _render_card(
     if footer:
         parts.append("─────")
         parts.append(footer)
+    # Everything appended after this point is service metadata. Record the
+    # exact raw-text boundary so rich-media transport can place the terminal
+    # screenshot before ``context`` and the background-session panel without
+    # searching for localized/rendered labels.
+    state.media_anchor_offset = len("\n\n".join(parts))
     # Active session's own context-fill — single line at the very
     # bottom of the card body, just above the bg-status panel.
     # See ``set_card_context_pct``.

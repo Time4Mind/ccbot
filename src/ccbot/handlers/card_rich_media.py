@@ -31,6 +31,7 @@ class RichCardSend:
 async def send_rich_media_card(
     bot: Any,
     user_id: int,
+    state: CardState,
     text: str,
     pane_png: bytes,
     *,
@@ -43,7 +44,7 @@ async def send_rich_media_card(
         message = await rich.send_rich_message(
             bot,
             user_id,
-            rich.to_rich_markdown(text),
+            _rich_card_markdown(text, state),
             reply_markup=reply_markup,
             photo=pane_png,
             disable_notification=True,
@@ -100,7 +101,7 @@ async def edit_rich_media_card(
             bot,
             user_id,
             state.msg_id,
-            rich.to_rich_markdown(text),
+            _rich_card_markdown(text, state),
             reply_markup=reply_markup,
             photo=photo,
         )
@@ -128,6 +129,19 @@ async def edit_rich_media_card(
         state.last_pane_hash = pane_hash
         state.last_photo_edit_ts = time.monotonic()
     return True
+
+
+def _rich_card_markdown(text: str, state: CardState) -> str:
+    """Insert the photo anchor before context/background service metadata."""
+    offset = state.media_anchor_offset
+    if offset <= 0 or offset > len(text):
+        return rich.to_rich_markdown(text)
+    body = rich.to_rich_markdown(text[:offset]).rstrip()
+    service_tail = rich.to_rich_markdown(text[offset:].lstrip()).lstrip()
+    parts = [body, rich.RICH_PHOTO_ANCHOR]
+    if service_tail:
+        parts.append(service_tail)
+    return "\n\n".join(parts)
 
 
 def _is_lost_carrier(error: str) -> bool:

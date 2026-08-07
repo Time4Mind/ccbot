@@ -45,6 +45,9 @@ _RICH_PHOTO_ID = "terminal_screenshot"
 _RICH_PHOTO_UPLOAD_FIELD = _RICH_PHOTO_ID
 _RICH_PHOTO_MARKDOWN = f"![](tg://photo?id={_RICH_PHOTO_ID})"
 _RICH_PHOTO_FILENAME = "terminal_screenshot.png"
+# Optional placement marker used by live cards. It is replaced only while
+# building a rich photo payload and never reaches Telegram as visible text.
+RICH_PHOTO_ANCHOR = "\x02RICH_PHOTO_ANCHOR\x02"
 
 # Fenced code blocks (tolerating an unterminated fence at EOF) and inline
 # code spans — `<` inside these is preserved verbatim by the rich parser.
@@ -292,10 +295,15 @@ def _input_rich_message(
     markdown: str, photo_ref: str | None = None
 ) -> dict[str, Any]:
     if photo_ref is None:
-        return {"markdown": markdown}
+        return {"markdown": markdown.replace(RICH_PHOTO_ANCHOR, "")}
     media = InputMediaPhoto(media=photo_ref).to_dict()
+    if RICH_PHOTO_ANCHOR in markdown:
+        markdown = markdown.replace(RICH_PHOTO_ANCHOR, _RICH_PHOTO_MARKDOWN, 1)
+        markdown = markdown.replace(RICH_PHOTO_ANCHOR, "")
+    else:
+        markdown = f"{markdown.rstrip()}\n\n{_RICH_PHOTO_MARKDOWN}"
     return {
-        "markdown": f"{markdown.rstrip()}\n\n{_RICH_PHOTO_MARKDOWN}",
+        "markdown": markdown,
         "media": [{"id": _RICH_PHOTO_ID, "media": media}],
     }
 

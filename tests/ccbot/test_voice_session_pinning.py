@@ -326,6 +326,38 @@ class TestVoiceTranscriptConfirmation:
         assert _transcript_contains_voice_text(checkpoint, "voice text") is True
         assert _transcript_contains_voice_text(checkpoint, "different") is False
 
+    def test_codex_confirmation_reads_response_item_user_rows(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex 0.147+ records submitted prompts as response items."""
+        from ccbot.bot.messages import (
+            _VoiceTranscriptCheckpoint,
+            _transcript_contains_voice_text,
+        )
+
+        rollout = tmp_path / "rollout.jsonl"
+        rollout.write_text(json.dumps({"type": "session_meta"}) + "\n")
+        checkpoint = _VoiceTranscriptCheckpoint(
+            path=rollout, offset=rollout.stat().st_size, backend="codex"
+        )
+        with rollout.open("a") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "voice text"}],
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+        assert _transcript_contains_voice_text(checkpoint, "voice text") is True
+        assert _transcript_contains_voice_text(checkpoint, "different") is False
+
     def test_claude_confirmation_reads_structured_user_text(
         self, tmp_path: Path
     ) -> None:

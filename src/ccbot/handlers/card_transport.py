@@ -101,6 +101,7 @@ async def _send_card_locked(
             rich_sent = await send_rich_media_card(
                 bot,
                 user_id,
+                state,
                 text,
                 png,
                 reply_markup=keyboard,

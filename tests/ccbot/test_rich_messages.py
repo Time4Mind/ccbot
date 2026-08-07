@@ -293,6 +293,35 @@ class TestRichPhotoMedia:
         )
 
     @pytest.mark.asyncio
+    async def test_photo_anchor_places_media_before_service_tail(self) -> None:
+        bot = _FakeBot(post_result=_sent_message_json())
+        markdown = (
+            "answer\n\n"
+            f"{rich.RICH_PHOTO_ANCHOR}\n\n"
+            "context: 42%\n\n─── фон ───"
+        )
+
+        await rich.send_rich_message(  # type: ignore[arg-type]
+            bot, 449, markdown, photo="existing-photo-file-id"
+        )
+
+        rendered = bot.posts[0][1]["rich_message"]["markdown"]
+        assert rich.RICH_PHOTO_ANCHOR not in rendered
+        assert rendered.index("![](tg://photo?id=terminal_screenshot)") < (
+            rendered.index("context: 42%")
+        )
+
+    @pytest.mark.asyncio
+    async def test_photo_anchor_is_invisible_without_photo(self) -> None:
+        bot = _FakeBot(post_result=_sent_message_json())
+
+        await rich.send_rich_message(  # type: ignore[arg-type]
+            bot, 449, f"answer{rich.RICH_PHOTO_ANCHOR}context"
+        )
+
+        assert bot.posts[0][1]["rich_message"]["markdown"] == "answercontext"
+
+    @pytest.mark.asyncio
     async def test_send_forwards_explicit_disable_notification_only(self) -> None:
         quiet_bot = _FakeBot(post_result=_sent_message_json())
         default_bot = _FakeBot(post_result=_sent_message_json())

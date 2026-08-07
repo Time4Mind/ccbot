@@ -123,6 +123,10 @@ class CardState:
     # for older Bot API servers / rich-disabled deployments.
     is_rich_media_msg: bool = False
     rich_media_file_id: str = ""
+    # Raw-text boundary recorded by ``_render_card`` immediately before the
+    # service tail (context row + background-session panel). Rich-media
+    # transport inserts the terminal image at this boundary.
+    media_anchor_offset: int = 0
     is_photo_msg: bool = False
     last_pane_hash: str = ""  # md5 of last captured pane text
     last_photo_edit_ts: float = 0.0  # monotonic seconds; 3s throttle

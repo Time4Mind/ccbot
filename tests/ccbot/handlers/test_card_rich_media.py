@@ -26,8 +26,10 @@ async def test_send_uploads_pane_and_returns_reusable_file_id(
         lambda _message: "pane-file-id",
     )
 
+    text = "**answer**\n\ncontext: 42%\n\n─── фон ───"
+    state = CardState(media_anchor_offset=len("**answer**"))
     result = await card_rich_media.send_rich_media_card(
-        SimpleNamespace(), 42, "**answer**", b"png", reply_markup=None
+        SimpleNamespace(), 42, state, text, b"png", reply_markup=None
     )
 
     assert result is not None
@@ -35,6 +37,10 @@ async def test_send_uploads_pane_and_returns_reusable_file_id(
     assert result.photo_file_id == "pane-file-id"
     assert send.await_args.kwargs["photo"] == b"png"
     assert send.await_args.kwargs["disable_notification"] is True
+    markdown = send.await_args.args[2]
+    assert markdown.index(card_rich_media.rich.RICH_PHOTO_ANCHOR) < markdown.index(
+        "context: 42%"
+    )
 
 
 @pytest.mark.asyncio
@@ -46,7 +52,7 @@ async def test_send_preserves_legacy_path_when_rich_is_disabled(
     monkeypatch.setattr(card_rich_media.rich, "send_rich_message", send)
 
     result = await card_rich_media.send_rich_media_card(
-        SimpleNamespace(), 42, "answer", b"png", reply_markup=None
+        SimpleNamespace(), 42, CardState(), "answer", b"png", reply_markup=None
     )
 
     assert result is None

@@ -40,34 +40,6 @@ class StartupFlow:
 
 
 _flows: dict[int, StartupFlow] = {}
-_notice_tasks: set[asyncio.Task[None]] = set()
-
-
-async def _send_capture_notice(
-    entry: QueuedInbound, window_id: str, ahead: int
-) -> None:
-    from .bot._common import is_user_allowed
-    from .handlers.message_sender import safe_reply
-    from .i18n import t
-    from .session import session_manager
-
-    user = entry.update.effective_user
-    message = entry.update.message
-    if user is None or message is None or not is_user_allowed(user.id):
-        return
-    sess = session_manager.find_session_by_window(window_id)
-    label = (
-        (sess.name or sess.id)
-        if sess is not None
-        else session_manager.get_display_name(window_id)
-    )
-    try:
-        await safe_reply(
-            message,
-            t(user.id, "queue.accepted", session=label, ahead=ahead),
-        )
-    except Exception:
-        return
 
 
 def begin_startup_queue(user_id: int) -> StartupFlow:
@@ -145,13 +117,21 @@ def enqueue_startup_message(
     entry = QueuedInbound(update=update, context=context, sequence=flow.next_sequence)
     flow.next_sequence += 1
     flow.entries.append(entry)
-    if flow.window_id is not None and len(flow.entries) > 1:
-        task = asyncio.create_task(
-            _send_capture_notice(entry, flow.window_id, len(flow.entries) - 1),
-            name=f"startup-queue-ack:{user.id}:{entry.sequence}",
-        )
-        _notice_tasks.add(task)
-        task.add_done_callback(_notice_tasks.discard)
+    if flow.window_id is not None:
+        # During a slow first voice replay, later captured messages must still
+        # get the same visual receipt as normal intake: the session card moves
+        # below them, with no separate "accepted" notification.
+        from .handlers.notifications import schedule_card_after_message
+        from .session import session_manager
+
+        sess = session_manager.find_session_by_window(flow.window_id)
+        if sess is not None:
+            schedule_card_after_message(
+                context.bot,
+                user.id,
+                sess,
+                update.message.message_id,
+            )
     logger.info(
         "startup queue captured user=%d seq=%d message_id=%s pending=%d",
         user.id,
@@ -186,7 +166,7 @@ async def _replay(entry: QueuedInbound, window_id: str | None = None) -> bool:
             result = await voice_handler(
                 entry.update,
                 entry.context,
-                **pinned,
+                pinned_wid=window_id,
                 ordered=True,
             )
     elif message.photo:
@@ -292,10 +272,6 @@ def reset_startup_queues_for_test() -> None:
         if flow.drain_task is not None and not flow.drain_task.done():
             flow.drain_task.cancel()
     _flows.clear()
-    for task in _notice_tasks:
-        if not task.done():
-            task.cancel()
-    _notice_tasks.clear()
 
 
 __all__ = [

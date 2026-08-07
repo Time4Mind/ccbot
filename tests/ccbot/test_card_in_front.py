@@ -22,6 +22,7 @@ Three guarantees, all reported as broken from real usage:
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -299,6 +300,40 @@ class TestCardIsBelow:
     def test_false_when_card_has_no_message(self) -> None:
         notifications._cards[(1, "s")] = CardState(msg_id=None)
         assert notifications.card_is_below(1, "s", 500) is False
+
+
+class TestInboundCardSurface:
+    def setup_method(self) -> None:
+        notifications._cards.clear()
+
+    def teardown_method(self) -> None:
+        notifications._cards.clear()
+
+    @pytest.mark.asyncio
+    async def test_burst_converges_on_one_card_below_every_message(self) -> None:
+        bot = AsyncMock()
+        sess = MagicMock(id="surface")
+        state = CardState(msg_id=400)
+        notifications._cards[(77, "surface")] = state
+
+        async def send_card(bot, user_id, sess, target, **kwargs):
+            target.msg_id = 600
+
+        with (
+            patch.object(notifications, "_ensure_seeded", new=AsyncMock()),
+            patch.object(notifications, "_render_card", return_value="card"),
+            patch.object(notifications, "_send_card", side_effect=send_card) as send,
+            patch.object(notifications, "is_active_for_user", return_value=True),
+        ):
+            results = await asyncio.gather(
+                notifications.surface_card_after_message(bot, 77, sess, 500),
+                notifications.surface_card_after_message(bot, 77, sess, 501),
+            )
+
+        assert results == [True, True]
+        assert send.await_count == 1
+        assert state.msg_id == 600
+        bot.delete_message.assert_awaited_once_with(chat_id=77, message_id=400)
 
 
 class TestSingleLiveSwitcher:

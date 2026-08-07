@@ -9,8 +9,9 @@ bottom of the active card.
 A fresh card opens (a new TG message is sent) on:
 
   - long pause: previous card sat idle for >= STALE_CARD_SECONDS
-  - ``repost_card`` (always-repost behaviour: every user-msg replaces
-    the card with a fresh one below)
+  - inbound receipt (the card itself acknowledges queue admission below
+    the newest user message)
+  - ``repost_card`` for direct/legacy handler paths
   - first event of a new session
 
 Within a single card, content is paginated. Each ``Event`` with
@@ -145,11 +146,19 @@ __all__ = [
     "paginate_events_for_card",
     "render_event",
     "render_page",
+    "schedule_card_after_message",
+    "shutdown_card_surface_tasks",
+    "surface_card_after_message",
 ]
 
 
 # Per-(user, session.id) card state.
 _cards: dict[tuple[int, str], CardState] = {}
+
+# Fire-and-forget receipt surfaces started by Telegram intake. Keeping them in
+# one registry lets shutdown cancel cleanly instead of leaving Telegram edits
+# alive after the application has started closing its HTTP client.
+_card_surface_tasks: set[asyncio.Task[bool]] = set()
 
 # Per-(user, session.id) async lock. Acquired by every code path that
 # may decide to ``_send_card`` (spawn a fresh card msg) so two
@@ -2343,6 +2352,119 @@ async def repost_card(bot: Bot, user_id: int, sess: Session) -> None:
                 old_msg_id,
                 e,
             )
+
+
+async def surface_card_after_message(
+    bot: Bot,
+    user_id: int,
+    sess: Session,
+    message_id: int,
+) -> bool:
+    """Make the active session card the only receipt for an inbound message.
+
+    Telegram message ids are monotonic within a chat.  The card therefore
+    acknowledges queue admission simply by sitting below ``message_id``.  The
+    position check and repost are serialized so several messages arriving in
+    one burst converge on one newest card instead of spawning one per task.
+    """
+    state = get_card_state(user_id, sess)
+    await _ensure_seeded(user_id, sess, state)
+    old_msg_id: int | None = None
+    new_msg_id: int | None = None
+
+    async with _card_lock(user_id, sess.id):
+        async with _carrier_edit_lock(user_id):
+            if not is_active_for_user(user_id, sess):
+                return False
+            if state.msg_id is not None and state.msg_id > message_id:
+                return True
+
+            if state.pending_edit is not None and not state.pending_edit.done():
+                state.pending_edit.cancel()
+            state.pending_edit = None
+            # Sending content is an explicit return from a menu/sub-screen to
+            # the live conversation.  Otherwise the old menu card would stay
+            # above the message and acceptance would remain invisible.
+            state.in_menu_view = False
+            old_msg_id = state.msg_id
+            state.msg_id = None
+            text = _render_card(sess, state, user_id=user_id)
+            await _send_card(bot, user_id, sess, state, text=text)
+            new_msg_id = state.msg_id
+            if new_msg_id is None:
+                # Telegram send failed: retain the existing carrier binding so
+                # later events can recover instead of orphaning a valid card.
+                state.msg_id = old_msg_id
+                return False
+            state.last_rendered = text
+            state.last_edit_ts = time.monotonic()
+            state.last_event_ts = time.time()
+
+    logger.info(
+        "card_surface user=%s sess=%s after=%s old_msg=%s new_msg=%s",
+        user_id,
+        sess.id,
+        message_id,
+        old_msg_id,
+        new_msg_id,
+    )
+    if old_msg_id and new_msg_id != old_msg_id:
+        try:
+            await bot.delete_message(chat_id=user_id, message_id=old_msg_id)
+        except Exception as exc:
+            logger.warning(
+                "card_surface delete_old_failed user=%s sess=%s msg=%s err=%s",
+                user_id,
+                sess.id,
+                old_msg_id,
+                exc,
+            )
+    return True
+
+
+def schedule_card_after_message(
+    bot: Bot,
+    user_id: int,
+    sess: Session,
+    message_id: int,
+) -> asyncio.Task[bool]:
+    """Schedule a non-blocking card receipt for Telegram intake."""
+    task = asyncio.create_task(
+        surface_card_after_message(bot, user_id, sess, message_id),
+        name=f"card-surface:{user_id}:{sess.id}:{message_id}",
+    )
+    _card_surface_tasks.add(task)
+
+    def _finished(done: asyncio.Task[bool]) -> None:
+        _card_surface_tasks.discard(done)
+        if done.cancelled():
+            return
+        try:
+            exc = done.exception()
+        except asyncio.CancelledError:
+            return
+        if exc is not None:
+            logger.warning(
+                "card_surface failed user=%s sess=%s after=%s err=%s",
+                user_id,
+                sess.id,
+                message_id,
+                exc,
+            )
+
+    task.add_done_callback(_finished)
+    return task
+
+
+async def shutdown_card_surface_tasks() -> None:
+    """Cancel outstanding intake card moves during application shutdown."""
+    tasks = list(_card_surface_tasks)
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    _card_surface_tasks.clear()
 
 
 async def refresh_panel(bot: Bot, user_id: int) -> None:

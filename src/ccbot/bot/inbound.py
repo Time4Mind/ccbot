@@ -7,16 +7,16 @@ voice transcription never blocks session-switch callbacks.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from ..codex_auth import get_flow
-from ..handlers.message_sender import safe_reply
-from ..handlers.notifications import lookup_session_for_message
-from ..i18n import t
+from ..handlers.notifications import (
+    lookup_session_for_message,
+    schedule_card_after_message,
+)
 from ..inbound_queue import InboundProcessor, enqueue_inbound
 from ..session import session_manager
 from ._common import active_window, is_user_allowed
@@ -47,32 +47,17 @@ async def _run_document(update: Update, context: Any, wid: str) -> bool:
 
 
 async def _run_voice(update: Update, context: Any, wid: str) -> bool:
-    return await voice_handler(update, context, pinned_wid=wid, ordered=True)
+    return await voice_handler(
+        update,
+        context,
+        pinned_wid=wid,
+        ordered=True,
+        surface_pending=False,
+    )
 
 
 async def _run_unsupported(update: Update, context: Any, wid: str) -> bool:
     return await unsupported_content_handler(update, context, pinned_wid=wid)
-
-
-async def _queue_notice(
-    update: Update, context: ContextTypes.DEFAULT_TYPE, wid: str, ahead: int
-) -> None:
-    user = update.effective_user
-    if update.message is None or user is None:
-        return
-    sess = session_manager.find_session_by_window(wid)
-    label = (
-        (sess.name or sess.id)
-        if sess is not None
-        else session_manager.get_display_name(wid)
-    )
-    try:
-        await safe_reply(
-            update.message,
-            t(user.id, "queue.accepted", session=label, ahead=ahead),
-        )
-    except Exception:
-        return
 
 
 def _enqueue(
@@ -89,7 +74,7 @@ def _enqueue(
     wid = target_window_id or active_window(user.id)
     if wid is None:
         return False
-    receipt = enqueue_inbound(
+    enqueue_inbound(
         user.id,
         wid,
         update,
@@ -97,10 +82,13 @@ def _enqueue(
         kind=kind,
         processor=processor,
     )
-    if receipt.ahead:
-        asyncio.create_task(
-            _queue_notice(update, context, wid, receipt.ahead),
-            name=f"inbound-ack:{user.id}:{wid}:{receipt.entry.sequence}",
+    sess = session_manager.find_session_by_window(wid)
+    if sess is not None:
+        schedule_card_after_message(
+            context.bot,
+            user.id,
+            sess,
+            update.message.message_id,
         )
     return True
 

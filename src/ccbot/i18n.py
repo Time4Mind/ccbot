@@ -43,9 +43,6 @@ _EN: dict[str, str] = {
     ),
     "voice.transcribing": "🎙 Voice message is being transcribed…",
     "voice.queued_dropped": "Messages sent after it didn't reach the session either.",
-    "queue.accepted": (
-        "⏳ Accepted for [{session}]. Messages ahead: {ahead}. You can switch sessions."
-    ),
     # Footer buttons
     "btn.stop": "⏹ Stop",
     "btn.kill": "💀 Kill",
@@ -540,9 +537,6 @@ _RU: dict[str, str] = {
     ),
     "voice.transcribing": "🎙 Голосовое распознаётся…",
     "voice.queued_dropped": "Последующие сообщения тоже не дошли до сессии.",
-    "queue.accepted": (
-        "⏳ Принято в [{session}]. Перед ним в очереди: {ahead}. Можно переключиться."
-    ),
     "btn.stop": "⏹ Стоп",
     "btn.kill": "💀 Убить",
     "btn.clear": "🧹 Очистить",
@@ -1008,7 +1002,6 @@ _ZH: dict[str, str] = {
     "voice.transcription_failed": "🎙 语音无法识别且未送达会话。请重新发送。",
     "voice.transcribing": "🎙 正在转写语音消息…",
     "voice.queued_dropped": "之后发送的消息也未送达会话。",
-    "queue.accepted": "⏳ 已加入 [{session}]。前面有 {ahead} 条消息。现在可以切换会话。",
     "btn.stop": "⏹ 停止",
     "btn.kill": "💀 终止",
     "btn.clear": "🧹 清空",

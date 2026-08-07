@@ -127,6 +127,9 @@ class CardState:
     # service tail (context row + background-session panel). Rich-media
     # transport inserts the terminal image at this boundary.
     media_anchor_offset: int = 0
+    # Ephemeral finalize guard. While true, send/edit converts the carrier
+    # back to text-only even when inline screenshots are enabled.
+    suppress_live_pane: bool = False
     is_photo_msg: bool = False
     last_pane_hash: str = ""  # md5 of last captured pane text
     last_photo_edit_ts: float = 0.0  # monotonic seconds; 3s throttle

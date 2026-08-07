@@ -379,14 +379,27 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     # for the next turn can't see ``msg_id is None`` simultaneously and
     # spawn a second card (Task #50).
     async with _card_lock(user_id, sess.id):
-        if state.msg_id is None:
-            await _legacy("_send_card")(
-                bot, user_id, sess, state, text=text, reply_markup=done_kb
-            )
-        elif await _legacy("_edit_card")(
-            bot, user_id, state, text=text, reply_markup=done_kb
-        ):
-            state.last_rendered = text
+        state.suppress_live_pane = True
+        try:
+            if state.msg_id is None:
+                await _legacy("_send_card")(
+                    bot,
+                    user_id,
+                    sess,
+                    state,
+                    text=text,
+                    reply_markup=done_kb,
+                )
+            elif await _legacy("_edit_card")(
+                bot,
+                user_id,
+                state,
+                text=text,
+                reply_markup=done_kb,
+            ):
+                state.last_rendered = text
+        finally:
+            state.suppress_live_pane = False
         state.last_edit_ts = time.monotonic()
 
     if attachments:

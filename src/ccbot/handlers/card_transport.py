@@ -57,7 +57,12 @@ async def _send_card(
     """
     async with _user_send_lock(user_id):
         await _send_card_locked(
-            bot, user_id, sess, state, text=text, reply_markup=reply_markup
+            bot,
+            user_id,
+            sess,
+            state,
+            text=text,
+            reply_markup=reply_markup,
         )
 
 
@@ -92,7 +97,11 @@ async def _send_card_locked(
     # Inline screenshots ON: prefer a Rich Markdown card whose final block
     # is the pane image. Older/rich-disabled servers retain photo+caption.
     sent = None
-    if _inline_screens_enabled(user_id) and sess.window_id:
+    if (
+        not state.suppress_live_pane
+        and _inline_screens_enabled(user_id)
+        and sess.window_id
+    ):
         from ..markdown_v2 import convert_markdown
         from .message_sender import PARSE_MODE, strip_sentinels
 
@@ -241,6 +250,20 @@ async def _edit_card_unlocked(
     # file_id for text-only edits. A changed pane is uploaded at most once
     # per throttle window.
     if state.is_rich_media_msg:
+        if state.suppress_live_pane:
+            removed = await try_rich_edit(
+                bot,
+                user_id,
+                state.msg_id,
+                text,
+                reply_markup=reply_markup,
+            )
+            if removed:
+                state.is_rich_media_msg = False
+                state.rich_media_file_id = ""
+                state.last_pane_hash = ""
+                state.last_photo_edit_ts = 0.0
+            return removed
         return await edit_rich_media_card(
             bot,
             user_id,

@@ -291,9 +291,7 @@ def to_rich_markdown(text: str) -> str:
     return _multiline_shell_fences_to_code(text)
 
 
-def _input_rich_message(
-    markdown: str, photo_ref: str | None = None
-) -> dict[str, Any]:
+def _input_rich_message(markdown: str, photo_ref: str | None = None) -> dict[str, Any]:
     if photo_ref is None:
         return {"markdown": markdown.replace(RICH_PHOTO_ANCHOR, "")}
     media = InputMediaPhoto(media=photo_ref).to_dict()

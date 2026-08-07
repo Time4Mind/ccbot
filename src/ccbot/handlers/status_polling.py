@@ -413,16 +413,10 @@ async def _drive_typing_indicator(
     if pane_busy and sess is not None and is_card_finalized(user_id, sess.id):
         pane_busy = False
 
-    # Stalled-session rescue (bug A4). For the ACTIVE session only: if the
-    # card has a non-terminal tail event but the pane spinner is idle and
-    # no new event has arrived for STALL_FINALIZE_AFTER_SECONDS, the
-    # upstream claude process likely stalled/exited (it may still write
-    # ``last-prompt`` / ``ai-title`` metadata, which transcript_parser
-    # filters out, so the monitor produces no card update). Finalise the
-    # frozen card with a clear note instead of leaving it stuck forever.
-    # Excluded: a still-changing spinner, a waiting interactive UI / kb
-    # prompt, and menu navigation — all valid "idle" states, not stalls.
-    if sess is not None and not is_bg_session:
+    # Silent unfinished turn: keep the active session's live pane refreshing;
+    # for a background session expose only a ⚠️ row in the active card panel.
+    # No synthetic final answer and no separate Telegram push are emitted.
+    if sess is not None:
         from .notifications import has_pending_kb
 
         interactive_waiting = (

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from enum import Enum
 
 __all__ = [
     "CARD_HARD_LIMIT",
@@ -16,6 +17,8 @@ __all__ = [
     "CARD_SEED_TURNS",
     "Event",
     "CardState",
+    "CarrierKind",
+    "TurnPhase",
 ]
 
 # Hard cap for rendered card text — Telegram limit is 4096; leave headroom.
@@ -85,6 +88,21 @@ class Event:
     image_data: list[tuple[str, bytes]] | None = None  # tool_result images
 
 
+class TurnPhase(str, Enum):
+    """Whether the active assistant turn may expose live terminal media."""
+
+    IDLE = "idle"
+    RUNNING = "running"
+
+
+class CarrierKind(str, Enum):
+    """Telegram representation currently bound to a live card."""
+
+    TEXT = "text"
+    RICH_MEDIA = "rich_media"
+    LEGACY_PHOTO = "legacy_photo"
+
+
 @dataclass
 class CardState:
     msg_id: int | None = None
@@ -127,9 +145,10 @@ class CardState:
     # service tail (context row + background-session panel). Rich-media
     # transport inserts the terminal image at this boundary.
     media_anchor_offset: int = 0
-    # Ephemeral finalize guard. While true, send/edit converts the carrier
-    # back to text-only even when inline screenshots are enabled.
-    suppress_live_pane: bool = False
+    # Durable task lifecycle. Terminal media is allowed only while RUNNING;
+    # final, clear, and buffered completion paths leave the card IDLE until a
+    # new inbound turn or non-final event explicitly starts work again.
+    turn_phase: TurnPhase = TurnPhase.RUNNING
     is_photo_msg: bool = False
     last_pane_hash: str = ""  # md5 of last captured pane text
     last_photo_edit_ts: float = 0.0  # monotonic seconds; 3s throttle
@@ -156,14 +175,10 @@ class CardState:
     # stat() each, not a full re-parse. Reset alongside ``seed_attempted``
     # at the non-destructive re-seed sites.
     seed_mtime: float = -1.0
-    # Stall-recovery flag. Set by ``maybe_finalize_stalled`` after it
-    # appends the STALL_NOTE final_text. If the stall was a false positive
-    # (a genuine assistant turn arrives after), the next
-    # ``update_session_card`` / ``finalize_task`` wipes the card binding
-    # and lets ``_send_card`` spawn a fresh message below the stalled
-    # stub — so the recovered answer is visible instead of being silently
-    # edited into a card the user has scrolled past or marked complete.
-    stall_finalized: bool = False
+    # A silent unfinished turn stays RUNNING instead of being replaced by a
+    # warning. Status polling refreshes its live pane for the active session.
+    stall_watch_active: bool = False
+    last_stall_pane_refresh_ts: float = 0.0
     # Set by voice_handler right when a voice message is pinned to this
     # session, before download/transcribe (which can take many seconds).
     # Rendered as a synthetic trailing ``user_msg`` row so an immediate

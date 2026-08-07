@@ -37,12 +37,14 @@ from ..handlers.notifications import (
     begin_repost_intent,
     card_is_below,
     end_repost_intent,
+    get_card_state,
     is_active_for_user,
     lookup_session_for_message,
     refresh_panel,
     repost_card,
     resume_card_view,
 )
+from ..handlers.card_types import TurnPhase
 from ..handlers.typing import fire_typing
 from ..markdown_v2 import convert_markdown
 from ..naming import maybe_auto_name
@@ -185,6 +187,7 @@ async def _route_reply_quote(update: Update, user_id: int, text: str) -> bool:
             ok, sm = await session_manager.send_to_window(target.window_id, text)
             if ok:
                 session_manager.touch_session(target.id)
+                get_card_state(user_id, target).turn_phase = TurnPhase.RUNNING
                 # Explicit feedback so the user can see which
                 # session received the reply-quote — bg session
                 # would otherwise stay silent until the next
@@ -363,6 +366,7 @@ async def _dispatch_text_to_active(
         # switcher has already handed to the new active session.
         owns_card = sess is not None and is_active_for_user(user_id, sess)
         if sess is not None:
+            get_card_state(user_id, sess).turn_phase = TurnPhase.RUNNING
             session_manager.touch_session(sess.id)
             # ``maybe_auto_name`` honours the user's ``haiku_naming``
             # setting and the directory-basename guard internally — we

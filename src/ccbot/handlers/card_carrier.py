@@ -11,10 +11,17 @@ import time
 from telegram import Bot
 
 from ..session import Session, session_manager
+from .card_binding import (
+    bind_carrier,
+    clear_carrier,
+    restore_carrier,
+    snapshot_carrier,
+)
 from .card_model import (
     CardState,
     _card_is_busy,
 )
+from .card_types import CarrierKind, TurnPhase
 from .card_registry import (
     _cards,
     _card_lock,
@@ -29,7 +36,6 @@ logger = logging.getLogger(__name__)
 
 
 __all__ = [
-    "_recover_from_false_stall",
     "cancel_pending_card_edits",
     "close_card_view",
     "set_card_context_pct",
@@ -45,32 +51,6 @@ __all__ = [
     "restore_card",
     "clear_card",
 ]
-
-
-def _recover_from_false_stall(state: CardState) -> None:
-    """Wipe the live-card binding after a false-positive stall_finalize.
-
-    Set when a genuine assistant turn lands AFTER
-    ``maybe_finalize_stalled`` armed ``state.stall_finalized``. Clears
-    msg_id / events / pagination so the next render path goes through
-    ``_send_card`` (fresh message below the stalled stub) rather than
-    ``_edit_card`` (silent edit of the now-finalized card). The stalled
-    stub stays in chat history with its STALL_NOTE — we don't rewrite
-    it; the recovery message appears as a fresh card with
-    ``is_continuation=True`` so the header carries the ``…continued``
-    marker.
-    """
-    if state.pending_edit is not None and not state.pending_edit.done():
-        state.pending_edit.cancel()
-    state.pending_edit = None
-    state.msg_id = None
-    state.events = []
-    state.current_page_idx = None
-    state.is_continuation = True
-    state.last_rendered = ""
-    state.seed_attempted = False
-    state.seed_mtime = -1.0
-    state.stall_finalized = False
 
 
 async def cancel_pending_card_edits(timeout: float = 2.0) -> None:
@@ -128,12 +108,8 @@ async def close_card_view(bot: Bot, user_id: int, session_id: str) -> None:
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
     state.pending_edit = None
-    old_msg_id = state.msg_id
-    state.msg_id = None
-    state.is_photo_msg = False
+    old_msg_id = clear_carrier(state)
     state.last_rendered = ""
-    state.last_pane_hash = ""
-    state.last_photo_edit_ts = 0.0
     state.in_menu_view = True
     if old_msg_id is not None:
         try:
@@ -256,10 +232,12 @@ def transfer_card_to_carrier(
         )
         return None
     from_msg_id_was: int | None = None
+    source_binding = None
     if from_session_id:
         from_state = _cards.get((user_id, from_session_id))
         if from_state is not None:
             from_msg_id_was = from_state.msg_id
+            source_binding = snapshot_carrier(from_state)
             if (
                 from_state.pending_edit is not None
                 and not from_state.pending_edit.done()
@@ -272,7 +250,10 @@ def transfer_card_to_carrier(
     if to_state.pending_edit is not None and not to_state.pending_edit.done():
         to_state.pending_edit.cancel()
     to_state.pending_edit = None
-    to_state.msg_id = target_message_id
+    if source_binding is not None and source_binding.msg_id == target_message_id:
+        restore_carrier(to_state, source_binding)
+    else:
+        bind_carrier(to_state, target_message_id, CarrierKind.TEXT)
     session_manager.set_card_msg(user_id, target_message_id)
     # Pause the TO card across the switch window. The caller (CB_SW_USE)
     # will paint history on this message_id next, and then call
@@ -376,7 +357,7 @@ def detach_paused_cards_at_message(user_id: int, message_id: int) -> None:
         if state.pending_edit is not None and not state.pending_edit.done():
             state.pending_edit.cancel()
         state.pending_edit = None
-        state.msg_id = None
+        clear_carrier(state)
         state.in_menu_view = False
         # Mark continuation so the next card visually flags carry-over
         # (``…continued`` in the header).
@@ -417,7 +398,7 @@ def release_card_message(user_id: int, session_id: str) -> None:
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
     state.pending_edit = None
-    state.msg_id = None
+    clear_carrier(state)
     state.in_menu_view = False
     state.events = []
     state.last_rendered = ""
@@ -461,7 +442,7 @@ async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
         await _legacy("_ensure_seeded")(user_id, sess, state)
         fresh_text = _legacy("_render_card")(sess, state, user_id=user_id)
         fresh_kb = _legacy("build_footer_keyboard")(
-            user_id, screen="main", is_busy=True
+            user_id, screen="main", is_busy=_card_is_busy(state)
         )
         await _legacy("_send_card")(
             bot, user_id, sess, state, text=fresh_text, reply_markup=fresh_kb
@@ -499,7 +480,7 @@ async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
                 return
             text = _legacy("_render_card")(sess, state, user_id=user_id)
             keyboard = _legacy("build_footer_keyboard")(
-                user_id, screen="main", is_busy=True
+                user_id, screen="main", is_busy=_card_is_busy(state)
             )
             if await _legacy("_edit_card_unlocked")(
                 bot, user_id, state, text=text, reply_markup=keyboard
@@ -535,7 +516,7 @@ async def paint_card_on_carrier(
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
     state.pending_edit = None
-    state.msg_id = carrier_msg_id
+    bind_carrier(state, carrier_msg_id, CarrierKind.TEXT)
     state.in_menu_view = False
     state.last_rendered = ""
     _register_msg(user_id, carrier_msg_id, sess.id)
@@ -576,9 +557,10 @@ async def restore_card(bot: Bot, user_id: int, sess: Session, card_msg_id: int) 
         # for this session — leave it alone rather than fight it.
         return True
     state = _cards.setdefault((user_id, sess.id), CardState())
-    state.msg_id = card_msg_id
+    bind_carrier(state, card_msg_id, CarrierKind.TEXT)
     state.last_rendered = ""
     await _legacy("_ensure_seeded")(user_id, sess, state)
+    state.turn_phase = TurnPhase.RUNNING if _card_is_busy(state) else TurnPhase.IDLE
     _register_msg(user_id, card_msg_id, sess.id)
     text = _legacy("_render_card")(sess, state, user_id=user_id)
     keyboard = _legacy("build_footer_keyboard")(
@@ -610,6 +592,7 @@ async def clear_card(bot: Bot, user_id: int, sess: Session) -> None:
     if state is None or state.msg_id is None:
         reset_card(user_id, sess.id)
         return
+    state.turn_phase = TurnPhase.IDLE
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
     state.pending_edit = None
@@ -623,10 +606,9 @@ async def clear_card(bot: Bot, user_id: int, sess: Session) -> None:
     state.in_kb_mode = False
     state.seed_attempted = True
     state.seed_mtime = -1.0
-    state.stall_finalized = False
+    state.stall_watch_active = False
+    state.last_stall_pane_refresh_ts = 0.0
     state.last_rendered = ""
     text = _legacy("_render_card")(sess, state, footer="(cleared)", user_id=user_id)
-    cleared_kb = _legacy("build_footer_keyboard")(
-        user_id, screen="main", is_busy=False
-    )
+    cleared_kb = _legacy("build_footer_keyboard")(user_id, screen="main", is_busy=False)
     await _legacy("_edit_card")(bot, user_id, state, text=text, reply_markup=cleared_kb)

@@ -10,7 +10,9 @@ from telegram import CallbackQuery
 from telegram.ext import ContextTypes
 
 from ...handlers import bg_status
+from ...handlers.card_binding import bind_carrier
 from ...handlers.callback_data import CB_SW_NEW, CB_SW_NOOP, CB_SW_USE
+from ...handlers.card_types import CarrierKind
 from ...handlers.directory_browser import (
     BROWSE_DIRS_KEY,
     BROWSE_PAGE_KEY,
@@ -173,7 +175,11 @@ async def handle(
                         # sets msg_id; enter_kb_mode then edits in place.
                         try:
                             state = get_card_state(user.id, sess)
-                            state.msg_id = query.message.message_id
+                            bind_carrier(
+                                state,
+                                query.message.message_id,
+                                CarrierKind.TEXT,
+                            )
                             state.in_menu_view = False
                             await enter_kb_mode(
                                 context.bot,

@@ -96,7 +96,7 @@ Additional modules:
   tmux_window.py      ─ backend command assembly and tmux window creation
   logging_setup.py    ─ Logging config (level via LOG_LEVEL, JSON via CCBOT_LOG_FORMAT)
   metrics.py          ─ In-process counters → metrics.json
-  rich.py             ─ Bot API 10.1 rich messages via raw Bot._post
+  rich.py             ─ Bot API 10.2 rich messages via raw Bot._post
                        (sendRichMessage / rich edit; to_rich_markdown
                        escapes bare < and maps expandable-quote sentinels
                        to <details>); safe_* try rich first, fall back to
@@ -198,8 +198,11 @@ Handler modules (handlers/):
   card_seed.py        ─ JSONL seeding
   card_carrier.py     ─ pause/transfer/restore carrier lifecycle
   card_transport.py   ─ Telegram send/edit/photo operations
+  card_rich_media.py  ─ RUNNING-only inline pane placement and Rich Markdown
+                        photo reuse (body → pane → context → bg panel; removed
+                        on idle/final/clear; legacy photo/text fallback)
   card_updates.py     ─ event application/finalization/attachments
-  card_stall.py       ─ stall detection and repost recovery
+  card_stall.py       ─ silent-turn pane refresh + bg ⚠️ state
   card_surface.py     ─ timers, panel refresh, and receipt scheduling
   kb_mode.py          ─ kb-mode keyboard builder + pane-capture-to-PNG helper
   typing.py           ─ Per-user throttle in front of send_chat_action(TYPING)

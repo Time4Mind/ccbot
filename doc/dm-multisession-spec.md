@@ -211,6 +211,15 @@ Notifications come in two forms.
 
 Edits do not trigger Telegram push notifications, so this is rate-limit friendly. The card is replaced (a new card sent, the old one finalized in chat history) on session completion or error.
 
+With `card_inline_screenshots` enabled, the terminal pane is present only while
+the turn is **RUNNING**. The stable block order is `body → gap → pane → gap →
+context → background panel`. **IDLE**, final-answer, and `/clear` transitions
+remove it; the next turn adds it again. Rich-capable Bot API servers keep the
+text and pane media in one Rich Markdown message. Older servers use the legacy
+photo + caption carrier. Initial delivery falls back rich → legacy photo →
+text-only. A transient edit failure is retried by the next update; a lost
+carrier is recreated rather than immediately duplicated.
+
 **Push notifications** are sent as separate `send_message` calls only on key events:
 
 - Task completion
@@ -369,6 +378,7 @@ Transcript and quota data have separate sources:
 
 - On-demand, not polled: a session hands the user a file by running `ccbot send-file <path> [--caption TEXT]` (`send_file.py`) directly — no drop directory, no delay. Image extensions go out via `send_photo`, everything else via `send_document`; the command prints a pass/fail line per target chat so the invoking tool call carries real feedback back to Claude.
 - Target chat resolution: `--chat-id` override > `$CCBOT_CHAT_ID` (exported by `tmux_manager.create_window` at spawn time from the Telegram user who created/owns the session — see `owner_user_id`) > broadcast to every `ALLOWED_USERS` entry (used for windows with no single owner, e.g. the internal usage-check window).
+- A silent unfinished turn is never converted into a synthetic final warning. If it is active, its RUNNING card keeps refreshing the terminal pane; if it is background, only a `⚠️` status appears beside it in the background panel. No separate stall push is sent.
 - No MCP tool involved; Claude just needs to know the convention (documented for it via the container's `~/.claude/CLAUDE.md`, keyed off `CCBOT_INTERFACE=telegram` the same way output-format guidance is).
 
 ---

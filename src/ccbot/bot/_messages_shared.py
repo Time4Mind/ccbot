@@ -27,10 +27,12 @@ from ..handlers.notifications import (
     clear_card,
     end_repost_intent,
     enter_kb_mode,
+    get_card_state,
     is_active_for_user,
     repost_card,
     resume_card_view,
 )
+from ..handlers.card_types import TurnPhase
 from ..handlers.typing import fire_typing
 from ..i18n import t
 from ..session_models import Session, WindowState
@@ -398,6 +400,7 @@ async def _card_repost_bracket(
     finally:
         if handle.do_repost and is_active_for_user(user_id, sess):
             try:
+                get_card_state(user_id, sess).turn_phase = TurnPhase.RUNNING
                 await repost_card(bot, user_id, sess)
             except Exception as e:
                 logger.debug("repost_card failed: %s", e)

@@ -9,7 +9,7 @@ import pytest
 from telegram.error import BadRequest
 
 from ccbot.config import config
-from ccbot.handlers import card_rich_media
+from ccbot.handlers import card_rich_media, card_transport, message_sender
 from ccbot.handlers.card_model import CardState
 
 
@@ -166,3 +166,72 @@ async def test_lost_rich_carrier_is_released(
         min_photo_interval=2.5,
     )
     assert state.msg_id is None
+
+
+@pytest.mark.asyncio
+async def test_final_edit_removes_rich_pane_media(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rich_edit = AsyncMock(return_value=True)
+    media_edit = AsyncMock()
+    monkeypatch.setattr(message_sender, "try_rich_edit", rich_edit)
+    monkeypatch.setattr(card_transport, "edit_rich_media_card", media_edit)
+    state = CardState(
+        msg_id=9,
+        is_rich_media_msg=True,
+        rich_media_file_id="pane-file",
+        last_pane_hash="pane-hash",
+        last_photo_edit_ts=10.0,
+        suppress_live_pane=True,
+    )
+
+    assert await card_transport._edit_card_unlocked(
+        SimpleNamespace(),
+        42,
+        state,
+        text="final answer\n\ncontext: 42%",
+        reply_markup=SimpleNamespace(),
+    )
+
+    rich_edit.assert_awaited_once()
+    media_edit.assert_not_awaited()
+    assert state.is_rich_media_msg is False
+    assert state.rich_media_file_id == ""
+    assert state.last_pane_hash == ""
+    assert state.last_photo_edit_ts == 0.0
+
+
+@pytest.mark.asyncio
+async def test_final_send_never_captures_or_attaches_pane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capture = AsyncMock()
+    send_text = AsyncMock(return_value=SimpleNamespace(message_id=17))
+    monkeypatch.setattr(card_transport, "_inline_screens_enabled", lambda _uid: True)
+    monkeypatch.setattr(card_transport, "_capture_pane_png", capture)
+    monkeypatch.setattr(message_sender, "send_with_fallback", send_text)
+    monkeypatch.setattr(card_transport, "_strip_stale_switchers", AsyncMock())
+    monkeypatch.setattr(card_transport, "_register_msg", lambda *_args: None)
+    monkeypatch.setattr(
+        card_transport.session_manager, "set_last_switcher_msg", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        card_transport.session_manager, "set_card_msg", lambda *_args: None
+    )
+    state = CardState(suppress_live_pane=True)
+    session = SimpleNamespace(id="s1", window_id="@1")
+
+    await card_transport._send_card_locked(
+        SimpleNamespace(),
+        42,
+        session,
+        state,
+        text="final answer",
+        reply_markup=SimpleNamespace(),
+    )
+
+    capture.assert_not_awaited()
+    send_text.assert_awaited_once()
+    assert state.msg_id == 17
+    assert state.is_rich_media_msg is False
+    assert state.is_photo_msg is False

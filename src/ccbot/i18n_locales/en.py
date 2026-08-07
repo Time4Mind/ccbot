@@ -298,7 +298,7 @@ EN: dict[str, str] = {
         "states and spoilers. Text and screenshot keep updating in that "
         "same live card; after your next message, a fresh card appears "
         "below it. The screenshot refreshes only when the pane changes, "
-        "with a ~3 sec throttle.\n\n"
+        "with a ~3 sec throttle, and disappears when the task finishes.\n\n"
         "When *off*, the card keeps its normal text-only flow and Shot "
         "remains available from the top-row terminal button."
     ),

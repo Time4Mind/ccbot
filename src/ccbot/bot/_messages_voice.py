@@ -45,11 +45,8 @@ if TYPE_CHECKING:
     _download_voice_bytes = cast(Any, None)
     _enqueue_voice = cast(Any, None)
     _intercept_if_pending_ui = cast(Any, None)
-    _pane_has_interactive_ui = cast(Any, None)
     _release_voice = cast(Any, None)
-    _voice_transcript_checkpoint = cast(Any, None)
     _wait_for_voice = cast(Any, None)
-    _wait_for_voice_transcript = cast(Any, None)
     cancel_bash_capture = cast(Any, None)
 
 logger = logging.getLogger(__name__)
@@ -290,37 +287,10 @@ async def _process_voice(
     # bash-capture, interactive-UI check, card repost) once the text is
     # known. No voice-specific reply; the transcribed text just becomes
     # this message's text, same as if the user had typed it.
-    transcript_checkpoint = _voice_transcript_checkpoint(wid)
     dispatched = await _dispatch_text_to_active(update, context, user.id, wid, text)
     if dispatched is False:
         return False
-
-    # A prompt appearing after send is not proof that the voice was eaten: it
-    # can be an approval raised by the successfully delivered turn, especially
-    # for the second voice in a queue. Prefer the authoritative transcript and
-    # only use the pane heuristic when no matching user row appears.
-    transcript_confirmed = await _wait_for_voice_transcript(
-        transcript_checkpoint, text, wid=wid
-    )
-    if transcript_confirmed is True:
-        logger.info(
-            "Voice delivery confirmed by transcript user=%d window=%s",
-            user.id,
-            wid,
-        )
-        return True
-    if transcript_confirmed is None:
-        await asyncio.sleep(1.5)
-    if await _pane_has_interactive_ui(wid):
-        logger.warning(
-            "Voice delivery unconfirmed while interactive UI is visible "
-            "user=%d window=%s",
-            user.id,
-            wid,
-        )
-        try:
-            await safe_reply(update.message, _voice_lost_notice)
-        except Exception:
-            pass
-        return False
+    # Dispatch already verified at-most-once TUI acceptance. A later approval
+    # or an absent transcript row can belong to an earlier busy turn and must
+    # not reclassify this queued voice as lost.
     return True

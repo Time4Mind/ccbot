@@ -510,6 +510,7 @@ async def idle_archive_sweep(bot: Bot, user_id: int) -> int:
     for sess in candidates:
         wid = sess.window_id
         if wid:
+            session_manager.cancel_window_startup(wid)
             w = await tmux_manager.find_window_by_id(wid)
             if w:
                 await tmux_manager.kill_window(w.window_id)

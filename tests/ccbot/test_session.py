@@ -371,6 +371,23 @@ class TestResumeSettleGate:
         mock_tmux.send_keys.assert_awaited_once()
         mock_tmux.capture_pane.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_watcher_stops_when_window_disappears(
+        self, mgr: SessionManager, monkeypatch, fast_gate
+    ) -> None:
+        """A killed startup window must not leave a retrying watcher behind."""
+        mock_tmux = self._mock_tmux(monkeypatch, lambda _w: None)
+        mock_tmux.find_window_by_id.return_value = None
+        mgr.mark_window_starting("@1", backend="claude", resume=False)
+
+        task = mgr._resume_settle_tasks["@1"]
+        await task
+
+        assert "@1" not in mgr._resuming_windows
+        assert "@1" not in mgr._resume_settle_tasks
+        assert mock_tmux.capture_pane.await_count == 1
+        mock_tmux.send_keys.assert_not_awaited()
+
     def test_mark_noop_when_disabled(self, mgr: SessionManager, monkeypatch) -> None:
         """resume_settle_timeout=0 disables the gate — nothing is flagged."""
         monkeypatch.setattr(config, "resume_settle_timeout", 0.0)

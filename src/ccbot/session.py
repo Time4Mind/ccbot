@@ -389,12 +389,18 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
             _typing_keepalive(), name=f"resume-settle-typing:{window_id}"
         )
         try:
-            settled = False
-            while not settled:
+            settled: bool | None = False
+            while settled is False:
                 settled = await self._wait_for_resume_settle(
                     window_id, backend=backend, resume=resume
                 )
-                if not settled:
+                if settled is None:
+                    logger.warning(
+                        "startup gate abandoned for vanished window %s",
+                        window_id,
+                    )
+                    return
+                if settled is False:
                     logger.error(
                         "startup gate remains closed for window %s; "
                         "TUI readiness is still unproven",
@@ -526,7 +532,7 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
         *,
         backend: str = "claude",
         resume: bool = True,
-    ) -> bool:
+    ) -> bool | None:
         """Block until a just-resumed window is safe to type into.
 
         A ``claude --resume`` of a near-limit transcript auto-compacts before
@@ -539,8 +545,9 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
           * no busy spinner appeared within ``_RESUME_SETTLE_BUSY_GRACE``
             seconds (small session — nothing to compact).
 
-        Returns True when settled, False on timeout (caller sends anyway —
-        best-effort, never worse than the old blind send).
+        Returns True when settled, False on timeout (the watcher retries so
+        queued startup messages are not lost), and None when the tmux window
+        vanished while it was being watched.
         """
         loop = asyncio.get_event_loop()
         started = loop.time()
@@ -549,6 +556,10 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
         idle_since: float | None = None
         while loop.time() < deadline:
             pane = await tmux_manager.capture_pane(window_id)
+            if pane is None:
+                window = await tmux_manager.find_window_by_id(window_id)
+                if window is None:
+                    return None
             now = loop.time()
             busy = bool(pane) and parse_status_line(pane) is not None
             ready = bool(pane) and self._pane_has_ready_input(pane or "", backend)

@@ -260,7 +260,34 @@ async def test_first_turn_can_be_confirmed_after_binding_appears(
 
 
 @pytest.mark.asyncio
-async def test_delivery_retries_until_exact_transcript_ack() -> None:
+async def test_late_transcript_ack_never_retypes_an_accepted_prompt() -> None:
+    from ccbot.bot.messages import _send_with_delivery_proof
+
+    fake_manager = MagicMock()
+    fake_manager.send_to_window = AsyncMock(return_value=(True, "Sent"))
+    fake_session = SimpleNamespace(backend="codex")
+    transcript_wait = AsyncMock(return_value=False)
+    with (
+        patch("ccbot.bot.messages.session_manager", fake_manager),
+        patch(
+            "ccbot.bot.messages.tmux_manager.ensure_codex_prompt_submitted",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "ccbot.bot.messages._wait_for_voice_transcript",
+            new=transcript_wait,
+        ),
+        patch("ccbot.bot.messages._voice_transcript_checkpoint", return_value=None),
+    ):
+        ok, _ = await _send_with_delivery_proof("@9", "do it", fake_session)
+
+    assert ok
+    assert fake_manager.send_to_window.await_count == 1
+    transcript_wait.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_prompt_left_in_input_fails_without_retyping_text() -> None:
     from ccbot.bot.messages import _send_with_delivery_proof
 
     fake_manager = MagicMock()
@@ -270,15 +297,12 @@ async def test_delivery_retries_until_exact_transcript_ack() -> None:
         patch("ccbot.bot.messages.session_manager", fake_manager),
         patch(
             "ccbot.bot.messages.tmux_manager.ensure_codex_prompt_submitted",
-            new=AsyncMock(return_value=True),
-        ),
-        patch(
-            "ccbot.bot.messages._wait_for_voice_transcript",
-            new=AsyncMock(side_effect=[False, True]),
+            new=AsyncMock(return_value=False),
         ),
         patch("ccbot.bot.messages._voice_transcript_checkpoint", return_value=None),
     ):
-        ok, _ = await _send_with_delivery_proof("@9", "do it", fake_session)
+        ok, message = await _send_with_delivery_proof("@9", "do it", fake_session)
 
-    assert ok
-    assert fake_manager.send_to_window.await_count == 2
+    assert not ok
+    assert "input field" in message
+    assert fake_manager.send_to_window.await_count == 1

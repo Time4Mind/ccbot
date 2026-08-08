@@ -231,37 +231,32 @@ async def _wait_for_voice_transcript(
 async def _send_with_delivery_proof(
     wid: str, text: str, sess: Session | None
 ) -> tuple[bool, str]:
-    """Send one prompt and require an exact Codex transcript acknowledgement."""
-    transcript_checkpoint = _voice_transcript_checkpoint(wid)
-    message = ""
-    for attempt in range(1, 3):
-        success, message = await session_manager.send_to_window(wid, text)
-        if not success:
-            continue
-        if message.startswith("Queued for "):
-            return True, message
-        if sess is None or sess.backend != "codex":
-            return True, message
-        if not await tmux_manager.ensure_codex_prompt_submitted(wid, text):
-            message = "Codex kept the text in its input field"
-            continue
-        # TUI slash commands do not become ordinary user_message rows.
-        if text.lstrip().startswith("/"):
-            return True, message
-        confirmed = await _wait_for_voice_transcript(
-            transcript_checkpoint, text, wid=wid
-        )
-        if confirmed is True or confirmed is None:
-            return True, message
-        logger.warning(
-            "Codex delivery absent from transcript; retrying exact prompt "
-            "window=%s attempt=%d/2 text_len=%d",
-            wid,
-            attempt,
-            len(text),
-        )
-        message = "Prompt did not appear in the Codex transcript"
-    return False, message or "Delivery was not acknowledged"
+    """Submit one prompt at most once and verify that the TUI accepted it.
+
+    A busy Codex TUI accepts follow-up prompts into its own queue but does not
+    append their user rows to the rollout until it starts processing them.
+    Transcript absence is therefore not delivery failure and must never cause
+    the full prompt to be typed again.  The only safe retry is an extra Enter,
+    handled by ``ensure_codex_prompt_submitted`` while the exact text is still
+    visibly present in the input field.
+    """
+    success, message = await session_manager.send_to_window(wid, text)
+    if not success:
+        return False, message or "Delivery was not acknowledged"
+    if message.startswith("Queued for "):
+        return True, message
+    if sess is None or sess.backend != "codex":
+        return True, message
+    if not await tmux_manager.ensure_codex_prompt_submitted(wid, text):
+        return False, "Codex kept the text in its input field"
+    # TUI slash commands do not become ordinary user_message rows.
+    if text.lstrip().startswith("/"):
+        return True, message
+    # Reaching this point proves that text+Enter were sent and that the exact
+    # text no longer remains in the live input. Do not hold the inbound FIFO
+    # open waiting for a rollout row: a busy Codex writes that row only when it
+    # eventually consumes its queued prompt, which can take minutes.
+    return True, message
 
 
 def _enqueue_voice(

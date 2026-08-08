@@ -435,7 +435,7 @@ class TestVoiceTranscriptConfirmation:
         notice.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_unconfirmed_transcript_with_interactive_prompt_reports_loss(self):
+    async def test_successful_dispatch_is_not_reclassified_by_later_prompt(self):
         update = _make_voice_update()
         context = _make_context()
         mock_sm = MagicMock()
@@ -444,6 +444,8 @@ class TestVoiceTranscriptConfirmation:
         mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock(window_id="@5"))
         notice = AsyncMock()
 
+        transcript_wait = AsyncMock(return_value=False)
+        pane_check = AsyncMock(return_value=True)
         with (
             patch("ccbot.bot.messages.is_user_allowed", return_value=True),
             patch("ccbot.bot.messages.resolve_voice_backend", return_value="whisper"),
@@ -468,11 +470,11 @@ class TestVoiceTranscriptConfirmation:
             ),
             patch(
                 "ccbot.bot.messages._wait_for_voice_transcript",
-                new=AsyncMock(return_value=False),
+                new=transcript_wait,
             ),
             patch(
                 "ccbot.bot.messages._pane_has_interactive_ui",
-                new=AsyncMock(return_value=True),
+                new=pane_check,
             ),
             patch("ccbot.bot.messages.safe_reply", new=notice),
         ):
@@ -480,8 +482,10 @@ class TestVoiceTranscriptConfirmation:
 
             delivered = await _process_voice(update, context, pinned_wid="@5")
 
-        assert delivered is False
-        notice.assert_awaited_once()
+        assert delivered is True
+        transcript_wait.assert_not_awaited()
+        pane_check.assert_not_awaited()
+        notice.assert_not_awaited()
 
 
 class TestVoiceSessionPinning:

@@ -38,12 +38,16 @@ async def test_archive_session_kills_window_and_orphans(fake_tmux, fake_bot):
         claude_session_id=CLAUDE_SID,
         active_for=USER_ID,
     )
+    session_manager._resuming_windows.add(WINDOW_ID)
+    session_manager._pending_sends[WINDOW_ID] = ["queued startup prompt"]
 
     await archive_session(USER_ID, fake_bot, sess, completed=False)
 
     # tmux window killed, then orphan claude --resume processes mopped up.
     assert WINDOW_ID in fake_tmux.killed
     assert CLAUDE_SID in fake_tmux.orphans_killed
+    assert WINDOW_ID not in session_manager._resuming_windows
+    assert WINDOW_ID not in session_manager._pending_sends
 
     # Session record flipped to archived; active pointer dropped (no
     # replacement available).

@@ -57,8 +57,9 @@ Claude Code живёт в терминале. Отошёл от стола — �
   Bot API 10.1 (нативный markdown: GFM-таблицы ≤ 20 колонок,
   заголовки, `<details>`, сноски, формулы), с фолбэком на MarkdownV2
   (`telegramify-markdown`) и дальше на plain text при любой ошибке.
-  Однострочные fenced shell-команды превращаются в inline code, чтобы
-  Telegram показывал для них Copy; многострочные блоки сохраняются.
+  Fenced shell-команды (включая PowerShell и cmd) превращаются в
+  копируемый code-текст, чтобы Telegram показывал для них Copy; блоки
+  исходного кода сохраняют подсветку и компоновку.
   Kill switch: `CCBOT_RICH_MESSAGES=off`. В upstream — HTML.
 - **Hook-based session tracking.** Хуки выбранного агента `SessionStart` +
   `UserPromptSubmit` пишут `session_map.json`; монитор бота его

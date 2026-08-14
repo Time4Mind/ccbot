@@ -1,0 +1,13 @@
+[Unit]
+Description=Restart ccbot after 30 minutes of KVN proxy unavailability
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=FAIL_AFTER_SEC=1800
+Environment=PROXY_URL=http://172.17.0.1:1081
+Environment=CHECK_URL=https://api.telegram.org/
+Environment="CONTAINERS=ccbot ccbot2"
+ExecStart=/usr/local/sbin/ccbot-connectivity-watchdog
+TimeoutStartSec=60

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check ccbot KVN proxy connectivity every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=5s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

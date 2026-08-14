@@ -107,6 +107,15 @@ class CarrierKind(str, Enum):
 class CardState:
     msg_id: int | None = None
     events: list[Event] = field(default_factory=list)
+    # Completed logical pages are immutable while the current turn streams.
+    # ``paginate_events_for_card`` caches their budget-split Event references
+    # here and recomputes only the latest logical page on each update. This is
+    # deliberately state-local (never persisted) and duplicates no event text.
+    pagination_prefix_len: int = 0
+    pagination_prefix_first_id: int = 0
+    pagination_prefix_last_id: int = 0
+    pagination_budget: int = 0
+    pagination_prefix_pages: list[list[Event]] = field(default_factory=list)
     # Page the user is currently looking at. ``None`` = default focus
     # (page with the latest answer-anchor). Set by pagination callbacks.
     current_page_idx: int | None = None

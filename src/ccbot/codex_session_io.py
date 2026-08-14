@@ -145,35 +145,50 @@ def _context_fill_from_rollout(path: Path) -> tuple[int, int] | None:
     ``total_token_usage``, ``last_token_usage`` naturally drops after a
     compaction and therefore represents the context that is live right now.
     """
-    latest: tuple[int, int] | None = None
     try:
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                try:
-                    data = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                payload = data.get("payload")
-                if data.get("type") != "event_msg" or not isinstance(payload, dict):
-                    continue
-                if payload.get("type") != "token_count":
-                    continue
-                info = payload.get("info")
-                if not isinstance(info, dict):
-                    continue
-                usage = info.get("last_token_usage")
-                if not isinstance(usage, dict):
-                    continue
-                try:
-                    used = int(usage.get("total_tokens") or 0)
-                    window = int(info.get("model_context_window") or 0)
-                except (TypeError, ValueError):
-                    continue
-                if used >= 0 and window > 0:
-                    latest = used, window
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            position = handle.tell()
+            remainder = b""
+            while position > 0:
+                start = max(0, position - 64 * 1024)
+                handle.seek(start)
+                block = handle.read(position - start) + remainder
+                position = start
+                lines = block.split(b"\n")
+                if start > 0:
+                    remainder = lines[0]
+                    lines = lines[1:]
+                else:
+                    remainder = b""
+                for raw_line in reversed(lines):
+                    if not raw_line.strip():
+                        continue
+                    try:
+                        data = json.loads(raw_line.decode("utf-8", errors="replace"))
+                    except json.JSONDecodeError:
+                        continue
+                    payload = data.get("payload")
+                    if data.get("type") != "event_msg" or not isinstance(payload, dict):
+                        continue
+                    if payload.get("type") != "token_count":
+                        continue
+                    info = payload.get("info")
+                    if not isinstance(info, dict):
+                        continue
+                    usage = info.get("last_token_usage")
+                    if not isinstance(usage, dict):
+                        continue
+                    try:
+                        used = int(usage.get("total_tokens") or 0)
+                        window = int(info.get("model_context_window") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if used >= 0 and window > 0:
+                        return used, window
     except OSError:
         return None
-    return latest
+    return None
 
 
 async def context_fill(path: Path) -> tuple[int, int] | None:

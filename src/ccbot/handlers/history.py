@@ -21,7 +21,13 @@ from ..session import Session, session_manager
 from ..session_claude_io import build_session_file_path
 from ..telegram_sender import split_message
 from ..transcript_parser import TranscriptParser
+from ..transcript_types import PendingToolInfo
 from .callback_data import CB_HISTORY_NEXT, CB_HISTORY_PREV
+from .history_incremental import (
+    IncrementalHistoryState,
+    read_boundary_marker,
+    read_history_delta,
+)
 from .history_archive import (
     render_archived_card_pages_impl,
     render_archived_history_pages_impl,
@@ -45,6 +51,10 @@ logger = logging.getLogger(__name__)
 # (un-byte-ranged) case is the only one cached; unread-range reads are
 # rare and parameterised, so they go through the slow path.
 _pages_cache: dict[str, tuple[float, int, list[str], int]] = {}
+
+
+_incremental_history: dict[str, IncrementalHistoryState] = {}
+_prewarm_locks: dict[str, asyncio.Lock] = {}
 
 
 # Same cache shape, but keyed by ``claude_session_id`` for archived
@@ -118,14 +128,11 @@ async def render_archived_history_pages(
 
 _last_prewarm_attempt: dict[str, float] = {}
 
-# Live, fire-and-forget prewarm tasks. We keep a strong reference so
-# the event loop doesn't garbage-collect them mid-run (CPython will
-# silently drop bare ``asyncio.create_task`` results once the local
-# binding goes away), and so ``cancel_pending_prewarm()`` can drain
-# them on shutdown — otherwise asyncio logs ``Task was destroyed but
-# it is pending!`` and an in-flight JSONL read can race with the
-# session monitor's final state save.
-_prewarm_tasks: set[asyncio.Task[bool]] = set()
+# One live fire-and-forget prewarm per window.  Keeping the task keyed by
+# window is both a strong-reference lifetime guard and a single-flight gate:
+# polling/card events that arrive while a large transcript is still being
+# parsed reuse the in-flight work instead of opening another full-file reader.
+_prewarm_tasks: dict[str, asyncio.Task[bool]] = {}
 
 
 def kick_prewarm(window_id: str, min_interval: float = 3.0) -> None:
@@ -147,6 +154,9 @@ def kick_prewarm(window_id: str, min_interval: float = 3.0) -> None:
 
     if not window_id:
         return
+    running = _prewarm_tasks.get(window_id)
+    if running is not None and not running.done():
+        return
     now = time.monotonic()
     last = _last_prewarm_attempt.get(window_id, 0.0)
     if now - last < min_interval:
@@ -159,8 +169,13 @@ def kick_prewarm(window_id: str, min_interval: float = 3.0) -> None:
         # Skip; another path (status polling, the next callback) will
         # populate the cache eventually.
         return
-    _prewarm_tasks.add(task)
-    task.add_done_callback(_prewarm_tasks.discard)
+    _prewarm_tasks[window_id] = task
+
+    def _discard(done: asyncio.Task[bool]) -> None:
+        if _prewarm_tasks.get(window_id) is done:
+            _prewarm_tasks.pop(window_id, None)
+
+    task.add_done_callback(_discard)
 
 
 async def cancel_pending_prewarm(timeout: float = 2.0) -> None:
@@ -170,7 +185,7 @@ async def cancel_pending_prewarm(timeout: float = 2.0) -> None:
     monitor so pending JSONL reads don't keep running after the bot
     has nominally exited.
     """
-    tasks = list(_prewarm_tasks)
+    tasks = list(_prewarm_tasks.values())
     if not tasks:
         return
     for t in tasks:
@@ -190,6 +205,105 @@ async def cancel_pending_prewarm(timeout: float = 2.0) -> None:
         _prewarm_tasks.clear()
 
 
+def _visible_history_messages(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Apply the stable visibility policy used by the full-history view."""
+    visible = messages
+    if not config.show_user_messages:
+        visible = [message for message in visible if message["role"] == "assistant"]
+    return [message for message in visible if message.get("content_type") != "tool_use"]
+
+
+def _history_header(window_id: str, total: int) -> str:
+    display_name = session_manager.get_display_name(window_id)
+    return f"📋 [{display_name}] Messages ({total} total)"
+
+
+def _history_message_blocks(messages: list[dict[str, Any]]) -> list[str]:
+    """Format only message bodies; page/header assembly is handled separately."""
+    quote_start = TranscriptParser.EXPANDABLE_QUOTE_START
+    quote_end = TranscriptParser.EXPANDABLE_QUOTE_END
+    blocks: list[str] = []
+    for message in messages:
+        timestamp = message.get("timestamp")
+        hh_mm = ""
+        if timestamp:
+            try:
+                time_part = timestamp.split("T")[1] if "T" in timestamp else timestamp
+                hh_mm = time_part[:5]
+            except (IndexError, TypeError):
+                hh_mm = ""
+        separator = f"───── {hh_mm} ─────" if hh_mm else "─────────────"
+        text = message["text"].replace(quote_start, "").replace(quote_end, "")
+        fence_lines = sum(
+            1 for line in text.split("\n") if line.strip().startswith("```")
+        )
+        if fence_lines % 2 == 1:
+            text += "\n```"
+        role = message.get("role", "assistant")
+        content_type = message.get("content_type", "text")
+        if role == "user":
+            body = f"👤 {text}"
+        elif content_type == "thinking":
+            body = f"∴ Thinking…\n{text}"
+        else:
+            body = text
+        blocks.append(f"{separator}\n\n{body}")
+    return blocks
+
+
+def _render_cached_pages(
+    window_id: str, messages: list[dict[str, Any]]
+) -> tuple[list[str], int]:
+    """Render an initial/rebuilt transcript snapshot into Telegram pages."""
+    visible = _visible_history_messages(messages)
+    total = len(visible)
+    if total == 0:
+        return [], 0
+    text = "\n\n".join(
+        [_history_header(window_id, total), *_history_message_blocks(visible)]
+    )
+    return list(split_message(text, max_length=4096)), total
+
+
+def _append_cached_pages(
+    window_id: str,
+    pages: list[str],
+    prior_total: int,
+    added_messages: list[dict[str, Any]],
+) -> tuple[list[str], int, int]:
+    """Append new visible messages by reflowing only the previous last page.
+
+    Earlier pages are immutable because JSONL transcripts are append-only. The
+    last page is combined with the newly formatted blocks and split again; this
+    bounds temporary allocations to roughly one Telegram page plus the delta.
+    """
+    visible = _visible_history_messages(added_messages)
+    added_total = len(visible)
+    if added_total == 0:
+        return list(pages), prior_total, 0
+
+    total = prior_total + added_total
+    if not pages:
+        rendered, rendered_total = _render_cached_pages(window_id, visible)
+        return rendered, rendered_total, added_total
+
+    updated = list(pages)
+    header = _history_header(window_id, total)
+    _old_header, separator, first_body = updated[0].partition("\n")
+    first_page = header + (separator + first_body if separator else "")
+    # A decimal-width transition can add one byte to a completely full first
+    # page. Keep its previous count rather than publishing an invalid >4096
+    # Telegram message; pagination metadata still carries the exact total.
+    if len(first_page) <= 4096:
+        updated[0] = first_page
+
+    tail = "\n\n".join([updated[-1], *_history_message_blocks(visible)])
+    updated[-1:] = split_message(tail, max_length=4096)
+    return updated, total, added_total
+
+
 async def prewarm_pages_cache(window_id: str) -> bool:
     """Build and store the rendered history pages for ``window_id`` so
     the next ``send_history`` for this window hits the cache.
@@ -200,76 +314,156 @@ async def prewarm_pages_cache(window_id: str) -> bool:
 
     Returns ``True`` when fresh pages were stored, ``False`` otherwise.
     """
-    try:
-        fp = _window_file_path(window_id)
-        if fp is None or not fp.exists():
+    if not window_id:
+        return False
+    lock = _prewarm_locks.setdefault(window_id, asyncio.Lock())
+    async with lock:
+        try:
+            fp = _window_file_path(window_id)
+            if fp is None or not fp.exists():
+                _incremental_history.pop(window_id, None)
+                _pages_cache.pop(window_id, None)
+                return False
+            stat_before = fp.stat()
+        except Exception as e:
+            logger.debug("prewarm: stat lookup failed for %s: %s", window_id, e)
             return False
-        st = fp.stat()
-        entry = _pages_cache.get(window_id)
-        if entry is not None and entry[0] == st.st_mtime and entry[1] == st.st_size:
-            return False  # already fresh
-    except Exception as e:
-        logger.debug("prewarm: stat lookup failed for %s: %s", window_id, e)
-        return False
 
-    try:
-        messages, total = await session_manager.get_recent_messages(window_id)
-    except Exception as e:
-        logger.debug("prewarm: get_recent_messages failed for %s: %s", window_id, e)
-        return False
-    if total == 0:
-        return False
-
-    if not config.show_user_messages:
-        messages = [m for m in messages if m["role"] == "assistant"]
-    # Drop ``tool_use`` entries — TranscriptParser emits them as soon
-    # as the streaming API sees the call, BEFORE the tool_result lands
-    # on disk. The matching ``tool_result`` entry that arrives later
-    # carries the same ``**Tool**(args)`` header AND the body/diff —
-    # rendering both shows each tool call twice (bare name first, then
-    # the same name with the body). Worse, in a fast-moving session
-    # the JSONL can flush tool_use rows with no matching tool_result
-    # yet, so the cache snapshots a long tail of empty tool names.
-    messages = [m for m in messages if m.get("content_type") != "tool_use"]
-    total = len(messages)
-    if total == 0:
-        return False
-
-    display_name = session_manager.get_display_name(window_id)
-    _start = TranscriptParser.EXPANDABLE_QUOTE_START
-    _end = TranscriptParser.EXPANDABLE_QUOTE_END
-    lines = [f"📋 [{display_name}] Messages ({total} total)"]
-    for msg in messages:
-        ts = msg.get("timestamp")
-        hh_mm = ""
-        if ts:
-            try:
-                time_part = ts.split("T")[1] if "T" in ts else ts
-                hh_mm = time_part[:5]
-            except (IndexError, TypeError):
-                hh_mm = ""
-        lines.append(f"───── {hh_mm} ─────" if hh_mm else "─────────────")
-        msg_text = msg["text"].replace(_start, "").replace(_end, "")
-        fence_lines = sum(
-            1 for ln in msg_text.split("\n") if ln.strip().startswith("```")
+        state = _incremental_history.get(window_id)
+        same_file = (
+            state is not None
+            and state.path == str(fp)
+            and state.device == stat_before.st_dev
+            and state.inode == stat_before.st_ino
         )
-        if fence_lines % 2 == 1:
-            msg_text = msg_text + "\n```"
-        role = msg.get("role", "assistant")
-        ctype = msg.get("content_type", "text")
-        if role == "user":
-            lines.append(f"👤 {msg_text}")
-        elif ctype == "thinking":
-            lines.append(f"∴ Thinking…\n{msg_text}")
+        if (
+            same_file
+            and state is not None
+            and state.observed_mtime_ns == stat_before.st_mtime_ns
+            and state.observed_size == stat_before.st_size
+        ):
+            return False
+
+        # Replacement, truncation, or an in-place same-size rewrite invalidates
+        # cumulative parser state. Ordinary append keeps the prior offset,
+        # unresolved tool metadata, and already-rendered pages.
+        reset = (
+            state is None
+            or not same_file
+            or stat_before.st_size < state.offset
+            or (
+                stat_before.st_size == state.observed_size
+                and stat_before.st_mtime_ns != state.observed_mtime_ns
+            )
+            or (state.rendered_total > 0 and window_id not in _pages_cache)
+        )
+        if not reset:
+            assert state is not None
+            if state.offset:
+                try:
+                    reset = (
+                        read_boundary_marker(fp, state.offset) != state.boundary_marker
+                    )
+                except OSError:
+                    return False
+        if reset:
+            start_offset = 0
+            pending_tools: dict[str, PendingToolInfo] = {}
         else:
-            lines.append(msg_text)
-    full = "\n\n".join(lines)
-    pages = split_message(full, max_length=4096)
-    _pages_cache[window_id] = (st.st_mtime, st.st_size, list(pages), total)
-    logger.debug(
-        "prewarm: cached window=%s pages=%d total=%d", window_id, len(pages), total
-    )
-    return True
+            assert state is not None
+            start_offset = state.offset
+            pending_tools = state.pending_tools
+
+        try:
+            added, remaining_pending, safe_offset = await asyncio.to_thread(
+                read_history_delta, fp, start_offset, pending_tools
+            )
+            stat_after = fp.stat()
+        except Exception as e:
+            logger.debug("prewarm: incremental read failed for %s: %s", window_id, e)
+            return False
+
+        # A rename/replacement during the read makes the result ambiguous; do
+        # not publish it.  The next polling tick starts cleanly from the new
+        # inode.
+        if (
+            stat_after.st_dev != stat_before.st_dev
+            or stat_after.st_ino != stat_before.st_ino
+            or safe_offset > stat_after.st_size
+        ):
+            _incremental_history.pop(window_id, None)
+            _pages_cache.pop(window_id, None)
+            return False
+
+        if safe_offset < stat_before.st_size:
+            # The snapshot already ended in a partial line.  Remember the
+            # newest metadata so unchanged polling ticks do not spin on it;
+            # the writer's completion/append changes size or mtime and wakes
+            # the reader again.
+            observed_mtime_ns = stat_after.st_mtime_ns
+            observed_size = stat_after.st_size
+            cache_mtime = stat_after.st_mtime
+            cache_size = stat_after.st_size
+        elif safe_offset < stat_after.st_size:
+            # The file grew after this read reached the original EOF.  Publish
+            # the consistent snapshot we did parse, but leave its old metadata
+            # in place so the next tick immediately consumes the new tail.
+            observed_mtime_ns = stat_before.st_mtime_ns
+            observed_size = stat_before.st_size
+            cache_mtime = stat_before.st_mtime
+            cache_size = stat_before.st_size
+        else:
+            observed_mtime_ns = stat_after.st_mtime_ns
+            observed_size = stat_after.st_size
+            cache_mtime = stat_after.st_mtime
+            cache_size = stat_after.st_size
+
+        cached = None if reset else _pages_cache.get(window_id)
+        if cached is None:
+            pages, total = _render_cached_pages(window_id, added)
+            visible_added = total
+        else:
+            assert state is not None
+            pages, total, visible_added = _append_cached_pages(
+                window_id,
+                cached[2],
+                state.rendered_total,
+                added,
+            )
+        new_state = IncrementalHistoryState(
+            path=str(fp),
+            device=stat_after.st_dev,
+            inode=stat_after.st_ino,
+            offset=safe_offset,
+            observed_mtime_ns=observed_mtime_ns,
+            observed_size=observed_size,
+            boundary_marker=read_boundary_marker(fp, safe_offset),
+            rendered_total=total,
+            pending_tools=remaining_pending,
+        )
+        _incremental_history[window_id] = new_state
+
+        if not pages:
+            _pages_cache.pop(window_id, None)
+            return bool(added or safe_offset != start_offset)
+        _pages_cache[window_id] = (
+            cache_mtime,
+            cache_size,
+            pages,
+            total,
+        )
+        logger.debug(
+            "prewarm: cached window=%s pages=%d total=%d added=%d visible_added=%d "
+            "offset=%d/%d",
+            window_id,
+            len(pages),
+            total,
+            len(added),
+            visible_added,
+            safe_offset,
+            stat_after.st_size,
+        )
+        return True
 
 
 def _build_history_keyboard(
@@ -369,13 +563,35 @@ async def send_history(
         cached_pages: list[str] | None = None
         cached_total = 0
         try:
+            # Route every full-history miss through the same incremental,
+            # per-window lock used by background polling.  This prevents a
+            # switcher tap from starting the old independent full JSONL walk
+            # while a prewarm is already consuming the append tail.
+            await prewarm_pages_cache(window_id)
+        except Exception as e:
+            logger.debug("history on-demand prewarm failed: %s", e)
+        try:
             fp = _window_file_path(window_id)
             if fp is not None and fp.exists():
                 st = fp.stat()
                 mtime = st.st_mtime
                 size = st.st_size
                 entry = _pages_cache.get(window_id)
-                if entry is not None and entry[0] == mtime and entry[1] == size:
+                incremental = _incremental_history.get(window_id)
+                same_incremental_file = (
+                    incremental is not None
+                    and incremental.path == str(fp)
+                    and incremental.device == st.st_dev
+                    and incremental.inode == st.st_ino
+                )
+                # Exact metadata is the common case.  If the append-only file
+                # grew in the tiny gap after prewarm returned, serve its
+                # consistent cached snapshot; the next polling tick consumes
+                # the tail instead of forcing this user interaction into a
+                # second full-file parser.
+                if entry is not None and (
+                    (entry[0] == mtime and entry[1] == size) or same_incremental_file
+                ):
                     cached_pages = entry[2]
                     cached_total = entry[3]
                     logger.debug(

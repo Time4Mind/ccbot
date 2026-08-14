@@ -488,7 +488,17 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
             # ``<model> <effort> · <cwd>``.  Accept that as Codex evidence so
             # resume cannot remain gated forever, while still rejecting
             # Artem's shell prompt (which also starts with ``›``).
-            efforts = {"low", "medium", "high", "xhigh", "max", "ultra"}
+            # Codex 0.147 renders the configured/default reasoning choice as
+            # ``default`` in the footer instead of an explicit effort level.
+            efforts = {
+                "default",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra",
+            }
             has_codex_footer = False
             for line in lines[-8:]:
                 parts = [part.strip() for part in line.split("·")]

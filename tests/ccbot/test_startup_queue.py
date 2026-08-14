@@ -196,11 +196,12 @@ def test_shell_prompt_is_not_codex_readiness() -> None:
     )
 
 
-def test_resumed_codex_without_visible_header_is_ready() -> None:
+@pytest.mark.parametrize("effort", ["high", "default"])
+def test_resumed_codex_without_visible_header_is_ready(effort: str) -> None:
     pane = (
         "• Previous assistant output after a long restored transcript\n\n"
         "› Improve documentation in @filename\n\n"
-        "  gpt-5.6-sol high · ~/pet_projects/ccbot"
+        f"  gpt-5.6-sol {effort} · ~/pet_projects/ccbot"
     )
 
     assert SessionManager._pane_has_ready_input(pane, "codex")

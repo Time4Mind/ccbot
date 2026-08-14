@@ -69,6 +69,23 @@ class TestToRichMarkdown:
             == "<code>git fetch origin\ngit status</code>"
         )
 
+    @pytest.mark.parametrize(
+        "language", ["powershell", "pwsh", "ps1", "cmd", "bat", "batch"]
+    )
+    def test_multiline_windows_command_fence_becomes_copyable_rich_code(
+        self, language: str
+    ) -> None:
+        text = (
+            f"```{language}\n"
+            "Start-Service sshd\n"
+            "Set-Service sshd -StartupType Automatic\n"
+            "```"
+        )
+
+        assert rich.to_rich_markdown(text) == (
+            "<code>Start-Service sshd\nSet-Service sshd -StartupType Automatic</code>"
+        )
+
     def test_single_line_and_non_shell_fences_stay_rich(self) -> None:
         assert rich.to_rich_markdown("```bash\nuv run ccbot\n```") == "`uv run ccbot`"
         assert (

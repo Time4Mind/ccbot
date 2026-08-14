@@ -61,7 +61,20 @@ _CODE_SPAN_RE = re.compile(r"```[\s\S]*?(?:```|$)|`[^`\n]*`")
 _SINGLE_LINE_FENCE_RE = re.compile(
     r"(?m)^[ \t]*```([^\n`]*)\n([^\n`]+)\n[ \t]*```[ \t]*$"
 )
-_COPYABLE_SHELL_LANGS = {"", "bash", "sh", "zsh", "shell", "console"}
+_COPYABLE_SHELL_LANGS = {
+    "",
+    "bash",
+    "bat",
+    "batch",
+    "cmd",
+    "console",
+    "powershell",
+    "ps1",
+    "pwsh",
+    "sh",
+    "shell",
+    "zsh",
+}
 
 # Telegram Android exposes its native tap/copy interaction for a multi-line
 # Rich ``<code>`` span, but not for a Rich fenced block.  Convert shell fences

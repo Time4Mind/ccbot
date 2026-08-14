@@ -57,8 +57,9 @@ and not negotiable:
   message (native markdown: GFM tables ≤ 20 columns, headings,
   `<details>`, footnotes, math), falling back to the MarkdownV2
   pipeline (`telegramify-markdown`) and then to plain text on any
-  failure. One-line fenced shell commands become inline code so Telegram
-  exposes Copy; multiline blocks remain fenced. Kill switch:
+  failure. Fenced shell commands (including PowerShell and cmd) become
+  copyable code text so Telegram exposes Copy; source-code blocks retain
+  their highlighting and layout. Kill switch:
   `CCBOT_RICH_MESSAGES=off`. Upstream uses HTML.
 - **Hook-based session tracking.** The selected agent's `SessionStart` +
   `UserPromptSubmit` hooks write `session_map.json`; the monitor polls

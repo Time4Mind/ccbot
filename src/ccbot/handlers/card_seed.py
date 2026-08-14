@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from __future__ import annotations
-
+import asyncio
 import logging
 import sys
 from collections.abc import Awaitable, Callable
@@ -20,6 +19,7 @@ from .card_model import (
     _apply_tool_result,
     _build_event,
 )
+from .card_seed_io import load_recent_parsed_entries
 
 from .card_registry import _cards
 
@@ -75,29 +75,10 @@ async def _seed_events_from_jsonl(
         fp = build_session_file_path(state.session_id, state.cwd)
     if fp is None or not fp.exists():
         return []
-    file_path = str(fp)
-    import json as _json
-    from pathlib import Path as _Path
-
-    from ..transcript_parser import TranscriptParser
-
     try:
-        raw = _Path(file_path).read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.debug("seed: read JSONL %s failed: %s", file_path, e)
-        return []
-    raw_entries: list[dict[str, object]] = []
-    for line in raw.splitlines():
-        if not line.strip():
-            continue
-        try:
-            raw_entries.append(_json.loads(line))
-        except Exception:
-            continue
-    try:
-        parsed_list, _ = TranscriptParser.parse_entries(raw_entries, pending_tools=None)
+        parsed_list = await asyncio.to_thread(load_recent_parsed_entries, fp, max_turns)
     except Exception as e:
-        logger.debug("seed: parse_entries failed: %s", e)
+        logger.debug("seed: tail read/parse failed for %s: %s", fp, e)
         return []
 
     # Walk backwards collecting indices of end_turn boundaries (final

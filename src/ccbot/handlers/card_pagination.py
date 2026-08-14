@@ -155,11 +155,44 @@ def paginate_events_for_card(
     the same page list.
     """
     budget = _resolve_line_budget(user_id)
-    base_pages = paginate_events(state.events)
-    final_pages: list[list[Event]] = []
-    for page in base_pages:
-        final_pages.extend(_split_page_by_budget(page, budget))
-    return final_pages or [[]]
+    events = state.events
+    if not events:
+        return [[]]
+
+    # Everything before the latest page-break belongs to completed turns and
+    # cannot change during ordinary streaming. Cache its already-split pages;
+    # only the current logical page needs render/line/Markdown measurements on
+    # every tool/text update. A new final answer moves the boundary and rebuilds
+    # the prefix once, rather than once per event.
+    latest_start = 0
+    for index in range(len(events) - 1, -1, -1):
+        if events[index].is_page_break:
+            latest_start = index
+            break
+
+    prefix_first_id = id(events[0]) if latest_start else 0
+    prefix_last_id = id(events[latest_start - 1]) if latest_start else 0
+    cache_fresh = (
+        state.pagination_budget == budget
+        and state.pagination_prefix_len == latest_start
+        and state.pagination_prefix_first_id == prefix_first_id
+        and state.pagination_prefix_last_id == prefix_last_id
+    )
+    if cache_fresh:
+        prefix_pages = state.pagination_prefix_pages
+    else:
+        prefix_pages = []
+        if latest_start:
+            for page in paginate_events(events[:latest_start]):
+                prefix_pages.extend(_split_page_by_budget(page, budget))
+        state.pagination_prefix_len = latest_start
+        state.pagination_prefix_first_id = prefix_first_id
+        state.pagination_prefix_last_id = prefix_last_id
+        state.pagination_budget = budget
+        state.pagination_prefix_pages = prefix_pages
+
+    latest_pages = _split_page_by_budget(events[latest_start:], budget)
+    return [*prefix_pages, *latest_pages] or [[]]
 
 
 def _resolved_page_idx(state: CardState, total_pages: int) -> int:

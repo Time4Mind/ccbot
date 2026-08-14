@@ -51,6 +51,20 @@ LANG_MODEL_MIN_BYTES = 30 * 1024 * 1024
 ProgressCB = Callable[[str], Awaitable[None]]
 
 
+def _privileged(cmd: list[str]) -> list[str]:
+    """Run system-mutating install steps as root when needed.
+
+    The bot normally runs as an unprivileged service user.  Calling apt or
+    writing to /opt and /usr/local directly therefore fails immediately on a
+    standard Linux install.  ``sudo -n`` keeps the Telegram callback
+    non-interactive: passwordless sudo works, while a host that requires a
+    password gets a useful command failure instead of a permanently hung bot.
+    """
+    if os.geteuid() == 0 or not shutil.which("sudo"):
+        return cmd
+    return ["sudo", "-n", *cmd]
+
+
 def whisper_bin_path() -> Path | None:
     """Resolve where ``whisper-cli`` lives now, or None if missing."""
     found = shutil.which(config.whisper_bin) or shutil.which("whisper-cli")
@@ -160,16 +174,18 @@ async def _install_bin(progress: ProgressCB) -> bool:
     """Toolchain + clone + build + copy. Returns False on failure."""
     await progress("1/4 `apt-get install` build toolchain + ffmpeg…")
     rc, out = await _run(
-        [
-            "apt-get",
-            "install",
-            "-y",
-            "--no-install-recommends",
-            "build-essential",
-            "cmake",
-            "git",
-            "ffmpeg",
-        ],
+        _privileged(
+            [
+                "apt-get",
+                "install",
+                "-y",
+                "--no-install-recommends",
+                "build-essential",
+                "cmake",
+                "git",
+                "ffmpeg",
+            ]
+        ),
         timeout=900,
     )
     if rc != 0:
@@ -178,15 +194,20 @@ async def _install_bin(progress: ProgressCB) -> bool:
 
     if not WHISPER_SRC.exists():
         await progress(f"2/4 `git clone` whisper.cpp → `{WHISPER_SRC}`…")
-        WHISPER_SRC.parent.mkdir(parents=True, exist_ok=True)
+        rc, out = await _run(_privileged(["mkdir", "-p", str(WHISPER_SRC.parent)]))
+        if rc != 0:
+            await progress(f"❌ mkdir failed (rc={rc})\n```\n{_tail(out)}\n```")
+            return False
         rc, out = await _run(
-            [
-                "git",
-                "clone",
-                "--depth=1",
-                "https://github.com/ggerganov/whisper.cpp.git",
-                str(WHISPER_SRC),
-            ],
+            _privileged(
+                [
+                    "git",
+                    "clone",
+                    "--depth=1",
+                    "https://github.com/ggerganov/whisper.cpp.git",
+                    str(WHISPER_SRC),
+                ]
+            ),
             timeout=600,
         )
         if rc != 0:
@@ -199,7 +220,7 @@ async def _install_bin(progress: ProgressCB) -> bool:
         "3/4 cmake build (Release) — это самый долгий шаг, ~5–10 мин на arm64…"
     )
     rc, out = await _run(
-        ["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"],
+        _privileged(["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"]),
         cwd=WHISPER_SRC,
         timeout=600,
     )
@@ -208,7 +229,17 @@ async def _install_bin(progress: ProgressCB) -> bool:
         return False
     nproc = os.cpu_count() or 2
     rc, out = await _run(
-        ["cmake", "--build", "build", "--config", "Release", "-j", str(nproc)],
+        _privileged(
+            [
+                "cmake",
+                "--build",
+                "build",
+                "--config",
+                "Release",
+                "-j",
+                str(nproc),
+            ]
+        ),
         cwd=WHISPER_SRC,
         timeout=1800,
     )
@@ -230,12 +261,20 @@ async def _install_bin(progress: ProgressCB) -> bool:
         return False
 
     await progress(f"4/4 копирую `whisper-cli` → `{WHISPER_BIN_DST}`…")
-    try:
-        WHISPER_BIN_DST.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src_bin, WHISPER_BIN_DST)
-        os.chmod(WHISPER_BIN_DST, 0o755)
-    except OSError as e:
-        await progress(f"❌ copy failed: {e}")
+    rc, out = await _run(
+        _privileged(
+            [
+                "install",
+                "-D",
+                "-m",
+                "755",
+                str(src_bin),
+                str(WHISPER_BIN_DST),
+            ]
+        )
+    )
+    if rc != 0:
+        await progress(f"❌ copy failed (rc={rc})\n```\n{_tail(out)}\n```")
         return False
     return True
 

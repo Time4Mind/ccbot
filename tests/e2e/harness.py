@@ -126,9 +126,15 @@ class FakeTmuxManager:
         self.remove_window(window_id)
         return existed
 
-    async def kill_orphan_claude_processes(self, claude_session_id: str) -> int:
-        self.orphans_killed.append(claude_session_id)
+    async def kill_orphan_agent_processes(
+        self, agent_session_id: str, backend: str
+    ) -> int:
+        del backend
+        self.orphans_killed.append(agent_session_id)
         return 0
+
+    async def kill_orphan_claude_processes(self, claude_session_id: str) -> int:
+        return await self.kill_orphan_agent_processes(claude_session_id, "claude")
 
     async def create_window(
         self,

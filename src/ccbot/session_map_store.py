@@ -40,3 +40,36 @@ def upsert_session_map_entry(
             return merged
         finally:
             fcntl.flock(lock_handle, fcntl.LOCK_UN)
+
+
+def remove_session_map_entries(map_file: Path, session_id: str) -> list[str]:
+    """Remove every window row for one exact provider session id."""
+    if not session_id:
+        return []
+    map_file.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = map_file.with_suffix(".lock")
+    with lock_path.open("a+") as lock_handle:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock_handle, fcntl.LOCK_EX)
+        try:
+            if not map_file.exists():
+                return []
+            try:
+                loaded = json.loads(map_file.read_text())
+            except (json.JSONDecodeError, OSError) as exc:
+                raise RuntimeError(f"cannot read {map_file}") from exc
+            if not isinstance(loaded, dict):
+                raise RuntimeError(f"invalid session map root in {map_file}")
+            removed = sorted(
+                key
+                for key, value in loaded.items()
+                if isinstance(value, dict) and value.get("session_id") == session_id
+            )
+            if not removed:
+                return []
+            for key in removed:
+                del loaded[key]
+            atomic_write_json(map_file, loaded)
+            return removed
+        finally:
+            fcntl.flock(lock_handle, fcntl.LOCK_UN)

@@ -43,6 +43,7 @@ class TestConfigValid:
 
     def test_codex_backend_defaults(self, monkeypatch):
         monkeypatch.setenv("CCBOT_AGENT_BACKEND", "codex")
+        monkeypatch.delenv("CODEX_FLAGS", raising=False)
         cfg = Config()
         assert cfg.agent_backend == "codex"
         assert cfg.codex_command == "codex"

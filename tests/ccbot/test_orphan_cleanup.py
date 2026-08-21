@@ -110,6 +110,35 @@ class TestKillOrphanClaudeProcesses:
             )
         assert killed == 0
 
+    @pytest.mark.asyncio
+    async def test_codex_resume_pattern_is_backend_specific(self) -> None:
+        mgr = TmuxManager()
+        session_id = "550e8400-e29b-41d4-a716-446655440000"
+        with (
+            patch(
+                "ccbot.tmux_manager.subprocess.run",
+                return_value=_completed("", returncode=1),
+            ) as mock_run,
+            patch("ccbot.tmux_manager.os.kill"),
+        ):
+            killed = await mgr.kill_orphan_agent_processes(session_id, "codex")
+        assert killed == 0
+        assert mock_run.call_args.args[0] == [
+            "pgrep",
+            "-f",
+            f"codex.*resume[ ]+{session_id}",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_unsupported_backend_skips_pgrep(self) -> None:
+        mgr = TmuxManager()
+        with patch("ccbot.tmux_manager.subprocess.run") as mock_run:
+            killed = await mgr.kill_orphan_agent_processes(
+                "550e8400-e29b-41d4-a716-446655440000", "other"
+            )
+        assert killed == 0
+        mock_run.assert_not_called()
+
 
 def _session(window_id: str) -> SimpleNamespace:
     return SimpleNamespace(window_id=window_id)

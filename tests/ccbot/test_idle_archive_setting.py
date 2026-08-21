@@ -85,6 +85,7 @@ async def test_idle_archive_sweep_uses_user_setting() -> None:
 @pytest.mark.asyncio
 async def test_idle_archive_cancels_startup_watcher() -> None:
     sess = SimpleNamespace(window_id="@9", claude_session_id="", id="deadbeef")
+    teardown = AsyncMock()
     with (
         patch.object(
             session_manager,
@@ -92,15 +93,11 @@ async def test_idle_archive_cancels_startup_watcher() -> None:
             return_value={"session_idle_hours": 12},
         ),
         patch.object(session_manager, "find_idle_to_archive", return_value=[sess]),
-        patch.object(session_manager, "cancel_window_startup") as cancel_startup,
-        patch(
-            "ccbot.handlers.archive.tmux_manager.find_window_by_id",
-            new=AsyncMock(return_value=None),
-        ),
-        patch("ccbot.handlers.archive.clear_session_state", new=AsyncMock()),
+        patch("ccbot.handlers.archive.teardown_session_runtime", new=teardown),
         patch.object(session_manager, "mark_session_archived"),
     ):
         archived = await idle_archive_sweep(MagicMock(), 42)
 
     assert archived == 1
-    cancel_startup.assert_called_once_with("@9")
+    teardown.assert_awaited_once()
+    assert teardown.await_args.args[1] is sess

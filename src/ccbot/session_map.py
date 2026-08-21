@@ -28,6 +28,7 @@ class SessionMapMixin:
     _session_map_lock: asyncio.Lock
     window_states: dict[str, WindowState]
     window_display_names: dict[str, str]
+    user_window_offsets: dict[int, dict[str, int]]
     sessions: dict[str, Session]
     agent_backend: str
     is_window_id: Any
@@ -222,6 +223,39 @@ class SessionMapMixin:
             state.transcript_path = str(transcript_path)
             self.set_session_window(sess.id, window_id)
             self.set_active_session(user_id, sess.id)
+
+    async def remove_provider_session_bindings(self, session_id: str) -> set[str]:
+        """Remove all persisted and in-memory window bindings for a provider id."""
+        if not session_id:
+            return set()
+        from .session_map_store import remove_session_map_entries
+
+        async with self._session_map_lock:
+            removed_keys = await asyncio.to_thread(
+                remove_session_map_entries, config.session_map_file, session_id
+            )
+            window_ids: set[str] = set()
+            for key in removed_keys:
+                if ":" not in key:
+                    continue
+                candidate = key.rsplit(":", 1)[1]
+                if self.is_window_id(candidate) and key_matches_window(key, candidate):
+                    window_ids.add(candidate)
+            for window_id, state in list(self.window_states.items()):
+                if state.session_id == session_id:
+                    window_ids.add(window_id)
+            changed = bool(removed_keys)
+            for window_id in window_ids:
+                changed = self.window_states.pop(window_id, None) is not None or changed
+                changed = (
+                    self.window_display_names.pop(window_id, None) is not None
+                    or changed
+                )
+                for offsets in self.user_window_offsets.values():
+                    changed = offsets.pop(window_id, None) is not None or changed
+            if changed:
+                self.save_state()
+            return window_ids
 
     # --- Window state management ---
 

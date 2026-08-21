@@ -32,8 +32,8 @@ from .tmux_process import kill_orphan_processes
 logger = logging.getLogger(__name__)
 
 # Validate before passing to pgrep so we never inject arbitrary regex
-# into the command line. claude session ids are UUIDs.
-_CLAUDE_SESSION_RE = re.compile(
+# into the command line. Claude and Codex session ids are UUIDs.
+_AGENT_SESSION_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
 
@@ -577,17 +577,20 @@ class TmuxManager:
         except Exception as e:
             logger.debug("kill grouped session %s failed: %s", target, e)
 
-    async def kill_orphan_claude_processes(self, claude_session_id: str) -> int:
-        """SIGTERM any surviving claude resume process for this session."""
-        if not _CLAUDE_SESSION_RE.match(claude_session_id):
+    async def kill_orphan_agent_processes(
+        self, agent_session_id: str, backend: str
+    ) -> int:
+        """SIGTERM surviving Claude/Codex resume processes for this session."""
+        if not _AGENT_SESSION_RE.match(agent_session_id):
             logger.warning(
-                "kill_orphan_claude_processes: invalid session id %r, skipping",
-                claude_session_id,
+                "kill_orphan_agent_processes: invalid session id %r, skipping",
+                agent_session_id,
             )
             return 0
         return await asyncio.to_thread(
             kill_orphan_processes,
-            claude_session_id,
+            agent_session_id,
+            backend,
             run=subprocess.run,
             kill=os.kill,
             own_pid=os.getpid(),
@@ -596,6 +599,10 @@ class TmuxManager:
             timeout_error=subprocess.TimeoutExpired,
             logger=logger,
         )
+
+    async def kill_orphan_claude_processes(self, claude_session_id: str) -> int:
+        """Compatibility wrapper for callers that only manage Claude sessions."""
+        return await self.kill_orphan_agent_processes(claude_session_id, "claude")
 
     async def create_window(
         self,

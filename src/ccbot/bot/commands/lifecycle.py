@@ -20,7 +20,7 @@ from ...handlers.callback_data import (
     CB_CONF_KILL_NO,
     CB_CONF_KILL_YES,
 )
-from ...handlers.cleanup import clear_session_state
+from ...handlers.cleanup import teardown_session_runtime
 from ...handlers.directory_browser import (
     BROWSE_DIRS_KEY,
     BROWSE_PAGE_KEY,
@@ -148,17 +148,7 @@ async def archive_session(
     Used by both the /kill confirmation and the /done confirmation, plus
     the matching CB_CONF_*_YES callback paths.
     """
-    wid = sess.window_id
-    if wid:
-        session_manager.cancel_window_startup(wid)
-        w = await tmux_manager.find_window_by_id(wid)
-        if w:
-            await tmux_manager.kill_window(w.window_id)
-        await clear_session_state(user_id, wid, bot)
-    # Mop up any claude --resume <id> process that survived the window
-    # kill (rare but observed — see kill_orphan_claude_processes docstring).
-    if sess.claude_session_id:
-        await tmux_manager.kill_orphan_claude_processes(sess.claude_session_id)
+    await teardown_session_runtime(user_id, sess, bot)
     session_manager.mark_session_archived(sess.id, completed=completed)
 
 

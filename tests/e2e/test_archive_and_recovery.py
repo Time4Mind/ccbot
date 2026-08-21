@@ -3,8 +3,8 @@
 Two independent scenarios:
 
   * archive → window kill → orphan cleanup: ``commands.lifecycle.archive_session``
-    on a live Session must ``kill_window`` then ``kill_orphan_claude_processes``,
-    and flip the Session record to archived (dropping the active pointer).
+    on a live Session must kill every mapped window, terminate the provider
+    writer, and flip the Session record to archived (dropping the active pointer).
 
   * startup stale-ID resolution: after a tmux server restart, persisted
     ``window_states`` keys point at dead window ids. ``resolve_stale_ids`` must
@@ -43,7 +43,7 @@ async def test_archive_session_kills_window_and_orphans(fake_tmux, fake_bot):
 
     await archive_session(USER_ID, fake_bot, sess, completed=False)
 
-    # tmux window killed, then orphan claude --resume processes mopped up.
+    # tmux window killed, then orphan provider resume processes mopped up.
     assert WINDOW_ID in fake_tmux.killed
     assert CLAUDE_SID in fake_tmux.orphans_killed
     assert WINDOW_ID not in session_manager._resuming_windows

@@ -12,7 +12,8 @@ from typing import Any
 
 
 def kill_orphan_processes(
-    claude_session_id: str,
+    agent_session_id: str,
+    backend: str,
     *,
     run: Callable[..., Any],
     kill: Callable[[int, int], None],
@@ -22,10 +23,21 @@ def kill_orphan_processes(
     timeout_error: type[BaseException],
     logger: logging.Logger,
 ) -> int:
-    """Signal surviving ``claude --resume`` processes and return the count."""
+    """Signal surviving agent resume processes and return the count."""
+    normalized_backend = backend.strip().lower()
+    if normalized_backend == "claude":
+        pattern = f"claude.*--resume[ =]{agent_session_id}"
+    elif normalized_backend == "codex":
+        pattern = f"codex.*resume[ ]+{agent_session_id}"
+    else:
+        logger.warning(
+            "kill_orphan_agent_processes: unsupported backend %r, skipping",
+            backend,
+        )
+        return 0
     try:
         result = run(
-            ["pgrep", "-f", f"claude.*--resume {claude_session_id}"],
+            ["pgrep", "-f", pattern],
             capture_output=True,
             text=True,
             timeout=5,
@@ -48,9 +60,14 @@ def kill_orphan_processes(
         try:
             kill(pid, sigterm)
             killed += 1
-            logger.info("kill_orphan_claude pid=%d session=%s", pid, claude_session_id)
+            logger.info(
+                "kill_orphan_agent pid=%d backend=%s session=%s",
+                pid,
+                normalized_backend,
+                agent_session_id,
+            )
         except ProcessLookupError:
             continue
         except PermissionError as exc:
-            logger.warning("kill_orphan_claude pid=%d denied: %s", pid, exc)
+            logger.warning("kill_orphan_agent pid=%d denied: %s", pid, exc)
     return killed

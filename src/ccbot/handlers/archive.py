@@ -35,7 +35,7 @@ from .archive_blurb import (
     _truncate_at_word,
 )
 from .callback_data import CB_ARC_ALL, CB_ARC_INSPECT, CB_ARC_PAGE
-from .cleanup import clear_session_state
+from .cleanup import teardown_session_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -508,15 +508,7 @@ async def idle_archive_sweep(bot: Bot, user_id: int) -> int:
     candidates = session_manager.find_idle_to_archive(idle_hours * 3600.0)
     archived = 0
     for sess in candidates:
-        wid = sess.window_id
-        if wid:
-            session_manager.cancel_window_startup(wid)
-            w = await tmux_manager.find_window_by_id(wid)
-            if w:
-                await tmux_manager.kill_window(w.window_id)
-            await clear_session_state(user_id, wid, bot)
-        if sess.claude_session_id:
-            await tmux_manager.kill_orphan_claude_processes(sess.claude_session_id)
+        await teardown_session_runtime(user_id, sess, bot)
         session_manager.mark_session_archived(sess.id, completed=False)
         archived += 1
     if archived:

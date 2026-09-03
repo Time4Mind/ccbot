@@ -234,9 +234,7 @@ async def _parakeet_transcribe(ogg_data: bytes) -> str:
             ]
         )
         if code != 0:
-            raise ValueError(
-                f"ffmpeg failed: {stderr.decode(errors='replace')[:200]}"
-            )
+            raise ValueError(f"ffmpeg failed: {stderr.decode(errors='replace')[:200]}")
         code, stdout, stderr = await _run(
             [
                 config.parakeet_bin,

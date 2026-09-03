@@ -27,12 +27,12 @@ async def test_auto_uses_bria_parakeet_command_and_model(tmp_path) -> None:
     with (
         patch.object(transcribe.config, "voice_backend", "auto"),
         patch.object(
-            transcribe.config, "parakeet_bin", "/opt/nemo-speech/bin/nemo-speech",
+            transcribe.config,
+            "parakeet_bin",
+            "/opt/nemo-speech/bin/nemo-speech",
             create=True,
         ),
-        patch.object(
-            transcribe.config, "parakeet_model_path", str(model), create=True
-        ),
+        patch.object(transcribe.config, "parakeet_model_path", str(model), create=True),
         patch.object(transcribe, "_run", new=fake_run),
     ):
         assert await transcribe.transcribe_voice(b"telegram-ogg") == "recognized text"
@@ -62,7 +62,9 @@ async def test_parakeet_requires_the_configured_model(tmp_path) -> None:
     with (
         patch.object(transcribe.config, "voice_backend", "parakeet"),
         patch.object(
-            transcribe.config, "parakeet_model_path", str(tmp_path / "missing.gguf"),
+            transcribe.config,
+            "parakeet_model_path",
+            str(tmp_path / "missing.gguf"),
             create=True,
         ),
         patch.object(transcribe, "_run", new=runner),
@@ -85,10 +87,10 @@ async def test_parakeet_rejects_an_empty_transcription(tmp_path) -> None:
     with (
         patch.object(transcribe.config, "voice_backend", "parakeet"),
         patch.object(transcribe.config, "parakeet_bin", "nemo-speech", create=True),
-        patch.object(
-            transcribe.config, "parakeet_model_path", str(model), create=True
-        ),
+        patch.object(transcribe.config, "parakeet_model_path", str(model), create=True),
         patch.object(transcribe, "_run", new=fake_run),
     ):
-        with pytest.raises(ValueError, match="Parakeet returned an empty transcription"):
+        with pytest.raises(
+            ValueError, match="Parakeet returned an empty transcription"
+        ):
             await transcribe.transcribe_voice(b"ogg")

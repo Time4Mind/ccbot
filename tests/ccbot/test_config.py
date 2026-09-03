@@ -23,6 +23,17 @@ class TestConfigValid:
         assert cfg.telegram_bot_token == "test:token"
         assert cfg.allowed_users == {12345}
 
+    def test_parakeet_defaults_match_bria(self, monkeypatch):
+        monkeypatch.delenv("VOICE_BACKEND", raising=False)
+        monkeypatch.delenv("PARAKEET_BIN", raising=False)
+        monkeypatch.delenv("PARAKEET_MODEL_PATH", raising=False)
+        cfg = Config()
+        assert cfg.voice_backend == "auto"
+        assert cfg.parakeet_bin == "nemo-speech"
+        assert cfg.parakeet_model_path == str(
+            cfg.config_dir / "models" / "parakeet-tdt-0.6b-v3.q8_0.gguf"
+        )
+
     def test_custom_tmux_session_name(self, monkeypatch):
         monkeypatch.setenv("TMUX_SESSION_NAME", "mysession")
         cfg = Config()

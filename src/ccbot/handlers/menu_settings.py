@@ -194,7 +194,7 @@ def _settings_voice_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
                 _highlight(v, cur == v),
                 callback_data=f"{CB_ST_VOICE}{v}",
             )
-            for v in ("auto", "whisper", "apple", "off")
+            for v in ("auto", "parakeet", "whisper", "apple", "off")
         ],
         [
             InlineKeyboardButton(

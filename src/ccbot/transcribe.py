@@ -1,16 +1,17 @@
 """Voice-to-text transcription dispatcher.
 
 Backend chosen at runtime via VOICE_BACKEND env var:
-  - "auto":   Apple Speech on Darwin if PyObjC bindings are installed,
-              else whisper.cpp.
-  - "whisper": whisper.cpp binary (default arm64-friendly choice).
+  - "auto":   Parakeet via NeMo-Speech.cpp (the Bria-compatible default).
+  - "parakeet": Parakeet via NeMo-Speech.cpp.
+  - "whisper": legacy whisper.cpp backend.
   - "apple":  macOS Apple Speech via SFSpeechRecognizer (PyObjC). Falls
-              back to whisper.cpp on permission denial / unavailable
+              back to Parakeet on permission denial / unavailable
               recognizer / missing pyobjc-framework-Speech.
   - "off":    voice messages rejected.
 
-DM-multisession spec section 8 — J4 selected: transcription is local
-(whisper.cpp / Apple Speech), no third-party API key required.
+Transcription is local (Parakeet / whisper.cpp / Apple Speech), with no
+third-party API key required.  Parakeet uses the same model and invocation as
+Bria: ``nemo-speech --quiet transcribe WAV --model MODEL``.
 
 The whisper.cpp path is tuned for arm64 (measured on the Kali-on-Android
 host, 8 cores, MATMUL_INT8 + i8mm, whisper built with REPACK=1):
@@ -32,7 +33,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import platform
 import re
 import tempfile
 
@@ -202,6 +202,65 @@ async def _whisper_cpp_transcribe(ogg_data: bytes) -> str:
                 pass
 
 
+async def _parakeet_transcribe(ogg_data: bytes) -> str:
+    """Run the Bria-compatible Parakeet model through NeMo-Speech.cpp."""
+    model = config.parakeet_model_path
+    if not os.path.exists(model):
+        raise ValueError(
+            f"parakeet model not found at {model}. "
+            "Set PARAKEET_MODEL_PATH or install parakeet-tdt-0.6b-v3.q8_0.gguf."
+        )
+    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as source:
+        source.write(ogg_data)
+        source_path = source.name
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav:
+        wav_path = wav.name
+
+    try:
+        code, _, stderr = await _run(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-y",
+                "-i",
+                source_path,
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-c:a",
+                "pcm_s16le",
+                wav_path,
+            ]
+        )
+        if code != 0:
+            raise ValueError(f"ffmpeg failed: {stderr.decode(errors='replace')[:200]}")
+        code, stdout, stderr = await _run(
+            [
+                config.parakeet_bin,
+                "--quiet",
+                "transcribe",
+                wav_path,
+                "--model",
+                model,
+            ]
+        )
+        if code != 0:
+            raise ValueError(
+                f"nemo-speech failed: {stderr.decode(errors='replace')[:200]}"
+            )
+        text = stdout.decode(errors="replace").strip()
+        if not text:
+            raise ValueError("Parakeet returned an empty transcription")
+        return text
+    finally:
+        for path in (source_path, wav_path):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
 def _apple_speech_sync(wav_path: str, timeout: float = 30.0) -> str | None:
     """Run SFSpeechRecognizer synchronously. Returns text or None on failure.
 
@@ -280,7 +339,7 @@ def _apple_speech_sync(wav_path: str, timeout: float = 30.0) -> str | None:
 
 
 async def _apple_speech_transcribe(ogg_data: bytes) -> str:
-    """Apple Speech via PyObjC SFSpeechRecognizer; whisper.cpp fallback."""
+    """Apple Speech via PyObjC SFSpeechRecognizer; Parakeet fallback."""
     wav = await _ogg_to_wav(ogg_data)
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp.write(wav)
@@ -292,9 +351,9 @@ async def _apple_speech_transcribe(ogg_data: bytes) -> str:
             return text.strip()
         logger.info(
             "Apple Speech unavailable or returned empty result; "
-            "falling back to whisper.cpp"
+            "falling back to Parakeet"
         )
-        return await _whisper_cpp_transcribe(ogg_data)
+        return await _parakeet_transcribe(ogg_data)
     finally:
         try:
             os.unlink(tmp_path)
@@ -309,10 +368,9 @@ def resolve_voice_backend(user_id: int | None = None) -> str:
       1. Per-user setting (`voice` key in user_settings) when `user_id` given
          and the value isn't `auto` (auto means "follow the env default").
       2. Env-var `VOICE_BACKEND` (config.voice_backend).
-      3. Platform fallback when the resolved value is `auto` (Apple on
-         Darwin, whisper elsewhere).
+      3. `auto` selects the Bria-compatible Parakeet backend on every platform.
 
-    Returns one of: `whisper`, `apple`, `off`. Shared by the voice
+    Returns one of: `parakeet`, `whisper`, `apple`, `off`. Shared by the voice
     handler's enable-check and `transcribe_voice` so a per-user override
     (e.g. `apple`) is honoured even when the global env is `off` — the
     global value is only a default, not a hard gate.
@@ -327,7 +385,7 @@ def resolve_voice_backend(user_id: int | None = None) -> str:
         if per_user and per_user != "auto":
             backend = per_user
     if backend == "auto":
-        backend = "apple" if platform.system() == "Darwin" else "whisper"
+        backend = "parakeet"
     return backend
 
 
@@ -337,6 +395,8 @@ async def transcribe_voice(ogg_data: bytes, user_id: int | None = None) -> str:
     if backend == "off":
         raise ValueError("Voice backend is disabled")
 
+    if backend == "parakeet":
+        return await _parakeet_transcribe(ogg_data)
     if backend == "whisper":
         return await _whisper_cpp_transcribe(ogg_data)
     if backend == "apple":

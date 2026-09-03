@@ -115,7 +115,8 @@ ZH: dict[str, str] = {
     "settings.voice.body": (
         "*语音识别*\n\n"
         "语音消息使用的后端。\n"
-        "• `auto` — macOS 用 Apple, 其他用 whisper.cpp\n"
+        "• `auto` — Parakeet（与 Bria 相同的本地模型）\n"
+        "• `parakeet` — 强制使用 NeMo-Speech.cpp Parakeet\n"
         "• `whisper` — 强制 whisper.cpp\n"
         "• `apple` — 强制 Apple Speech (仅 macOS)\n"
         "• `off` — 忽略语音"

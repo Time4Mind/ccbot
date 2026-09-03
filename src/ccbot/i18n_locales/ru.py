@@ -130,7 +130,8 @@ RU: dict[str, str] = {
     "settings.voice.body": (
         "*Распознавание голоса*\n\n"
         "Бэкенд для voice-сообщений.\n"
-        "• `auto` — Apple на macOS, whisper.cpp иначе\n"
+        "• `auto` — Parakeet (та же локальная модель, что в Bria)\n"
+        "• `parakeet` — форсить Parakeet через NeMo-Speech.cpp\n"
         "• `whisper` — форсить whisper.cpp\n"
         "• `apple` — форсить Apple Speech (только macOS)\n"
         "• `off` — игнорировать voice"

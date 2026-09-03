@@ -6,7 +6,7 @@ monitoring intervals from environment variables (with .env support).
 The module-level `config` instance is imported by nearly every other module.
 
 DM mode adds: ARCHIVE_PURGE_AFTER, MAX_SESSIONS,
-PREVIEW_*, BG_NOTIFY_MODE, VOICE_BACKEND, WHISPER_MODEL_PATH,
+PREVIEW_*, BG_NOTIFY_MODE, VOICE_BACKEND, PARAKEET_MODEL_PATH, WHISPER_MODEL_PATH,
 INBOX_TTL_HOURS, QUOTA_ALERT_POLL_INTERVAL.
 
 Key class: Config (singleton instantiated as `config`).
@@ -187,9 +187,17 @@ class Config:
 
         # Voice
         voice_backend = os.getenv("VOICE_BACKEND", "auto").strip().lower()
-        if voice_backend not in ("auto", "whisper", "apple", "off"):
+        if voice_backend not in ("auto", "parakeet", "whisper", "apple", "off"):
             voice_backend = "auto"
         self.voice_backend: str = voice_backend
+        # Match Bria's default local STT model and CLI contract.  The command
+        # remains configurable because service processes do not always inherit
+        # the interactive shell's PATH.
+        self.parakeet_bin: str = os.getenv("PARAKEET_BIN", "nemo-speech")
+        self.parakeet_model_path: str = os.getenv(
+            "PARAKEET_MODEL_PATH",
+            str(self.config_dir / "models" / "parakeet-tdt-0.6b-v3.q8_0.gguf"),
+        )
         # q8_0 by default: measured 1.80-1.83x faster than fp16 medium on
         # arm64 (MATMUL_INT8 + i8mm + REPACK put it on the native int8
         # kernel) with byte-identical transcripts on the ru/en samples.

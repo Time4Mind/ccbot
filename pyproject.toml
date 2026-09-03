@@ -36,7 +36,7 @@ dev = [
     "ruff>=0.8.0,<0.16",
 ]
 # macOS-only optional: Apple Speech framework bindings used by the
-# native Apple Speech voice backend. Falls back to whisper.cpp if missing.
+# native Apple Speech voice backend. Falls back to Parakeet if missing.
 apple-speech = [
     "pyobjc-framework-Speech>=10.0; platform_system=='Darwin'",
 ]

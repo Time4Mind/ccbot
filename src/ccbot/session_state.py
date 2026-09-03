@@ -329,7 +329,7 @@ class SessionStateMixin:
     DEFAULT_USER_SETTINGS: ClassVar[dict[str, Any]] = {
         "language": "en",  # "en" | "ru" | "zh" — UI strings
         "live_lag": 4,  # seconds, see PREVIEW_LIVE_LAG
-        "voice": "auto",  # "auto" | "whisper" | "apple" | "off"
+        "voice": "auto",  # "auto" | "parakeet" | "whisper" | "apple" | "off"
         # Hours without activity before a live session is archived. 6h is the
         # closest supported migration from the historical global 4h default.
         "session_idle_hours": DEFAULT_IDLE_ARCHIVE_HOURS,

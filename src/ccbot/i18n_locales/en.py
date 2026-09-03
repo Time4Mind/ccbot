@@ -135,7 +135,8 @@ EN: dict[str, str] = {
     "settings.voice.body": (
         "*Voice transcription*\n\n"
         "Backend used for voice messages.\n"
-        "• `auto` — Apple on macOS, whisper.cpp elsewhere\n"
+        "• `auto` — Parakeet (same local model as Bria)\n"
+        "• `parakeet` — force Parakeet via NeMo-Speech.cpp\n"
         "• `whisper` — force whisper.cpp\n"
         "• `apple` — force Apple Speech (macOS only)\n"
         "• `off` — drop voice messages"

@@ -11,7 +11,8 @@ single source of truth. macOS works as an interactive client via `ssh -t
 - `tmux` (≥3.0)
 - `claude` CLI authenticated against `claude.ai` (Max x20 subscription) —
   `claude auth status` must succeed for the user that owns the bot
-- `ffmpeg` if `VOICE_BACKEND=whisper`
+- `ffmpeg`, `nemo-speech`, and `parakeet-tdt-0.6b-v3.q8_0.gguf` for the
+  default Parakeet backend
 - `whisper-cli` plus `ggml-medium-q8_0.bin` if `VOICE_BACKEND=whisper`
 
 ## One-shot install
@@ -97,9 +98,11 @@ curl -s --max-time 8 -x "$TG_PROXY_URL" \
 
 ## Voice backend
 
-- `VOICE_BACKEND=auto` (default) → Apple Speech on Darwin, whisper.cpp
-  elsewhere. Apple currently delegates to whisper.cpp; adjust once a
-  pure-Python AVSpeechRecognizer wrapper proves stable.
+- `VOICE_BACKEND=auto` (default) → Parakeet through NeMo-Speech.cpp, matching
+  Bria's local model and invocation.
+- `VOICE_BACKEND=parakeet` → requires `PARAKEET_BIN` (default `nemo-speech`)
+  and `PARAKEET_MODEL_PATH` (default
+  `$CCBOT_DIR/models/parakeet-tdt-0.6b-v3.q8_0.gguf`).
 - `VOICE_BACKEND=whisper` → requires `WHISPER_BIN` (default
   `whisper-cli`) and `WHISPER_MODEL_PATH` (default
   `$CCBOT_DIR/models/ggml-medium-q8_0.bin`, ~785MB). `WHISPER_THREADS`
@@ -114,7 +117,8 @@ curl -s --max-time 8 -x "$TG_PROXY_URL" \
 - `~/.ccbot/monitor_state.json` — JSONL byte offsets.
 - `~/.ccbot/codex_quota_day.json` — Codex daily quota baseline and allocation.
 - `~/.codex/` — Codex credentials, hooks, and rollout JSONL when Codex is used.
-- `~/.ccbot/models/` — whisper model (only if VOICE_BACKEND=whisper).
+- `~/.ccbot/models/` - Parakeet model by default; Whisper models only when
+  `VOICE_BACKEND=whisper`.
 - `<workdir>/.ccbot-inbox/` — uploaded photos/documents per session;
   pruned every hour past `INBOX_TTL_HOURS` (default 24h).
 - Archived Session records expire after `ARCHIVE_PURGE_AFTER` (default

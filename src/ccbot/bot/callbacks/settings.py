@@ -89,16 +89,10 @@ async def _send_linux_claude_prompt(query: CallbackQuery, user_id: int) -> None:
 def _voice_value_needs_whisper(value: str) -> bool:
     """True when the chosen voice backend will dispatch to whisper.cpp.
 
-    ``auto`` falls back to whisper.cpp on non-Darwin hosts, so the
-    install prompt fires there too.
+    ``auto`` now resolves to Parakeet, so only the explicit legacy
+    ``whisper`` choice needs the whisper.cpp installer.
     """
-    import sys
-
-    if value == "whisper":
-        return True
-    if value == "auto" and sys.platform != "darwin":
-        return True
-    return False
+    return value == "whisper"
 
 
 _VOICE_INSTALL_HEAD = "🎙 *whisper.cpp* — авто-установка"
@@ -323,7 +317,7 @@ async def handle(
         screen_name = "settings_lag"
     elif data.startswith(CB_ST_VOICE):
         value = data[len(CB_ST_VOICE) :]
-        if value in ("auto", "whisper", "apple", "off"):
+        if value in ("auto", "parakeet", "whisper", "apple", "off"):
             session_manager.update_user_setting(user.id, "voice", value)
             # When the user picks a backend that needs whisper.cpp and
             # the host doesn't have it, offer the auto-install. Fires

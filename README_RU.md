@@ -64,8 +64,9 @@ Claude Code живёт в терминале. Отошёл от стола — �
 - **Hook-based session tracking.** Хуки выбранного агента `SessionStart` +
   `UserPromptSubmit` пишут `session_map.json`; монитор бота его
   опрашивает. Никаких process-tree introspection или claude SDK.
-- **Голос — local-first.** `whisper.cpp` (по умолчанию) или Apple
-  Speech через PyObjC на macOS — API-ключ для запуска не нужен.
+- **Голос - local-first.** Parakeet через NeMo-Speech.cpp (по умолчанию,
+  как в Bria), legacy `whisper.cpp` или Apple Speech через PyObjC на
+  macOS - API-ключ для запуска не нужен.
 
 Полная архитектурная мотивация — в `doc/dm-multisession-spec.md`.
 Карта реализации — в `doc/dm-multisession-plan.md`.
@@ -123,7 +124,9 @@ ccbot                           # foreground; для prod — systemd-юнит
 | `SESSION_IDLE_TTL`          | `4h`         | active → archived через столько простоя |
 | `ARCHIVE_PURGE_AFTER`       | `14d`        | архивные сессии удаляются из state через столько |
 | `QUOTA_ALERT_POLL_INTERVAL` | `10m`        | как часто опрашивается живой `/usage` |
-| `VOICE_BACKEND`             | `auto`       | `auto` / `whisper` / `apple` / `off` |
+| `VOICE_BACKEND`             | `auto`       | `auto` / `parakeet` / `whisper` / `apple` / `off`; `auto` выбирает Parakeet |
+| `PARAKEET_BIN`              | `nemo-speech` | бинарь NeMo-Speech.cpp |
+| `PARAKEET_MODEL_PATH`       | `~/.ccbot/models/parakeet-tdt-0.6b-v3.q8_0.gguf` | локальная Parakeet-модель, совместимая с Bria |
 | `WHISPER_MODEL_PATH`        | `~/.ccbot/models/ggml-medium-q8_0.bin` | модель whisper.cpp (фолбэк на уже стоящий `ggml-medium.bin`) |
 | `WHISPER_LANG_MODEL_PATH`   | `~/.ccbot/models/ggml-tiny.bin` | tiny-модель для пре-пасса определения языка |
 | `WHISPER_LANG_DEFAULT`      | `ru`         | язык по умолчанию, когда детект не уверен |
@@ -422,16 +425,17 @@ OpenAI Codex
 
 ### Голос и медиа
 
-- **Голосовые сообщения** транскрибируются локально (whisper.cpp /
-  Apple Speech) и попадают в активную сессию как набранный текст. На
+- **Голосовые сообщения** транскрибируются локально (Parakeet по умолчанию;
+  whisper.cpp / Apple Speech остаются явными вариантами) и попадают в
+  активную сессию как набранный текст. На
   время транскрипции в карточке висит pending-маркер, затем он
   заменяется распознанным текстом — видно, что именно получил Claude.
-  На эталонном arm64-хосте голосовое стоит ~9 с целиком: квантованная
+  Legacy Whisper-путь на эталонном arm64-хосте занимает ~9 с: квантованная
   `ggml-medium-q8_0` (в 1.8× быстрее fp16, транскрипты на ru/en-
   сэмплах идентичны) плюс пре-пасс определения языка на `ggml-tiny`,
   благодаря которому основной проход пиннит `-l` и кодирует один раз.
-  Нет бинаря или модели? *Настройки → 🎙 Голос* поставят всё в один
-  тап (сборка whisper.cpp, скачивание обеих моделей).
+  Для явного Whisper-варианта *Настройки → 🎙 Голос* предлагают установку
+  whisper.cpp и обеих моделей.
 - **Фото и документы** ложатся в `<workdir>/.ccbot-inbox/`, Claude
   получает синтетическое сообщение через tmux. Файлы авто-чистятся
   через 24 часа.

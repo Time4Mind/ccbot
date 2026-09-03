@@ -64,8 +64,9 @@ and not negotiable:
 - **Hook-based session tracking.** The selected agent's `SessionStart` +
   `UserPromptSubmit` hooks write `session_map.json`; the monitor polls
   it. No reliance on process-tree introspection or claude SDK.
-- **Voice transcription is local-first.** `whisper.cpp` (default) or
-  Apple Speech via PyObjC on macOS — no API key required to run.
+- **Voice transcription is local-first.** Parakeet via NeMo-Speech.cpp
+  (default, matching Bria), legacy `whisper.cpp`, or Apple Speech via
+  PyObjC on macOS - no API key required to run.
 
 The full design rationale lives in `doc/dm-multisession-spec.md`. The
 implementation map is in `doc/dm-multisession-plan.md`.
@@ -81,7 +82,8 @@ implementation map is in `doc/dm-multisession-plan.md`.
 
 Optional:
 
-- **`ffmpeg`** + **`whisper-cli`** for local voice transcription
+- **`ffmpeg`** + **`nemo-speech`** and the Parakeet q8 model for the default
+  local voice transcription backend
 - **`pyobjc-framework-Speech`** for the native Apple Speech backend
   (`uv sync --extra apple-speech`)
 
@@ -122,7 +124,9 @@ Most-frequently-tweaked optionals:
 | `CODEX_NAMING_MODEL`        | `gpt-5.6-luna` | lightweight Codex model for automatic session names |
 | `ARCHIVE_PURGE_AFTER`       | `14d`        | archived sessions purged from state after this |
 | `QUOTA_ALERT_POLL_INTERVAL` | `10m`        | how often the live `/usage` modal is sampled |
-| `VOICE_BACKEND`             | `auto`       | `auto` / `whisper` / `apple` / `off` |
+| `VOICE_BACKEND`             | `auto`       | `auto` / `parakeet` / `whisper` / `apple` / `off`; `auto` selects Parakeet |
+| `PARAKEET_BIN`              | `nemo-speech` | NeMo-Speech.cpp binary |
+| `PARAKEET_MODEL_PATH`       | `~/.ccbot/models/parakeet-tdt-0.6b-v3.q8_0.gguf` | Bria-compatible local Parakeet model |
 | `WHISPER_MODEL_PATH`        | `~/.ccbot/models/ggml-medium-q8_0.bin` | whisper.cpp model (falls back to a pre-existing `ggml-medium.bin`) |
 | `WHISPER_LANG_MODEL_PATH`   | `~/.ccbot/models/ggml-tiny.bin` | tiny model for the language-detect pre-pass |
 | `WHISPER_LANG_DEFAULT`      | `ru`         | language assumed when detection isn't confident |
@@ -424,7 +428,7 @@ half-rendered modal can't fire a phantom alert.
 
 ### Voice and media
 
-- **Voice messages** are transcribed locally (whisper.cpp / Apple
+- **Voice messages** are transcribed locally (Parakeet by default; whisper.cpp / Apple
   Speech) and routed to the active session as if you typed them. The
   card shows a pending marker while the transcription runs, then the
   transcribed text in place, so you can verify what Claude received.

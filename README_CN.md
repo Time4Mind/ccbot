@@ -53,8 +53,9 @@ ccbot 让你可以:
 - **基于 hook 的会话跟踪。** Claude Code 的 `SessionStart` +
   `UserPromptSubmit` hook 写入 `session_map.json`;监控器轮询它。
   不依赖进程树检查或 claude SDK。
-- **语音 — 本地优先。** `whisper.cpp`(默认)或 macOS 上通过 PyObjC
-  的 Apple Speech — 运行不需要 API key。
+- **语音 - 本地优先。** 默认使用通过 NeMo-Speech.cpp 的 Parakeet
+  （与 Bria 相同）；也可显式选择 legacy `whisper.cpp` 或 macOS Apple
+  Speech。运行不需要 API key。
 
 完整的设计动机在 `doc/dm-multisession-spec.md`。实现地图在
 `doc/dm-multisession-plan.md`。
@@ -70,7 +71,7 @@ ccbot 让你可以:
 
 可选:
 
-- **`ffmpeg`** + **`whisper-cli`** 用于本地语音转写
+- **`ffmpeg`** + **`nemo-speech`** 和 Parakeet q8 模型用于默认本地语音转写
 - **`pyobjc-framework-Speech`** 用于原生 Apple Speech 后端
   (`uv sync --extra apple-speech`)
 
@@ -111,7 +112,9 @@ ccbot                           # 前台;生产环境用 systemd 单元
 | `SESSION_IDLE_TTL`          | `4h`         | 闲置多久后 active → archived |
 | `ARCHIVE_PURGE_AFTER`       | `14d`        | 归档会话从 state 中清除的时长 |
 | `QUOTA_ALERT_POLL_INTERVAL` | `10m`        | 实时 `/usage` 弹窗的采样间隔 |
-| `VOICE_BACKEND`             | `auto`       | `auto` / `whisper` / `apple` / `off` |
+| `VOICE_BACKEND`             | `auto`       | `auto` / `parakeet` / `whisper` / `apple` / `off`；`auto` 使用 Parakeet |
+| `PARAKEET_BIN`              | `nemo-speech` | NeMo-Speech.cpp 可执行文件 |
+| `PARAKEET_MODEL_PATH`       | `~/.ccbot/models/parakeet-tdt-0.6b-v3.q8_0.gguf` | 与 Bria 兼容的本地 Parakeet 模型 |
 | `WHISPER_MODEL_PATH`        | `~/.ccbot/models/ggml-medium-q8_0.bin` | whisper.cpp 模型(回退到已存在的 `ggml-medium.bin`) |
 | `WHISPER_LANG_MODEL_PATH`   | `~/.ccbot/models/ggml-tiny.bin` | 语言检测预处理用的 tiny 模型 |
 | `WHISPER_LANG_DEFAULT`      | `ru`         | 检测置信度不足时假定的语言 |
@@ -358,14 +361,14 @@ OpenAI Codex
 
 ### 语音和媒体
 
-- **语音消息** 在本地转写(whisper.cpp / Apple Speech),并以你
+- **语音消息** 在本地转写（默认 Parakeet；也可显式选择 whisper.cpp /
+  Apple Speech），并以你
   键入的方式路由到活动会话。转写期间卡片上显示 pending 标记,完成
-  后原地替换为转写文本,你可以验证 Claude 收到了什么。在 arm64
-  参考主机上一条语音端到端约 9 秒:量化的 `ggml-medium-q8_0`
+  后原地替换为转写文本,你可以验证 Claude 收到了什么。Legacy Whisper
+  在 arm64 参考主机上一条语音端到端约 9 秒:量化的 `ggml-medium-q8_0`
   (比 fp16 快 1.8 倍,ru/en 样本转写结果一致)加上 `ggml-tiny`
   的语言检测预处理 — 后者让正式那遍能钉住 `-l` 只编码一次。
-  缺二进制或模型?*设置 → 🎙 语音* 一键安装(编译 whisper.cpp、
-  下载两个模型)。
+  显式选择 Whisper 时，*设置 → 🎙 语音* 可安装 whisper.cpp 和两个模型。
 - **照片和文档** 落到 `<workdir>/.ccbot-inbox/`,Claude 通过 tmux
   收到通知。文件在上传 24 小时后自动清理。
 - **出站文件** 是反方向的按需通道:会话运行

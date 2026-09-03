@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from ccbot.handlers.menu import render_settings_group_text, render_settings_text
+from ccbot.handlers.menu import (
+    build_footer_keyboard,
+    render_settings_group_text,
+    render_settings_text,
+)
 from ccbot.handlers.menu_settings_data import _GROUP_TEXT_KEYS
 from ccbot.i18n import TRANSLATIONS
 from ccbot.rich import to_rich_markdown
@@ -59,3 +63,21 @@ def test_every_settings_group_keeps_locale_text_and_hard_breaks(
         expected = TRANSLATIONS[language].get(key) or TRANSLATIONS["en"][key]
         assert rendered.replace("  \n", "\n") == expected
         _assert_hard_single_breaks(rendered)
+
+
+def test_voice_settings_offer_parakeet(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        session_manager,
+        "get_user_settings",
+        lambda _uid: {"language": "ru", "voice": "parakeet"},
+    )
+
+    keyboard = build_footer_keyboard(42, screen="settings_voice")
+    assert keyboard is not None
+    callbacks = [
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+    assert any(value.endswith("parakeet") for value in callbacks)

@@ -1,5 +1,5 @@
-"""Menu screen actions (CB_MM_*) — Sessions / Status / Shot / New /
-Archive / Settings / Back.
+"""Options screen actions (CB_MM_*) — Sessions / Status / Shot / Term /
+New / Archive / Settings / Back.
 
 Sessions is not a separate rendering — it lands on the active session's
 live card. The card already has the switcher row in its footer, so it
@@ -23,6 +23,7 @@ from ...handlers.callback_data import (
     CB_MM_SETTINGS,
     CB_MM_SHOT,
     CB_MM_STATUS,
+    CB_MM_TERM,
     CB_SW_NEW,
 )
 from ...handlers.menu import (
@@ -158,6 +159,20 @@ async def handle(
         # anymore since Menu→Sessions IS the live card.
 
         await emit_screenshot_compact(query, context.bot, user.id, origin="m")
+        return True
+
+    if data == CB_MM_TERM:
+        from ...local_terminal import open_terminal_for_window
+
+        sess = session_manager.get_active_session(user.id)
+        if sess is None or not sess.window_id:
+            await query.answer(t(user.id, "toast.no_session"), show_alert=False)
+            return True
+        await open_terminal_for_window(sess.window_id, user_id=user.id)
+        await query.answer(t(user.id, "toast.term_opened"))
+        keyboard = build_footer_keyboard(user.id, screen="more")
+        if keyboard is not None:
+            await query.edit_message_reply_markup(reply_markup=keyboard)
         return True
 
     if data == CB_MM_NEW:

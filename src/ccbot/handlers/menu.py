@@ -13,11 +13,9 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from ..i18n import t
 from ..session import session_manager
 from .callback_data import (
-    CB_FT_CLEAR,
     CB_FT_KILL,
     CB_FT_MORE,
     CB_FT_STOP,
-    CB_FT_TERM,
     CB_MM_ARCHIVE,
     CB_MM_BACK,
     CB_MM_LIST,
@@ -25,6 +23,7 @@ from .callback_data import (
     CB_MM_SETTINGS,
     CB_MM_SHOT,
     CB_MM_STATUS,
+    CB_MM_TERM,
     CB_PG_JUMP,
     CB_PG_NEXT,
     CB_PG_PREV,
@@ -108,7 +107,7 @@ def _has_active_session(user_id: int) -> bool:
 
 
 def can_offer_terminal(user_id: int) -> bool:
-    """Show the "Open terminal" button on the live card for this user?
+    """Show the "Open terminal" button on the Options screen for this user?
 
     Visible iff:
       * the user has an active session with a live window_id,
@@ -182,9 +181,8 @@ def _footer_top_row(
     ``notifications._card_is_busy`` which keys off "card is alive" so
     the button doesn't flicker between tool calls.
 
-    When the active session has an unresolved kb-mode prompt (user
-    pressed Back from kb-mode but pending still active), Shot is
-    replaced with [🔙 Resume action] so the user can re-enter kb-mode.
+    An unresolved kb-mode prompt keeps [🔙 Resume action] reachable
+    alongside Options so the user can re-enter kb-mode.
     """
     from .callback_data import CB_KB_RESUME
 
@@ -198,41 +196,18 @@ def _footer_top_row(
             row.append(
                 InlineKeyboardButton(t(user_id, "btn.kill"), callback_data=CB_FT_KILL)
             )
-        row.append(
-            InlineKeyboardButton(t(user_id, "btn.clear"), callback_data=CB_FT_CLEAR)
-        )
-        # Pending kb action → Resume on Shot slot. Otherwise Shot as usual.
+        # Keep an unresolved interactive action reachable from the live card.
         if _has_pending_kb_action(user_id):
             row.append(
                 InlineKeyboardButton("🔙 Resume action", callback_data=CB_KB_RESUME)
             )
-        else:
-            row.append(
-                InlineKeyboardButton(t(user_id, "mm.shot"), callback_data=CB_MM_SHOT)
-            )
-        # Open-terminal sits with the other per-session controls so the
-        # button persists across switcher taps (which re-render the
-        # footer top row for the newly-active session). Visible only
-        # when ``local_terminal`` ∈ {manual, auto} AND no tmux client
-        # is currently attached to this session's window group.
-        if can_offer_terminal(user_id):
-            row.append(
-                InlineKeyboardButton(t(user_id, "btn.term"), callback_data=CB_FT_TERM)
-            )
+    row.append(InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_FT_MORE))
     return row
 
 
 def _footer_bottom_row(user_id: int) -> list[InlineKeyboardButton]:
-    """Bottom row for the main screen: `[+ new] [≡ Menu]`. The pair sits
-    on a single row so the two most-used "go elsewhere" affordances land
-    side-by-side and the user's eye doesn't ping-pong between rows. Same
-    slot as Back on /archive / settings sub-screens, just with
-    two buttons instead of one.
-    """
-    return [
-        InlineKeyboardButton("+ new", callback_data=CB_SW_NEW),
-        InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_FT_MORE),
-    ]
+    """Bottom row for the main screen; Options lives in the control row."""
+    return [InlineKeyboardButton("+ new", callback_data=CB_SW_NEW)]
 
 
 _MM_BUTTONS: tuple[tuple[str, str, str], ...] = (
@@ -254,11 +229,22 @@ def _more_grid(
     Back row that returns to Menu. The Menu top-level (exclude=None) is the
     home screen — no Back row, since there is no parent.
     """
-    buttons = [
-        InlineKeyboardButton(t(user_id, label_key), callback_data=cb)
-        for key, label_key, cb in _MM_BUTTONS
-        if key != exclude
-    ]
+    buttons: list[InlineKeyboardButton] = []
+    if _has_active_session(user_id):
+        buttons.append(
+            InlineKeyboardButton(t(user_id, "mm.shot"), callback_data=CB_MM_SHOT)
+        )
+    if can_offer_terminal(user_id):
+        buttons.append(
+            InlineKeyboardButton(t(user_id, "btn.term"), callback_data=CB_MM_TERM)
+        )
+    buttons.extend(
+        [
+            InlineKeyboardButton(t(user_id, label_key), callback_data=cb)
+            for key, label_key, cb in _MM_BUTTONS
+            if key != exclude
+        ]
+    )
     rows: list[list[InlineKeyboardButton]] = []
     for i in range(0, len(buttons), 2):
         rows.append(buttons[i : i + 2])
@@ -410,9 +396,8 @@ def build_footer_keyboard(
                 if row_list:
                     rows.append(row_list)
 
-    # Main / live-card view: anchor ⋯ Menu at the very bottom so its
-    # position matches Back / Close in the menu sub-screens. Sub-screens
-    # add their own Back row inside their grid builders.
+    # Main / live-card view: keep creation separate at the bottom. Options
+    # lives in the control row and sub-screens add their own Back row.
     if screen == "main":
         rows.append(_footer_bottom_row(user_id))
 

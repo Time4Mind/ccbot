@@ -89,6 +89,7 @@ CB_PG_JUMP = "pg:jump"  # N/M — jump to default-focus page
 CB_MM_LIST = "mm:list"
 CB_MM_STATUS = "mm:status"
 CB_MM_SHOT = "mm:shot"
+CB_MM_TERM = "mm:term"
 CB_MM_NEW = "mm:new"
 CB_MM_ARCHIVE = "mm:arch"
 CB_MM_SETTINGS = "mm:set"

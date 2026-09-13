@@ -77,3 +77,33 @@ async def test_immediate_refresh_cancels_debounce_and_paints_now(
         assert state.last_rendered == "page 1"
     finally:
         card_surface._cards.pop((42, "s1"), None)
+
+
+@pytest.mark.asyncio
+async def test_keyboard_refresh_paints_when_card_text_is_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = SimpleNamespace(id="s1")
+    state = CardState(msg_id=7, last_rendered="same text")
+    card_surface._cards[(42, "s1")] = state
+    monkeypatch.setattr(
+        card_surface.session_manager, "get_active_session", lambda _uid: session
+    )
+    edit = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        card_surface,
+        "_legacy",
+        lambda name: {
+            "_render_card": lambda *_a, **_k: "same text",
+            "_edit_card": edit,
+        }[name],
+    )
+
+    try:
+        assert await card_surface.refresh_panel(
+            SimpleNamespace(), 42, immediate=True, refresh_keyboard=True
+        )
+        edit.assert_awaited_once()
+        assert edit.await_args.kwargs["refresh_pane"] is False
+    finally:
+        card_surface._cards.pop((42, "s1"), None)

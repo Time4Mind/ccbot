@@ -151,7 +151,13 @@ async def shutdown_card_surface_tasks() -> None:
     _card_surface_tasks.clear()
 
 
-async def refresh_panel(bot: Bot, user_id: int, *, immediate: bool = False) -> bool:
+async def refresh_panel(
+    bot: Bot,
+    user_id: int,
+    *,
+    immediate: bool = False,
+    refresh_keyboard: bool = False,
+) -> bool:
     """Re-render the active session's live card so the bg-status panel
     (and active quota glyph) reflects the latest bg_status state.
 
@@ -164,6 +170,9 @@ async def refresh_panel(bot: Bot, user_id: int, *, immediate: bool = False) -> b
     Interactive actions such as pagination pass ``immediate=True``. That
     cancels the live-update debounce and paints the requested page now,
     instead of making the button appear stuck until ``live_lag`` expires.
+    Keyboard-only controls additionally pass ``refresh_keyboard=True`` because
+    their card text is intentionally unchanged and must not hit the text-dedupe
+    fast path.
     """
     active = session_manager.get_active_session(user_id)
     if active is None:
@@ -192,7 +201,7 @@ async def refresh_panel(bot: Bot, user_id: int, *, immediate: bool = False) -> b
         ):
             return False
     text = _legacy("_render_card")(active, state, user_id=user_id)
-    if text == state.last_rendered:
+    if text == state.last_rendered and not refresh_keyboard:
         return True
     if await _legacy("_edit_card")(
         bot,

@@ -1,4 +1,4 @@
-"""Footer callbacks (CB_FT_STOP / KILL / CLEAR / MORE / TERM) — top row of the live card."""
+"""Footer callbacks for the live-card controls and inline Options row."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from ...handlers.callback_data import (
     CB_FT_CLEAR,
     CB_FT_KILL,
     CB_FT_MORE,
+    CB_FT_OPTIONS,
     CB_FT_STOP,
     CB_FT_TERM,
     CB_KB_BACK,
@@ -24,7 +25,11 @@ from ...handlers.callback_data import (
     CB_PG_NEXT,
     CB_PG_PREV,
 )
-from ...handlers.menu import build_footer_keyboard, render_more_text
+from ...handlers.menu import (
+    build_footer_keyboard,
+    render_more_text,
+    toggle_footer_options,
+)
 from ...handlers.notifications import (
     card_page_info,
     enter_kb_mode,
@@ -134,6 +139,12 @@ async def handle(
         await query.answer()
         return True
 
+    if data == CB_FT_OPTIONS:
+        toggle_footer_options(user.id)
+        await query.answer()
+        await refresh_panel(context.bot, user.id, immediate=True, refresh_keyboard=True)
+        return True
+
     if data in (CB_PG_PREV, CB_PG_NEXT, CB_PG_JUMP):
         sess = session_manager.get_active_session(user.id)
         if sess is None:
@@ -199,9 +210,8 @@ async def handle(
         return True
 
     if data == CB_FT_TERM:
-        # Compatibility path for a pre-deploy keyboard. The current terminal
-        # button lives under Options and uses CB_MM_TERM. A stale tap still
-        # opens the native terminal for the active tmux window.
+        # The terminal action is disclosed by Options. A stale tap after the
+        # row collapses still opens the active tmux window safely.
         from ...local_terminal import open_terminal_for_window
 
         sess = session_manager.get_active_session(user.id)

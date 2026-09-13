@@ -22,7 +22,8 @@ EN: dict[str, str] = {
     # Footer buttons
     "btn.stop": "⏹ Stop",
     "btn.kill": "💀 Kill",
-    "btn.menu": "≡ Options",
+    "btn.menu": "≡ Menu",
+    "btn.options": "⋯ Options",
     "btn.term": "🖥 Term",
     "btn.back": "← Back",
     "btn.cancel": "× Cancel",
@@ -376,8 +377,8 @@ EN: dict[str, str] = {
         "tmux window — useful for driving Claude by hand in parallel "
         "with the Telegram UI.\n\n"
         "*off* — never spawn, never offer.\n"
-        "*manual* — no auto-spawn; *🖥 Term* shows up next to *Stop / "
-        "Kill / Clear / Menu* whenever the active session has no "
+        "*manual* — no auto-spawn; *🖥 Term* appears in the row under "
+        "*⋯ Options* whenever the active session has no "
         "terminal attached.\n"
         "*auto* — spawn one on every new session AND show the same "
         "*🖥 Term* button whenever no terminal is attached.\n\n"

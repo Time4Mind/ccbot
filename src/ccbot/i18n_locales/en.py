@@ -22,8 +22,7 @@ EN: dict[str, str] = {
     # Footer buttons
     "btn.stop": "⏹ Stop",
     "btn.kill": "💀 Kill",
-    "btn.clear": "🧹 Clear",
-    "btn.menu": "≡ Menu",
+    "btn.menu": "≡ Options",
     "btn.term": "🖥 Term",
     "btn.back": "← Back",
     "btn.cancel": "× Cancel",

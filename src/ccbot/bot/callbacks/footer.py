@@ -199,13 +199,9 @@ async def handle(
         return True
 
     if data == CB_FT_TERM:
-        # Manual "Open terminal" — spawns a native Terminal/iTerm tab on
-        # macOS or the user's configured emulator on Linux, attached to
-        # the active session's tmux window. The button lives on the
-        # footer top row alongside Stop/Kill/Clear/Menu, gated on
-        # ``can_offer_terminal``. A stale tap (race between the user
-        # tapping and a terminal already arriving) is harmless — the
-        # spawn just adds another attached client at the desired window.
+        # Compatibility path for a pre-deploy keyboard. The current terminal
+        # button lives under Options and uses CB_MM_TERM. A stale tap still
+        # opens the native terminal for the active tmux window.
         from ...local_terminal import open_terminal_for_window
 
         sess = session_manager.get_active_session(user.id)

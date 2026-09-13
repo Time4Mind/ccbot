@@ -128,7 +128,9 @@ async def test_options_button_toggles_and_refreshes_live_card(monkeypatch) -> No
         }
         assert CB_MM_SHOT in callbacks
         query.answer.assert_awaited_once()
-        refresh.assert_awaited_once_with(context.bot, 42, immediate=True)
+        refresh.assert_awaited_once_with(
+            context.bot, 42, immediate=True, refresh_keyboard=True
+        )
 
         assert await footer.handle(query, context, user) is True
         collapsed = menu.build_footer_keyboard(42, screen="main")

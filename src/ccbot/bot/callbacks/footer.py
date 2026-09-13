@@ -142,7 +142,7 @@ async def handle(
     if data == CB_FT_OPTIONS:
         toggle_footer_options(user.id)
         await query.answer()
-        await refresh_panel(context.bot, user.id, immediate=True)
+        await refresh_panel(context.bot, user.id, immediate=True, refresh_keyboard=True)
         return True
 
     if data in (CB_PG_PREV, CB_PG_NEXT, CB_PG_JUMP):

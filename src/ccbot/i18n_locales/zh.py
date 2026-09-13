@@ -16,7 +16,8 @@ ZH: dict[str, str] = {
     "voice.queued_dropped": "之后发送的消息也未送达会话。",
     "btn.stop": "⏹ 停止",
     "btn.kill": "💀 终止",
-    "btn.menu": "≡ 选项",
+    "btn.menu": "≡ 菜单",
+    "btn.options": "⋯ 选项",
     "btn.term": "🖥 终端",
     "btn.back": "← 返回",
     "btn.cancel": "× 取消",
@@ -298,7 +299,7 @@ ZH: dict[str, str] = {
         "便于在桌面手动操作 Claude,与 Telegram 并行。\n\n"
         "*关* — 从不打开,不显示按钮。\n"
         "*按钮* — 不自动打开;当活动会话未附加终端时,\n"
-        "*🖥 终端* 出现在 *停止 / 终止 / 清空 / 菜单* 旁边。\n"
+        "*🖥 终端* 出现在 *⋯ 选项* 下方的按钮行中。\n"
         "*总是* — 每个新会话都自动打开,同时在未附加\n"
         "终端时显示相同的 *🖥 终端* 按钮。\n\n"
         "macOS:Terminal.app 或 iTerm2(自动)。\n"

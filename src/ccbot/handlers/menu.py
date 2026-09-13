@@ -15,7 +15,9 @@ from ..session import session_manager
 from .callback_data import (
     CB_FT_KILL,
     CB_FT_MORE,
+    CB_FT_OPTIONS,
     CB_FT_STOP,
+    CB_FT_TERM,
     CB_MM_ARCHIVE,
     CB_MM_BACK,
     CB_MM_LIST,
@@ -23,7 +25,6 @@ from .callback_data import (
     CB_MM_SETTINGS,
     CB_MM_SHOT,
     CB_MM_STATUS,
-    CB_MM_TERM,
     CB_PG_JUMP,
     CB_PG_NEXT,
     CB_PG_PREV,
@@ -71,6 +72,8 @@ __all__ = [
     "WEEKDAYS",
     "_has_active_session",
     "can_offer_terminal",
+    "toggle_footer_options",
+    "close_footer_options",
     "_has_pending_kb_action",
     "_footer_top_row",
     "_footer_bottom_row",
@@ -106,8 +109,25 @@ def _has_active_session(user_id: int) -> bool:
     return session_manager.get_active_session(user_id) is not None
 
 
+_footer_options_open_users: set[int] = set()
+
+
+def toggle_footer_options(user_id: int) -> bool:
+    """Toggle the inline action row; return its new visibility."""
+    if user_id in _footer_options_open_users:
+        _footer_options_open_users.remove(user_id)
+        return False
+    _footer_options_open_users.add(user_id)
+    return True
+
+
+def close_footer_options(user_id: int) -> None:
+    """Collapse the inline action row if it is open."""
+    _footer_options_open_users.discard(user_id)
+
+
 def can_offer_terminal(user_id: int) -> bool:
-    """Show the "Open terminal" button on the Options screen for this user?
+    """Show the "Open terminal" button in the disclosed Options row?
 
     Visible iff:
       * the user has an active session with a live window_id,
@@ -201,13 +221,28 @@ def _footer_top_row(
             row.append(
                 InlineKeyboardButton("🔙 Resume action", callback_data=CB_KB_RESUME)
             )
-    row.append(InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_FT_MORE))
+        row.append(
+            InlineKeyboardButton(t(user_id, "btn.options"), callback_data=CB_FT_OPTIONS)
+        )
     return row
 
 
 def _footer_bottom_row(user_id: int) -> list[InlineKeyboardButton]:
-    """Bottom row for the main screen; Options lives in the control row."""
-    return [InlineKeyboardButton("+ new", callback_data=CB_SW_NEW)]
+    """Keep New and Menu in their original bottom row."""
+    return [
+        InlineKeyboardButton("+ new", callback_data=CB_SW_NEW),
+        InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_FT_MORE),
+    ]
+
+
+def _footer_options_row(user_id: int) -> list[InlineKeyboardButton]:
+    """Actions disclosed below Options and immediately above sessions."""
+    row = [InlineKeyboardButton(t(user_id, "mm.shot"), callback_data=CB_MM_SHOT)]
+    if can_offer_terminal(user_id):
+        row.append(
+            InlineKeyboardButton(t(user_id, "btn.term"), callback_data=CB_FT_TERM)
+        )
+    return row
 
 
 _MM_BUTTONS: tuple[tuple[str, str, str], ...] = (
@@ -229,22 +264,11 @@ def _more_grid(
     Back row that returns to Menu. The Menu top-level (exclude=None) is the
     home screen — no Back row, since there is no parent.
     """
-    buttons: list[InlineKeyboardButton] = []
-    if _has_active_session(user_id):
-        buttons.append(
-            InlineKeyboardButton(t(user_id, "mm.shot"), callback_data=CB_MM_SHOT)
-        )
-    if can_offer_terminal(user_id):
-        buttons.append(
-            InlineKeyboardButton(t(user_id, "btn.term"), callback_data=CB_MM_TERM)
-        )
-    buttons.extend(
-        [
-            InlineKeyboardButton(t(user_id, label_key), callback_data=cb)
-            for key, label_key, cb in _MM_BUTTONS
-            if key != exclude
-        ]
-    )
+    buttons = [
+        InlineKeyboardButton(t(user_id, label_key), callback_data=cb)
+        for key, label_key, cb in _MM_BUTTONS
+        if key != exclude
+    ]
     rows: list[list[InlineKeyboardButton]] = []
     for i in range(0, len(buttons), 2):
         rows.append(buttons[i : i + 2])
@@ -379,6 +403,8 @@ def build_footer_keyboard(
         top = _footer_top_row(user_id, is_busy=is_busy)
         if top:
             rows.append(top)
+        if user_id in _footer_options_open_users and _has_active_session(user_id):
+            rows.append(_footer_options_row(user_id))
 
     if include_switcher:
         sw = build_switcher_keyboard(
@@ -396,8 +422,7 @@ def build_footer_keyboard(
                 if row_list:
                     rows.append(row_list)
 
-    # Main / live-card view: keep creation separate at the bottom. Options
-    # lives in the control row and sub-screens add their own Back row.
+    # Main / live-card view: keep New + Menu at the original bottom position.
     if screen == "main":
         rows.append(_footer_bottom_row(user_id))
 

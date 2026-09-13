@@ -1,4 +1,4 @@
-"""User-visible layout of the live-card and Options keyboards."""
+"""User-visible layout of the live-card Options disclosure."""
 
 from __future__ import annotations
 
@@ -6,30 +6,43 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from ccbot.bot.callbacks import more_menu
+from ccbot.bot.callbacks import footer
 from ccbot.handlers import menu
 from ccbot.handlers.callback_data import (
     CB_FT_CLEAR,
     CB_FT_MORE,
+    CB_FT_OPTIONS,
     CB_FT_STOP,
+    CB_FT_TERM,
     CB_MM_SHOT,
-    CB_MM_TERM,
+    CB_SW_NEW,
+    CB_SW_NOOP,
 )
 from ccbot.session import session_manager
 
 
-def test_options_replaces_live_card_shot_terminal_and_clear(
-    monkeypatch,
-) -> None:
+def _patch_active(monkeypatch: pytest.MonkeyPatch, *, terminal: bool) -> None:
     monkeypatch.setattr(menu, "_has_active_session", lambda _uid: True)
     monkeypatch.setattr(menu, "_has_pending_kb_action", lambda _uid: False)
-    monkeypatch.setattr(menu, "can_offer_terminal", lambda _uid: True)
+    monkeypatch.setattr(menu, "can_offer_terminal", lambda _uid: terminal)
     monkeypatch.setattr(
         session_manager,
         "get_user_settings",
         lambda _uid: {"language": "ru"},
     )
+    monkeypatch.setattr(
+        menu,
+        "build_switcher_keyboard",
+        lambda *_args, **_kwargs: InlineKeyboardMarkup(
+            [[InlineKeyboardButton("session", callback_data=CB_SW_NOOP)]]
+        ),
+    )
+
+
+def test_options_replaces_shot_terminal_and_clear_on_live_card(monkeypatch) -> None:
+    _patch_active(monkeypatch, terminal=True)
 
     keyboard = menu.build_footer_keyboard(42, screen="main", is_busy=True)
     assert keyboard is not None
@@ -40,92 +53,91 @@ def test_options_replaces_live_card_shot_terminal_and_clear(
     )
     assert [button.callback_data for button in controls_row] == [
         CB_FT_STOP,
-        CB_FT_MORE,
+        CB_FT_OPTIONS,
     ]
-    assert controls_row[1].text == "≡ Опции"
+    assert controls_row[1].text == "⋯ Опции"
 
     callbacks = {
         button.callback_data for row in keyboard.inline_keyboard for button in row
     }
     assert CB_FT_CLEAR not in callbacks
     assert CB_MM_SHOT not in callbacks
-    assert CB_MM_TERM not in callbacks
-    assert (
-        sum(
-            button.callback_data == CB_FT_MORE
-            for row in keyboard.inline_keyboard
-            for button in row
-        )
-        == 1
-    )
+    assert CB_FT_TERM not in callbacks
 
 
-def test_options_screen_contains_shot_and_available_terminal(monkeypatch) -> None:
-    monkeypatch.setattr(menu, "_has_active_session", lambda _uid: True)
-    monkeypatch.setattr(menu, "can_offer_terminal", lambda _uid: True)
-    monkeypatch.setattr(
-        session_manager,
-        "get_user_settings",
-        lambda _uid: {"language": "ru"},
-    )
-
-    keyboard = menu.build_footer_keyboard(42, screen="more")
-    assert keyboard is not None
-    assert [button.callback_data for button in keyboard.inline_keyboard[0]] == [
-        CB_MM_SHOT,
-        CB_MM_TERM,
-    ]
+def test_options_discloses_actions_directly_above_sessions(monkeypatch) -> None:
+    _patch_active(monkeypatch, terminal=True)
+    menu.toggle_footer_options(42)
+    try:
+        keyboard = menu.build_footer_keyboard(42, screen="main")
+        assert keyboard is not None
+        rows = [
+            [button.callback_data for button in row] for row in keyboard.inline_keyboard
+        ]
+        assert [CB_MM_SHOT, CB_FT_TERM] in rows
+        assert rows.index([CB_MM_SHOT, CB_FT_TERM]) + 1 == rows.index([CB_SW_NOOP])
+    finally:
+        menu.close_footer_options(42)
 
 
-def test_options_screen_hides_unavailable_terminal(monkeypatch) -> None:
-    monkeypatch.setattr(menu, "_has_active_session", lambda _uid: True)
-    monkeypatch.setattr(menu, "can_offer_terminal", lambda _uid: False)
+def test_disclosed_actions_hide_unavailable_terminal(monkeypatch) -> None:
+    _patch_active(monkeypatch, terminal=False)
+    menu.toggle_footer_options(42)
+    try:
+        keyboard = menu.build_footer_keyboard(42, screen="main")
+        assert keyboard is not None
+        callbacks = {
+            button.callback_data for row in keyboard.inline_keyboard for button in row
+        }
+        assert CB_MM_SHOT in callbacks
+        assert CB_FT_TERM not in callbacks
+    finally:
+        menu.close_footer_options(42)
 
-    keyboard = menu.build_footer_keyboard(42, screen="more")
-    assert keyboard is not None
-    callbacks = {
-        button.callback_data for row in keyboard.inline_keyboard for button in row
-    }
-    assert CB_MM_SHOT in callbacks
-    assert CB_MM_TERM not in callbacks
 
-
-def test_options_remains_available_without_active_session(monkeypatch) -> None:
+def test_menu_stays_in_original_bottom_row(monkeypatch) -> None:
     monkeypatch.setattr(menu, "_has_active_session", lambda _uid: False)
 
     keyboard = menu.build_footer_keyboard(42, screen="main")
     assert keyboard is not None
+    assert [button.callback_data for button in keyboard.inline_keyboard[-1]] == [
+        CB_SW_NEW,
+        CB_FT_MORE,
+    ]
     callbacks = {
         button.callback_data for row in keyboard.inline_keyboard for button in row
     }
-    assert CB_FT_MORE in callbacks
-    assert CB_MM_SHOT not in callbacks
+    assert CB_FT_OPTIONS not in callbacks
 
 
 @pytest.mark.asyncio
-async def test_options_terminal_keeps_options_keyboard(monkeypatch) -> None:
-    session = SimpleNamespace(window_id="@7")
-    monkeypatch.setattr(
-        more_menu.session_manager, "get_active_session", lambda _uid: session
-    )
-    open_terminal = AsyncMock()
-    monkeypatch.setattr("ccbot.local_terminal.open_terminal_for_window", open_terminal)
-    options_keyboard = object()
-    monkeypatch.setattr(
-        more_menu,
-        "build_footer_keyboard",
-        lambda _uid, *, screen: options_keyboard if screen == "more" else None,
-    )
-    query = SimpleNamespace(
-        data=CB_MM_TERM,
-        answer=AsyncMock(),
-        edit_message_reply_markup=AsyncMock(),
-    )
+async def test_options_button_toggles_and_refreshes_live_card(monkeypatch) -> None:
+    _patch_active(monkeypatch, terminal=True)
+    refresh = AsyncMock(return_value=True)
+    monkeypatch.setattr(footer, "refresh_panel", refresh)
+    query = SimpleNamespace(data=CB_FT_OPTIONS, answer=AsyncMock())
     context = SimpleNamespace(bot=object())
     user = SimpleNamespace(id=42)
 
-    assert await more_menu.handle(query, context, user) is True
-    open_terminal.assert_awaited_once_with("@7", user_id=42)
-    query.edit_message_reply_markup.assert_awaited_once_with(
-        reply_markup=options_keyboard
-    )
+    try:
+        assert await footer.handle(query, context, user) is True
+        keyboard = menu.build_footer_keyboard(42, screen="main")
+        assert keyboard is not None
+        callbacks = {
+            button.callback_data for row in keyboard.inline_keyboard for button in row
+        }
+        assert CB_MM_SHOT in callbacks
+        query.answer.assert_awaited_once()
+        refresh.assert_awaited_once_with(context.bot, 42, immediate=True)
+
+        assert await footer.handle(query, context, user) is True
+        collapsed = menu.build_footer_keyboard(42, screen="main")
+        assert collapsed is not None
+        assert all(
+            button.callback_data != CB_MM_SHOT
+            for row in collapsed.inline_keyboard
+            for button in row
+        )
+        assert refresh.await_count == 2
+    finally:
+        menu.close_footer_options(42)

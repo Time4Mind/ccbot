@@ -62,7 +62,6 @@ def persist_session_screenshot(
         or sess.screenshot_user_id != user_id
         or sess.screenshot_capture_kib != capture_kib
         or sess.screenshot_profile != profile
-        or now - sess.screenshot_cached_at >= 10.0
     )
     sess.screenshot_file_id = file_id
     sess.screenshot_pane_hash = pane_hash

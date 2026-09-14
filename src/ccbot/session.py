@@ -121,6 +121,8 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
     # Cached short summaries for ClaudeSession picker. Key = claude session id.
     # Value = {"summary": str, "mtime": float, "ts": float}.
     summary_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
+    _summary_cache_serialized: str = field(default="", init=False, repr=False)
+    _state_serialized: str = field(default="", init=False, repr=False)
     # Window ids that were just `claude --resume`d and may still be
     # auto-compacting. While a window is here, ``send_to_window`` buffers
     # prompts into ``_pending_sends`` instead of typing them, and a
@@ -164,11 +166,21 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                 str(uid): vals for uid, vals in self.user_settings.items()
             },
             "agent_backend": self.agent_backend,
-            "summary_cache": self.summary_cache,
             "bg_status": bg_status.serialize_per_user(),
         }
-        atomic_write_json(config.state_file, state)
-        logger.debug("State saved to %s", config.state_file)
+        summary_serialized = json.dumps(
+            self.summary_cache, sort_keys=True, separators=(",", ":")
+        )
+        if summary_serialized != self._summary_cache_serialized:
+            atomic_write_json(
+                config.summary_cache_file, self.summary_cache, indent=None
+            )
+            self._summary_cache_serialized = summary_serialized
+        state_serialized = json.dumps(state, sort_keys=True, separators=(",", ":"))
+        if state_serialized != self._state_serialized:
+            atomic_write_json(config.state_file, state, indent=None)
+            self._state_serialized = state_serialized
+            logger.debug("State saved to %s", config.state_file)
 
     def is_window_id(self, key: str) -> bool:
         """Check if a key looks like a tmux window ID (e.g. '@0', '@12')."""
@@ -256,6 +268,18 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                 self.user_settings = {}
                 self.summary_cache = {}
                 self.agent_backend = config.agent_backend
+
+        if config.summary_cache_file.exists():
+            try:
+                stored_summary_cache = json.loads(config.summary_cache_file.read_text())
+                if not isinstance(stored_summary_cache, dict):
+                    raise ValueError("summary cache root must be an object")
+                self.summary_cache = stored_summary_cache
+                self._summary_cache_serialized = json.dumps(
+                    self.summary_cache, sort_keys=True, separators=(",", ":")
+                )
+            except (OSError, json.JSONDecodeError, ValueError) as e:
+                logger.warning("Failed to load summary cache: %s", e)
 
     async def reconcile_sessions_with_tmux(self) -> int:
         """Mark sessions whose tmux window vanished as ``lost``."""

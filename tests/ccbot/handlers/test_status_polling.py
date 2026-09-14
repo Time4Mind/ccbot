@@ -5,11 +5,14 @@ model picker renders in the terminal, and the status poller detects it
 on its next 1s tick.
 """
 
+import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ccbot.handlers.status_polling import update_status_message
+from ccbot.handlers.status_polling import status_poll_loop, update_status_message
+from ccbot.tmux_manager import TmuxWindow
 
 
 @pytest.fixture
@@ -131,3 +134,76 @@ class TestStatusPollerSettingsDetection:
             assert keyboard is not None
             # Verify the message text contains model picker content
             assert "Select model" in call_kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_pre_resolved_window_skips_second_tmux_lookup(mock_bot: AsyncMock):
+    """A background tick reuses its window snapshot without changing pane checks."""
+    window_id = "@5"
+    window = TmuxWindow(window_id, "work", "/tmp", "codex")
+
+    with patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux:
+        mock_tmux.find_window_by_id = AsyncMock()
+        mock_tmux.capture_pane = AsyncMock(return_value="plain terminal output")
+
+        await update_status_message(
+            mock_bot,
+            user_id=1,
+            window_id=window_id,
+            window=window,
+        )
+
+        mock_tmux.find_window_by_id.assert_not_awaited()
+        mock_tmux.capture_pane.assert_awaited_once_with(window_id)
+
+
+@pytest.mark.asyncio
+async def test_status_tick_uses_one_window_snapshot_for_all_live_sessions():
+    """One poll tick has fixed discovery cost instead of one scan per session."""
+    sessions = [
+        SimpleNamespace(id="s1", window_id="@1"),
+        SimpleNamespace(id="s2", window_id="@2"),
+    ]
+    windows = [
+        TmuxWindow("@1", "one", "/one", "codex"),
+        TmuxWindow("@2", "two", "/two", "codex"),
+    ]
+
+    with (
+        patch("ccbot.handlers.status_polling.config.allowed_users", {7}),
+        patch(
+            "ccbot.handlers.status_polling.session_manager.list_user_sessions",
+            return_value=sessions,
+        ),
+        patch(
+            "ccbot.handlers.status_polling.tmux_manager.polling_snapshot",
+            new_callable=AsyncMock,
+            return_value=windows,
+        ) as snapshot,
+        patch(
+            "ccbot.handlers.status_polling.tmux_manager.find_window_by_id",
+            new_callable=AsyncMock,
+        ) as find_window,
+        patch(
+            "ccbot.handlers.status_polling.update_status_message",
+            new_callable=AsyncMock,
+        ) as update,
+        patch(
+            "ccbot.handlers.status_polling.idle_archive_sweep",
+            new_callable=AsyncMock,
+        ),
+        patch("ccbot.handlers.status_polling.purge_sweep"),
+        patch("ccbot.handlers.status_polling.inbox_sweep"),
+        patch(
+            "ccbot.handlers.status_polling.asyncio.sleep",
+            new_callable=AsyncMock,
+            side_effect=asyncio.CancelledError,
+        ),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await status_poll_loop(AsyncMock())
+
+    snapshot.assert_awaited_once_with()
+    find_window.assert_not_awaited()
+    assert update.await_count == 2
+    assert [call.kwargs["window"] for call in update.await_args_list] == windows

@@ -26,6 +26,7 @@ from ..session import session_manager
 
 if TYPE_CHECKING:
     from ..session_models import Session
+    from ..tmux_manager import TmuxWindow
 from ..terminal_parser import (
     InteractiveUIContent,
     extract_interactive_content,
@@ -450,6 +451,8 @@ async def update_status_message(
     bot: Bot,
     user_id: int,
     window_id: str,
+    *,
+    window: "TmuxWindow | None" = None,
 ) -> None:
     """Poll terminal: detect interactive UIs and drive the typing indicator.
 
@@ -457,7 +460,7 @@ async def update_status_message(
     carries its own header. The pane spinner ("…Esc to interrupt") is no
     longer shown in chat; it drives ``send_chat_action(TYPING)`` instead.
     """
-    w = await tmux_manager.find_window_by_id(window_id)
+    w = window or await tmux_manager.find_window_by_id(window_id)
     if not w:
         return
 
@@ -550,10 +553,15 @@ async def status_poll_loop(bot: Bot) -> None:
                     if sess.window_id:
                         pairs.append((user_id, sess.window_id))
 
+            windows_by_id = {
+                window.window_id: window
+                for window in await tmux_manager.polling_snapshot()
+            }
+
             for user_id, wid in pairs:
                 try:
                     # Reap tmux windows that vanished externally.
-                    w = await tmux_manager.find_window_by_id(wid)
+                    w = windows_by_id.get(wid)
                     if not w:
                         sess = session_manager.find_session_by_window(wid)
                         if sess is not None:
@@ -576,7 +584,7 @@ async def status_poll_loop(bot: Bot) -> None:
 
                     kick_prewarm(wid)
 
-                    await update_status_message(bot, user_id, wid)
+                    await update_status_message(bot, user_id, wid, window=w)
                 except Exception as e:
                     logger.debug(
                         "Status update error for user %d window %s: %s",

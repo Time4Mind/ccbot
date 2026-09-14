@@ -107,6 +107,7 @@ class Config:
 
         # All state files live under config_dir
         self.state_file = self.config_dir / "state.json"
+        self.summary_cache_file = self.config_dir / "summary_cache.json"
         self.session_map_file = self.config_dir / "session_map.json"
         self.monitor_state_file = self.config_dir / "monitor_state.json"
 

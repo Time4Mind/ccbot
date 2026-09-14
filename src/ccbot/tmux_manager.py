@@ -209,6 +209,60 @@ class TmuxManager:
 
         return await asyncio.to_thread(_sync_list_windows)
 
+    async def polling_snapshot(self) -> list[TmuxWindow]:
+        """Return one active-pane row per window using one tmux subprocess.
+
+        Background polling needs a consistent window snapshot, but libtmux
+        resolves window and pane attributes through several subprocesses. A
+        single formatted ``list-panes`` call keeps the discovery cost fixed
+        per tick. Interactive call sites continue to use ``find_window_*`` and
+        therefore never wait for or consume this background snapshot.
+        """
+        output_format = (
+            "#{window_id}\t#{window_name}\t#{pane_current_path}\t"
+            "#{pane_current_command}\t#{pane_active}"
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "tmux",
+                "list-panes",
+                "-s",
+                "-t",
+                self.session_name,
+                "-F",
+                output_format,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                logger.debug(
+                    "Fast tmux polling snapshot failed: %s",
+                    stderr.decode("utf-8", errors="replace").strip(),
+                )
+                return await self.list_windows()
+
+            windows: list[TmuxWindow] = []
+            for raw_line in stdout.decode("utf-8", errors="replace").splitlines():
+                fields = raw_line.split("\t", 4)
+                if len(fields) != 5:
+                    continue
+                window_id, name, cwd, pane_cmd, pane_active = fields
+                if pane_active != "1" or name == config.tmux_main_window_name:
+                    continue
+                windows.append(
+                    TmuxWindow(
+                        window_id=window_id,
+                        window_name=name,
+                        cwd=cwd,
+                        pane_current_command=pane_cmd,
+                    )
+                )
+            return windows
+        except Exception as exc:
+            logger.debug("Fast tmux polling snapshot error: %s", exc)
+            return await self.list_windows()
+
     async def find_window_by_name(self, window_name: str) -> TmuxWindow | None:
         """Find a window by its name.
 
@@ -251,53 +305,28 @@ class TmuxManager:
         Returns:
             The captured text, or None on failure.
         """
+        args = ["tmux", "capture-pane"]
         if with_ansi:
-            # Use async subprocess to call tmux capture-pane -e for ANSI colors
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "tmux",
-                    "capture-pane",
-                    "-e",
-                    "-p",
-                    "-t",
-                    window_id,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout, stderr = await proc.communicate()
-                if proc.returncode == 0:
-                    return stdout.decode("utf-8")
-                logger.error(
-                    f"Failed to capture pane {window_id}: {stderr.decode('utf-8')}"
-                )
-                return None
-            except Exception as e:
-                logger.error(f"Unexpected error capturing pane {window_id}: {e}")
-                return None
-
-        # Original implementation for plain text - wrap in thread
-        def _sync_capture() -> str | None:
-            session = self.get_session()
-            if not session:
-                return None
-            try:
-                window = session.windows.get(window_id=window_id)
-                if not window:
-                    return None
-                pane = window.active_pane
-                if not pane:
-                    return None
-                lines = pane.capture_pane()
-                return (
-                    "\n".join(lines)
-                    if isinstance(lines, list)  # pyright: ignore[reportUnnecessaryIsInstance]
-                    else str(lines)
-                )
-            except Exception as e:
-                logger.error(f"Failed to capture pane {window_id}: {e}")
-                return None
-
-        return await asyncio.to_thread(_sync_capture)
+            args.append("-e")
+        args.extend(("-p", "-t", window_id))
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode == 0:
+                return stdout.decode("utf-8")
+            logger.error(
+                "Failed to capture pane %s: %s",
+                window_id,
+                stderr.decode("utf-8", errors="replace"),
+            )
+            return None
+        except Exception as exc:
+            logger.error("Unexpected error capturing pane %s: %s", window_id, exc)
+            return None
 
     async def send_keys(
         self, window_id: str, text: str, enter: bool = True, literal: bool = True

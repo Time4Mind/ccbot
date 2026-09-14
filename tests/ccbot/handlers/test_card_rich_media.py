@@ -103,6 +103,34 @@ def test_confirmed_screenshot_cache_is_persisted_per_session(
     save.assert_called_once_with()
 
 
+def test_unchanged_screenshot_only_refreshes_timestamp_in_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sess = Session(
+        id="s1",
+        name="one",
+        screenshot_file_id="photo-id",
+        screenshot_pane_hash="pane-hash",
+        screenshot_cached_at=100.0,
+        screenshot_user_id=42,
+        screenshot_capture_kib=64,
+        screenshot_profile="compact8",
+    )
+    save = MagicMock()
+    monkeypatch.setattr(card_rich_media.session_manager, "save_state", save)
+    monkeypatch.setattr(card_rich_media.time, "time", lambda: 111.0)
+    monkeypatch.setattr(
+        card_rich_media.session_manager,
+        "get_user_settings",
+        lambda _uid: {"screenshot_capture_kib": 64, "screenshot_profile": "compact8"},
+    )
+
+    card_rich_media.persist_session_screenshot(sess, 42, "pane-hash", "photo-id")
+
+    assert sess.screenshot_cached_at == 111.0
+    save.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_interactive_text_edit_reuses_cached_photo_without_capture(
     monkeypatch: pytest.MonkeyPatch,

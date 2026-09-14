@@ -12,6 +12,7 @@ Key classes: SessionMonitor, NewMessage, SessionInfo.
 """
 
 import asyncio
+import copy
 import json
 import logging
 from dataclasses import dataclass
@@ -435,8 +436,15 @@ class SessionMonitor:
             except OSError as e:
                 logger.debug(f"Error processing session {session_info.session_id}: {e}")
 
-        self.state.save_if_dirty()
         return new_messages
+
+    @staticmethod
+    def _is_terminal_message(msg: NewMessage) -> bool:
+        return (
+            msg.role == "assistant"
+            and msg.content_type == "text"
+            and msg.stop_reason in ("end_turn", "stop_sequence", "max_tokens")
+        )
 
     async def _load_current_session_targets(
         self,
@@ -592,6 +600,8 @@ class SessionMonitor:
         self._last_session_map = await self._load_current_session_map()
 
         while self._running:
+            poll_started = False
+            pending_before: dict[str, dict[str, Any]] = {}
             try:
                 # Load hook-based session map updates
                 await session_manager.load_session_map()
@@ -602,12 +612,15 @@ class SessionMonitor:
                 active_session_ids = set(current_map.values())
 
                 # Check for new messages (all I/O is async)
+                poll_started = True
+                pending_before = copy.deepcopy(self._pending_tools)
                 new_messages = await self.check_for_updates(
                     active_session_ids,
                     session_infos=direct_targets,
                 )
 
-                for msg in new_messages:
+                failed_index: int | None = None
+                for index, msg in enumerate(new_messages):
                     status = "complete" if msg.is_complete else "streaming"
                     preview = msg.text[:80] + ("..." if len(msg.text) > 80 else "")
                     logger.info("[%s] session=%s: %s", status, msg.session_id, preview)
@@ -616,8 +629,41 @@ class SessionMonitor:
                             await self._message_callback(msg)
                         except Exception as e:
                             logger.error(f"Message callback error: {e}")
+                            failed_index = index
+                            break
+
+                if failed_index is not None:
+                    # Never make an unread event durable before its callback
+                    # completes. Rewind the failed and not-yet-dispatched
+                    # sessions, but retain progress from earlier sessions.
+                    rollback_ids = {
+                        msg.session_id for msg in new_messages[failed_index:]
+                    }
+                    self.state.restore_committed(rollback_ids)
+                    for session_id in rollback_ids:
+                        if session_id in pending_before:
+                            self._pending_tools[session_id] = copy.deepcopy(
+                                pending_before[session_id]
+                            )
+                        else:
+                            self._pending_tools.pop(session_id, None)
+                    delivered_messages = new_messages[:failed_index]
+                else:
+                    delivered_messages = new_messages
+
+                # Terminal answers checkpoint immediately, but only after
+                # Telegram/card handling completes. Streaming/tool events
+                # share one checkpoint per interval.
+                force_checkpoint = any(
+                    self._is_terminal_message(msg) for msg in delivered_messages
+                )
+                if force_checkpoint or not self._pending_tools:
+                    self.state.save_if_due(force=force_checkpoint)
 
             except Exception as e:
+                if poll_started:
+                    self.state.restore_committed()
+                    self._pending_tools = pending_before
                 logger.error(f"Monitor loop error: {e}")
 
             await asyncio.sleep(self.poll_interval)

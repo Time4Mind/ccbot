@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ccbot.monitor_state import TrackedSession
-from ccbot.session_monitor import SessionInfo, SessionMonitor
+from ccbot.monitor_state import MonitorState, TrackedSession
+from ccbot.session_monitor import NewMessage, SessionInfo, SessionMonitor
 
 
 class TestReadNewLinesOffsetRecovery:
@@ -209,3 +209,189 @@ class TestDirectSessionTargets:
         monitor.scan_projects.assert_awaited_once()
         assert monitor.state.get_session("direct-session") is not None
         assert monitor.state.get_session("legacy-session") is not None
+
+
+class TestMonitorCheckpointOrdering:
+    @staticmethod
+    def _terminal_message() -> NewMessage:
+        return NewMessage(
+            session_id="s1",
+            text="done",
+            is_complete=True,
+            content_type="text",
+            role="assistant",
+            stop_reason="end_turn",
+        )
+
+    @pytest.mark.asyncio
+    async def test_terminal_offset_is_saved_after_callback(self, tmp_path, monkeypatch):
+        from ccbot.session import session_manager
+
+        state_file = tmp_path / "monitor_state.json"
+        monitor = SessionMonitor(state_file=state_file, poll_interval=0.0)
+        tracked = TrackedSession("s1", "/tmp/s1.jsonl", 10)
+        monitor.state.update_session(tracked)
+        monitor.state.save()
+
+        async def check_for_updates(*_args, **_kwargs):
+            tracked.last_byte_offset = 20
+            monitor.state.update_session(tracked)
+            return [self._terminal_message()]
+
+        observed_offsets: list[int] = []
+
+        async def callback(_msg):
+            persisted = MonitorState(state_file=state_file)
+            persisted.load()
+            observed_offsets.append(persisted.tracked_sessions["s1"].last_byte_offset)
+            monitor._running = False
+
+        monitor.check_for_updates = check_for_updates
+        monitor.set_message_callback(callback)
+        monitor._cleanup_all_stale_sessions = AsyncMock()
+        monitor._load_current_session_map = AsyncMock(return_value={"@1": "s1"})
+        monitor._current_session_targets = lambda: ({"@1": "s1"}, [])
+        monitor._detect_and_cleanup_changes = AsyncMock(return_value={"@1": "s1"})
+        monkeypatch.setattr(session_manager, "load_session_map", AsyncMock())
+        monkeypatch.setattr("ccbot.session_monitor.asyncio.sleep", AsyncMock())
+
+        monitor._running = True
+        await monitor._monitor_loop()
+
+        persisted = MonitorState(state_file=state_file)
+        persisted.load()
+        assert observed_offsets == [10]
+        assert persisted.tracked_sessions["s1"].last_byte_offset == 20
+
+    @pytest.mark.asyncio
+    async def test_callback_failure_restores_last_persisted_offset(
+        self, tmp_path, monkeypatch
+    ):
+        from ccbot.session import session_manager
+
+        state_file = tmp_path / "monitor_state.json"
+        monitor = SessionMonitor(state_file=state_file, poll_interval=0.0)
+        tracked = TrackedSession("s1", "/tmp/s1.jsonl", 10)
+        monitor.state.update_session(tracked)
+        monitor.state.save()
+
+        async def check_for_updates(*_args, **_kwargs):
+            tracked.last_byte_offset = 20
+            monitor.state.update_session(tracked)
+            return [self._terminal_message()]
+
+        async def callback(_msg):
+            monitor._running = False
+            raise RuntimeError("delivery failed")
+
+        monitor.check_for_updates = check_for_updates
+        monitor.set_message_callback(callback)
+        monitor._cleanup_all_stale_sessions = AsyncMock()
+        monitor._load_current_session_map = AsyncMock(return_value={"@1": "s1"})
+        monitor._current_session_targets = lambda: ({"@1": "s1"}, [])
+        monitor._detect_and_cleanup_changes = AsyncMock(return_value={"@1": "s1"})
+        monkeypatch.setattr(session_manager, "load_session_map", AsyncMock())
+        monkeypatch.setattr("ccbot.session_monitor.asyncio.sleep", AsyncMock())
+
+        monitor._running = True
+        await monitor._monitor_loop()
+
+        assert monitor.state.tracked_sessions["s1"].last_byte_offset == 10
+        persisted = MonitorState(state_file=state_file)
+        persisted.load()
+        assert persisted.tracked_sessions["s1"].last_byte_offset == 10
+
+    @pytest.mark.asyncio
+    async def test_poll_failure_restores_last_persisted_offset(
+        self, tmp_path, monkeypatch
+    ):
+        from ccbot.session import session_manager
+
+        state_file = tmp_path / "monitor_state.json"
+        monitor = SessionMonitor(state_file=state_file, poll_interval=0.0)
+        tracked = TrackedSession("s1", "/tmp/s1.jsonl", 10)
+        monitor.state.update_session(tracked)
+        monitor.state.save()
+
+        async def check_for_updates(*_args, **_kwargs):
+            tracked.last_byte_offset = 20
+            monitor.state.update_session(tracked)
+            monitor._running = False
+            raise RuntimeError("parse failed")
+
+        monitor.check_for_updates = check_for_updates
+        monitor._cleanup_all_stale_sessions = AsyncMock()
+        monitor._load_current_session_map = AsyncMock(return_value={"@1": "s1"})
+        monitor._current_session_targets = lambda: ({"@1": "s1"}, [])
+        monitor._detect_and_cleanup_changes = AsyncMock(return_value={"@1": "s1"})
+        monkeypatch.setattr(session_manager, "load_session_map", AsyncMock())
+        monkeypatch.setattr("ccbot.session_monitor.asyncio.sleep", AsyncMock())
+
+        monitor._running = True
+        await monitor._monitor_loop()
+
+        assert monitor.state.tracked_sessions["s1"].last_byte_offset == 10
+
+    @pytest.mark.asyncio
+    async def test_failure_does_not_replay_another_sessions_delivered_terminal(
+        self, tmp_path, monkeypatch
+    ):
+        from ccbot.session import session_manager
+
+        state_file = tmp_path / "monitor_state.json"
+        monitor = SessionMonitor(state_file=state_file, poll_interval=0.0)
+        first = TrackedSession("s1", "/tmp/s1.jsonl", 10)
+        second = TrackedSession("s2", "/tmp/s2.jsonl", 10)
+        monitor.state.update_session(first)
+        monitor.state.update_session(second)
+        monitor.state.save()
+
+        async def check_for_updates(*_args, **_kwargs):
+            first.last_byte_offset = 20
+            second.last_byte_offset = 20
+            monitor.state.update_session(first)
+            monitor.state.update_session(second)
+            return [
+                self._terminal_message(),
+                NewMessage(
+                    session_id="s2",
+                    text="done two",
+                    is_complete=True,
+                    content_type="text",
+                    role="assistant",
+                    stop_reason="end_turn",
+                ),
+            ]
+
+        delivered: list[str] = []
+
+        async def callback(msg):
+            if msg.session_id == "s2":
+                monitor._running = False
+                raise RuntimeError("delivery failed")
+            delivered.append(msg.session_id)
+
+        monitor.check_for_updates = check_for_updates
+        monitor.set_message_callback(callback)
+        monitor._cleanup_all_stale_sessions = AsyncMock()
+        monitor._load_current_session_map = AsyncMock(
+            return_value={"@1": "s1", "@2": "s2"}
+        )
+        monitor._current_session_targets = lambda: (
+            {"@1": "s1", "@2": "s2"},
+            [],
+        )
+        monitor._detect_and_cleanup_changes = AsyncMock(
+            return_value={"@1": "s1", "@2": "s2"}
+        )
+        monkeypatch.setattr(session_manager, "load_session_map", AsyncMock())
+        monkeypatch.setattr("ccbot.session_monitor.asyncio.sleep", AsyncMock())
+
+        monitor._running = True
+        await monitor._monitor_loop()
+
+        persisted = MonitorState(state_file=state_file)
+        persisted.load()
+        assert delivered == ["s1"]
+        assert persisted.tracked_sessions["s1"].last_byte_offset == 20
+        assert persisted.tracked_sessions["s2"].last_byte_offset == 10

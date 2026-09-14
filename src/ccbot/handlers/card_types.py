@@ -83,6 +83,8 @@ class Event:
     completed_at: float | None = None  # set when event completes
     tool_use_id: str | None = None
     tool_name: str | None = None
+    tool_args: str = ""
+    tool_content: str = ""
     is_page_break: bool = False  # this event starts a new page
     is_error: bool = False
     image_data: list[tuple[str, bytes]] | None = None  # tool_result images
@@ -114,6 +116,7 @@ class CardState:
     pagination_prefix_first_id: int = 0
     pagination_prefix_last_id: int = 0
     pagination_budget: int = 0
+    pagination_spoiler_lines: int = 0
     pagination_prefix_pages: list[list[Event]] = field(default_factory=list)
     # Page the user is currently looking at. ``None`` = default focus
     # (page with the latest answer-anchor). Set by pagination callbacks.
@@ -191,6 +194,9 @@ class CardState:
     # warning. Status polling refreshes its live pane for the active session.
     stall_watch_active: bool = False
     last_stall_pane_refresh_ts: float = 0.0
+    # Normalized Codex TUI status for work that outlives the parent answer,
+    # e.g. ``Working · 1 background terminal running``.
+    pane_status: str = ""
     # Set by voice_handler right when a voice message is pinned to this
     # session, before download/transcribe (which can take many seconds).
     # Rendered as a synthetic trailing ``user_msg`` row so an immediate

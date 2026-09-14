@@ -19,6 +19,7 @@ from .card_types import (
     STALE_CARD_SECONDS,
     CardState,
     Event,
+    TurnPhase,
 )
 
 __all__ = [
@@ -80,7 +81,9 @@ _EVENT_JOINER = "\n\n \n\n"
 _JOINER_LINES = 3
 
 
-def _split_page_by_budget(page: list[Event], budget_lines: int) -> list[list[Event]]:
+def _split_page_by_budget(
+    page: list[Event], budget_lines: int, *, spoiler_max_lines: int = 7
+) -> list[list[Event]]:
     """Split one logical page into budget-fitting sub-pages.
 
     Returns the page unchanged when it fits in BOTH ``budget_lines +
@@ -107,7 +110,7 @@ def _split_page_by_budget(page: list[Event], budget_lines: int) -> list[list[Eve
         return [page]
     now = time.time()
     cap = budget_lines + CARD_PAGE_LINES_OVERSHOOT
-    rendered = render_page(page, now=now)
+    rendered = render_page(page, now=now, spoiler_max_lines=spoiler_max_lines)
     if (
         _count_lines(rendered) <= cap
         and _estimate_md_v2_size(rendered) <= CARD_PAGE_BUDGET
@@ -122,7 +125,9 @@ def _split_page_by_budget(page: list[Event], budget_lines: int) -> list[list[Eve
     # post-conversion size matches the source.
     _JOINER_BYTES = len(_EVENT_JOINER.encode("utf-8"))
     for ev in page:
-        rendered_ev = render_event(ev, in_flight=False, now=now)
+        rendered_ev = render_event(
+            ev, in_flight=False, now=now, spoiler_max_lines=spoiler_max_lines
+        )
         ev_lines = _count_lines(rendered_ev)
         ev_bytes = _estimate_md_v2_size(rendered_ev)
         line_overhead = _JOINER_LINES if current else 0
@@ -155,6 +160,7 @@ def paginate_events_for_card(
     the same page list.
     """
     budget = _resolve_line_budget(user_id)
+    spoiler_lines = resolve_spoiler_line_budget(user_id)
     events = state.events
     if not events:
         return [[]]
@@ -174,6 +180,7 @@ def paginate_events_for_card(
     prefix_last_id = id(events[latest_start - 1]) if latest_start else 0
     cache_fresh = (
         state.pagination_budget == budget
+        and state.pagination_spoiler_lines == spoiler_lines
         and state.pagination_prefix_len == latest_start
         and state.pagination_prefix_first_id == prefix_first_id
         and state.pagination_prefix_last_id == prefix_last_id
@@ -184,14 +191,19 @@ def paginate_events_for_card(
         prefix_pages = []
         if latest_start:
             for page in paginate_events(events[:latest_start]):
-                prefix_pages.extend(_split_page_by_budget(page, budget))
+                prefix_pages.extend(
+                    _split_page_by_budget(page, budget, spoiler_max_lines=spoiler_lines)
+                )
         state.pagination_prefix_len = latest_start
         state.pagination_prefix_first_id = prefix_first_id
         state.pagination_prefix_last_id = prefix_last_id
         state.pagination_budget = budget
+        state.pagination_spoiler_lines = spoiler_lines
         state.pagination_prefix_pages = prefix_pages
 
-    latest_pages = _split_page_by_budget(events[latest_start:], budget)
+    latest_pages = _split_page_by_budget(
+        events[latest_start:], budget, spoiler_max_lines=spoiler_lines
+    )
     return [*prefix_pages, *latest_pages] or [[]]
 
 
@@ -204,7 +216,7 @@ def _resolved_page_idx(state: CardState, total_pages: int) -> int:
     return max(0, min(state.current_page_idx, total_pages - 1))
 
 
-def render_page(events: list[Event], now: float) -> str:
+def render_page(events: list[Event], now: float, *, spoiler_max_lines: int = 7) -> str:
     """Render the events of one page into a single body string.
 
     Events are joined by ``_EVENT_JOINER`` — a non-breaking-space
@@ -216,7 +228,14 @@ def render_page(events: list[Event], now: float) -> str:
     """
     parts: list[str] = []
     for i, ev in enumerate(events):
-        parts.append(render_event(ev, in_flight=_is_in_flight(ev, events, i), now=now))
+        parts.append(
+            render_event(
+                ev,
+                in_flight=_is_in_flight(ev, events, i),
+                now=now,
+                spoiler_max_lines=spoiler_max_lines,
+            )
+        )
     return _EVENT_JOINER.join(parts)
 
 
@@ -290,7 +309,21 @@ def _resolve_line_budget(user_id: int | None) -> int:
     return value
 
 
-def _trim_page_events(events: list[Event], budget_lines: int) -> list[Event]:
+def resolve_spoiler_line_budget(user_id: int | None) -> int:
+    if user_id is None:
+        return 7
+    try:
+        value = int(
+            session_manager.get_user_settings(user_id).get("spoiler_block_lines", 7)
+        )
+    except (TypeError, ValueError):
+        return 7
+    return value if value in (3, 7, 20) else 7
+
+
+def _trim_page_events(
+    events: list[Event], budget_lines: int, *, spoiler_max_lines: int = 7
+) -> list[Event]:
     """Drop middle events from ``events`` until rendered line-count
     ≤ ``budget_lines`` (with ``CARD_PAGE_LINES_OVERSHOOT`` slack).
 
@@ -306,18 +339,32 @@ def _trim_page_events(events: list[Event], budget_lines: int) -> list[Event]:
     if not events:
         return events
     now = time.time()
-    full_lines = _count_lines(render_page(events, now=now))
+    full_lines = _count_lines(
+        render_page(events, now=now, spoiler_max_lines=spoiler_max_lines)
+    )
     cap = budget_lines + CARD_PAGE_LINES_OVERSHOOT
     if full_lines <= cap:
         return events
     anchor = events[0]
-    anchor_lines = _count_lines(render_event(anchor, in_flight=False, now=now))
+    anchor_lines = _count_lines(
+        render_event(
+            anchor,
+            in_flight=False,
+            now=now,
+            spoiler_max_lines=spoiler_max_lines,
+        )
+    )
     remaining = max(0, budget_lines - anchor_lines)
     # Walk from the end (excluding anchor), accumulating until budget.
     kept_tail_rev: list[Event] = []
     total = 0
     for i in range(len(events) - 1, 0, -1):
-        rendered = render_event(events[i], in_flight=False, now=now)
+        rendered = render_event(
+            events[i],
+            in_flight=False,
+            now=now,
+            spoiler_max_lines=spoiler_max_lines,
+        )
         ev_lines = _count_lines(rendered)
         if kept_tail_rev and total + ev_lines > remaining:
             break
@@ -397,6 +444,8 @@ def _card_is_busy(state: CardState) -> bool:
 
     if state.msg_id is None:
         return False
+    if state.pane_status and state.turn_phase is TurnPhase.RUNNING:
+        return True
     if state.last_event_ts <= 0:
         return False
     if not state.events:

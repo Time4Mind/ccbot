@@ -393,6 +393,8 @@ class SessionStateMixin:
         # with smart sentence / paragraph boundaries — see
         # ``_chunk_final_text`` for the exact preference order.
         "card_page_lines": 20,
+        # Visible rows in each half of a tool spoiler (command and result).
+        "spoiler_block_lines": 7,
         # Auto-rename new sessions via a cheap one-shot model call after the
         # first user message ≥20 chars. When ``False``, names stay as
         # the directory basename (``workdir``, ``workdir-2``, ...) for

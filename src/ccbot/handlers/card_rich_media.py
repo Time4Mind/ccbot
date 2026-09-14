@@ -265,8 +265,16 @@ async def edit_rich_media_card(
             )
             return False
     except Exception as exc:
-        logger.warning("rich-media card edit failed msg=%s: %s", state.msg_id, exc)
-        return False
+        # Transport/read failures do not prove that the carrier is invalid.
+        # Keep the last screenshot in place; the status-driven refresh retries
+        # within four seconds while the pane is working. Falling through to a
+        # text edit here caused the user-visible rich-card layout shift.
+        logger.warning(
+            "rich-media card edit transient failure msg=%s; keeping carrier: %s",
+            state.msg_id,
+            exc,
+        )
+        return True
 
     if uploaded_new_pane:
         new_file_id = rich.extract_rich_photo_file_id(result)

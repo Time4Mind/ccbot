@@ -100,15 +100,38 @@ def _format_tool_content(tool_name: str, args: str, content: str) -> str:
     return content
 
 
-def _build_tool_spoiler_body(tool_name: str, args: str, content: str) -> str:
+def _bounded_tool_block(text: str, max_lines: int, max_chars: int = 70) -> str:
+    """Keep one command/result block within the phone-readable budget."""
+    if not text:
+        return ""
+    lines = text.splitlines() or [text]
+    bounded = [
+        line if len(line) <= max_chars else line[: max_chars - 1] + "…"
+        for line in lines
+    ]
+    if len(bounded) > max_lines:
+        hidden = len(bounded) - max_lines + 1
+        bounded = bounded[: max_lines - 1] + [f"… (+{hidden} more lines)"]
+    return "\n".join(bounded)
+
+
+def _build_tool_spoiler_body(
+    tool_name: str,
+    args: str,
+    content: str,
+    *,
+    max_lines: int = 7,
+) -> str:
     """Assemble the spoiler body for a tool event — args first
     (highlighted), then content (highlighted when it's code)."""
     parts: list[str] = []
-    if args:
-        parts.append(_format_tool_args(tool_name, args))
-    if content:
-        parts.append(_format_tool_content(tool_name, args, content))
-    return "\n".join(parts)
+    bounded_args = _bounded_tool_block(args, max_lines)
+    bounded_content = _bounded_tool_block(content, max_lines)
+    if bounded_args:
+        parts.append(_format_tool_args(tool_name, bounded_args))
+    if bounded_content:
+        parts.append(_format_tool_content(tool_name, args, bounded_content))
+    return "\n- - -\n".join(parts)
 
 
 def _spoiler_body(body: str) -> str:
@@ -127,20 +150,22 @@ def _spoiler_body(body: str) -> str:
     return format_expandable_quote(trimmed)
 
 
-def _headed_block(head: str, body: str) -> str:
+def _headed_block(head: str, body: str, *, trim_body: bool = True) -> str:
     """Return ``head`` if there's no body, else wrap ``(head, body)``
     in the ``EXPANDABLE_HEADED`` sentinel so the rich renderer makes
     ``head`` the spoiler label and ``body`` the collapsible content
     (without repeating the head)."""
     from ..transcript_format import format_expandable_with_head
 
-    trimmed = _trimmed_body(body)
+    trimmed = _trimmed_body(body) if trim_body else body
     if not trimmed:
         return head
     return format_expandable_with_head(head, trimmed)
 
 
-def render_event(event: Event, *, in_flight: bool, now: float) -> str:
+def render_event(
+    event: Event, *, in_flight: bool, now: float, spoiler_max_lines: int = 7
+) -> str:
     """Render one Event as a plain-text block for the card."""
     # Build the trailing time-or-elapsed marker
     if in_flight:
@@ -163,11 +188,27 @@ def render_event(event: Event, *, in_flight: bool, now: float) -> str:
             glyph = "▷"
         else:
             glyph = "✓"
+        if event.tool_args or event.tool_content:
+            body = _build_tool_spoiler_body(
+                event.tool_name or event.text,
+                event.tool_args,
+                event.tool_content,
+                max_lines=spoiler_max_lines,
+            )
+            return _headed_block(f"{glyph} {event.text}{marker}", body, trim_body=False)
         return _headed_block(f"{glyph} {event.text}{marker}", event.body)
 
     if event.type == "tool_result":
         # Fallback when the matching tool_use Event isn't found (parser
         # race / restart). Render as a standalone row.
+        if event.tool_args or event.tool_content:
+            body = _build_tool_spoiler_body(
+                event.tool_name or event.text,
+                event.tool_args,
+                event.tool_content,
+                max_lines=spoiler_max_lines,
+            )
+            return _headed_block(f"✓ {event.text}{marker}", body, trim_body=False)
         return _headed_block(f"✓ {event.text}{marker}", event.body)
 
     if event.type in ("text", "final_text", "error"):

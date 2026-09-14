@@ -94,6 +94,21 @@ class TestSyntaxHighlightedToolBody:
         assert "total 8\nfoo.py" in out
         assert out.count("```") == 2  # only the bash fence
 
+    def test_command_and_result_have_independent_bounded_blocks(self) -> None:
+        from ccbot.handlers.card_model import _build_tool_spoiler_body
+
+        command = "x" * 90
+        result = "\n".join(f"result-{i}" for i in range(6))
+        out = _build_tool_spoiler_body("Bash", command, result, max_lines=3)
+
+        command_block, result_block = out.split("\n- - -\n")
+        assert command_block == f"```bash\n{'x' * 69}…\n```"
+        assert result_block.splitlines() == [
+            "result-0",
+            "result-1",
+            "… (+4 more lines)",
+        ]
+
     def test_read_content_picks_language_from_path_extension(self) -> None:
         from ccbot.handlers.card_model import _build_tool_spoiler_body
 

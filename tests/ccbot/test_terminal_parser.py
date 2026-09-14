@@ -16,6 +16,19 @@ from ccbot.terminal_parser import (
 
 
 class TestParseStatusLine:
+    def test_codex_background_terminal_status_without_chrome(self) -> None:
+        pane = (
+            "tool output\n\n"
+            "• Working (9m 57s • esc to interrupt) · "
+            "1 background terminal running · /ps to inspect\n\n"
+            "› Ask Codex to do anything\n\n"
+            "gpt-5.6-sol medium · ~/repo · session · Main"
+        )
+        assert parse_status_line(pane) == (
+            "Working (9m 57s • esc to interrupt) · "
+            "1 background terminal running · /ps to inspect"
+        )
+
     @pytest.mark.parametrize(
         ("spinner", "rest", "expected"),
         [

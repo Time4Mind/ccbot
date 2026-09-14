@@ -402,6 +402,36 @@ async def test_lost_rich_carrier_is_released(
 
 
 @pytest.mark.asyncio
+async def test_transient_rich_edit_failure_keeps_screenshot_carrier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire_session(monkeypatch)
+    monkeypatch.setattr(
+        card_rich_media.rich,
+        "edit_rich_message",
+        AsyncMock(side_effect=OSError("temporary read failure")),
+    )
+    state = CardState(
+        msg_id=9,
+        is_rich_media_msg=True,
+        rich_media_file_id="cached-pane",
+        last_photo_edit_ts=1.0,
+    )
+
+    assert await card_rich_media.edit_rich_media_card(
+        SimpleNamespace(),
+        42,
+        state,
+        text="next",
+        reply_markup=None,
+        min_photo_interval=2.5,
+        refresh_pane=False,
+    )
+    assert state.msg_id == 9
+    assert state.is_rich_media_msg is True
+
+
+@pytest.mark.asyncio
 async def test_final_edit_keeps_latest_rich_pane_media(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

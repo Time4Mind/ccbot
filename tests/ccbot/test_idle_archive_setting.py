@@ -65,6 +65,31 @@ async def test_idle_archive_callback_persists_selected_hours() -> None:
 
 
 @pytest.mark.asyncio
+async def test_spoiler_line_callback_persists_selected_limit() -> None:
+    query = MagicMock(data="st:spl:20", message=None)
+    query.answer = AsyncMock()
+    context = MagicMock()
+    user = SimpleNamespace(id=42)
+
+    with (
+        patch.object(
+            settings_callback.session_manager, "update_user_setting"
+        ) as update,
+        patch.object(settings_callback, "safe_edit", new=AsyncMock()),
+        patch.object(
+            settings_callback,
+            "render_settings_group_text",
+            return_value="settings",
+        ),
+        patch.object(settings_callback, "build_footer_keyboard", return_value=None),
+    ):
+        handled = await settings_callback.handle(query, context, user)
+
+    assert handled is True
+    update.assert_called_once_with(42, "spoiler_block_lines", 20)
+
+
+@pytest.mark.asyncio
 async def test_idle_archive_sweep_uses_user_setting() -> None:
     with (
         patch.object(

@@ -14,6 +14,7 @@ from telegram.ext import ContextTypes
 
 from ..codex_auth import get_flow
 from ..handlers.notifications import (
+    get_card_state,
     lookup_session_for_message,
     schedule_card_after_message,
 )
@@ -85,6 +86,10 @@ def _enqueue(
     )
     sess = session_manager.find_session_by_window(wid)
     if sess is not None:
+        if kind == "voice":
+            state = get_card_state(user.id, sess)
+            state.voice_pending = True
+            state.current_page_idx = None
         schedule_card_after_message(
             context.bot,
             user.id,

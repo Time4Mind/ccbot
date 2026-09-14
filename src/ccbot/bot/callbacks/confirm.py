@@ -24,7 +24,7 @@ from ...handlers.callback_data import (
 )
 from ...i18n import t
 from ...session import session_manager
-from .._common import open_more_in_place
+from .._common import open_more_in_place, open_sessions_in_place
 from ..commands.lifecycle import archive_session
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ async def handle(
             await query.answer(t(user.id, "toast.already_gone"), show_alert=False)
             return True
         await archive_session(user.id, context.bot, sess, completed=False)
-        await open_more_in_place(query, user.id)
+        await open_sessions_in_place(query, context.bot, user.id)
         await query.answer(t(user.id, "toast.killed"))
         return True
 
@@ -60,7 +60,7 @@ async def handle(
             await query.answer("Not live", show_alert=False)
             return True
         await archive_session(user.id, context.bot, sess, completed=True)
-        await open_more_in_place(query, user.id)
+        await open_sessions_in_place(query, context.bot, user.id)
         await query.answer(t(user.id, "toast.done"))
         return True
 

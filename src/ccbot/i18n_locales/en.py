@@ -308,6 +308,13 @@ EN: dict[str, str] = {
         "Smaller = compact phone view. Larger = more context per page "
         "but heavier message edits."
     ),
+    "settings.group.spoiler_block_lines": "Command/result lines",
+    "settings.spoiler_lines.body": (
+        "*Command/result lines*\n\n"
+        "Maximum visible lines in each tool spoiler block. The command and "
+        "result each receive the selected limit independently; every line is "
+        "limited to 70 characters."
+    ),
     "screens.on": "on",
     "screens.off": "off",
     # Bg notifications (Task #42) — three independent toggles.

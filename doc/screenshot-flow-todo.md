@@ -1,8 +1,9 @@
 # Screenshot flow - agreed target and implementation TODO
 
 Status: the agreed screenshot flow and its cached-switching follow-up are
-implemented. The Tier 0 findings below were diagnosed and have local regression
-fixes; production acceptance is pending.
+implemented. The active-pane freshness, fixed-palette colour correction, and
+background-terminal state below have a local candidate; production acceptance
+is pending.
 
 ## Tier 0 investigations
 
@@ -47,7 +48,8 @@ fixes; production acceptance is pending.
 | Screenshot button configured visible | The row contains `🧑‍💻 Скрин`. Its label has no on/off suffix or state marker. |
 | Tap `Скрин` while globally off | Enable screenshots globally for every session and immediately repaint the same active-card carrier with the current pane image. Keep Options expanded. |
 | Tap `Скрин` while globally on | Disable screenshots globally and immediately remove the image from the same carrier. Keep Options expanded. |
-| Screenshot enabled, session running | Refresh the image only as part of normal active-card updates; do not emit screenshot-only Telegram messages. |
+| Screenshot enabled, session running | Refresh in the same carrier on normal card events and, while the Codex pane reports active work, at most once per 4 seconds. Never emit a separate screenshot message. |
+| Parent answer is final but a Codex background terminal is still running | Keep the session unfinished, show `Working · N background terminal(s) running`, keep the busy controls, and continue same-carrier screenshot refreshes. |
 | Screenshot enabled, turn becomes idle | Keep the latest screenshot in the active card. |
 | Active session emits a final answer | Freeze the old carrier on its currently open page and remove its buttons. Create the final-answer card as a new message with `✅` before the session icon; the first later card update removes the check. |
 | User opens menu/settings/archive/new-session flow or switches away | The former active session becomes background. Its terminal changes must not repaint the visible non-session surface. |
@@ -157,6 +159,9 @@ Add the bounded behavior proven in Bria:
   fits;
 - implement deterministic full-color, full-size eight-color, and 75%
   eight-color profiles.
+- Quantize eight-colour profiles against a fixed terminal palette. Do not use
+  a content-adaptive palette that can tint a pane brown/sepia when warm colours
+  dominate a frame.
 
 An invalid/empty capture or render failure must not block the text/keyboard
 card update.
@@ -177,9 +182,10 @@ card update.
 - Changing capture limit or image profile must prevent stale PNG/file-ID reuse.
 - A concurrent render for an obsolete session/profile/state must not overwrite
   the current cache.
-- When Rich Media is disabled, unsupported, rejected, or temporarily fails,
-  keep/edit the same text-only card. Retry adding the screenshot on a later
-  ordinary card update.
+- When Rich Media is disabled or unsupported, keep/edit the same text-only
+  card. On a transient network/read failure of an existing rich carrier, keep
+  its last confirmed screenshot and retry on the status-driven refresh or next
+  ordinary card update; do not downgrade and shift the layout.
 - `RetryAfter` remains transport backpressure and must not select another
   carrier type.
 - Lost-message recovery remains the existing card-carrier concern; it is not a
@@ -237,7 +243,11 @@ Automated acceptance must cover at least:
 - global screenshot toggle across two sessions;
 - terminal action scoped to only the selected active session;
 - same `message_id` when screenshot is enabled/disabled/refreshed;
-- no screenshot-only notification on a pane-only change;
+- a changing busy pane refreshes its screenshot in the same carrier within the
+  4-second bound and never creates a screenshot-only message;
+- a finalized parent with a running Codex background terminal remains visibly
+  unfinished until that terminal status disappears;
+- eight-colour output uses a stable terminal palette and cannot drift to sepia;
 - screenshot persists after RUNNING -> IDLE;
 - no repaint while menu/settings/archive/new-session surfaces are visible;
 - image placement before context/background blocks;

@@ -6,6 +6,8 @@ Public imports remain in :mod:`ccbot.bot.messages`.
 from __future__ import annotations
 
 import logging
+import html
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, TYPE_CHECKING, cast
 
@@ -27,6 +29,7 @@ from ._common import active_window, is_user_allowed
 __all__ = [
     "_forward_attribution",
     "_hidden_link_urls",
+    "_incoming_rich_text",
     "unsupported_content_handler",
     "_forward_inbox_file",
     "photo_handler",
@@ -43,6 +46,44 @@ if TYPE_CHECKING:
     _send_with_delivery_proof = cast(Any, None)
 
 logger = logging.getLogger(__name__)
+
+
+def _incoming_rich_text(msg: Any) -> str:
+    """Recover Bot API rich-message text unknown to the installed PTB model."""
+    api_kwargs = getattr(msg, "api_kwargs", None)
+    payload = (
+        api_kwargs.get("rich_message") if isinstance(api_kwargs, Mapping) else None
+    )
+    if not isinstance(payload, Mapping):
+        return ""
+    markdown = payload.get("markdown")
+    if isinstance(markdown, str) and markdown.strip():
+        return html.unescape(markdown).strip()
+
+    def flatten(node: Any) -> list[str]:
+        if isinstance(node, str):
+            return [html.unescape(node).strip()] if node.strip() else []
+        if isinstance(node, list):
+            out: list[str] = []
+            for item in node:
+                out.extend(flatten(item))
+            return out
+        if not isinstance(node, Mapping):
+            return []
+        for key in ("text", "title"):
+            value = node.get(key)
+            if isinstance(value, str) and value.strip():
+                return [html.unescape(value).strip()]
+            if isinstance(value, (dict, list)):
+                nested = flatten(value)
+                if nested:
+                    return nested
+        out = []
+        for key in ("blocks", "items", "children", "content", "rows", "cells"):
+            out.extend(flatten(node.get(key)))
+        return out
+
+    return "\n".join(flatten(payload.get("blocks"))).strip()
 
 
 def _forward_attribution(msg: Any) -> str:
@@ -139,6 +180,8 @@ async def unsupported_content_handler(
             return False
 
     caption = (msg.caption or "").strip()
+    if not caption:
+        caption = _incoming_rich_text(msg)
     if caption:
         wid = pinned_wid or active_window(user.id)
         if wid is None:

@@ -263,8 +263,17 @@ def _render_card(
     # _trim_page_events keeps anchor + tail; the dropped events become
     # genuinely inaccessible (no prior sub-page covers them), so the
     # marker phrasing acknowledges that.
-    page_events = _trim_page_events(pages[idx], line_budget)
-    body = render_page(page_events, now=time.time())
+    from .card_pagination import resolve_spoiler_line_budget
+
+    spoiler_lines = resolve_spoiler_line_budget(user_id)
+    page_events = _trim_page_events(
+        pages[idx], line_budget, spoiler_max_lines=spoiler_lines
+    )
+    body = render_page(
+        page_events,
+        now=time.time(),
+        spoiler_max_lines=spoiler_lines,
+    )
     if len(page_events) < len(pages[idx]):
         dropped = len(pages[idx]) - len(page_events)
         body = f"… (+{dropped} events trimmed to fit)\n{body}"
@@ -279,6 +288,9 @@ def _render_card(
             now=time.time(),
         )
         body = _EVENT_JOINER.join(part for part in (body, pending_row) if part)
+    if state.pane_status:
+        working_row = f"• {state.pane_status}"
+        body = _EVENT_JOINER.join(part for part in (body, working_row) if part)
 
     parts = [header, "─────"]
     if body:

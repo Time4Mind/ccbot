@@ -63,6 +63,10 @@ async def test_directory_browser_exit_is_back_to_active_card(tmp_path) -> None:
         if button.callback_data == CB_DIR_CANCEL
     )
     assert exit_button.text == t(42, "btn.back")
+    assert keyboard.inline_keyboard[-1] == (exit_button,)
+    assert any(
+        button.callback_data == CB_DIR_CREATE for button in keyboard.inline_keyboard[-2]
+    )
 
 
 @pytest.mark.asyncio

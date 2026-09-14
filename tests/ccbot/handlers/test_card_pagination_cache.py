@@ -31,9 +31,9 @@ def test_stream_append_reuses_completed_prefix(monkeypatch) -> None:
     real_split = card_pagination._split_page_by_budget
     calls: list[list[Event]] = []
 
-    def recording_split(page: list[Event], budget: int):
+    def recording_split(page: list[Event], budget: int, **kwargs: object):
         calls.append(page)
-        return real_split(page, budget)
+        return real_split(page, budget, **kwargs)
 
     monkeypatch.setattr(card_pagination, "_split_page_by_budget", recording_split)
     first = card_pagination.paginate_events_for_card(state, None)
@@ -60,10 +60,10 @@ def test_new_answer_rebuilds_prefix_once(monkeypatch) -> None:
     real_split = card_pagination._split_page_by_budget
     calls = 0
 
-    def recording_split(page: list[Event], budget: int):
+    def recording_split(page: list[Event], budget: int, **kwargs: object):
         nonlocal calls
         calls += 1
-        return real_split(page, budget)
+        return real_split(page, budget, **kwargs)
 
     monkeypatch.setattr(card_pagination, "_split_page_by_budget", recording_split)
     state.events.append(_event("answer three", page_break=True))

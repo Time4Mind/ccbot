@@ -11,7 +11,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ccbot.handlers.status_polling import status_poll_loop, update_status_message
+from ccbot.handlers.status_polling import (
+    _drive_typing_indicator,
+    status_poll_loop,
+    update_status_message,
+)
+from ccbot.handlers.card_types import CardState, Event, TurnPhase
+from ccbot.handlers.card_pagination import _card_is_busy
 from ccbot.tmux_manager import TmuxWindow
 
 
@@ -154,7 +160,46 @@ async def test_pre_resolved_window_skips_second_tmux_lookup(mock_bot: AsyncMock)
         )
 
         mock_tmux.find_window_by_id.assert_not_awaited()
-        mock_tmux.capture_pane.assert_awaited_once_with(window_id)
+    mock_tmux.capture_pane.assert_awaited_once_with(window_id)
+
+
+@pytest.mark.asyncio
+async def test_codex_background_terminal_reopens_working_surface(monkeypatch) -> None:
+    from ccbot.handlers import status_polling
+
+    sess = SimpleNamespace(id="s1", window_id="@1")
+    state = CardState(
+        msg_id=9,
+        events=[Event(type="final_text", text="parent done", started_at=1.0)],
+        turn_phase=TurnPhase.IDLE,
+    )
+    pane = (
+        "• Working (9m 57s • esc to interrupt) · "
+        "1 background terminal running · /ps to inspect"
+    )
+    bot = object()
+    refresh = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        status_polling, "get_card_state", lambda *_a: state, raising=False
+    )
+    monkeypatch.setattr(status_polling, "is_card_in_menu_view", lambda *_a: False)
+    monkeypatch.setattr(status_polling, "is_card_busy", lambda *_a: False)
+    monkeypatch.setattr(status_polling, "is_card_finalized", lambda *_a: True)
+    monkeypatch.setattr(status_polling, "maybe_finalize_stalled", AsyncMock())
+    monkeypatch.setattr(status_polling, "refresh_panel", refresh)
+    monkeypatch.setattr(status_polling, "fire_typing", AsyncMock())
+    monkeypatch.setattr(status_polling, "is_interactive_ui", lambda _p: False)
+    monkeypatch.setattr(status_polling, "get_interactive_window", lambda _u: None)
+    status_polling._pane_status_cache.clear()
+
+    await _drive_typing_indicator(bot, 42, "@1", pane, sess, False)
+
+    assert state.turn_phase is TurnPhase.RUNNING
+    assert state.pane_status == "Working · 1 background terminal running"
+    assert _card_is_busy(state) is True
+    refresh.assert_awaited_once_with(
+        bot, 42, immediate=True, refresh_keyboard=True, refresh_pane=True
+    )
 
 
 @pytest.mark.asyncio

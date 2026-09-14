@@ -17,6 +17,7 @@ from ..handlers.notifications import (
     lookup_session_for_message,
     schedule_card_after_message,
 )
+from ..handlers.directory_browser import STATE_KEY, STATE_NAMING_DIRECTORY
 from ..inbound_queue import InboundProcessor, enqueue_inbound
 from ..session import session_manager
 from ._common import active_window, is_user_allowed
@@ -97,6 +98,11 @@ async def text_intake_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> bool:
     user = update.effective_user
+    state = context.user_data.get(STATE_KEY) if context.user_data else None
+    if state == STATE_NAMING_DIRECTORY:
+        # Folder names are control-plane input. Do not pin them to the active
+        # session or schedule its card below the directory browser.
+        return await text_handler(update, context)
     if user is not None and get_flow(user.id) is not None:
         return await text_handler(update, context)
     target_wid = None

@@ -12,7 +12,11 @@ from pathlib import Path
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from ...handlers.archive import DEFAULT_LOOKBACK_SECONDS, build_archive_page
+from ...handlers.archive import (
+    DEFAULT_LOOKBACK_SECONDS,
+    archive_or_delete_session,
+    build_archive_page,
+)
 from ...handlers.callback_data import (
     CB_CONF_DONE_NO,
     CB_CONF_DONE_YES,
@@ -148,7 +152,7 @@ async def archive_session(
     the matching CB_CONF_*_YES callback paths.
     """
     await teardown_session_runtime(user_id, sess, bot)
-    session_manager.mark_session_archived(sess.id, completed=completed)
+    await archive_or_delete_session(sess, completed=completed)
 
 
 async def kill_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -93,6 +93,54 @@ async def test_directory_name_bypasses_agent_startup_queue() -> None:
 
 
 @pytest.mark.asyncio
+async def test_voice_remains_queued_while_directory_is_being_named() -> None:
+    context = MagicMock()
+    context.user_data = {"state": "naming_directory"}
+    begin_startup_queue(42)
+
+    with pytest.raises(ApplicationHandlerStop):
+        await capture_startup_message(_update(10, voice=True), context)
+
+    assert pending_startup_count(42) == 1
+
+
+@pytest.mark.asyncio
+async def test_queued_directory_flow_voice_replays_into_created_session() -> None:
+    context = MagicMock()
+    context.user_data = {"state": "naming_directory"}
+    begin_startup_queue(42)
+    voice = _update(10, voice=True)
+    with pytest.raises(ApplicationHandlerStop):
+        await capture_startup_message(voice, context)
+    sess = SimpleNamespace(id="fresh")
+
+    with (
+        patch(
+            "ccbot.session.session_manager.wait_for_window_ready",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "ccbot.session.session_manager.find_session_by_window",
+            return_value=sess,
+        ),
+        patch(
+            "ccbot.handlers.notifications.schedule_card_after_message",
+        ),
+        patch(
+            "ccbot.startup_queue._replay", new=AsyncMock(return_value=True)
+        ) as replay,
+    ):
+        task = bind_startup_queue(42, "@new")
+        assert task is not None
+        await task
+
+    replay.assert_awaited_once()
+    assert replay.await_args.args[0].update is voice
+    assert replay.await_args.args[1] == "@new"
+    assert not has_startup_queue(42)
+
+
+@pytest.mark.asyncio
 async def test_drain_includes_messages_arriving_while_window_becomes_ready() -> None:
     context = MagicMock()
     begin_startup_queue(42)

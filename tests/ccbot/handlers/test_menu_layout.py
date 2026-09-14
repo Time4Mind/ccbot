@@ -12,6 +12,7 @@ from ccbot.bot.callbacks import footer
 from ccbot.handlers import menu
 from ccbot.handlers.callback_data import (
     CB_FT_CLEAR,
+    CB_FT_KILL,
     CB_FT_MORE,
     CB_FT_OPTIONS,
     CB_FT_STOP,
@@ -63,6 +64,23 @@ def test_options_replaces_shot_terminal_and_clear_on_live_card(monkeypatch) -> N
     assert CB_FT_CLEAR not in callbacks
     assert CB_MM_SHOT not in callbacks
     assert CB_FT_TERM not in callbacks
+
+
+def test_idle_session_close_button_uses_cross_without_changing_callback(
+    monkeypatch,
+) -> None:
+    _patch_active(monkeypatch, terminal=True)
+
+    keyboard = menu.build_footer_keyboard(42, screen="main", is_busy=False)
+    assert keyboard is not None
+    close = next(
+        button
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.callback_data == CB_FT_KILL
+    )
+
+    assert close.text == "✕ Закрыть"
 
 
 def test_options_discloses_actions_directly_above_sessions(monkeypatch) -> None:

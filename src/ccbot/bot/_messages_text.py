@@ -49,6 +49,7 @@ from ..handlers.card_types import TurnPhase
 from ..handlers.typing import fire_typing
 from ..markdown_v2 import convert_markdown
 from ..naming import maybe_auto_name
+from ..i18n import t
 from ..session import session_manager
 from ..terminal_parser import (
     extract_bash_output,
@@ -445,18 +446,6 @@ async def text_handler(
         return False
 
     text = update.message.text
-    queued_wid = pinned_wid or active_window(user.id)
-    if queued_wid is not None:
-        if pinned_wid is None and not await _await_prior_voice(user.id, queued_wid):
-            return False
-
-    # A pending /login flow owns the next message: it's the OAuth code, not a
-    # prompt. Must run before session routing — the code would otherwise be
-    # typed into a pane (and echoed into that session's transcript).
-    if await maybe_consume_code(update, context):
-        return True
-
-    # Ignore text while a picker UI is mid-flight.
     state = context.user_data.get(STATE_KEY) if context.user_data else None
     if state == STATE_NAMING_DIRECTORY:
         current_path = (
@@ -472,19 +461,24 @@ async def text_handler(
             or "\\" in name
             or "\x00" in name
         ):
-            await safe_reply(update.message, "Некорректное имя папки. Введите одно имя без слешей.")
+            await safe_reply(
+                update.message, "Некорректное имя папки. Введите одно имя без слешей."
+            )
             return True
         target = (Path(current_path) / name).resolve()
         if target.parent != Path(current_path).resolve():
             await safe_reply(update.message, "Некорректное имя папки.")
             return True
+        existed = False
         try:
             target.mkdir()
         except FileExistsError:
-            await safe_reply(update.message, "Такая папка уже существует.")
-            return True
+            if not target.is_dir():
+                await safe_reply(update.message, t(user.id, "dir.create.failed"))
+                return True
+            existed = True
         except OSError:
-            await safe_reply(update.message, "Не удалось создать папку.")
+            await safe_reply(update.message, t(user.id, "dir.create.failed"))
             return True
         msg_text, keyboard, subdirs = await build_directory_browser(
             str(target), user_id=user.id
@@ -494,8 +488,26 @@ async def text_handler(
             context.user_data[BROWSE_PATH_KEY] = str(target)
             context.user_data[BROWSE_PAGE_KEY] = 0
             context.user_data[BROWSE_DIRS_KEY] = subdirs
-        await safe_reply(update.message, msg_text, reply_markup=keyboard)
+        notice_key = "dir.create.exists" if existed else "dir.create.created"
+        await safe_reply(
+            update.message,
+            f"{t(user.id, notice_key)}\n\n{msg_text}",
+            reply_markup=keyboard,
+        )
         return True
+
+    queued_wid = pinned_wid or active_window(user.id)
+    if queued_wid is not None:
+        if pinned_wid is None and not await _await_prior_voice(user.id, queued_wid):
+            return False
+
+    # A pending /login flow owns the next message: it's the OAuth code, not a
+    # prompt. Must run before session routing — the code would otherwise be
+    # typed into a pane (and echoed into that session's transcript).
+    if await maybe_consume_code(update, context):
+        return True
+
+    # Ignore text while a picker UI is mid-flight.
     if state in (
         STATE_SELECTING_WINDOW,
         STATE_BROWSING_DIRECTORY,

@@ -21,7 +21,7 @@ EN: dict[str, str] = {
     "voice.queued_dropped": "Messages sent after it didn't reach the session either.",
     # Footer buttons
     "btn.stop": "⏹ Stop",
-    "btn.kill": "💀 Kill",
+    "btn.kill": "✕ Close",
     "btn.menu": "≡ Menu",
     "btn.options": "⋯ Options",
     "btn.term": "🖥 Term",
@@ -181,6 +181,9 @@ EN: dict[str, str] = {
     "dir.btn.select": "Select",
     "dir.btn.create": "Create folder",
     "dir.create.prompt": "{path}\n\nEnter one new folder name without slashes.",
+    "dir.create.created": "Folder created.",
+    "dir.create.exists": "Folder already exists - opening it.",
+    "dir.create.failed": "Could not create folder.",
     # Session picker
     "picker.title": "*Resume Session?*",
     "picker.summary": "page {page}/{pages} — {total} session(s) in this directory.",

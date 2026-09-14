@@ -196,6 +196,46 @@ async def _archive_blurb(sess: Session, user_id: int | None = None) -> str:
     return fallback
 
 
+async def _archive_context_status(sess: Session) -> bool | None:
+    """Return whether a session has user context, or None if unreadable."""
+    if not sess.claude_session_id:
+        return False
+    fp = build_session_file_path(sess.claude_session_id, sess.workdir)
+    if fp is None or not fp.exists():
+        return None
+    return bool((await _collect_user_messages(sess)).strip())
+
+
+async def archive_or_delete_session(sess: Session, *, completed: bool) -> bool:
+    """Archive resumable sessions and discard proven-empty shells.
+
+    Returns True when an archive record remains, False when an empty record
+    was removed. Missing transcripts are preserved because absence of local
+    evidence is not proof that the provider session is empty.
+    """
+    has_context = await _archive_context_status(sess)
+    if has_context is False:
+        deleted = session_manager.delete_session(sess.id)
+        if deleted:
+            logger.info("Deleted empty session instead of archiving: %s", sess.id)
+        return False
+    session_manager.mark_session_archived(sess.id, completed=completed)
+    return True
+
+
+async def purge_empty_archive_records() -> list[str]:
+    """Delete terminal session records whose empty context is proven."""
+    deleted: list[str] = []
+    for sess in list(session_manager.list_archived()):
+        if await _archive_context_status(sess) is not False:
+            continue
+        if session_manager.delete_session(sess.id):
+            deleted.append(sess.id)
+    if deleted:
+        logger.info("Deleted %d empty archive record(s): %s", len(deleted), deleted)
+    return deleted
+
+
 def _format_age(user_id: int, ts: float, now: float | None = None) -> str:
     """Compact human age (``5m``, ``3h``, ``2d``) with localized ``ago`` suffix."""
     if not ts:
@@ -510,8 +550,8 @@ async def idle_archive_sweep(bot: Bot, user_id: int) -> int:
     archived = 0
     for sess in candidates:
         await teardown_session_runtime(user_id, sess, bot)
-        session_manager.mark_session_archived(sess.id, completed=False)
-        archived += 1
+        if await archive_or_delete_session(sess, completed=False):
+            archived += 1
     if archived:
         logger.info("Archived %d idle sessions", archived)
     return archived

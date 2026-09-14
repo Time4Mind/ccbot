@@ -1,4 +1,4 @@
-"""Bot API 10.2 rich-message calls (sendRichMessage / rich editMessageText).
+"""Bot API 10.3 rich-message calls (sendRichMessage / rich editMessageText).
 
 PTB 22.x wraps Bot API 10.0, so rich messages go through the raw
 ``Bot._post`` escape hatch until PTB ships native support; ``ExtBot``
@@ -34,6 +34,7 @@ from .transcript_format import (
     EXPANDABLE_QUOTE_END,
     EXPANDABLE_QUOTE_START,
 )
+from .file_actions import add_file_buttons
 
 # Rich messages cap (Bot API 10.2): 32768 UTF-8 chars of text.
 RICH_MAX_CHARS = 32768
@@ -94,7 +95,7 @@ _ALLOWED_TAG_RE = re.compile(
     r"</?(?:"
     r"b|strong|i|em|u|ins|s|strike|del|code|pre|mark|sub|sup"
     r"|tg-spoiler|tg-emoji|tg-time|tg-math|tg-math-block"
-    r"|tg-collage|tg-slideshow|tg-map|tg-reference"
+    r"|tg-collage|tg-slideshow|tg-map|tg-reference|tg-button|tg-button-row"
     r"|a|img|video|audio|figure|figcaption|cite|aside"
     r"|details|summary|blockquote|footer"
     r"|h[1-6]|p|ul|ol|li|table|tr|th|td|caption|br|hr"
@@ -300,6 +301,7 @@ def _render_details_headed(m: re.Match[str]) -> str:
 
 def to_rich_markdown(text: str) -> str:
     """Convert internal markdown to Rich Markdown for ``sendRichMessage``."""
+    text = add_file_buttons(text)
     text = _inline_single_line_fences(text)
     text = _ensure_blank_before_tables(text)
     text = _escape_outside_code(text)

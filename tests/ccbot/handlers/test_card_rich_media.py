@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from telegram.error import BadRequest
@@ -12,6 +12,7 @@ from ccbot.config import config
 from ccbot.handlers import card_rich_media, card_transport, message_sender
 from ccbot.handlers.card_model import CardState
 from ccbot.handlers.card_types import TurnPhase
+from ccbot.session_models import Session
 
 
 @pytest.mark.asyncio
@@ -75,6 +76,31 @@ def _wire_session(monkeypatch: pytest.MonkeyPatch) -> None:
         "get_session",
         lambda _sid: SimpleNamespace(window_id="ccbot:1"),
     )
+
+
+def test_confirmed_screenshot_cache_is_persisted_per_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sess = Session(id="s1", name="one")
+    save = MagicMock()
+    monkeypatch.setattr(card_rich_media.session_manager, "save_state", save)
+    monkeypatch.setattr(card_rich_media.time, "time", lambda: 123.5)
+
+    monkeypatch.setattr(
+        card_rich_media.session_manager,
+        "get_user_settings",
+        lambda _uid: {"screenshot_capture_kib": 64, "screenshot_profile": "compact8"},
+    )
+
+    card_rich_media.persist_session_screenshot(sess, 42, "pane-hash", "photo-id")
+
+    assert sess.screenshot_file_id == "photo-id"
+    assert sess.screenshot_pane_hash == "pane-hash"
+    assert sess.screenshot_cached_at == 123.5
+    assert sess.screenshot_user_id == 42
+    assert sess.screenshot_capture_kib == 64
+    assert sess.screenshot_profile == "compact8"
+    save.assert_called_once_with()
 
 
 @pytest.mark.asyncio

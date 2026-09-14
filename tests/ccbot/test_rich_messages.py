@@ -5,12 +5,15 @@ code spans), expandable-quote → <details> conversion, and the
 rich-first / MarkdownV2-fallback behaviour of safe_send and safe_edit.
 """
 
+import re
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
 from ccbot import rich
+from ccbot.file_actions import resolve_file_button
 from ccbot.config import config
 from ccbot.handlers import message_sender
 from ccbot.transcript_format import format_expandable_quote
@@ -125,6 +128,52 @@ class TestToRichMarkdown:
     def test_expandable_quote_inner_lt_escaped(self) -> None:
         out = rich.to_rich_markdown(format_expandable_quote("a<y>c"))
         assert "a&lt;y>c" in out
+
+    def test_absolute_file_path_becomes_stem_and_extension_button(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "financial.report.xlsx"
+        path.write_text("data", encoding="utf-8")
+
+        out = rich.to_rich_markdown(f"Готово: `{path}`")
+
+        assert str(path) not in out
+        assert "financial.report " in out
+        assert ">xlsx</tg-button>" in out
+        match = re.search(r'data="file:([0-9a-f]+)"', out)
+        assert match is not None
+        assert resolve_file_button(match.group(1)) == path.resolve()
+
+    def test_file_path_with_spaces_is_supported_inside_inline_code(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "weekly report.csv"
+        path.write_text("a,b", encoding="utf-8")
+
+        out = rich.to_rich_markdown(f"`{path}`")
+
+        assert str(path) not in out
+        assert out.startswith("weekly report <tg-button")
+        assert out.endswith(">csv</tg-button>")
+
+    def test_local_markdown_link_becomes_file_button(self, tmp_path: Path) -> None:
+        path = tmp_path / "artifact.pdf"
+        path.write_bytes(b"%PDF")
+
+        out = rich.to_rich_markdown(f"[download]({path})")
+
+        assert str(path) not in out
+        assert out.startswith("artifact <tg-button")
+        assert out.endswith(">pdf</tg-button>")
+
+    def test_file_path_inside_fenced_code_is_not_rewritten(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "script.sh"
+        path.write_text("echo ok", encoding="utf-8")
+        source = f"```text\n{path}\n```"
+
+        assert rich.to_rich_markdown(source) == source
 
 
 class TestSubWrapTables:

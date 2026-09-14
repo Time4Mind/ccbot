@@ -22,7 +22,7 @@ from ccbot.handlers import (
     message_sender,
 )
 from ccbot.handlers.card_binding import bind_carrier, carrier_kind
-from ccbot.handlers.card_model import CardState, CarrierKind, TurnPhase
+from ccbot.handlers.card_model import CardState, CarrierKind, Event, TurnPhase
 
 
 def _assert_text_carrier(state: CardState, *, message_id: int) -> None:
@@ -152,7 +152,12 @@ async def test_finalize_waits_for_in_flight_deferred_edit(
 
     pending = asyncio.create_task(in_flight_edit())
     state.pending_edit = pending
-    final_edit = AsyncMock(return_value=True)
+
+    async def send_final(_bot, _uid, _sess, target, **_kwargs):
+        target.msg_id = 10
+        return True
+
+    final_send = AsyncMock(side_effect=send_final)
     ensure_seeded = AsyncMock(return_value=None)
     monkeypatch.setattr(card_updates, "get_card_state", lambda _uid, _sess: state)
     monkeypatch.setattr(card_updates, "_should_buffer", lambda *_args: False)
@@ -163,7 +168,8 @@ async def test_finalize_waits_for_in_flight_deferred_edit(
             "_ensure_seeded": ensure_seeded,
             "_render_card": lambda *_args, **_kwargs: "rendered final",
             "build_footer_keyboard": lambda *_args, **_kwargs: None,
-            "_edit_card": final_edit,
+            "_send_card": final_send,
+            "_edit_card": AsyncMock(return_value=True),
         }[name],
     )
     session = SimpleNamespace(id="s1", window_id="")
@@ -172,14 +178,66 @@ async def test_finalize_waits_for_in_flight_deferred_edit(
         card_updates.finalize_task(SimpleNamespace(), 42, session, "final answer")
     )
     await asyncio.sleep(0)
-    edited_before_release = final_edit.await_count
+    sent_before_release = final_send.await_count
     release.set()
     await asyncio.gather(pending, finalize, return_exceptions=True)
 
     assert was_cancelled is False
-    assert edited_before_release == 0
-    final_edit.assert_awaited_once()
+    assert sent_before_release == 0
+    final_send.assert_awaited_once()
     assert state.pending_edit is None
+
+
+@pytest.mark.asyncio
+async def test_active_final_answer_spawns_new_card_and_freezes_open_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = CardState(
+        msg_id=9,
+        current_page_idx=0,
+        events=[Event(type="tool_use", text="old page", started_at=1.0)],
+    )
+    bot = SimpleNamespace(
+        edit_message_reply_markup=AsyncMock(return_value=True),
+        delete_message=AsyncMock(return_value=True),
+    )
+    sent: list[str] = []
+
+    async def send_card(_bot, _uid, _sess, target, *, text, reply_markup=None):
+        sent.append(text)
+        target.msg_id = 10
+        return True
+
+    monkeypatch.setattr(card_updates, "get_card_state", lambda _uid, _sess: state)
+    monkeypatch.setattr(card_updates, "_should_buffer", lambda *_args: False)
+    monkeypatch.setattr(
+        card_updates,
+        "_legacy",
+        lambda name: {
+            "_ensure_seeded": AsyncMock(return_value=None),
+            "_render_card": lambda _sess, target, **_kwargs: (
+                "✅ active session"
+                if target.completion_marker_pending
+                else "active session"
+            ),
+            "build_footer_keyboard": lambda *_args, **_kwargs: SimpleNamespace(),
+            "_send_card": send_card,
+            "_edit_card": AsyncMock(return_value=True),
+        }[name],
+    )
+    session = SimpleNamespace(id="s1", window_id="")
+
+    await card_updates.finalize_task(bot, 42, session, "final answer")
+
+    bot.edit_message_reply_markup.assert_awaited_once_with(
+        chat_id=42,
+        message_id=9,
+        reply_markup=None,
+    )
+    bot.delete_message.assert_not_awaited()
+    assert sent == ["✅ active session"]
+    assert state.msg_id == 10
+    assert state.completion_marker_pending is False
 
 
 def test_carrier_rebinding_clears_previous_media_kind(
@@ -206,3 +264,50 @@ def test_carrier_rebinding_clears_previous_media_kind(
         _assert_text_carrier(state, message_id=15)
     finally:
         card_carrier._cards.pop(key, None)
+
+
+def test_switch_uses_target_session_cached_screenshot_not_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = CardState()
+    bind_carrier(
+        source,
+        9,
+        CarrierKind.RICH_MEDIA,
+        rich_media_file_id="source-photo",
+        pane_hash="source-hash",
+        photo_edit_ts=50.0,
+    )
+    target = CardState()
+    target_session = SimpleNamespace(
+        screenshot_file_id="target-photo",
+        screenshot_pane_hash="target-hash",
+        screenshot_cached_at=1000.0,
+        screenshot_user_id=42,
+        screenshot_capture_kib=48,
+        screenshot_profile="full8",
+    )
+    monkeypatch.setattr(
+        card_carrier.session_manager,
+        "get_session",
+        lambda sid: target_session if sid == "to" else None,
+    )
+    monkeypatch.setattr(
+        card_carrier.session_manager, "set_card_msg", lambda *_args: None
+    )
+    monkeypatch.setattr(card_carrier, "_inline_screens_enabled", lambda _uid: True)
+    monkeypatch.setattr(card_carrier.time, "time", lambda: 1005.0)
+    monkeypatch.setattr(card_carrier.time, "monotonic", lambda: 75.0)
+    card_carrier._cards[(42, "from")] = source
+    card_carrier._cards[(42, "to")] = target
+
+    try:
+        card_carrier.transfer_card_to_carrier(42, "from", "to", 9)
+
+        assert carrier_kind(target) is CarrierKind.RICH_MEDIA
+        assert target.rich_media_file_id == "target-photo"
+        assert target.last_pane_hash == "target-hash"
+        assert target.last_photo_edit_ts == 75.0
+    finally:
+        card_carrier._cards.pop((42, "from"), None)
+        card_carrier._cards.pop((42, "to"), None)

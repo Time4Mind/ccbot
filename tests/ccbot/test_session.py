@@ -137,6 +137,13 @@ class TestLocalTerminalSetting:
         assert mgr.get_user_settings(1)["option_button_terminal"] is False
 
 
+class TestLiveLagSetting:
+    def test_legacy_zero_is_read_as_two_seconds(self, mgr: SessionManager) -> None:
+        mgr.user_settings[1] = {"live_lag": 0}
+
+        assert mgr.get_user_settings(1)["live_lag"] == 2
+
+
 class TestIdleArchiveSetting:
     def test_default_is_six_hours(self, mgr: SessionManager) -> None:
         assert mgr.get_user_settings(1).get("session_idle_hours") == 6
@@ -144,6 +151,29 @@ class TestIdleArchiveSetting:
     def test_explicit_value_is_persisted(self, mgr: SessionManager) -> None:
         mgr.update_user_setting(1, "session_idle_hours", 12)
         assert mgr.get_user_settings(1).get("session_idle_hours") == 12
+
+
+def test_archiving_drops_persisted_screenshot_cache(mgr: SessionManager) -> None:
+    sess = Session(
+        id="cached",
+        name="cached",
+        screenshot_file_id="photo-id",
+        screenshot_pane_hash="pane-hash",
+        screenshot_cached_at=123.0,
+        screenshot_user_id=42,
+        screenshot_capture_kib=64,
+        screenshot_profile="compact8",
+    )
+    mgr.sessions[sess.id] = sess
+
+    mgr.mark_session_archived(sess.id)
+
+    assert sess.screenshot_file_id == ""
+    assert sess.screenshot_pane_hash == ""
+    assert sess.screenshot_cached_at == 0.0
+    assert sess.screenshot_user_id == 0
+    assert sess.screenshot_capture_kib == 0
+    assert sess.screenshot_profile == ""
 
 
 class TestGlobalAgentBackend:

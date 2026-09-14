@@ -19,6 +19,7 @@ from .card_model import (
 from .card_types import CarrierKind
 from .card_rich_media import (
     edit_rich_media_card,
+    persist_session_screenshot,
     remember_rich_photo,
     send_rich_media_card,
 )
@@ -154,6 +155,7 @@ async def _send_card_locked(
         photo_edit_ts=sent_photo_ts,
     )
     remember_rich_photo(state, sent_pane_hash, sent_file_id)
+    persist_session_screenshot(sess, user_id, sent_pane_hash, sent_file_id)
     await _strip_stale_switchers(bot, user_id, sent.message_id, sess.id)
     if keyboard is not None:
         session_manager.set_last_switcher_msg(user_id, sent.message_id)

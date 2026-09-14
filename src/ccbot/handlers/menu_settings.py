@@ -178,7 +178,7 @@ def _settings_lag_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
                 _highlight(f"{v}s", cur == v),
                 callback_data=f"{CB_ST_LAG}{v}",
             )
-            for v in (0, 2, 4, 8)
+            for v in (2, 4, 8)
         ],
         [
             InlineKeyboardButton(

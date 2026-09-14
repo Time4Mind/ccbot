@@ -323,7 +323,7 @@ async def handle(
             lag = int(data[len(CB_ST_LAG) :])
         except ValueError:
             lag = 4
-        if lag in (0, 2, 4, 8):
+        if lag in (2, 4, 8):
             session_manager.update_user_setting(user.id, "live_lag", lag)
         screen_name = "settings_lag"
     elif data.startswith(CB_ST_VOICE):

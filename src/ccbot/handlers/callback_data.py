@@ -57,6 +57,9 @@ CB_SW_USE = "sw:"  # sw:<session.id>     — switch active session
 CB_SW_NEW = "swn"  # open directory browser to create a new session
 CB_SW_NOOP = "sw0"  # tap on already-active button (no-op)
 
+# Inline Rich Markdown file buttons use an opaque process-local token.
+CB_FILE_SEND = "file:"
+
 # Footer (always under last bot message)
 CB_FT_STOP = "ft:stop"  # send Escape to active session (busy state)
 CB_FT_KILL = "ft:kill"  # confirm-archive active session (idle state)

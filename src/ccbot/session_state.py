@@ -180,6 +180,12 @@ class SessionStateMixin:
         sess.state = "completed" if completed else "archived"
         sess.archived_at = time.time()
         sess.window_id = ""
+        sess.screenshot_file_id = ""
+        sess.screenshot_pane_hash = ""
+        sess.screenshot_cached_at = 0.0
+        sess.screenshot_user_id = 0
+        sess.screenshot_capture_kib = 0
+        sess.screenshot_profile = ""
         # If this was anyone's active session, auto-pick the
         # previously-active session as the replacement (per user
         # request: "при удалении активной сессии необходимо
@@ -408,6 +414,10 @@ class SessionStateMixin:
         # user picks something on the settings screen.
         if merged.get("local_terminal") == "on":
             merged["local_terminal"] = "auto"
+        # Zero used to disable coalescing. It is no longer offered because it
+        # produces an edit for every event; migrate persisted zero to 2s.
+        if merged.get("live_lag") == 0:
+            merged["live_lag"] = 2
         # Before option visibility had its own key, manual/auto meant that
         # the user expected a Terminal action. Preserve that expectation but
         # never revive the removed automatic-launch behavior.

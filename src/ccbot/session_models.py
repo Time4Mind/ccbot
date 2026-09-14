@@ -113,6 +113,12 @@ class Session:
     backend: str = "claude"
     imported_from_backend: str = ""
     imported_from_session_id: str = ""
+    screenshot_file_id: str = ""
+    screenshot_pane_hash: str = ""
+    screenshot_cached_at: float = 0.0
+    screenshot_user_id: int = 0
+    screenshot_capture_kib: int = 0
+    screenshot_profile: str = ""
 
     @staticmethod
     def new_id() -> str:
@@ -147,6 +153,12 @@ class Session:
             "backend": self.backend,
             "imported_from_backend": self.imported_from_backend,
             "imported_from_session_id": self.imported_from_session_id,
+            "screenshot_file_id": self.screenshot_file_id,
+            "screenshot_pane_hash": self.screenshot_pane_hash,
+            "screenshot_cached_at": self.screenshot_cached_at,
+            "screenshot_user_id": self.screenshot_user_id,
+            "screenshot_capture_kib": self.screenshot_capture_kib,
+            "screenshot_profile": self.screenshot_profile,
         }
 
     @classmethod
@@ -170,4 +182,10 @@ class Session:
             backend=data.get("backend", "claude"),
             imported_from_backend=data.get("imported_from_backend", ""),
             imported_from_session_id=data.get("imported_from_session_id", ""),
+            screenshot_file_id=data.get("screenshot_file_id", ""),
+            screenshot_pane_hash=data.get("screenshot_pane_hash", ""),
+            screenshot_cached_at=float(data.get("screenshot_cached_at", 0.0)),
+            screenshot_user_id=int(data.get("screenshot_user_id", 0)),
+            screenshot_capture_kib=int(data.get("screenshot_capture_kib", 0)),
+            screenshot_profile=data.get("screenshot_profile", ""),
         )

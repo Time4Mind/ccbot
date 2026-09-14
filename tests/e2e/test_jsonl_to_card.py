@@ -104,7 +104,7 @@ async def test_assistant_turn_renders_card(
 
 
 @pytest.mark.asyncio
-async def test_second_turn_edits_existing_card(
+async def test_second_final_turn_spawns_new_card_and_freezes_previous(
     fake_tmux, fake_bot, projects_path, no_card_lag, tmp_path
 ):
     from ccbot.config import config
@@ -147,12 +147,15 @@ async def test_second_turn_edits_existing_card(
     sends_after_first = fake_bot.send_message.call_count
     assert sends_after_first >= 1
 
-    # A second completed turn edits the SAME card msg in place (no new send).
+    # A second completed turn creates a new card and freezes the old one.
     append_jsonl(jsonl, assistant_turn("Second answer."))
     await _run_monitor_cycles(monitor, 1)
 
-    assert fake_bot.edit_message_text.call_count >= 1
-    edit_texts = [e["text"] for e in fake_bot.edits]
-    assert any("Second answer" in t for t in edit_texts), edit_texts
-    # No spurious extra card was spawned for the second turn.
-    assert fake_bot.send_message.call_count == sends_after_first
+    assert fake_bot.send_message.call_count == sends_after_first + 1
+    assert "Second answer" in fake_bot.sent_messages[-1].text
+    assert "✅" in fake_bot.sent_messages[-1].text
+    fake_bot.edit_message_reply_markup.assert_awaited_with(
+        chat_id=USER_ID,
+        message_id=fake_bot.sent_messages[-2].message_id,
+        reply_markup=None,
+    )

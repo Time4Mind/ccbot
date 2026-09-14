@@ -91,6 +91,7 @@ from .card_carrier import (
     release_card_message,
     resume_card_view,
     paint_card_on_carrier,
+    refresh_cached_screenshot,
     restore_card,
     clear_card,
 )
@@ -210,6 +211,7 @@ __all__ = [
     "release_card_message",
     "resume_card_view",
     "paint_card_on_carrier",
+    "refresh_cached_screenshot",
     "restore_card",
     "clear_card",
     "_send_card",

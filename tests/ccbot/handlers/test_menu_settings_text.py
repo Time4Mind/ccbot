@@ -154,6 +154,27 @@ def test_voice_settings_offer_parakeet(monkeypatch: pytest.MonkeyPatch) -> None:
     assert any(value.endswith("parakeet") for value in callbacks)
 
 
+def test_live_lag_settings_no_longer_offer_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        session_manager,
+        "get_user_settings",
+        lambda _uid: {"language": "ru", "live_lag": 2},
+    )
+
+    keyboard = build_footer_keyboard(42, screen="settings_lag")
+    assert keyboard is not None
+    callbacks = [
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.callback_data and button.callback_data.startswith("st:lag:")
+    ]
+
+    assert callbacks == ["st:lag:2", "st:lag:4", "st:lag:8"]
+
+
 def test_options_category_renders_button_visibility_table(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

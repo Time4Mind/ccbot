@@ -1,14 +1,15 @@
 # Screenshot flow - agreed target and implementation TODO
 
-Status: product decisions agreed with Artem on 2026-09-14 (Europe/Moscow).
-Local implementation candidate is complete and test-verified; no commit or
-deployment yet.
+Status: the original agreed flow was merged in PR #217. The 2026-09-14
+follow-up is in local implementation: persistent per-session screenshot cache,
+instant cached switching, and background refresh of stale snapshots. It is not
+committed or deployed yet.
 
 ## Task contract
 
 - Object: terminal screenshots in the Telegram live-session card and the
   composition of the expanded `Options` row.
-- Sources: current ccbot code at `52e65f9`, current Bria code at `c8d541d`,
+- Sources: current ccbot base at `3d91411`, current Bria code at `c8d541d`,
   focused screenshot/rich-media tests in both repositories, and the decisions
   recorded below.
 - Population: all ccbot users and all active Claude/Codex sessions that have a
@@ -37,8 +38,12 @@ deployment yet.
 | Tap `Скрин` while globally on | Disable screenshots globally and immediately remove the image from the same carrier. Keep Options expanded. |
 | Screenshot enabled, session running | Refresh the image only as part of normal active-card updates; do not emit screenshot-only Telegram messages. |
 | Screenshot enabled, turn becomes idle | Keep the latest screenshot in the active card. |
+| Active session emits a final answer | Freeze the old carrier on its currently open page and remove its buttons. Create the final-answer card as a new message with `✅` before the session icon; the first later card update removes the check. |
 | User opens menu/settings/archive/new-session flow or switches away | The former active session becomes background. Its terminal changes must not repaint the visible non-session surface. |
-| User returns to/selects an active session | Render that session's current snapshot in the same carrier when screenshots are globally enabled. |
+| User returns to/selects an active session | Immediately render that session's own cached snapshot in the same carrier when screenshots are globally enabled. Never carry the source session's image across. |
+| Target screenshot cache is at most 10s old | Use it as the completed switch; no synchronous pane capture is needed. |
+| Target screenshot cache is older than 10s | Show it immediately, then capture and replace it in the background if the user is still on that session. |
+| Target has no screenshot cache | Capture once synchronously so the card never shifts through an image-less intermediate layout. |
 | Terminal button configured visible and available | The row contains `🖥 Терминал`; tapping it opens a terminal only for the current active session. It does not enable a global terminal mode. |
 | No configured action is currently available | Do not show an empty Options disclosure. |
 | Session is closed/archived/deleted | Remove all cached PNG bytes and Telegram file IDs owned by that session. |
@@ -154,6 +159,8 @@ card update.
   Telegram.
 - Cache identity includes session, captured snapshot, capture limit, and image
   profile.
+- Persist the newest confirmed `file_id`, PNG digest, and wall-clock timestamp
+  in the session record so restart does not discard the last usable image.
 - Reuse the confirmed `file_id` when the exact PNG is unchanged.
 - Keep a small bounded per-session cache (Bria uses three images per session).
 - Changing capture limit or image profile must prevent stale PNG/file-ID reuse.
@@ -226,6 +233,10 @@ Automated acceptance must cover at least:
 - each capture limit and each image profile;
 - deterministic profile output, byte/dimension caps, and UTF-8-safe trimming;
 - unchanged PNG uses confirmed `file_id` without a multipart re-upload;
+- switching never shows another session's screenshot;
+- a fresh target cache avoids capture; a stale target cache paints first and
+  refreshes asynchronously; a no-cache target captures before its first paint;
+- persisted cache survives a state round-trip and bot restart;
 - limit/profile changes do not reuse stale media;
 - close/archive/delete clears session-owned screenshot cache;
 - Rich failure keeps the same text card; `RetryAfter` remains retryable;
@@ -237,6 +248,8 @@ Local Telegram acceptance must visibly verify:
 1. Open Options on an active session and enable Screenshot.
 2. Observe the image appear in the same message and in the agreed position.
 3. Complete a turn and observe the image remain.
+   The final answer must arrive in a new checked card; the previous card must
+   remain on its open page without buttons.
 4. Open Menu and confirm terminal changes do not overwrite it.
 5. Return to the session, switch sessions, and confirm the global state follows
    while each card uses its own current pane.

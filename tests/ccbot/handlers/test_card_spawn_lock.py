@@ -31,11 +31,17 @@ from ccbot.session_monitor import NewMessage
 
 
 @pytest.fixture(autouse=True)
-def _clear_card_state():
+def _clear_card_state(monkeypatch):
     """Reset module-level state before each test so tests are isolated."""
     _cards.clear()
     _card_locks.clear()
     _repost_intent.clear()
+    # These race tests need an immediate edit seam independent of the
+    # user-facing lag choices (whose minimum is now 2s).
+    monkeypatch.setattr(
+        "ccbot.handlers.card_updates.effective_live_lag",
+        lambda *_args, **_kwargs: 0.0,
+    )
     yield
     _cards.clear()
     _card_locks.clear()
@@ -101,14 +107,6 @@ async def test_concurrent_update_session_card_spawns_once(monkeypatch):
         "get_active_session",
         lambda uid: fake_active,
     )
-    # ``live_lag=0`` forces immediate edit (no coalescing deferral) so
-    # the second path's edit attempt is observable synchronously.
-    monkeypatch.setattr(
-        notifications.session_manager,
-        "get_user_settings",
-        lambda uid: {"live_lag": 0},
-    )
-
     user_id = 42
 
     import asyncio
@@ -157,14 +155,6 @@ async def test_repost_card_race_with_update_spawns_once(monkeypatch):
         "get_active_session",
         lambda uid: fake_active,
     )
-    # ``live_lag=0`` forces immediate edit (no coalescing deferral) so
-    # the second path's edit attempt is observable synchronously.
-    monkeypatch.setattr(
-        notifications.session_manager,
-        "get_user_settings",
-        lambda uid: {"live_lag": 0},
-    )
-
     user_id = 42
     # Seed an existing card so repost_card has an old_msg_id to drop
     state = _cards.setdefault((user_id, sess.id), CardState())
@@ -208,14 +198,6 @@ async def test_serial_calls_still_spawn_then_edit(monkeypatch):
         "get_active_session",
         lambda uid: fake_active,
     )
-    # ``live_lag=0`` forces immediate edit (no coalescing deferral) so
-    # the second path's edit attempt is observable synchronously.
-    monkeypatch.setattr(
-        notifications.session_manager,
-        "get_user_settings",
-        lambda uid: {"live_lag": 0},
-    )
-
     user_id = 42
     await notifications.update_session_card(bot, user_id, sess, _make_msg("a"))
     await notifications.update_session_card(bot, user_id, sess, _make_msg("b"))

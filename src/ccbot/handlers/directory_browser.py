@@ -388,7 +388,7 @@ async def build_directory_browser(
         InlineKeyboardButton(t(user_id, "dir.btn.select"), callback_data=CB_DIR_CONFIRM)
     )
     action_row.append(
-        InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_DIR_CANCEL)
+        InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_DIR_CANCEL)
     )
     buttons.append(action_row)
     buttons.append(
@@ -515,7 +515,7 @@ def build_session_picker(
                 t(user_id, "picker.btn.back_to_dirs"), callback_data=CB_SESSION_BACK
             ),
             InlineKeyboardButton(
-                t(user_id, "btn.menu"), callback_data=CB_SESSION_CANCEL
+                t(user_id, "btn.back"), callback_data=CB_SESSION_CANCEL
             ),
         ]
     )

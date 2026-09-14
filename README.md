@@ -249,6 +249,13 @@ directory browser, you pick the project, and a tmux window with
 the selected agent starts there. Subsequent text in the DM is routed to the
 **active** session.
 
+Opening Menu, New, Archive, or Settings gives that screen exclusive ownership
+of the current card message. The selected session keeps running in the
+background and buffers card updates until its card is shown again. Back from
+the new-session flow returns directly to that card; confirming a directory
+atomically turns the same message into the new session's card while the agent
+continues starting asynchronously.
+
 Directory rows paint immediately from cached or shallow filesystem/Git
 metadata. One background pass computes nested-content recency for every
 visited directory at once; generated dependency/cache trees are ignored.
@@ -293,8 +300,9 @@ stay in the footer.
 
 ### Background sessions
 
-Background (non-active) sessions have **no live card of their own** —
-they never edit a card or surface an AskUserQuestion prompt in chat.
+Background sessions, including the selected session while a non-card screen is
+open, have **no writable live card of their own** — they never edit the current
+screen or surface an AskUserQuestion prompt in chat.
 Their state surfaces as a compact panel at the bottom of the active
 session's card:
 

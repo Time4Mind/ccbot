@@ -8,13 +8,16 @@ import pytest
 from ccbot.bot.callbacks import dir_browser
 from ccbot.bot import _messages_text
 from ccbot.handlers.callback_data import CB_DIR_CONFIRM
+from ccbot.handlers.callback_data import CB_DIR_CANCEL
 from ccbot.handlers.callback_data import CB_DIR_CREATE
 from ccbot.handlers.directory_browser import (
     BROWSE_PAGE_KEY,
     BROWSE_PATH_KEY,
     STATE_KEY,
     STATE_NAMING_DIRECTORY,
+    build_directory_browser,
 )
+from ccbot.i18n import t
 
 
 @pytest.mark.asyncio
@@ -47,6 +50,43 @@ async def test_create_folder_prompt_has_back_to_current_page(
     assert context.user_data[STATE_KEY] == STATE_NAMING_DIRECTORY
     keyboard = edit.await_args.kwargs["reply_markup"]
     assert keyboard.inline_keyboard[0][0].callback_data == "db:page:2"
+
+
+@pytest.mark.asyncio
+async def test_directory_browser_exit_is_back_to_active_card(tmp_path) -> None:
+    _text, keyboard, _subdirs = await build_directory_browser(str(tmp_path), user_id=42)
+
+    exit_button = next(
+        button
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.callback_data == CB_DIR_CANCEL
+    )
+    assert exit_button.text == t(42, "btn.back")
+
+
+@pytest.mark.asyncio
+async def test_cancel_new_session_flow_restores_active_card(monkeypatch) -> None:
+    query = SimpleNamespace(data=CB_DIR_CANCEL, answer=AsyncMock())
+    context = SimpleNamespace(user_data={}, bot=object())
+    user = SimpleNamespace(id=42)
+    active = SimpleNamespace(id="active-session")
+    resume = AsyncMock()
+    open_menu = AsyncMock()
+
+    monkeypatch.setattr(
+        dir_browser,
+        "session_manager",
+        SimpleNamespace(get_active_session=lambda _uid: active),
+        raising=False,
+    )
+    monkeypatch.setattr(dir_browser, "resume_card_view", resume, raising=False)
+    monkeypatch.setattr(dir_browser, "open_more_in_place", open_menu)
+    monkeypatch.setattr("ccbot.startup_queue.cancel_startup_queue", lambda _uid: 0)
+
+    assert await dir_browser.handle(query, context, user)
+    resume.assert_awaited_once_with(context.bot, user.id, active)
+    open_menu.assert_not_awaited()
 
 
 @pytest.mark.asyncio

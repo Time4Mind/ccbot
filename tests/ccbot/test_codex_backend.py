@@ -109,36 +109,6 @@ def test_codex_startup_screen_poll_uses_250ms_interval(
     assert delays == [0.25]
 
 
-@pytest.mark.asyncio
-async def test_codex_startup_watcher_uses_writable_manager_transport(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    screens = iter(
-        [
-            [
-                "Do you trust the contents of this directory?",
-                "1. Yes, continue",
-            ],
-            ["OpenAI Codex", "›"],
-        ]
-    )
-
-    class Pane:
-        def capture_pane(self) -> list[str]:
-            return next(screens)
-
-        def send_keys(self, _value: str, enter: bool = True) -> None:
-            raise AssertionError("read-only libtmux client must not send keys")
-
-    mgr = TmuxManager()
-    send = AsyncMock(return_value=True)
-    monkeypatch.setattr(mgr, "send_keys", send)
-    monkeypatch.setattr("ccbot.tmux_manager.asyncio.sleep", AsyncMock())
-
-    assert await mgr._watch_codex_startup_screens(Pane(), "@7") is True
-    send.assert_awaited_once_with("@7", "", enter=True, literal=False)
-
-
 def test_codex_ready_prompt_is_not_auto_confirmed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -846,14 +816,14 @@ async def test_archive_restore_rebuilds_live_card_on_existing_carrier(
 async def test_tmux_builds_codex_resume_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    sent: list[str] = []
     trust_started = threading.Event()
     release_trust = threading.Event()
 
     class Pane:
         def send_keys(self, value: str, enter: bool = True) -> None:
-            raise AssertionError(
-                "startup must not inherit libtmux's possibly read-only client"
-            )
+            assert enter is True
+            sent.append(value)
 
     class Window:
         window_id = "@7"
@@ -868,11 +838,8 @@ async def test_tmux_builds_codex_resume_command(
 
     mgr = TmuxManager()
     monkeypatch.setattr(mgr, "get_or_create_session", lambda: Session())
-    send_startup = AsyncMock(return_value=True)
-    monkeypatch.setattr(mgr, "send_keys", send_startup)
 
-    async def wait_for_trust(_pane: object, window_id: str) -> bool:
-        assert window_id == "@7"
+    async def wait_for_trust(_pane: object) -> bool:
         trust_started.set()
         await asyncio.to_thread(release_trust.wait, 2.0)
         return True
@@ -899,15 +866,11 @@ async def test_tmux_builds_codex_resume_command(
     )
     assert ok is True
     assert wid == "@7"
-    send_startup.assert_awaited_once()
-    assert send_startup.await_args.args[0] == "@7"
-    startup_command = send_startup.await_args.args[1]
-    assert send_startup.await_args.kwargs == {"backend": ""}
-    assert "CCBOT_AGENT_BACKEND=codex" in startup_command
-    assert f"CCBOT_DIR={config.config_dir}" in startup_command
-    assert "/data/data/com.termux/files/usr/bin/codex" in startup_command
-    assert " resume 550e8400-e29b-41d4-a716-446655440000" in startup_command
-    assert "--resume" not in startup_command
+    assert "CCBOT_AGENT_BACKEND=codex" in sent[0]
+    assert f"CCBOT_DIR={config.config_dir}" in sent[0]
+    assert "/data/data/com.termux/files/usr/bin/codex" in sent[0]
+    assert " resume 550e8400-e29b-41d4-a716-446655440000" in sent[0]
+    assert "--resume" not in sent[0]
     # create_window returned even though its startup-prompt worker is still
     # blocked. Trust handling must never hold the Telegram callback open.
     assert await asyncio.to_thread(trust_started.wait, 1.0)

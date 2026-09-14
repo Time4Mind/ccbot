@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import secrets
 
 logger = logging.getLogger(__name__)
@@ -33,25 +32,12 @@ def terminal_input_chunks(text: str, *, backend: str = "") -> list[bytes]:
 
 
 async def _run_tmux(*args: str, input_bytes: bytes | None = None) -> tuple[int, bytes]:
-    env = os.environ.copy()
-    inherited_tmux = env.pop("TMUX", "")
-    env.pop("TMUX_PANE", None)
-    command = ["tmux"]
-    if inherited_tmux:
-        # Keep targeting the inherited server socket without identifying this
-        # subprocess as the attached client that launched ccbot.  That client
-        # may be read-only (notably Linux control/supervisor deployments), in
-        # which case tmux rejects ``send-keys`` with "client is read-only".
-        socket_path = inherited_tmux.rsplit(",", 2)[0]
-        if socket_path:
-            command.extend(("-S", socket_path))
     proc = await asyncio.create_subprocess_exec(
-        *command,
+        "tmux",
         *args,
         stdin=asyncio.subprocess.PIPE if input_bytes is not None else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env=env,
     )
     _stdout, stderr = await proc.communicate(input=input_bytes)
     return proc.returncode or 0, stderr
@@ -118,42 +104,6 @@ async def _send_carriage_return(window_id: str) -> bool:
             stderr.decode(errors="replace"),
         )
         return False
-    return True
-
-
-async def send_special_key(window_id: str, key: str, *, enter: bool = False) -> bool:
-    """Send named tmux keys through an independent writable command client."""
-    keys = [key] if key else []
-    if enter:
-        keys.append("C-m")
-    if not keys:
-        return True
-    try:
-        code, stderr = await _run_tmux("send-keys", "-t", window_id, *keys)
-    except Exception as exc:
-        logger.error("tmux special key failed window=%s: %s", window_id, exc)
-        return False
-    if code:
-        logger.error(
-            "tmux special key failed window=%s: %s",
-            window_id,
-            stderr.decode(errors="replace"),
-        )
-        return False
-    return True
-
-
-async def paste_literal(window_id: str, text: str) -> bool:
-    """Paste literal text without Enter through writable command clients."""
-    if not text:
-        return True
-    operation = f"ccbot-{secrets.token_hex(8)}"
-    for index, chunk in enumerate(terminal_input_chunks(text)):
-        name = operation if index == 0 else f"{operation}-{index}"
-        ok, _ambiguous = await _paste_chunk(window_id, name, chunk)
-        if not ok:
-            return False
-        await asyncio.sleep(_CHUNK_PACE)
     return True
 
 

@@ -17,37 +17,6 @@ from typing import Any
 _CODEX_STARTUP_POLL_SECONDS = 0.25
 
 
-def inspect_codex_startup_screen(
-    pane: object, *, trust_prompt: str, trust_yes: str
-) -> tuple[list[tuple[str, bool]], bool]:
-    """Return required key actions and whether the normal prompt is ready."""
-    capture = getattr(pane, "capture_pane", None)
-    if not callable(capture):
-        return [], True
-    try:
-        lines = capture()
-        text = "\n".join(lines) if isinstance(lines, list) else str(lines)
-    except Exception:
-        return [], True
-    if trust_prompt in text and trust_yes in text:
-        return [("", True)], False
-    if (
-        "Choose working directory to resume this session" in text
-        and "1. Use session directory" in text
-        and "2. Use current directory" in text
-        and "Press enter to continue" in text
-    ):
-        return [("Down", False), ("", True)], False
-    if (
-        "Update available!" in text
-        and "1. Update now" in text
-        and "2. Skip" in text
-        and "Press enter to continue" in text
-    ):
-        return [("Down", False), ("", True)], False
-    return [], "OpenAI Codex" in text and "›" in text
-
-
 def handle_codex_startup_screen(
     pane: object,
     *,
@@ -60,17 +29,41 @@ def handle_codex_startup_screen(
     Returns ``(acted, terminal)``. Terminal means the normal Codex input
     is ready or the pane can no longer be inspected.
     """
+    capture = getattr(pane, "capture_pane", None)
     send_keys = getattr(pane, "send_keys", None)
-    if not callable(send_keys):
+    if not callable(capture) or not callable(send_keys):
         return False, True
-    actions, terminal = inspect_codex_startup_screen(
-        pane, trust_prompt=trust_prompt, trust_yes=trust_yes
-    )
-    for key, enter in actions:
-        send_keys(key, enter=enter)
-    if actions:
-        logger_obj.info("Handled Codex startup prompt")
-    return bool(actions), terminal
+    try:
+        lines = capture()
+        text = "\n".join(lines) if isinstance(lines, list) else str(lines)
+    except Exception:
+        return False, True
+    if trust_prompt in text and trust_yes in text:
+        send_keys("", enter=True)
+        logger_obj.info("Accepted Codex directory trust prompt")
+        return True, False
+    if (
+        "Choose working directory to resume this session" in text
+        and "1. Use session directory" in text
+        and "2. Use current directory" in text
+        and "Press enter to continue" in text
+    ):
+        send_keys("Down", enter=False)
+        send_keys("", enter=True)
+        logger_obj.info("Selected current directory for Codex resume")
+        return True, False
+    if (
+        "Update available!" in text
+        and "1. Update now" in text
+        and "2. Skip" in text
+        and "Press enter to continue" in text
+    ):
+        # Never mutate the host toolchain from a Telegram session.
+        send_keys("Down", enter=False)
+        send_keys("", enter=True)
+        logger_obj.info("Skipped Codex CLI update prompt")
+        return True, False
+    return False, "OpenAI Codex" in text and "›" in text
 
 
 def accept_codex_directory_trust(
@@ -104,19 +97,14 @@ async def watch_codex_startup_screens(
     timeout: float,
     sleep: Any,
     to_thread: Any,
-    inspector: Any,
-    sender: Any,
+    handler: Any,
 ) -> bool:
     """Cancellation-safe long watcher for cold Codex launches."""
     accepted = False
     attempts = max(18, int(max(timeout, 4.5) / _CODEX_STARTUP_POLL_SECONDS))
     for _ in range(attempts):
         await sleep(_CODEX_STARTUP_POLL_SECONDS)
-        actions, terminal = await to_thread(inspector, pane)
-        acted = False
-        for key, enter in actions:
-            if await sender(key, enter=enter, literal=False):
-                acted = True
+        acted, terminal = await to_thread(handler, pane)
         accepted = accepted or acted
         if terminal:
             return accepted
@@ -167,10 +155,9 @@ async def create_window(
 
     # Create window in thread
     created_pane: object | None = None
-    startup_command: str | None = None
 
     def _create_and_start() -> tuple[bool, str, str, str]:
-        nonlocal created_pane, startup_command
+        nonlocal created_pane
         session = manager.get_or_create_session()
         try:
             # Create new window
@@ -224,7 +211,7 @@ async def create_window(
                         cmd = f"IS_SANDBOX=1 {env_prefix} {cmd}"
                     else:
                         cmd = f"{env_prefix} {cmd}"
-                    startup_command = cmd
+                    pane.send_keys(cmd, enter=True)
 
             logger_obj.info(
                 "Created window '%s' (id=%s) at %s",
@@ -244,22 +231,12 @@ async def create_window(
             return False, f"Failed to create window: {e}", "", ""
 
     result = await asyncio.to_thread(_create_and_start)
-    if result[0] and start_claude and startup_command:
-        # Do not use ``libtmux.Pane.send_keys`` here.  On Linux the bot may
-        # share a server with a persistent read-only control client, and
-        # libtmux can associate this mutation with that client.  The regular
-        # input transport preserves the same server socket while creating an
-        # independent writable command client.
-        started = await manager.send_keys(result[3], startup_command, backend="")
-        if not started:
-            logger_obj.error("Failed to start agent in window %s", result[3])
-            return False, "Failed to start agent in tmux window", result[2], result[3]
     if result[0] and selected_backend == "codex" and created_pane is not None:
         # Do not hold the Telegram callback open while the Node wrapper
         # draws its startup UI. The background task accepts only the two
         # known directory prompts; normal input is never confirmed.
         task = asyncio.create_task(
-            manager._watch_codex_startup_screens(created_pane, result[3]),
+            manager._watch_codex_startup_screens(created_pane),
             name=f"codex-startup-trust:{result[3]}",
         )
         manager._startup_tasks.add(task)

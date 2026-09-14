@@ -21,7 +21,7 @@ def ccbot_dir() -> Path:
     return Path(raw) if raw else Path.home() / ".ccbot"
 
 
-def atomic_write_json(path: Path, data: Any, indent: int = 2) -> None:
+def atomic_write_json(path: Path, data: Any, indent: int | None = 2) -> None:
     """Write JSON data to a file atomically.
 
     Writes to a temporary file in the same directory, then renames it
@@ -29,7 +29,11 @@ def atomic_write_json(path: Path, data: Any, indent: int = 2) -> None:
     is interrupted mid-write.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = json.dumps(data, indent=indent)
+    content = json.dumps(
+        data,
+        indent=indent,
+        separators=(",", ":") if indent is None else None,
+    )
 
     # Write to temp file in same directory (same filesystem for atomic rename)
     fd, tmp_path = tempfile.mkstemp(

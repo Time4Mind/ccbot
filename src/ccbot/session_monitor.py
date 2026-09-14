@@ -660,6 +660,15 @@ class SessionMonitor:
                 if force_checkpoint or not self._pending_tools:
                     self.state.save_if_due(force=force_checkpoint)
 
+            except asyncio.CancelledError:
+                if poll_started:
+                    # A graceful restart can cancel the loop while Telegram
+                    # delivery is still awaiting a response. Keep that event
+                    # unread so the next process retries it instead of making
+                    # an unfinished callback durable during ``stop()``.
+                    self.state.restore_committed()
+                    self._pending_tools = pending_before
+                raise
             except Exception as e:
                 if poll_started:
                     self.state.restore_committed()

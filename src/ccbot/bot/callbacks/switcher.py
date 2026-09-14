@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from telegram import CallbackQuery
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from ...handlers import bg_status
@@ -41,6 +42,30 @@ from ...tmux_manager import tmux_manager
 from .._common import render_session_preview
 
 logger = logging.getLogger(__name__)
+
+
+async def _strip_orphan_switcher_if_current(
+    bot: Any, user_id: int, orphan_msg_id: int | None
+) -> bool:
+    """Strip an orphan only while it is still the registered live keyboard."""
+    if (
+        orphan_msg_id is None
+        or session_manager.get_last_switcher_msg(user_id) != orphan_msg_id
+    ):
+        return False
+    try:
+        await bot.edit_message_reply_markup(
+            chat_id=user_id, message_id=orphan_msg_id, reply_markup=None
+        )
+        return True
+    except BadRequest as exc:
+        error = str(exc).lower()
+        if "message to edit not found" in error or "message is not modified" in error:
+            return True
+        logger.debug("current orphan switcher strip failed: %s", exc)
+    except Exception as exc:
+        logger.debug("current orphan switcher strip failed: %s", exc)
+    return False
 
 
 async def handle(
@@ -101,13 +126,7 @@ async def handle(
         # carrier, so nothing will ever edit it again — strip its
         # keyboard, otherwise the chat keeps two tappable switchers and
         # the next tap repaints whichever one the user happened to hit.
-        if orphan_msg_id is not None:
-            try:
-                await context.bot.edit_message_reply_markup(
-                    chat_id=user.id, message_id=orphan_msg_id, reply_markup=None
-                )
-            except Exception as e:
-                logger.debug("orphan switcher strip failed: %s", e)
+        await _strip_orphan_switcher_if_current(context.bot, user.id, orphan_msg_id)
 
         # The session we just LEFT is now bg. Seed its panel row from
         # JSONL — but only for the "working" case. If the inferred

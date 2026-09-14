@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TimedOut
 
 from ccbot.config import config
 from ccbot.handlers import card_rich_media, card_transport, message_sender
@@ -262,6 +262,114 @@ async def test_previous_exact_png_reuses_bounded_session_file_id_cache(
     assert edit.await_args.kwargs["photo"] == "cached-pane-b"
     assert state.rich_media_file_id == "cached-pane-b"
     assert state.last_pane_hash == "hash-b"
+
+
+@pytest.mark.asyncio
+async def test_invalid_cached_photo_is_replaced_with_fresh_upload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sess = Session(
+        id="s1",
+        name="target",
+        window_id="@3",
+        workdir="/tmp/target",
+        state="active",
+        screenshot_file_id="bad-photo",
+        screenshot_pane_hash="old-hash",
+        screenshot_cached_at=100.0,
+        screenshot_user_id=42,
+        screenshot_capture_kib=48,
+        screenshot_profile="full8",
+    )
+    monkeypatch.setattr(
+        card_rich_media, "lookup_session_for_message", lambda _uid, _mid: sess.id
+    )
+    monkeypatch.setattr(
+        card_rich_media.session_manager, "get_session", lambda _sid: sess
+    )
+    save = MagicMock()
+    monkeypatch.setattr(card_rich_media.session_manager, "save_state", save)
+    monkeypatch.setattr(card_rich_media.time, "time", lambda: 200.0)
+    monkeypatch.setattr(card_rich_media.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(
+        card_rich_media,
+        "_capture_pane_png",
+        AsyncMock(return_value=(b"png", "new-hash")),
+    )
+    response = {
+        "rich_message": {
+            "blocks": [
+                {
+                    "type": "photo",
+                    "photo": [{"file_id": "fresh-photo", "width": 100, "height": 100}],
+                }
+            ]
+        }
+    }
+    edit = AsyncMock(side_effect=[BadRequest("Rich_message_photo_invalid"), response])
+    monkeypatch.setattr(card_rich_media.rich, "edit_rich_message", edit)
+    state = CardState(
+        msg_id=9,
+        is_rich_media_msg=True,
+        rich_media_file_id="bad-photo",
+        rich_media_cache=[("old-hash", "bad-photo")],
+        last_pane_hash="old-hash",
+        last_photo_edit_ts=9.0,
+    )
+
+    assert await card_rich_media.edit_rich_media_card(
+        SimpleNamespace(),
+        42,
+        state,
+        text="target card",
+        reply_markup=None,
+        min_photo_interval=2.5,
+        refresh_pane=False,
+    )
+
+    assert [call.kwargs["photo"] for call in edit.await_args_list] == [
+        "bad-photo",
+        b"png",
+    ]
+    assert state.rich_media_file_id == "fresh-photo"
+    assert state.rich_media_cache == [("new-hash", "fresh-photo")]
+    assert sess.screenshot_file_id == "fresh-photo"
+    assert sess.screenshot_pane_hash == "new-hash"
+    save.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_rich_media_timeout_keeps_existing_carrier_for_next_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire_session(monkeypatch)
+    monkeypatch.setattr(
+        card_rich_media.rich,
+        "edit_rich_message",
+        AsyncMock(side_effect=TimedOut("Timed out")),
+    )
+    capture = AsyncMock(return_value=(b"png", "pane-hash"))
+    monkeypatch.setattr(card_rich_media, "_capture_pane_png", capture)
+    state = CardState(
+        msg_id=9,
+        is_rich_media_msg=True,
+        rich_media_file_id="cached-pane",
+        last_pane_hash="pane-hash",
+        last_photo_edit_ts=10.0,
+    )
+
+    assert await card_rich_media.edit_rich_media_card(
+        SimpleNamespace(),
+        42,
+        state,
+        text="next",
+        reply_markup=None,
+        min_photo_interval=2.5,
+        refresh_pane=False,
+    )
+    assert state.is_rich_media_msg is True
+    assert state.rich_media_file_id == "cached-pane"
+    capture.assert_not_awaited()
 
 
 @pytest.mark.asyncio

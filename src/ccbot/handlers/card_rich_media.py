@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from telegram import InlineKeyboardMarkup, Message
-from telegram.error import BadRequest, RetryAfter
+from telegram.error import BadRequest, RetryAfter, TimedOut
 
 from .. import rich
 from ..config import config
@@ -47,6 +47,22 @@ def remember_rich_photo(state: CardState, pane_hash: str, file_id: str) -> None:
     ]
     state.rich_media_cache.append((pane_hash, file_id))
     del state.rich_media_cache[:-3]
+
+
+def _discard_invalid_photo(state: CardState, sess: object | None, file_id: str) -> bool:
+    """Forget one rejected Telegram photo id so a switch cannot revive it."""
+    state.rich_media_cache = [
+        item for item in state.rich_media_cache if item[1] != file_id
+    ]
+    if state.rich_media_file_id == file_id:
+        state.rich_media_file_id = ""
+    if not isinstance(sess, Session) or sess.screenshot_file_id != file_id:
+        return False
+    sess.screenshot_file_id = ""
+    sess.screenshot_pane_hash = ""
+    sess.screenshot_cached_at = 0.0
+    _last_screenshot_save.pop(sess.id, None)
+    return True
 
 
 def persist_session_screenshot(
@@ -182,6 +198,14 @@ async def edit_rich_media_card(
         )
     except RetryAfter:
         raise
+    except TimedOut:
+        # The server may have applied the idempotent edit before the client-side
+        # timeout. Keep the rich carrier and let the next normal update converge;
+        # downgrading it to text here causes the visible layout shift.
+        logger.info(
+            "rich-media card edit timed out msg=%s; keeping carrier", state.msg_id
+        )
+        return True
     except BadRequest as exc:
         error = str(exc)
         if "message is not modified" in error.lower():
@@ -192,8 +216,54 @@ async def edit_rich_media_card(
             )
             clear_carrier(state)
             return False
-        logger.warning("rich-media card edit failed msg=%s: %s", state.msg_id, error)
-        return False
+        if "rich_message_photo_invalid" in error.lower() and isinstance(photo, str):
+            invalidated_session = _discard_invalid_photo(state, sess, photo)
+            png, captured_hash = await _capture_pane_png(window_id, user_id=user_id)
+            if png is not None and captured_hash:
+                try:
+                    result = await rich.edit_rich_message(
+                        bot,
+                        user_id,
+                        state.msg_id,
+                        _rich_card_markdown(text, state),
+                        reply_markup=reply_markup,
+                        photo=png,
+                    )
+                except RetryAfter:
+                    raise
+                except TimedOut:
+                    if invalidated_session:
+                        session_manager.save_state()
+                    logger.info(
+                        "rich-media fresh-photo retry timed out msg=%s; keeping carrier",
+                        state.msg_id,
+                    )
+                    return True
+                except Exception as retry_exc:
+                    if invalidated_session:
+                        session_manager.save_state()
+                    logger.warning(
+                        "rich-media fresh-photo retry failed msg=%s: %s",
+                        state.msg_id,
+                        retry_exc,
+                    )
+                    return False
+                pane_hash = captured_hash
+                uploaded_new_pane = True
+                reused_cached_pane = False
+            else:
+                if invalidated_session:
+                    session_manager.save_state()
+                logger.info(
+                    "rich-media invalid photo removed msg=%s; fresh capture unavailable",
+                    state.msg_id,
+                )
+                return False
+        else:
+            logger.warning(
+                "rich-media card edit failed msg=%s: %s", state.msg_id, error
+            )
+            return False
     except Exception as exc:
         logger.warning("rich-media card edit failed msg=%s: %s", state.msg_id, exc)
         return False

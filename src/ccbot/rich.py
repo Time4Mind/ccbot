@@ -37,6 +37,9 @@ from .transcript_format import (
 
 # Rich messages cap (Bot API 10.2): 32768 UTF-8 chars of text.
 RICH_MAX_CHARS = 32768
+# Invisible opt-out marker for tables whose contents must keep normal font.
+# It remains invisible in Markdown fallback and is stripped on the rich path.
+RICH_TABLE_NORMAL_FONT = "\u2060"
 
 # One embedded terminal screenshot per rich message. The identifier connects
 # the final Markdown media block to InputRichMessage.media; for a fresh upload
@@ -225,6 +228,8 @@ def _ensure_blank_before_tables(text: str) -> str:
 
 def _sub_wrap_row(line: str) -> str:
     """Wrap each cell of one table row in ``<sub>…</sub>``."""
+    if RICH_TABLE_NORMAL_FONT in line:
+        return line.replace(RICH_TABLE_NORMAL_FONT, "")
     cells = line.strip().strip("|").split("|")
     if all(_TABLE_SEP_CELL_RE.match(c.strip()) for c in cells if c.strip()):
         return line  # separator row — keep alignment hints intact

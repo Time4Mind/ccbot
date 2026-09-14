@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from telegram import CallbackQuery
+from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from ...handlers.callback_data import (
@@ -161,6 +161,7 @@ async def handle(
             else default_path
         )
         if context.user_data is not None:
+            context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
             context.user_data[BROWSE_PAGE_KEY] = pg
 
         msg_text, keyboard, subdirs = await build_directory_browser(
@@ -212,9 +213,24 @@ async def handle(
             return True
         if context.user_data is not None:
             context.user_data[STATE_KEY] = STATE_NAMING_DIRECTORY
+        page = (
+            int(context.user_data.get(BROWSE_PAGE_KEY, 0))
+            if context.user_data is not None
+            else 0
+        )
         await safe_edit(
             query,
             t(user.id, "dir.create.prompt", path=selected_path),
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            t(user.id, "btn.back"),
+                            callback_data=f"{CB_DIR_PAGE}{page}",
+                        )
+                    ]
+                ]
+            ),
         )
         await query.answer()
         return True

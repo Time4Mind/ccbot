@@ -44,6 +44,12 @@ def _make_archived(idx: int) -> Session:
     )
 
 
+def test_ai_description_defaults_off() -> None:
+    from ccbot.session_state import SessionStateMixin
+
+    assert SessionStateMixin.DEFAULT_USER_SETTINGS["archive_ai_description"] is False
+
+
 @pytest.fixture
 def many_archived():
     sessions = [_make_archived(i) for i in range(PAGE_SIZE * 3)]
@@ -163,7 +169,7 @@ class TestArchiveTableLayout:
             show_all=True,
             user_id=1,
         )
-        assert "| Session | Description |" in text
+        assert "| Session | Description" in text
         for idx in range(1, PAGE_SIZE + 1):
             assert f"| **{idx}.**" in text
 
@@ -198,6 +204,16 @@ class TestArchiveTableLayout:
             user_id=1,
         )
         assert "*sess 0* · 1h" in text
+
+    @pytest.mark.asyncio
+    async def test_archive_table_keeps_normal_font(self, many_archived) -> None:
+        from ccbot.rich import to_rich_markdown
+
+        text, _ = await build_archive_page(
+            page=0, lookback_seconds=None, show_all=False, user_id=1
+        )
+        rich = to_rich_markdown(text)
+        assert "<sub>**1.**" not in rich
 
 
 class TestDisplayName:
@@ -453,6 +469,64 @@ class TestArchiveBlurbCollectsUserMessages:
         assert "I will inspect it" not in out
 
     @pytest.mark.asyncio
+    async def test_current_codex_response_items_skip_injected_context(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import json
+
+        from ccbot.handlers import archive
+
+        sid = "650e8400-e29b-41d4-a716-446655440000"
+        rollout = tmp_path / f"rollout-{sid}.jsonl"
+        rows = [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "# AGENTS.md instructions"},
+                        {"type": "input_text", "text": "<environment_context>cwd</environment_context>"},
+                    ],
+                },
+            },
+            *[
+                {"type": "event_msg", "payload": {"type": "token_count"}}
+                for _ in range(210)
+            ],
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "first available"}],
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "second available"}],
+                },
+            },
+        ]
+        rollout.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+        monkeypatch.setattr(archive, "build_session_file_path", lambda *_args: rollout)
+        sess = Session(
+            id="current-codex",
+            name="",
+            state="archived",
+            claude_session_id=sid,
+            workdir="/tmp/x",
+            backend="codex",
+        )
+
+        assert await archive._collect_user_messages(sess) == (
+            "first available  \nsecond available"
+        )
+
+    @pytest.mark.asyncio
     async def test_ai_description_uses_first_two_requests(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -558,9 +632,7 @@ class TestSystemUiTextFilter:
 
 
 class TestFormatBlurb:
-    """``_format_blurb`` caps the combined blurb at ``_BLURB_TOTAL_BUDGET``
-    chars on a whole-word boundary — no spoiler, no expandable block,
-    just plain text with a trailing ``…`` when content overflows."""
+    """Each early prompt has its own bounded display budget."""
 
     def test_short_single_message_verbatim(self) -> None:
         from ccbot.handlers.archive import _format_blurb
@@ -590,7 +662,7 @@ class TestFormatBlurb:
             "regression that crept in last week — reproduce on staging "
             "and confirm the fix locally before opening a PR after the "
             "follow-up review with the platform team."
-        )
+        ) * 2
         assert len(long_msg) > _BLURB_TOTAL_BUDGET
         out = _format_blurb([long_msg])
         assert out.endswith("…")
@@ -603,28 +675,25 @@ class TestFormatBlurb:
         assert long_msg.startswith(head)
         assert long_msg[len(head)] == " "
 
-    def test_overflow_drops_later_messages_keeps_first_whole(self) -> None:
+    def test_long_first_prompt_does_not_drop_second(self) -> None:
         from ccbot.handlers.archive import _BLURB_TOTAL_BUDGET, _format_blurb
 
-        first = "a" * (_BLURB_TOTAL_BUDGET - 10)  # fits whole
-        second = "b" * 30  # would overshoot
+        first = "a" * (_BLURB_TOTAL_BUDGET - 10)
+        second = "b" * 30
         out = _format_blurb([first, second])
-        # First message kept whole, no ellipsis, second dropped.
-        assert out == first
-        assert "…" not in out
+        assert first in out
+        assert second in out
 
-    def test_two_short_messages_third_dropped_if_over(self) -> None:
-        from ccbot.handlers.archive import _BLURB_TOTAL_BUDGET, _format_blurb
+    def test_three_prompts_are_independently_bounded(self) -> None:
+        from ccbot.handlers.archive import _format_blurb
 
         first = "x" * 60
         second = "y" * 60  # +3 separator → 123 ≤ 140
         third = "z" * 30  # +3 separator → 156 > 140 → dropped
-        assert len(first) + 3 + len(second) <= _BLURB_TOTAL_BUDGET
-        assert len(first) + 3 + len(second) + 3 + len(third) > _BLURB_TOTAL_BUDGET
         out = _format_blurb([first, second, third])
         assert first in out
         assert second in out
-        assert third not in out
+        assert third in out
 
 
 class TestDedupConsecutiveMessages:

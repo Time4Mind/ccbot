@@ -422,7 +422,7 @@ def _settings_haiku_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
 def _settings_archive_ai_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     cur = bool(
         session_manager.get_user_settings(user_id).get(
-            "archive_ai_description", True
+            "archive_ai_description", False
         )
     )
     return [

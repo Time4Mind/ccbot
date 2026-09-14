@@ -17,6 +17,7 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from ..config import config
 from ..i18n import t
+from ..rich import RICH_TABLE_NORMAL_FONT
 from ..session import (
     DEFAULT_IDLE_ARCHIVE_HOURS,
     IDLE_ARCHIVE_HOUR_CHOICES,
@@ -40,49 +41,29 @@ from .cleanup import teardown_session_runtime
 logger = logging.getLogger(__name__)
 
 _BLURB_CACHE: dict[str, str] = {}
-_BLURB_TOTAL_BUDGET = 140
+_BLURB_TOTAL_BUDGET = 240
 _BLURB_MAX_MESSAGES = 3
 PAGE_SIZE = 6
 DEFAULT_LOOKBACK_SECONDS = 20 * 86400
 
 
 def _format_blurb(messages: list[str]) -> str:
-    """Lay out ``messages`` into a blurb capped at ``_BLURB_TOTAL_BUDGET``
-    chars.
-
-    * No messages → empty string.
-    * First message alone exceeds the cap → truncated at a word
-      boundary with ``…``. Subsequent messages are dropped.
-    * First message fits → include later messages one by one as long as
-      the running total stays under the cap. Joined with ``  \\n`` so
-      each one renders on its own line in the rich-message body.
-    """
+    """Lay out early prompts with an independent per-prompt display cap."""
     if not messages:
         return ""
-    first = messages[0]
-    if len(first) > _BLURB_TOTAL_BUDGET:
-        return _truncate_at_word(first, _BLURB_TOTAL_BUDGET)
-    out: list[str] = [first]
-    total = len(first)
     sep = "  \n"
-    for msg in messages[1:]:
-        # Account for the hard-break separator we'll glue in front.
-        if total + len(sep) + len(msg) > _BLURB_TOTAL_BUDGET:
-            break
-        out.append(msg)
-        total += len(sep) + len(msg)
-    return sep.join(out)
+    return sep.join(
+        _truncate_at_word(message, _BLURB_TOTAL_BUDGET) for message in messages
+    )
 
 
 async def _collect_user_messages(sess: Session) -> str:
     """Walk the JSONL and assemble a blurb from the first 1-3 real user
     messages.
 
-    Stops accumulating as soon as the next message would push the
-    combined length past ``_BLURB_TOTAL_BUDGET`` — but the *first*
-    message is always included whole, even if it alone exceeds the
-    budget (the user's own words trump the soft cap). Overflow lands in
-    an expandable-quote block so the visible row stays compact.
+    Keeps scanning until the earliest three usable requests are found.
+    Each request is independently truncated only for display, so a long
+    first request can never make the second one disappear.
 
     Skips Claude Code's wrapper user-messages (``<system-reminder>``,
     ``<local-command-caveat>``, bash chrome) and its own UI events
@@ -101,18 +82,11 @@ async def _collect_user_messages(sess: Session) -> str:
         fp = matches[0]
 
     messages: list[str] = []
-    total = 0
     scanned = 0
     try:
         async with aiofiles.open(fp, "r", encoding="utf-8") as f:
             async for line in f:
                 scanned += 1
-                # Honest sessions wedge the first 3 user messages
-                # well inside the first 200 lines (system prelude +
-                # opening assistant turn + 3 turns of dialogue). Cap
-                # the scan to bail on long-running sessions.
-                if scanned > 200:
-                    break
                 if len(messages) >= _BLURB_MAX_MESSAGES:
                     break
                 line = line.strip()
@@ -124,14 +98,31 @@ async def _collect_user_messages(sess: Session) -> str:
                     continue
                 if sess.backend == "codex":
                     payload = data.get("payload")
+                    raw_messages: list[str] = []
                     if (
                         data.get("type") != "event_msg"
                         or not isinstance(payload, dict)
                         or payload.get("type") != "user_message"
                     ):
-                        continue
-                    raw = str(payload.get("message") or "").strip()
-                    if not raw:
+                        if (
+                            data.get("type") != "response_item"
+                            or not isinstance(payload, dict)
+                            or payload.get("type") != "message"
+                            or payload.get("role") != "user"
+                        ):
+                            continue
+                        content = payload.get("content")
+                        if not isinstance(content, list):
+                            continue
+                        raw_messages = [
+                            str(item.get("text") or "").strip()
+                            for item in content
+                            if isinstance(item, dict)
+                            and item.get("type") == "input_text"
+                        ]
+                    else:
+                        raw_messages = [str(payload.get("message") or "").strip()]
+                    if not any(raw_messages):
                         continue
                 else:
                     if not TranscriptParser.is_user_message(data):
@@ -139,27 +130,23 @@ async def _collect_user_messages(sess: Session) -> str:
                     parsed = TranscriptParser.parse_message(data)
                     if not parsed or not parsed.text.strip():
                         continue
-                    raw = parsed.text.strip()
-                if _RE_INJECTED_USER_MSG.search(raw):
-                    continue
-                if _RE_SYSTEM_UI_TEXT.match(raw):
-                    continue
-                cleaned = _clean_user_msg(raw)
-                if not cleaned:
-                    continue
-                # Drop a consecutive duplicate — when the user re-sends
-                # the same prompt (typical "didn't go through" double
-                # tap), the blurb shouldn't echo it twice. Only the
-                # immediately-previous message counts; a later repeat
-                # of an earlier message stays.
-                if messages and cleaned == messages[-1]:
-                    continue
-                # First message: always include whole. Subsequent ones:
-                # only if they still fit under the cumulative budget.
-                if messages and total + len(cleaned) > _BLURB_TOTAL_BUDGET:
-                    break
-                messages.append(cleaned)
-                total += len(cleaned)
+                    raw_messages = [parsed.text.strip()]
+                for raw in raw_messages:
+                    if (
+                        not raw
+                        or _RE_INJECTED_USER_MSG.search(raw)
+                        or _RE_SYSTEM_UI_TEXT.match(raw)
+                        or raw.startswith("# AGENTS.md instructions")
+                        or raw.startswith("<environment_context>")
+                        or raw.startswith("<turn_aborted>")
+                    ):
+                        continue
+                    cleaned = _clean_user_msg(raw)
+                    if not cleaned or (messages and cleaned == messages[-1]):
+                        continue
+                    messages.append(cleaned)
+                    if len(messages) >= _BLURB_MAX_MESSAGES:
+                        break
     except OSError as e:
         logger.debug("archive blurb read failed for %s: %s", fp, e)
         return ""
@@ -187,7 +174,7 @@ async def _archive_blurb(sess: Session, user_id: int | None = None) -> str:
         return blurb
     ai_enabled = bool(
         session_manager.get_user_settings(user_id).get(
-            "archive_ai_description", True
+            "archive_ai_description", False
         )
     )
     cache_key = f"{sid}:{int(ai_enabled)}"
@@ -274,7 +261,8 @@ async def build_archive_page(
     else:
         body = []
         table_rows = [
-            f"| {t(user_id, 'archive.column.session')} | {t(user_id, 'archive.column.description')} |",
+            f"| {t(user_id, 'archive.column.session')} | "
+            f"{t(user_id, 'archive.column.description')}{RICH_TABLE_NORMAL_FONT} |",
             "|---|---|",
         ]
         for idx, sess in enumerate(chunk, start=start + 1):
@@ -300,7 +288,8 @@ async def build_archive_page(
                 first += f"<br><code>{wd}</code>"
             description = blurb or "-"
             table_rows.append(
-                f"| {first.replace('|', '\\|')} | {description.replace('|', '\\|')} |"
+                f"| {first.replace('|', '\\|')} | "
+                f"{description.replace('|', '\\|')}{RICH_TABLE_NORMAL_FONT} |"
             )
         body.append("\n".join(table_rows))
 

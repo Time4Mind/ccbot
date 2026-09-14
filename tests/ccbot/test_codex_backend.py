@@ -629,29 +629,6 @@ def test_codex_completed_prompt_is_not_treated_as_pending() -> None:
 
 
 @pytest.mark.asyncio
-async def test_codex_collapsed_long_prompt_gets_a_submit_retry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A Codex paste placeholder is still an unsent Telegram prompt.
-
-    The TUI collapses sufficiently fast/long input instead of displaying its
-    literal contents.  Delivery must not report success merely because the
-    original text is therefore absent from the captured pane.
-    """
-    manager = TmuxManager()
-    text = "x" * 425
-    pending = "old output\n\n› [Pasted Content 425 chars]\n\n  model · ~/project"
-    manager.capture_pane = AsyncMock(side_effect=[pending, "› "])
-    manager.send_keys = AsyncMock(return_value=True)
-    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
-
-    assert await manager.ensure_codex_prompt_submitted("@5", text)
-    manager.send_keys.assert_awaited_once_with(
-        "@5", "Enter", enter=False, literal=False
-    )
-
-
-@pytest.mark.asyncio
 async def test_codex_pending_prompt_retries_until_it_is_submitted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

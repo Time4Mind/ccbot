@@ -437,12 +437,7 @@ class TmuxManager:
             return None
 
     async def send_keys(
-        self,
-        window_id: str,
-        text: str,
-        enter: bool = True,
-        literal: bool = True,
-        submit_key: str = "Enter",
+        self, window_id: str, text: str, enter: bool = True, literal: bool = True
     ) -> bool:
         """Send keys to a specific window.
 
@@ -465,17 +460,10 @@ class TmuxManager:
         The lock makes each send atomic against every other send on the pane.
         """
         async with self._send_lock_for(window_id):
-            return await self._send_keys_locked(
-                window_id, text, enter, literal, submit_key
-            )
+            return await self._send_keys_locked(window_id, text, enter, literal)
 
     async def _send_keys_locked(
-        self,
-        window_id: str,
-        text: str,
-        enter: bool,
-        literal: bool,
-        submit_key: str,
+        self, window_id: str, text: str, enter: bool, literal: bool
     ) -> bool:
         if literal and enter:
             # Split into text + delay + Enter via libtmux.
@@ -503,7 +491,7 @@ class TmuxManager:
                     logger.error(f"Failed to send keys to window {window_id}: {e}")
                     return False
 
-            def _send_submit() -> bool:
+            def _send_enter() -> bool:
                 session = self.get_session()
                 if not session:
                     return False
@@ -514,10 +502,7 @@ class TmuxManager:
                     pane = window.active_pane
                     if not pane:
                         return False
-                    if submit_key == "Enter":
-                        pane.send_keys("", enter=True, literal=False)
-                    else:
-                        pane.send_keys(submit_key, enter=False, literal=False)
+                    pane.send_keys("", enter=True, literal=False)
                     return True
                 except Exception as e:
                     logger.error(f"Failed to send Enter to window {window_id}: {e}")
@@ -537,7 +522,7 @@ class TmuxManager:
                 if not await asyncio.to_thread(_send_literal, text):
                     return False
             await asyncio.sleep(0.5)
-            return await asyncio.to_thread(_send_submit)
+            return await asyncio.to_thread(_send_enter)
 
         # Other cases: special keys (literal=False) or no-enter
         def _sync_send_keys() -> bool:
@@ -592,22 +577,6 @@ class TmuxManager:
         needle = " ".join(text.split())
         if not needle:
             return False
-        # Codex collapses a fast/long paste to a placeholder instead of
-        # keeping the literal text visible.  Treat a matching placeholder as
-        # the same pending prompt; otherwise the submit verifier sees none of
-        # ``text`` and incorrectly reports successful delivery while the
-        # request is still sitting in the composer.
-        for raw_count in re.findall(
-            r"\[Pasted Content\s+([\d,._ ]+)\s+chars?\](?:\s*#\d+)?",
-            prompt,
-            re.IGNORECASE,
-        ):
-            try:
-                count = int(re.sub(r"\D", "", raw_count))
-            except ValueError:
-                continue
-            if count == len(text):
-                return True
         if len(needle) <= 80:
             return needle in prompt
         # A long TUI input may have scrolled its beginning out of the pane.

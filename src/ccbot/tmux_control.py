@@ -1,4 +1,4 @@
-"""Persistent read-only tmux control-mode client."""
+"""Persistent tmux control-mode client for read-heavy polling."""
 
 from __future__ import annotations
 
@@ -18,12 +18,22 @@ class TmuxControlClient:
         self.lock = asyncio.Lock()
 
     def _start_command(self) -> tuple[str, ...]:
+        # Older Linux tmux builds (including Kali/ARM64 in a chroot) bind
+        # separate ``send-keys`` command clients to the only attached client.
+        # If that control client is read-only, even an explicit socket command
+        # fails with "client is read-only".  Keep the internal Linux client
+        # writable; ``request`` still exposes only ccbot's fixed read queries.
+        flags = (
+            "ignore-size,no-output"
+            if sys.platform == "linux"
+            else "read-only,ignore-size,no-output"
+        )
         tmux = (
             "tmux",
             "-C",
             "attach-session",
             "-f",
-            "read-only,ignore-size,no-output",
+            flags,
             "-t",
             self.session_name,
         )

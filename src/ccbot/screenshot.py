@@ -14,7 +14,9 @@ import asyncio
 import io
 import logging
 import re
+import threading
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -87,6 +89,64 @@ class StyledSegment:
     text: str
     style: TextStyle
     font_tier: int
+
+
+_thread_fonts = threading.local()
+
+
+def _fonts_for_thread(
+    size: int,
+) -> tuple[ImageFont.FreeTypeFont | ImageFont.ImageFont, ...]:
+    """Reuse font handles within a renderer thread without sharing them."""
+    cache = getattr(_thread_fonts, "by_size", None)
+    if cache is None:
+        cache = {}
+        _thread_fonts.by_size = cache
+    fonts = cache.get(size)
+    if fonts is None:
+        fonts = tuple(_load_font(path, size) for path in _FONT_PATHS)
+        cache[size] = fonts
+    return fonts
+
+
+_LineKey = tuple[
+    tuple[str, tuple[int, int, int], tuple[int, int, int] | None, int], ...
+]
+
+
+@lru_cache(maxsize=256)
+def _render_line_cached(
+    segments: _LineKey,
+    font_size: int,
+    line_height: int,
+) -> tuple[int, bytes]:
+    """Render one immutable terminal row and cache its RGB pixels."""
+    fonts = _fonts_for_thread(font_size)
+    dummy = Image.new("RGB", (1, 1))
+    measure = ImageDraw.Draw(dummy)
+    metrics: list[tuple[int, int, int]] = []
+    width = 0
+    for text, _fg, _bg, tier in segments:
+        bbox = measure.textbbox((0, 0), text, font=fonts[tier])
+        left = int(bbox[0])
+        right = int(bbox[2])
+        advance = right - left
+        metrics.append((left, right, advance))
+        width += advance
+    if width <= 0:
+        return 0, b""
+
+    row = Image.new("RGB", (width, line_height), _DEFAULT_BG)
+    draw = ImageDraw.Draw(row)
+    x = 0
+    for (text, fg, bg, tier), (left, right, advance) in zip(
+        segments, metrics, strict=True
+    ):
+        if bg:
+            draw.rectangle([x + left, 0, x + right, line_height], fill=bg)
+        draw.text((x, 0), text, fill=fg, font=fonts[tier])
+        x += advance
+    return width, row.tobytes()
 
 
 def _load_font(path: Path, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -277,8 +337,6 @@ async def text_to_image(
     """
 
     def _render_image() -> bytes:
-        fonts = [_load_font(p, font_size) for p in _FONT_PATHS]
-
         lines = text.split("\n")
         padding = 16
 
@@ -296,42 +354,28 @@ async def text_to_image(
                 for segments in line_segments_plain
             ]
 
-        # Measure text size
-        dummy = Image.new("RGB", (1, 1))
-        draw = ImageDraw.Draw(dummy)
         line_height = int(font_size * 1.4)
-        max_width = 0
-        for segments in line_segments:
-            w = 0
-            for seg in segments:
-                bbox = draw.textbbox((0, 0), seg.text, font=fonts[seg.font_tier])
-                w += bbox[2] - bbox[0]
-            max_width = max(max_width, w)
+        line_keys: list[_LineKey] = [
+            tuple(
+                (seg.text, seg.style.fg_color, seg.style.bg_color, seg.font_tier)
+                for seg in segments
+            )
+            for segments in line_segments
+        ]
+        rendered_lines = [
+            _render_line_cached(key, font_size, line_height) for key in line_keys
+        ]
+        max_width = max((width for width, _pixels in rendered_lines), default=0)
 
         img_width = int(max_width) + padding * 2
         img_height = line_height * len(lines) + padding * 2
 
         img = Image.new("RGB", (img_width, img_height), _DEFAULT_BG)
-        draw = ImageDraw.Draw(img)
-
         y = padding
-        for segments in line_segments:
-            x = padding
-            for seg in segments:
-                f = fonts[seg.font_tier]
-
-                # Draw background if specified
-                if seg.style.bg_color:
-                    bbox = draw.textbbox((x, y), seg.text, font=f)
-                    draw.rectangle(
-                        [bbox[0], y, bbox[2], y + line_height], fill=seg.style.bg_color
-                    )
-
-                # Draw text with foreground color
-                draw.text((x, y), seg.text, fill=seg.style.fg_color, font=f)
-
-                bbox = draw.textbbox((0, 0), seg.text, font=f)
-                x += bbox[2] - bbox[0]
+        for width, pixels in rendered_lines:
+            if width:
+                row = Image.frombytes("RGB", (width, line_height), pixels)
+                img.paste(row, (padding, y))
             y += line_height
 
         if profile == "compact8":

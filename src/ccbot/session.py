@@ -88,6 +88,9 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
     _session_map_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False
     )
+    _session_map_signature: tuple[str, int, int] | None = field(
+        default=None, init=False, repr=False
+    )
     user_window_offsets: dict[int, dict[str, int]] = field(default_factory=dict)
     # DM mode: routing key for inbound user text.
     # user_id -> Session.id (short hex). Single active session per user.

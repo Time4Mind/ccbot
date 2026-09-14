@@ -17,6 +17,8 @@ import asyncio
 import logging
 import os
 import re
+import secrets
+import shlex
 import signal
 import subprocess
 import time
@@ -27,6 +29,7 @@ import libtmux
 
 from . import tmux_window as _tmux_window
 from .config import SENSITIVE_ENV_VARS, config
+from .tmux_control import TmuxControlClient
 from .tmux_process import kill_orphan_processes
 
 logger = logging.getLogger(__name__)
@@ -49,6 +52,7 @@ class TmuxWindow:
     window_name: str
     cwd: str  # Current working directory
     pane_current_command: str = ""  # Process running in active pane
+    activity: int = 0  # Last tmux window activity timestamp
 
 
 class TmuxManager:
@@ -75,6 +79,14 @@ class TmuxManager:
         # session readiness/queued input is handled independently by
         # SessionManager's startup gate.
         self._startup_tasks: set[asyncio.Task[bool]] = set()
+        self._control_client = TmuxControlClient(self.session_name)
+
+    async def _drop_control_client(self) -> None:
+        await self._control_client.close()
+
+    async def _control_request(self, command: str) -> str | None:
+        """Run a read-only command through one persistent tmux client."""
+        return await self._control_client.request(command)
 
     def _send_lock_for(self, window_id: str) -> asyncio.Lock:
         """Return the per-window send lock, creating it on first use.
@@ -220,48 +232,144 @@ class TmuxManager:
         """
         output_format = (
             "#{window_id}\t#{window_name}\t#{pane_current_path}\t"
-            "#{pane_current_command}\t#{pane_active}"
+            "#{pane_current_command}\t#{pane_active}\t#{window_activity}"
         )
+        command = (
+            f"list-panes -s -t {shlex.quote(self.session_name)} "
+            f"-F {shlex.quote(output_format)}"
+        )
+        output_text = await self._control_request(command)
+        if output_text is None:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "tmux",
+                    "list-panes",
+                    "-s",
+                    "-t",
+                    self.session_name,
+                    "-F",
+                    output_format,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await proc.communicate()
+                if proc.returncode != 0:
+                    logger.debug(
+                        "Fast tmux polling snapshot failed: %s",
+                        stderr.decode("utf-8", errors="replace").strip(),
+                    )
+                    return await self.list_windows()
+                output_text = stdout.decode("utf-8", errors="replace")
+            except Exception as exc:
+                logger.debug("Fast tmux polling snapshot error: %s", exc)
+                return await self.list_windows()
+
+        windows: list[TmuxWindow] = []
+        for raw_line in output_text.splitlines():
+            fields = raw_line.split("\t", 5)
+            if len(fields) != 6:
+                continue
+            window_id, name, cwd, pane_cmd, pane_active, activity_raw = fields
+            if pane_active != "1" or name == config.tmux_main_window_name:
+                continue
+            try:
+                activity = int(activity_raw)
+            except ValueError:
+                activity = 0
+            windows.append(
+                TmuxWindow(
+                    window_id=window_id,
+                    window_name=name,
+                    cwd=cwd,
+                    pane_current_command=pane_cmd,
+                    activity=activity,
+                )
+            )
+        return windows
+
+    async def capture_panes(
+        self, window_ids: list[str], *, with_ansi: bool = False
+    ) -> dict[str, str]:
+        """Capture multiple panes through the persistent tmux client."""
+        if not window_ids:
+            return {}
+
+        marker_prefix = f"__CCBOT_CAPTURE_{secrets.token_hex(8)}__"
+        args = ["tmux"]
+        unique_ids = [
+            window_id
+            for window_id in dict.fromkeys(window_ids)
+            if re.fullmatch(r"@\d+", window_id)
+        ]
+        if not unique_ids:
+            return {}
+        for index, window_id in enumerate(unique_ids):
+            if index:
+                args.append(";")
+            marker = f"{marker_prefix}{window_id}"
+            args.extend(
+                (
+                    "display-message",
+                    "-p",
+                    "-t",
+                    window_id,
+                    marker,
+                    ";",
+                    "capture-pane",
+                )
+            )
+            if with_ansi:
+                args.append("-e")
+            args.extend(("-p", "-t", window_id))
+
+        controlled: dict[str, str] = {}
+        ansi_arg = " -e" if with_ansi else ""
+        for window_id in unique_ids:
+            pane_text = await self._control_request(
+                f"capture-pane{ansi_arg} -p -t {window_id}"
+            )
+            if pane_text is None:
+                controlled = {}
+                break
+            controlled[window_id] = pane_text
+        if len(controlled) == len(unique_ids):
+            return controlled
+
         try:
             proc = await asyncio.create_subprocess_exec(
-                "tmux",
-                "list-panes",
-                "-s",
-                "-t",
-                self.session_name,
-                "-F",
-                output_format,
+                *args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await proc.communicate()
-            if proc.returncode != 0:
-                logger.debug(
-                    "Fast tmux polling snapshot failed: %s",
-                    stderr.decode("utf-8", errors="replace").strip(),
-                )
-                return await self.list_windows()
-
-            windows: list[TmuxWindow] = []
-            for raw_line in stdout.decode("utf-8", errors="replace").splitlines():
-                fields = raw_line.split("\t", 4)
-                if len(fields) != 5:
-                    continue
-                window_id, name, cwd, pane_cmd, pane_active = fields
-                if pane_active != "1" or name == config.tmux_main_window_name:
-                    continue
-                windows.append(
-                    TmuxWindow(
-                        window_id=window_id,
-                        window_name=name,
-                        cwd=cwd,
-                        pane_current_command=pane_cmd,
-                    )
-                )
-            return windows
         except Exception as exc:
-            logger.debug("Fast tmux polling snapshot error: %s", exc)
-            return await self.list_windows()
+            logger.debug("Batch tmux pane capture error: %s", exc)
+            return {}
+
+        if proc.returncode != 0:
+            logger.debug(
+                "Batch tmux pane capture failed: %s",
+                stderr.decode("utf-8", errors="replace").strip(),
+            )
+        output_text = stdout.decode("utf-8", errors="replace")
+
+        requested = set(unique_ids)
+        captured: dict[str, str] = {}
+        current_id: str | None = None
+        current_lines: list[str] = []
+        for line in output_text.splitlines(keepends=True):
+            marker = line.rstrip("\r\n")
+            if marker.startswith(marker_prefix):
+                if current_id is not None:
+                    captured[current_id] = "".join(current_lines)
+                candidate = marker.removeprefix(marker_prefix)
+                current_id = candidate if candidate in requested else None
+                current_lines = []
+            elif current_id is not None:
+                current_lines.append(line)
+        if current_id is not None:
+            captured[current_id] = "".join(current_lines)
+        return captured
 
     async def find_window_by_name(self, window_name: str) -> TmuxWindow | None:
         """Find a window by its name.

@@ -32,10 +32,25 @@ async def test_screenshot_profile_output_is_deterministic() -> None:
 
 
 @pytest.mark.asyncio
+async def test_repeated_screenshot_reuses_rendered_terminal_rows() -> None:
+    from ccbot import screenshot
+
+    screenshot._render_line_cached.cache_clear()
+
+    await text_to_image("static first row\nstatic second row", profile="full8")
+    cold = screenshot._render_line_cached.cache_info()
+    await text_to_image("static first row\nstatic second row", profile="full8")
+    warm = screenshot._render_line_cached.cache_info()
+
+    assert cold.misses == 2
+    assert warm.misses == cold.misses
+    assert warm.hits >= cold.hits + 2
+
+
+@pytest.mark.asyncio
 async def test_pane_capture_uses_user_limit_profile_and_complete_suffix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
     from ccbot.handlers import kb_mode
@@ -53,13 +68,8 @@ async def test_pane_capture_uses_user_limit_profile_and_complete_suffix(
 
     monkeypatch.setattr(
         tmux_module.tmux_manager,
-        "find_window_by_id",
-        AsyncMock(return_value=SimpleNamespace(window_id="@1")),
-    )
-    monkeypatch.setattr(
-        tmux_module.tmux_manager,
-        "capture_pane",
-        AsyncMock(return_value=source),
+        "capture_panes",
+        AsyncMock(return_value={"@1": source}),
     )
     monkeypatch.setattr(screenshot_module, "text_to_image", render)
     monkeypatch.setattr(
@@ -79,3 +89,6 @@ async def test_pane_capture_uses_user_limit_profile_and_complete_suffix(
     assert len(rendered[0][0].encode("utf-8")) <= 48 * 1024
     assert rendered[0][0].endswith("latest")
     assert not rendered[0][0].startswith("discard this partial row")
+    tmux_module.tmux_manager.capture_panes.assert_awaited_once_with(
+        ["@1"], with_ansi=True
+    )

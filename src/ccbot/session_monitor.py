@@ -308,7 +308,12 @@ class SessionMonitor:
             logger.error("Error reading session file %s: %s", file_path, e)
         return new_entries
 
-    async def check_for_updates(self, active_session_ids: set[str]) -> list[NewMessage]:
+    async def check_for_updates(
+        self,
+        active_session_ids: set[str],
+        *,
+        session_infos: list[SessionInfo] | None = None,
+    ) -> list[NewMessage]:
         """Check all sessions for new assistant messages.
 
         Reads from last byte offset. Emits both intermediate
@@ -319,8 +324,23 @@ class SessionMonitor:
         """
         new_messages = []
 
-        # Scan projects to get available session files
-        sessions = await self.scan_projects()
+        # Modern hooks publish the exact transcript path in session_map.json.
+        # Use those direct targets on the hot path: walking every Claude
+        # project and asking tmux for every cwd each poll is unnecessary when
+        # the authoritative file is already known.  Keep the legacy scan only
+        # for active entries whose old hook payload has no transcript_path.
+        if session_infos is None:
+            sessions = await self.scan_projects()
+        else:
+            sessions = list(session_infos)
+            direct_ids = {info.session_id for info in sessions}
+            missing_ids = active_session_ids - direct_ids
+            if missing_ids:
+                sessions.extend(
+                    info
+                    for info in await self.scan_projects()
+                    if info.session_id in missing_ids
+                )
 
         # Only process sessions that are in session_map
         for session_info in sessions:
@@ -418,6 +438,39 @@ class SessionMonitor:
         self.state.save_if_dirty()
         return new_messages
 
+    async def _load_current_session_targets(
+        self,
+    ) -> tuple[dict[str, str], list[SessionInfo]]:
+        """Read active ids and direct transcript paths in one file pass."""
+        from .session import key_matches_window
+
+        window_to_session: dict[str, str] = {}
+        targets_by_session: dict[str, SessionInfo] = {}
+        if config.session_map_file.exists():
+            try:
+                async with aiofiles.open(config.session_map_file, "r") as f:
+                    content = await f.read()
+                session_map = json.loads(content)
+                for key, info in session_map.items():
+                    if ":" not in key or not isinstance(info, dict):
+                        continue
+                    window_key = key.rsplit(":", 1)[1]
+                    if not key_matches_window(key, window_key):
+                        continue
+                    session_id = str(info.get("session_id") or "")
+                    if not session_id:
+                        continue
+                    window_to_session[window_key] = session_id
+                    transcript_path = str(info.get("transcript_path") or "")
+                    if transcript_path:
+                        targets_by_session[session_id] = SessionInfo(
+                            session_id=session_id,
+                            file_path=Path(transcript_path),
+                        )
+            except (json.JSONDecodeError, OSError):
+                pass
+        return window_to_session, list(targets_by_session.values())
+
     async def _load_current_session_map(self) -> dict[str, str]:
         """Load current session_map and return window_key -> session_id mapping.
 
@@ -426,26 +479,33 @@ class SessionMonitor:
         Claude hook build writes when called from a client attached to
         a per-window grouped session (see ``session.key_matches_window``).
         """
-        from .session import key_matches_window
+        current_map, _ = await self._load_current_session_targets()
+        return current_map
 
-        window_to_session: dict[str, str] = {}
-        if config.session_map_file.exists():
-            try:
-                async with aiofiles.open(config.session_map_file, "r") as f:
-                    content = await f.read()
-                session_map = json.loads(content)
-                for key, info in session_map.items():
-                    if ":" not in key:
-                        continue
-                    window_key = key.rsplit(":", 1)[1]
-                    if not key_matches_window(key, window_key):
-                        continue
-                    session_id = info.get("session_id", "")
-                    if session_id:
-                        window_to_session[window_key] = session_id
-            except (json.JSONDecodeError, OSError):
-                pass
-        return window_to_session
+    def _current_session_targets(self) -> tuple[dict[str, str], list[SessionInfo]]:
+        """Build monitor targets from the already-reconciled bot state."""
+        from .session import session_manager
+
+        current_map: dict[str, str] = {}
+        targets: dict[str, SessionInfo] = {}
+        for sess in session_manager.sessions.values():
+            if (
+                sess.state not in ("active", "idle")
+                or not sess.window_id
+                or not sess.claude_session_id
+            ):
+                continue
+            current_map[sess.window_id] = sess.claude_session_id
+            window_state = session_manager.window_states.get(sess.window_id)
+            transcript_path = (
+                str(window_state.transcript_path or "") if window_state else ""
+            )
+            if transcript_path:
+                targets[sess.claude_session_id] = SessionInfo(
+                    session_id=sess.claude_session_id,
+                    file_path=Path(transcript_path),
+                )
+        return current_map, list(targets.values())
 
     async def _cleanup_all_stale_sessions(self) -> None:
         """Clean up all tracked sessions not in current session_map (used on startup)."""
@@ -466,12 +526,15 @@ class SessionMonitor:
                 self._file_mtimes.pop(session_id, None)
             self.state.save_if_dirty()
 
-    async def _detect_and_cleanup_changes(self) -> dict[str, str]:
+    async def _detect_and_cleanup_changes(
+        self, current_map: dict[str, str] | None = None
+    ) -> dict[str, str]:
         """Detect session_map changes and cleanup replaced/removed sessions.
 
         Returns current session_map for further processing.
         """
-        current_map = await self._load_current_session_map()
+        if current_map is None:
+            current_map = await self._load_current_session_map()
 
         sessions_to_remove: set[str] = set()
 
@@ -534,11 +597,15 @@ class SessionMonitor:
                 await session_manager.load_session_map()
 
                 # Detect session_map changes and cleanup replaced/removed sessions
-                current_map = await self._detect_and_cleanup_changes()
+                current_map, direct_targets = self._current_session_targets()
+                current_map = await self._detect_and_cleanup_changes(current_map)
                 active_session_ids = set(current_map.values())
 
                 # Check for new messages (all I/O is async)
-                new_messages = await self.check_for_updates(active_session_ids)
+                new_messages = await self.check_for_updates(
+                    active_session_ids,
+                    session_infos=direct_targets,
+                )
 
                 for msg in new_messages:
                     status = "complete" if msg.is_complete else "streaming"

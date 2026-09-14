@@ -26,6 +26,7 @@ class SessionMapMixin:
     """Window/session-map operations mixed into SessionManager."""
 
     _session_map_lock: asyncio.Lock
+    _session_map_signature: tuple[str, int, int] | None
     window_states: dict[str, WindowState]
     window_display_names: dict[str, str]
     user_window_offsets: dict[int, dict[str, int]]
@@ -83,10 +84,26 @@ class SessionMapMixin:
 
     async def load_session_map(self) -> None:
         """Serialize map reconciliation against bot-owned restore publication."""
+        signature = self._session_map_file_signature()
+        if signature == self._session_map_signature:
+            return
         async with self._session_map_lock:
-            await self._load_session_map_unlocked()
+            signature = self._session_map_file_signature()
+            if signature == self._session_map_signature:
+                return
+            if await self._load_session_map_unlocked():
+                self._session_map_signature = signature
 
-    async def _load_session_map_unlocked(self) -> None:
+    @staticmethod
+    def _session_map_file_signature() -> tuple[str, int, int]:
+        path = config.session_map_file
+        try:
+            stat = path.stat()
+            return str(path), stat.st_mtime_ns, stat.st_size
+        except OSError:
+            return str(path), 0, 0
+
+    async def _load_session_map_unlocked(self) -> bool:
         """Read session_map.json and update window_states with new session associations.
 
         Accepts canonical (``<source>:<wid>``) and grouped-session
@@ -96,13 +113,13 @@ class SessionMapMixin:
         ``window_name`` field in values.
         """
         if not config.session_map_file.exists():
-            return
+            return True
         try:
             async with aiofiles.open(config.session_map_file, "r") as f:
                 content = await f.read()
             session_map = json.loads(content)
         except (json.JSONDecodeError, OSError):
-            return
+            return False
 
         valid_wids: set[str] = set()
         changed = False
@@ -179,6 +196,7 @@ class SessionMapMixin:
 
         if changed:
             self.save_state()
+        return True
 
     async def publish_codex_restore_binding(
         self,

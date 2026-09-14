@@ -185,6 +185,11 @@ async def test_status_tick_uses_one_window_snapshot_for_all_live_sessions():
             new_callable=AsyncMock,
         ) as find_window,
         patch(
+            "ccbot.handlers.status_polling.tmux_manager.capture_panes",
+            new_callable=AsyncMock,
+            return_value={"@1": "one pane", "@2": "two pane"},
+        ) as capture,
+        patch(
             "ccbot.handlers.status_polling.update_status_message",
             new_callable=AsyncMock,
         ) as update,
@@ -204,6 +209,153 @@ async def test_status_tick_uses_one_window_snapshot_for_all_live_sessions():
             await status_poll_loop(AsyncMock())
 
     snapshot.assert_awaited_once_with()
+    capture.assert_awaited_once_with(["@1", "@2"])
     find_window.assert_not_awaited()
     assert update.await_count == 2
     assert [call.kwargs["window"] for call in update.await_args_list] == windows
+
+
+@pytest.mark.asyncio
+async def test_unchanged_windows_reuse_pane_text_without_recapture():
+    sessions = [SimpleNamespace(id="s1", window_id="@1")]
+    window = TmuxWindow("@1", "one", "/one", "codex", activity=100)
+
+    with (
+        patch("ccbot.handlers.status_polling.config.allowed_users", {7}),
+        patch(
+            "ccbot.handlers.status_polling.session_manager.list_user_sessions",
+            return_value=sessions,
+        ),
+        patch(
+            "ccbot.handlers.status_polling.tmux_manager.polling_snapshot",
+            new_callable=AsyncMock,
+            return_value=[window],
+        ),
+        patch(
+            "ccbot.handlers.status_polling.tmux_manager.capture_panes",
+            new_callable=AsyncMock,
+            return_value={"@1": "cached pane"},
+        ) as capture,
+        patch(
+            "ccbot.handlers.status_polling.update_status_message",
+            new_callable=AsyncMock,
+        ) as update,
+        patch(
+            "ccbot.handlers.status_polling.idle_archive_sweep",
+            new_callable=AsyncMock,
+        ),
+        patch("ccbot.handlers.status_polling.purge_sweep"),
+        patch("ccbot.handlers.status_polling.inbox_sweep"),
+        patch("ccbot.handlers.status_polling.ACTIVITY_CAPTURE_GRACE", 0.0),
+        patch(
+            "ccbot.handlers.status_polling.asyncio.sleep",
+            new_callable=AsyncMock,
+            side_effect=[None, asyncio.CancelledError],
+        ),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await status_poll_loop(AsyncMock())
+
+    capture.assert_awaited_once_with(["@1"])
+    assert update.await_count == 1
+    assert [call.kwargs["pane_text"] for call in update.await_args_list] == [
+        "cached pane",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_failed_capture_of_changed_window_is_retried():
+    sessions = [SimpleNamespace(id="s1", window_id="@1")]
+    windows = [
+        TmuxWindow("@1", "one", "/one", "codex", activity=100),
+        TmuxWindow("@1", "one", "/one", "codex", activity=101),
+        TmuxWindow("@1", "one", "/one", "codex", activity=101),
+    ]
+
+    with (
+        patch("ccbot.handlers.status_polling.config.allowed_users", {7}),
+        patch(
+            "ccbot.handlers.status_polling.session_manager.list_user_sessions",
+            return_value=sessions,
+        ),
+        patch(
+            "ccbot.handlers.status_polling.tmux_manager.polling_snapshot",
+            new_callable=AsyncMock,
+            side_effect=[[windows[0]], [windows[1]], [windows[2]]],
+        ),
+        patch(
+            "ccbot.handlers.status_polling.tmux_manager.capture_panes",
+            new_callable=AsyncMock,
+            side_effect=[{"@1": "old"}, {}, {"@1": "new"}],
+        ) as capture,
+        patch(
+            "ccbot.handlers.status_polling.update_status_message",
+            new_callable=AsyncMock,
+        ) as update,
+        patch(
+            "ccbot.handlers.status_polling.idle_archive_sweep",
+            new_callable=AsyncMock,
+        ),
+        patch("ccbot.handlers.status_polling.purge_sweep"),
+        patch("ccbot.handlers.status_polling.inbox_sweep"),
+        patch("ccbot.handlers.status_polling.ACTIVITY_CAPTURE_GRACE", 0.0),
+        patch(
+            "ccbot.handlers.status_polling.asyncio.sleep",
+            new_callable=AsyncMock,
+            side_effect=[None, None, asyncio.CancelledError],
+        ),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await status_poll_loop(AsyncMock())
+
+    assert capture.await_count == 3
+    assert [call.kwargs["pane_text"] for call in update.await_args_list] == [
+        "old",
+        "new",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unchanged_window_gets_periodic_status_recheck():
+    sessions = [SimpleNamespace(id="s1", window_id="@1")]
+    window = TmuxWindow("@1", "one", "/one", "codex", activity=100)
+
+    with (
+        patch("ccbot.handlers.status_polling.config.allowed_users", {7}),
+        patch(
+            "ccbot.handlers.status_polling.session_manager.list_user_sessions",
+            return_value=sessions,
+        ),
+        patch(
+            "ccbot.handlers.status_polling.tmux_manager.polling_snapshot",
+            new_callable=AsyncMock,
+            return_value=[window],
+        ),
+        patch(
+            "ccbot.handlers.status_polling.tmux_manager.capture_panes",
+            new_callable=AsyncMock,
+            return_value={"@1": "cached pane"},
+        ) as capture,
+        patch(
+            "ccbot.handlers.status_polling.update_status_message",
+            new_callable=AsyncMock,
+        ) as update,
+        patch(
+            "ccbot.handlers.status_polling.idle_archive_sweep",
+            new_callable=AsyncMock,
+        ),
+        patch("ccbot.handlers.status_polling.purge_sweep"),
+        patch("ccbot.handlers.status_polling.inbox_sweep"),
+        patch("ccbot.handlers.status_polling.ACTIVITY_CAPTURE_GRACE", 0.0),
+        patch("ccbot.handlers.status_polling.UNCHANGED_STATUS_RECHECK", 0.0),
+        patch(
+            "ccbot.handlers.status_polling.asyncio.sleep",
+            new_callable=AsyncMock,
+            side_effect=[None, asyncio.CancelledError],
+        ),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await status_poll_loop(AsyncMock())
+
+    capture.assert_awaited_once_with(["@1"])
+    assert update.await_count == 2

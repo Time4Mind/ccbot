@@ -6,6 +6,7 @@ those tests live in `doc/legacy/topic-architecture.md` for reference
 only.
 """
 
+import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -70,6 +71,29 @@ class TestWindowState:
         state.session_id = "abc"
         mgr.clear_window_session("@1")
         assert mgr.get_window_state("@1").session_id == ""
+
+
+@pytest.mark.asyncio
+async def test_unchanged_session_map_skips_reparse(
+    mgr: SessionManager, tmp_path, monkeypatch
+) -> None:
+    session_map = tmp_path / "session_map.json"
+    session_map.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(config, "session_map_file", session_map)
+    reconcile = AsyncMock(return_value=True)
+    monkeypatch.setattr(mgr, "_load_session_map_unlocked", reconcile)
+
+    await mgr.load_session_map()
+    await mgr.load_session_map()
+
+    reconcile.assert_awaited_once()
+
+    session_map.write_text('{"changed": true}', encoding="utf-8")
+    stat = session_map.stat()
+    os.utime(session_map, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+    await mgr.load_session_map()
+
+    assert reconcile.await_count == 2
 
 
 class TestDisplayNames:

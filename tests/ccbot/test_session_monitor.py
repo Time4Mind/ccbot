@@ -1,11 +1,13 @@
 """Unit tests for SessionMonitor JSONL reading and offset handling."""
 
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from ccbot.monitor_state import TrackedSession
-from ccbot.session_monitor import SessionMonitor
+from ccbot.session_monitor import SessionInfo, SessionMonitor
 
 
 class TestReadNewLinesOffsetRecovery:
@@ -93,3 +95,117 @@ class TestReadNewLinesOffsetRecovery:
         # Should reset offset to 0 and read the line
         assert session.last_byte_offset == jsonl_file.stat().st_size
         assert len(result) == 1
+
+
+class TestDirectSessionTargets:
+    @pytest.fixture
+    def monitor(self, tmp_path):
+        return SessionMonitor(
+            projects_path=tmp_path / "projects",
+            state_file=tmp_path / "monitor_state.json",
+        )
+
+    @pytest.mark.asyncio
+    async def test_loads_current_server_transcript_paths_from_session_map(
+        self, monitor, tmp_path, monkeypatch
+    ):
+        from ccbot.config import config
+
+        transcript = tmp_path / "active.jsonl"
+        transcript.write_text("", encoding="utf-8")
+        session_map = tmp_path / "session_map.json"
+        session_map.write_text(
+            json.dumps(
+                {
+                    "ccbot:@7": {
+                        "session_id": "active-session",
+                        "transcript_path": str(transcript),
+                    },
+                    "other:@8": {
+                        "session_id": "foreign-session",
+                        "transcript_path": str(tmp_path / "foreign.jsonl"),
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(config, "session_map_file", session_map)
+        monkeypatch.setattr(config, "tmux_session_name", "ccbot")
+
+        current_map, targets = await monitor._load_current_session_targets()
+
+        assert current_map == {"@7": "active-session"}
+        assert targets == [SessionInfo("active-session", transcript)]
+
+    @pytest.mark.asyncio
+    async def test_complete_direct_targets_skip_project_and_tmux_scan(
+        self, monitor, tmp_path
+    ):
+        transcript = tmp_path / "active.jsonl"
+        transcript.write_text("", encoding="utf-8")
+        monitor.scan_projects = AsyncMock(return_value=[])
+
+        await monitor.check_for_updates(
+            {"active-session"},
+            session_infos=[SessionInfo("active-session", transcript)],
+        )
+
+        monitor.scan_projects.assert_not_awaited()
+        assert monitor.state.get_session("active-session") is not None
+
+    def test_uses_only_live_bot_sessions_for_hot_path_targets(
+        self, monitor, tmp_path, monkeypatch
+    ):
+        from ccbot.session import session_manager
+
+        active_path = tmp_path / "active.jsonl"
+        monkeypatch.setattr(
+            session_manager,
+            "sessions",
+            {
+                "active": SimpleNamespace(
+                    state="active",
+                    window_id="@7",
+                    claude_session_id="active-provider",
+                ),
+                "archived": SimpleNamespace(
+                    state="archived",
+                    window_id="@8",
+                    claude_session_id="archived-provider",
+                ),
+            },
+        )
+        monkeypatch.setattr(
+            session_manager,
+            "window_states",
+            {
+                "@7": SimpleNamespace(transcript_path=str(active_path)),
+                "@8": SimpleNamespace(transcript_path=str(tmp_path / "old.jsonl")),
+            },
+        )
+
+        current_map, targets = monitor._current_session_targets()
+
+        assert current_map == {"@7": "active-provider"}
+        assert targets == [SessionInfo("active-provider", active_path)]
+
+    @pytest.mark.asyncio
+    async def test_missing_direct_target_uses_legacy_scan_fallback(
+        self, monitor, tmp_path
+    ):
+        direct = tmp_path / "direct.jsonl"
+        legacy = tmp_path / "legacy.jsonl"
+        direct.write_text("", encoding="utf-8")
+        legacy.write_text("", encoding="utf-8")
+        monitor.scan_projects = AsyncMock(
+            return_value=[SessionInfo("legacy-session", legacy)]
+        )
+
+        await monitor.check_for_updates(
+            {"direct-session", "legacy-session"},
+            session_infos=[SessionInfo("direct-session", direct)],
+        )
+
+        monitor.scan_projects.assert_awaited_once()
+        assert monitor.state.get_session("direct-session") is not None
+        assert monitor.state.get_session("legacy-session") is not None

@@ -60,7 +60,9 @@ def test_no_user_action_uses_process_start_as_idle_anchor() -> None:
 
 
 @pytest.mark.asyncio
-async def test_message_activity_records_allowed_user(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_message_activity_records_allowed_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from ccbot.bot import activity
 
     monkeypatch.setattr(activity, "is_user_allowed", lambda _uid: True)
@@ -68,11 +70,15 @@ async def test_message_activity_records_allowed_user(monkeypatch: pytest.MonkeyP
 
     await activity.record_user_message_activity(update, MagicMock())
 
-    assert user_activity.effective_live_lag(42, 4, now=user_activity.last_seen(42)) == 4.0
+    assert (
+        user_activity.effective_live_lag(42, 4, now=user_activity.last_seen(42)) == 4.0
+    )
 
 
 @pytest.mark.asyncio
-async def test_even_noop_button_records_user_activity(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_even_noop_button_records_user_activity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from ccbot.bot import callbacks
 
     recorded: list[int] = []

@@ -20,6 +20,8 @@ async def test_screenshot_profiles_have_deterministic_scale_and_palette() -> Non
     assert compact8.height == round(full8.height * 0.75)
     assert len(full8.convert("RGB").getcolors(maxcolors=256) or []) <= 8
     assert len(compact8.convert("RGB").getcolors(maxcolors=256) or []) <= 8
+    assert full8.mode == "P"
+    assert compact8.mode == "P"
     assert fullcolor.size == full8.size
 
 

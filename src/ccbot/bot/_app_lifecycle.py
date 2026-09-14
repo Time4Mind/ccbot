@@ -381,3 +381,8 @@ async def post_shutdown(
     if session_monitor:
         await session_monitor.stop()
         logger.info("Session monitor stopped")
+
+    # Flush the newest in-memory activity timestamps before a clean exit.
+    # The periodic status checkpoint keeps crash exposure below one minute;
+    # an orderly deploy/restart loses nothing.
+    session_manager.save_state()

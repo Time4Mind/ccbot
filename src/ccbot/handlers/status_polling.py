@@ -543,6 +543,11 @@ async def status_poll_loop(bot: Bot) -> None:
                         await idle_archive_sweep(bot, user_id)
                     except Exception as e:
                         logger.debug("idle_archive_sweep error: %s", e)
+                # ``touch_session`` updates activity in memory immediately.
+                # Persist all accumulated timestamps once per archive sweep
+                # instead of fsyncing the full state file for every transcript
+                # event. UI routing never waits for this checkpoint.
+                session_manager.save_state()
 
             # Long-archive purge sweep.
             if now - last_purge_sweep >= PURGE_SWEEP_INTERVAL:

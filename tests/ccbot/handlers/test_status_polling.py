@@ -197,6 +197,8 @@ async def test_status_tick_uses_one_window_snapshot_for_all_live_sessions():
             "ccbot.handlers.status_polling.idle_archive_sweep",
             new_callable=AsyncMock,
         ),
+        patch("ccbot.handlers.status_polling.session_manager.save_state") as save_state,
+        patch("ccbot.handlers.status_polling.time.monotonic", return_value=120.0),
         patch("ccbot.handlers.status_polling.purge_sweep"),
         patch("ccbot.handlers.status_polling.inbox_sweep"),
         patch(
@@ -213,6 +215,7 @@ async def test_status_tick_uses_one_window_snapshot_for_all_live_sessions():
     find_window.assert_not_awaited()
     assert update.await_count == 2
     assert [call.kwargs["window"] for call in update.await_args_list] == windows
+    save_state.assert_called_once_with()
 
 
 @pytest.mark.asyncio

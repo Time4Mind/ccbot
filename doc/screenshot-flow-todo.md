@@ -1,19 +1,20 @@
 # Screenshot flow - agreed target and implementation TODO
 
 Status: the agreed screenshot flow and its cached-switching follow-up are
-implemented. The unresolved production findings below are the next Tier 0
-investigations; they are recorded here, not fixed as part of the state-write
-optimization.
+implemented. The Tier 0 findings below were diagnosed and have local regression
+fixes; production acceptance is pending.
 
 ## Tier 0 investigations
 
 - Rich-media delivery errors under the 2026-09-14 five-minute load audit:
-  13 `Rich_message_photo_invalid` responses and one timeout. Determine the
-  failing transition and remove the error without adding tap latency or text
-  layout shifts.
-- Old/orphan keyboard cleanup failed 15 times in the same audit. Determine why
-  Telegram rejects or misses the cleanup, and ensure obsolete session keyboards
-  become non-interactive without delaying the session switch.
+  13 `Rich_message_photo_invalid` responses came from persisted photo IDs that
+  Telegram now rejects. The recovery path now evicts the rejected ID and retries
+  once with a fresh capture; a timeout keeps the existing rich carrier for the
+  next normal update instead of causing a text-layout shift.
+- Old/orphan keyboard cleanup failed 15 times in the same audit because the
+  switch path retried cleanup for message IDs that were no longer the registered
+  live keyboard. Cleanup is now sent only for the current registered orphan;
+  already-missing/already-clean responses are terminal success.
 
 ## Task contract
 

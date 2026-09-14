@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,23 @@ class TmuxControlClient:
         self.session_name = session_name
         self.proc: asyncio.subprocess.Process | None = None
         self.lock = asyncio.Lock()
+
+    def _start_command(self) -> tuple[str, ...]:
+        tmux = (
+            "tmux",
+            "-C",
+            "attach-session",
+            "-f",
+            "read-only,ignore-size,no-output",
+            "-t",
+            self.session_name,
+        )
+        # macOS/BSD script allocates the PTY required by the local tmux build.
+        # util-linux script has incompatible argument order; tmux control mode
+        # works directly on Linux and avoids a shell-quoted `-c` command.
+        if sys.platform == "linux":
+            return tmux
+        return ("/usr/bin/script", "-q", "/dev/null", *tmux)
 
     async def close(self) -> None:
         proc = self.proc
@@ -33,16 +51,7 @@ class TmuxControlClient:
             return True
         try:
             proc = await asyncio.create_subprocess_exec(
-                "/usr/bin/script",
-                "-q",
-                "/dev/null",
-                "tmux",
-                "-C",
-                "attach-session",
-                "-f",
-                "read-only,ignore-size,no-output",
-                "-t",
-                self.session_name,
+                *self._start_command(),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,

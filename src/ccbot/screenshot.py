@@ -388,7 +388,7 @@ async def text_to_image(
                 colors=8,
                 method=Image.Quantize.FASTOCTREE,
                 dither=Image.Dither.NONE,
-            ).convert("RGB")
+            )
         elif profile != "fullcolor":
             raise ValueError(f"Unknown screenshot profile: {profile}")
 

@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 
 from telegram import Bot
 
@@ -44,43 +43,6 @@ from ..usage import context_pct_for_session
 from .commands.auth import notify_auth_expired
 
 logger = logging.getLogger(__name__)
-
-
-def _transcript_path_for_window(window_id: str, sess: object) -> Path | None:
-    """Resolve a live transcript without parsing it for summary statistics."""
-    state = session_manager.window_states.get(window_id)
-    if state is not None and state.transcript_path:
-        candidate = Path(state.transcript_path)
-        if candidate.exists():
-            return candidate
-
-    session_id = str(
-        getattr(state, "session_id", "") or getattr(sess, "claude_session_id", "")
-    )
-    cwd = str(getattr(state, "cwd", "") or getattr(sess, "workdir", ""))
-    backend = str(getattr(state, "backend", "") or getattr(sess, "backend", ""))
-    if not session_id or not cwd:
-        return None
-    if backend == "codex":
-        from ..codex_session_io import build_session_file_path
-    else:
-        from ..session_claude_io import build_session_file_path
-
-    candidate = build_session_file_path(session_id, cwd)
-    return candidate if candidate is not None and candidate.exists() else None
-
-
-def _mark_window_read(user_id: int, window_id: str, sess: object) -> None:
-    """Advance the unread offset using stat-only transcript resolution."""
-    file_path = _transcript_path_for_window(window_id, sess)
-    if file_path is None:
-        return
-    try:
-        session_manager.update_user_window_offset(
-            user_id, window_id, file_path.stat().st_size
-        )
-    except OSError:
-        pass
 
 
 async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
@@ -209,7 +171,6 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                     ui = extract_interactive_content(pane_text)
                     if ui is not None:
                         await enter_kb_mode(bot, user_id, sess, ui.content, ui.name)
-                        _mark_window_read(user_id, wid, sess)
                         continue
             # Pane parse failed — fall through to regular card update.
 
@@ -260,8 +221,6 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                             await push_event(bot, user_id, sess, text="task complete")
                         except Exception as e:
                             logger.debug("bg finished push failed: %s", e)
-
-            _mark_window_read(user_id, wid, sess)
 
             # Context-pct refresh from JSONL on every end-of-turn
             # assistant text. The /context-command-based poller was

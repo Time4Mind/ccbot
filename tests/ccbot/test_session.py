@@ -121,6 +121,21 @@ class TestLocalTerminalSetting:
         mgr.user_settings[1] = {"local_terminal": "on"}
         assert mgr.get_user_settings(1).get("local_terminal") == "auto"
 
+    def test_option_button_defaults_and_legacy_terminal_migration(
+        self, mgr: SessionManager
+    ) -> None:
+        assert mgr.get_user_settings(1)["option_button_screenshot"] is True
+        assert mgr.get_user_settings(1)["option_button_terminal"] is False
+
+        mgr.user_settings[1] = {"local_terminal": "manual"}
+        assert mgr.get_user_settings(1)["option_button_terminal"] is True
+
+        mgr.user_settings[1] = {
+            "local_terminal": "manual",
+            "option_button_terminal": False,
+        }
+        assert mgr.get_user_settings(1)["option_button_terminal"] is False
+
 
 class TestIdleArchiveSetting:
     def test_default_is_six_hours(self, mgr: SessionManager) -> None:

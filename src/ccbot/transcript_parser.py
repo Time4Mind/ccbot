@@ -17,7 +17,7 @@ import re
 from typing import Any
 
 from . import transcript_format
-from .transcript_codex import normalize_codex_entry
+from .transcript_codex import is_injected_user_text, normalize_codex_entry
 from .transcript_format import (
     EXPANDABLE_HEADED_END,
     EXPANDABLE_HEADED_SEP,
@@ -465,7 +465,11 @@ class TranscriptParser:
 
                     elif btype == "text":
                         t = block.get("text", "").strip()
-                        if t and not cls._RE_SYSTEM_TAGS.search(t):
+                        if (
+                            t
+                            and not cls._RE_SYSTEM_TAGS.search(t)
+                            and not is_injected_user_text(t)
+                        ):
                             user_text_parts.append(t)
 
                 # Add user text if present (skip if message was only tool_results)

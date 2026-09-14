@@ -31,8 +31,6 @@ def carrier_kind(state: CardState) -> CarrierKind:
     """Return the normalized carrier kind, tolerating legacy test fixtures."""
     if state.is_rich_media_msg:
         return CarrierKind.RICH_MEDIA
-    if state.is_photo_msg:
-        return CarrierKind.LEGACY_PHOTO
     return CarrierKind.TEXT
 
 
@@ -71,7 +69,6 @@ def bind_carrier(
     """Bind ``state`` to one message and set its transport kind as a unit."""
     state.msg_id = msg_id
     state.is_rich_media_msg = kind is CarrierKind.RICH_MEDIA
-    state.is_photo_msg = kind is CarrierKind.LEGACY_PHOTO
     state.rich_media_file_id = (
         rich_media_file_id if kind is CarrierKind.RICH_MEDIA else ""
     )

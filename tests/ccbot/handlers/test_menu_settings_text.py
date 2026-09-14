@@ -88,7 +88,8 @@ def test_multi_setting_category_moves_values_from_buttons_to_table(
             "live_lag": 4,
             "card_history": 10,
             "card_page_lines": 20,
-            "card_inline_screenshots": True,
+            "screenshot_capture_kib": 48,
+            "screenshot_profile": "full8",
         },
     )
 
@@ -100,12 +101,14 @@ def test_multi_setting_category_moves_values_from_buttons_to_table(
     assert "| Лаг карточки | 4s |" in rendered
     assert "| История в карточке | 10 turns |" in rendered
     assert "| Размер страницы | 20 lines |" in rendered
-    assert "| Скрины в карточке | on |" in rendered
+    assert "| Объём скрина | 48 KiB |" in rendered
+    assert "| Качество скрина | 100%, 8 цветов |" in rendered
     assert [row[0].text for row in keyboard.inline_keyboard[:-1]] == [
         "Лаг карточки",
         "История в карточке",
         "Размер страницы",
-        "Скрины в карточке",
+        "Объём скрина",
+        "Качество скрина",
     ]
 
 
@@ -149,3 +152,29 @@ def test_voice_settings_offer_parakeet(monkeypatch: pytest.MonkeyPatch) -> None:
         if button.callback_data
     ]
     assert any(value.endswith("parakeet") for value in callbacks)
+
+
+def test_options_category_renders_button_visibility_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        session_manager,
+        "get_user_settings",
+        lambda _uid: {
+            "language": "ru",
+            "option_button_screenshot": True,
+            "option_button_terminal": False,
+        },
+    )
+
+    rendered = render_settings_group_text(42, "settings_cat_options")
+    keyboard = build_footer_keyboard(42, screen="settings_cat_options")
+
+    assert "| Кнопка | Показывать |" in rendered
+    assert "| 🧑‍💻 Скрин | on |" in rendered
+    assert "| 🖥 Терминал | off |" in rendered
+    assert keyboard is not None
+    assert [row[0].text for row in keyboard.inline_keyboard[:-1]] == [
+        "🧑‍💻 Скрин",
+        "🖥 Терминал",
+    ]

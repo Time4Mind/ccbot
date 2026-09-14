@@ -8,6 +8,7 @@ doubles as a session-list surface.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -21,7 +22,6 @@ from ...handlers.callback_data import (
     CB_MM_LIST,
     CB_MM_NEW,
     CB_MM_SETTINGS,
-    CB_MM_SHOT,
     CB_MM_STATUS,
     CB_SW_NEW,
 )
@@ -40,9 +40,47 @@ from .._usage_window import (
     get_cached_live_usage,
     get_cached_live_usage_age_seconds,
 )
-from ..commands.info import emit_screenshot_compact
 
 logger = logging.getLogger(__name__)
+
+_status_refresh_tasks: dict[int, asyncio.Task[None]] = {}
+
+
+def _cancel_status_refresh(user_id: int) -> None:
+    task = _status_refresh_tasks.pop(user_id, None)
+    if task is not None and not task.done():
+        task.cancel()
+
+
+async def _refresh_status_live(
+    query: CallbackQuery,
+    user_id: int,
+    shown_text: str,
+    cached_info: object | None,
+    keyboard: InlineKeyboardMarkup,
+) -> None:
+    """Refresh quota without holding Telegram's callback dispatch lane."""
+    current = asyncio.current_task()
+    try:
+        from ...usage import format_usage_breakdown_compact
+
+        usage_info = await fetch_live_usage()
+        live_block = format_usage_breakdown_compact(
+            user_id,
+            usage_info if usage_info is not None else cached_info,
+            age_seconds=0
+            if usage_info is not None
+            else get_cached_live_usage_age_seconds(),
+        )
+        if _status_refresh_tasks.get(user_id) is current and live_block != shown_text:
+            await safe_edit(query, live_block, reply_markup=keyboard)
+    except asyncio.CancelledError:
+        return
+    except Exception as exc:
+        logger.debug("status live refresh failed: %s", exc)
+    finally:
+        if _status_refresh_tasks.get(user_id) is current:
+            _status_refresh_tasks.pop(user_id, None)
 
 
 async def _emit_new_flow(
@@ -88,6 +126,9 @@ async def handle(
     query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
 ) -> bool:
     data = query.data or ""
+
+    if data != CB_MM_STATUS:
+        _cancel_status_refresh(user.id)
 
     if data == CB_MM_BACK:
         text = render_more_text(user.id)
@@ -148,28 +189,14 @@ async def handle(
         )
         shown_text = cached_block
         await safe_edit(query, shown_text, reply_markup=kb)
-        usage_info = await fetch_live_usage()
-        live_block = format_usage_breakdown_compact(
-            user.id,
-            usage_info if usage_info is not None else cached_info,
-            age_seconds=0
-            if usage_info is not None
-            else get_cached_live_usage_age_seconds(),
+        # Quota collection may involve a slow CLI/network probe. Keep it out of
+        # the callback handler so a following Back tap is dispatched at once.
+        # A second status refresh, or any navigation away, supersedes this task.
+        _cancel_status_refresh(user.id)
+        task = asyncio.create_task(
+            _refresh_status_live(query, user.id, shown_text, cached_info, kb)
         )
-        # Status is a read-only operation. Failure to load quota data must not
-        # start or replace the user's otherwise-working Codex authorization.
-        text = live_block
-        if text != shown_text:
-            await safe_edit(query, text, reply_markup=kb)
-        return True
-
-    if data == CB_MM_SHOT:
-        await query.answer()
-        # Screenshot's Back button always returns to the main live-card
-        # view now — the legacy "l" origin (Menu→List) doesn't exist
-        # anymore since Menu→Sessions IS the live card.
-
-        await emit_screenshot_compact(query, context.bot, user.id, origin="m")
+        _status_refresh_tasks[user.id] = task
         return True
 
     if data == CB_MM_NEW:

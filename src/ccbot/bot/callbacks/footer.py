@@ -17,6 +17,7 @@ from ...handlers.callback_data import (
     CB_FT_KILL,
     CB_FT_MORE,
     CB_FT_OPTIONS,
+    CB_FT_SCREENSHOT,
     CB_FT_STOP,
     CB_FT_TERM,
     CB_KB_BACK,
@@ -142,6 +143,17 @@ async def handle(
     if data == CB_FT_OPTIONS:
         toggle_footer_options(user.id)
         await query.answer()
+        await refresh_panel(context.bot, user.id, immediate=True, refresh_keyboard=True)
+        return True
+
+    if data == CB_FT_SCREENSHOT:
+        settings = session_manager.get_user_settings(user.id)
+        enabled = not bool(settings.get("card_inline_screenshots", False))
+        session_manager.update_user_setting(user.id, "card_inline_screenshots", enabled)
+        await query.answer()
+        # Keep Options expanded and transform the existing carrier in place.
+        # Rich-media failures leave the text card intact and retry on the next
+        # ordinary update.
         await refresh_panel(context.bot, user.id, immediate=True, refresh_keyboard=True)
         return True
 

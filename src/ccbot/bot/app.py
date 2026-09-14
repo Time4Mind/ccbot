@@ -52,7 +52,6 @@ from .commands.info import (
     health_command,
     help_command,
     history_command,
-    screenshot_command,
     usage_command,
 )
 from .commands.lifecycle import (

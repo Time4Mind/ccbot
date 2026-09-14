@@ -16,15 +16,18 @@ from .card_model import (
     CardState,
     _card_is_busy,
 )
-from .card_types import CarrierKind, TurnPhase
-from .card_rich_media import edit_rich_media_card, send_rich_media_card
+from .card_types import CarrierKind
+from .card_rich_media import (
+    edit_rich_media_card,
+    remember_rich_photo,
+    send_rich_media_card,
+)
 from .kb_mode import _capture_pane_png
 from .card_registry import (
     _carrier_edit_lock,
     _user_send_lock,
     _strip_stale_switchers,
     _register_msg,
-    lookup_session_for_message,
     _inline_screens_enabled,
     _legacy,
 )
@@ -38,8 +41,6 @@ __all__ = [
     "_edit_card",
     "_edit_card_unlocked",
     "_PHOTO_EDIT_MIN_INTERVAL",
-    "_edit_photo_card",
-    "_replace_legacy_photo_with_text",
     "_deferred_edit",
 ]
 
@@ -102,18 +103,11 @@ async def _send_card_locked(
     sent_pane_hash = ""
     sent_photo_ts = 0.0
 
-    # Inline screenshots ON: prefer a Rich Markdown card whose final block
-    # is the pane image. Older/rich-disabled servers retain photo+caption.
+    # Inline screenshots ON: prefer a Rich Markdown card whose media block
+    # sits before the service tail. The latest image remains after completion.
     sent = None
-    if (
-        state.turn_phase is TurnPhase.RUNNING
-        and _inline_screens_enabled(user_id)
-        and sess.window_id
-    ):
-        from ..markdown_v2 import convert_markdown
-        from .message_sender import PARSE_MODE, strip_sentinels
-
-        png, pane_hash = await _capture_pane_png(sess.window_id)
+    if _inline_screens_enabled(user_id) and sess.window_id:
+        png, pane_hash = await _capture_pane_png(sess.window_id, user_id=user_id)
         if png is not None:
             rich_sent = await send_rich_media_card(
                 bot,
@@ -127,38 +121,6 @@ async def _send_card_locked(
                 sent = rich_sent.message
                 sent_kind = CarrierKind.RICH_MEDIA
                 sent_file_id = rich_sent.photo_file_id
-                sent_pane_hash = pane_hash
-                sent_photo_ts = time.monotonic()
-
-        if png is not None and sent is None:
-            import io as _io
-
-            caption = convert_markdown(text)
-            try:
-                sent = await bot.send_photo(
-                    chat_id=user_id,
-                    photo=_io.BytesIO(png),
-                    caption=caption,
-                    parse_mode=PARSE_MODE,
-                    reply_markup=keyboard,
-                    disable_notification=True,
-                )
-            except RetryAfter:
-                raise
-            except Exception as e:
-                logger.debug("photo send failed, retry plain caption: %s", e)
-                try:
-                    sent = await bot.send_photo(
-                        chat_id=user_id,
-                        photo=_io.BytesIO(png),
-                        caption=strip_sentinels(text),
-                        reply_markup=keyboard,
-                        disable_notification=True,
-                    )
-                except Exception as e2:
-                    logger.debug("photo send plain fallback failed: %s", e2)
-            if sent is not None:
-                sent_kind = CarrierKind.LEGACY_PHOTO
                 sent_pane_hash = pane_hash
                 sent_photo_ts = time.monotonic()
 
@@ -191,6 +153,7 @@ async def _send_card_locked(
         pane_hash=sent_pane_hash,
         photo_edit_ts=sent_photo_ts,
     )
+    remember_rich_photo(state, sent_pane_hash, sent_file_id)
     await _strip_stale_switchers(bot, user_id, sent.message_id, sess.id)
     if keyboard is not None:
         session_manager.set_last_switcher_msg(user_id, sent.message_id)
@@ -257,12 +220,13 @@ async def _edit_card_unlocked(
     )
 
     kind = carrier_kind(state)
-    removing_rich_pane = (
-        kind is CarrierKind.RICH_MEDIA and state.turn_phase is TurnPhase.IDLE
+    rich_media_failed = False
+    removing_rich_pane = kind is CarrierKind.RICH_MEDIA and not _inline_screens_enabled(
+        user_id
     )
 
-    # Rich-media card: refresh it while RUNNING, or convert it back to a
-    # text carrier once the durable turn phase becomes IDLE.
+    # Rich-media card persists through IDLE. Only the explicit Screenshot
+    # toggle removes it from the same carrier.
     if kind is CarrierKind.RICH_MEDIA:
         if removing_rich_pane:
             removed = await try_rich_edit(
@@ -278,7 +242,7 @@ async def _edit_card_unlocked(
             # Continue through the normal rich → MarkdownV2 → plain pipeline.
             # A temporary rich failure must not leave the final answer stale.
         else:
-            return await edit_rich_media_card(
+            updated = await edit_rich_media_card(
                 bot,
                 user_id,
                 state,
@@ -287,33 +251,19 @@ async def _edit_card_unlocked(
                 min_photo_interval=_PHOTO_EDIT_MIN_INTERVAL,
                 refresh_pane=refresh_pane,
             )
-
-    # A legacy photo message cannot be transformed into text by editing its
-    # caption. Replace it transactionally only after the text send succeeds.
-    if kind is CarrierKind.LEGACY_PHOTO:
-        if state.turn_phase is TurnPhase.IDLE:
-            return await _replace_legacy_photo_with_text(
-                bot,
-                user_id,
-                state,
-                text=text,
-                reply_markup=reply_markup,
-            )
-        return await _edit_photo_card(
-            bot,
-            user_id,
-            state,
-            text=text,
-            formatted=convert_markdown(text),
-            reply_markup=reply_markup,
-            refresh_pane=refresh_pane,
-        )
+            if updated:
+                return True
+            # The rich editor may clear the mutable carrier after a lost-message
+            # response; getattr avoids retaining the pre-call type narrowing.
+            if getattr(state, "msg_id") is None:
+                return False
+            rich_media_failed = True
 
     # A text carrier left by finalization is promoted back to rich media on
     # the next running turn. If capture/rich delivery is temporarily
     # unavailable, retain the text carrier and continue with text editing.
     if (
-        state.turn_phase is TurnPhase.RUNNING
+        not rich_media_failed
         and _inline_screens_enabled(user_id)
         and config.rich_messages
     ):
@@ -346,7 +296,7 @@ async def _edit_card_unlocked(
     # through to the MarkdownV2 pipeline below, which also owns the
     # lost-carrier detection.
     if await try_rich_edit(bot, user_id, state.msg_id, text, reply_markup=reply_markup):
-        if removing_rich_pane:
+        if removing_rich_pane or rich_media_failed:
             bind_carrier(state, state.msg_id, CarrierKind.TEXT)
         return True
 
@@ -361,7 +311,7 @@ async def _edit_card_unlocked(
             reply_markup=reply_markup,
             link_preview_options=NO_LINK_PREVIEW,
         )
-        if removing_rich_pane:
+        if removing_rich_pane or rich_media_failed:
             bind_carrier(state, state.msg_id, CarrierKind.TEXT)
         return True
     except BadRequest as e:
@@ -389,7 +339,7 @@ async def _edit_card_unlocked(
                 reply_markup=reply_markup,
                 link_preview_options=NO_LINK_PREVIEW,
             )
-            if removing_rich_pane:
+            if removing_rich_pane or rich_media_failed:
                 bind_carrier(state, state.msg_id, CarrierKind.TEXT)
             return True
         except BadRequest as e2:
@@ -413,165 +363,6 @@ async def _edit_card_unlocked(
 
 
 _PHOTO_EDIT_MIN_INTERVAL = 2.5  # seconds — per-session throttle on editMessageMedia
-
-
-async def _replace_legacy_photo_with_text(
-    bot: Bot,
-    user_id: int,
-    state: CardState,
-    *,
-    text: str,
-    reply_markup: InlineKeyboardMarkup | None,
-) -> bool:
-    """Transactionally replace a photo carrier with a text-only message."""
-    from .message_sender import send_with_fallback
-
-    old = snapshot_carrier(state)
-    if old.msg_id is None:
-        return False
-    sess_id = lookup_session_for_message(user_id, old.msg_id)
-    if not sess_id:
-        logger.warning("photo replacement has no session msg=%s", old.msg_id)
-        return False
-
-    async with _user_send_lock(user_id):
-        try:
-            sent = await send_with_fallback(
-                bot,
-                user_id,
-                text,
-                reply_markup=reply_markup,
-                disable_notification=True,
-            )
-        except RetryAfter:
-            raise
-        except Exception as exc:
-            logger.warning("photo replacement send failed msg=%s: %s", old.msg_id, exc)
-            return False
-        if sent is None:
-            return False
-
-        bind_carrier(state, sent.message_id, CarrierKind.TEXT)
-        _register_msg(user_id, sent.message_id, sess_id)
-        session_manager.set_card_msg(user_id, sent.message_id)
-        if reply_markup is not None:
-            session_manager.set_last_switcher_msg(user_id, sent.message_id)
-        await _strip_stale_switchers(bot, user_id, sent.message_id, sess_id)
-
-    try:
-        await bot.delete_message(chat_id=user_id, message_id=old.msg_id)
-    except Exception as exc:
-        logger.warning("photo replacement delete failed msg=%s: %s", old.msg_id, exc)
-    return True
-
-
-async def _edit_photo_card(
-    bot: Bot,
-    user_id: int,
-    state: CardState,
-    *,
-    text: str,
-    formatted: str,
-    reply_markup: InlineKeyboardMarkup | None,
-    refresh_pane: bool = True,
-) -> bool:
-    """Edit a photo+caption card msg.
-
-    Refresh strategy:
-    * Pane unchanged since last edit → editMessageCaption only.
-    * Pane changed AND ≥3s since last photo edit → editMessageMedia
-      with new photo + new caption + keyboard.
-    * Pane changed but throttled → editMessageCaption only. Next render
-      after the throttle window will pick up the freshest pane.
-    """
-    import io as _io
-
-    from telegram import InputMediaPhoto
-
-    from ..markdown_v2 import convert_markdown
-    from .message_sender import PARSE_MODE, strip_sentinels
-
-    # Resolve session from msg_id lookup (we don't have it here directly).
-    # Find by reverse mapping (user_id, msg_id) → session_id.
-    sess_id = lookup_session_for_message(user_id, state.msg_id or 0)
-    sess = session_manager.get_session(sess_id) if sess_id else None
-    window_id = sess.window_id if sess is not None else ""
-
-    pane_changed = False
-    pane_png: bytes | None = None
-    pane_hash = state.last_pane_hash
-    elapsed = time.monotonic() - state.last_photo_edit_ts
-    if refresh_pane and window_id and elapsed >= _PHOTO_EDIT_MIN_INTERVAL:
-        png, h = await _capture_pane_png(window_id)
-        if png is not None and h:
-            if h != state.last_pane_hash:
-                pane_changed = True
-                pane_png = png
-                pane_hash = h
-
-    try:
-        if pane_changed and pane_png is not None:
-            media = InputMediaPhoto(
-                media=_io.BytesIO(pane_png),
-                caption=convert_markdown(text),
-                parse_mode=PARSE_MODE,
-            )
-            await bot.edit_message_media(
-                chat_id=user_id,
-                message_id=state.msg_id,
-                media=media,
-                reply_markup=reply_markup,
-            )
-            bind_carrier(
-                state,
-                state.msg_id,
-                CarrierKind.LEGACY_PHOTO,
-                pane_hash=pane_hash,
-                photo_edit_ts=time.monotonic(),
-            )
-            return True
-        # Pane unchanged or throttled — caption-only refresh.
-        await bot.edit_message_caption(
-            chat_id=user_id,
-            message_id=state.msg_id,
-            caption=formatted,
-            parse_mode=PARSE_MODE,
-            reply_markup=reply_markup,
-        )
-        return True
-    except BadRequest as e:
-        err = str(e)
-        if "Message is not modified" in err:
-            return True
-        if (
-            "Message to edit not found" in err
-            or "message can't be edited" in err.lower()
-            or "MESSAGE_ID_INVALID" in err
-        ):
-            logger.info("photo card edit lost-carrier msg=%s err=%s", state.msg_id, err)
-            clear_carrier(state)
-            return False
-        logger.warning(
-            "photo card edit MarkdownV2 failed msg=%s err=%s", state.msg_id, err
-        )
-        # Plain-text caption fallback.
-        try:
-            await bot.edit_message_caption(
-                chat_id=user_id,
-                message_id=state.msg_id,
-                caption=strip_sentinels(text),
-                reply_markup=reply_markup,
-            )
-            return True
-        except Exception as e2:
-            logger.warning(
-                "photo card plain fallback failed msg=%s err=%s", state.msg_id, e2
-            )
-    except RetryAfter:
-        raise
-    except Exception as e:
-        logger.warning("photo card edit failed (other): %s", e)
-    return False
 
 
 async def _deferred_edit(

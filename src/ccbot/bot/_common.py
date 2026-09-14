@@ -115,7 +115,7 @@ def is_media_message(msg: Any) -> bool:
 
     Photo / document / video / animation messages can't be edited via
     edit_message_text — we have to delete+resend to switch back to a text
-    view. Common path when user came from /screenshot.
+    view. Common path when the active card carrier must be restored.
     """
     if msg is None:
         return False

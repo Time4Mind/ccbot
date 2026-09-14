@@ -22,7 +22,6 @@ from ..handlers.notifications import (
     paint_card_on_carrier,
 )
 from ..i18n import t
-from ..local_terminal import open_terminal_for_window
 from ..session import session_manager
 from ..tmux_manager import tmux_manager
 
@@ -175,11 +174,3 @@ async def create_and_activate_session(
     asyncio.create_task(
         _bind_lifecycle_in_background(), name=f"session-bind:{created_wid}"
     )
-
-    # Desktop Terminal is a convenience side-effect, never part of the
-    # session-start critical path.
-    if session_manager.get_user_settings(user.id).get("local_terminal") == "auto":
-        asyncio.create_task(
-            open_terminal_for_window(created_wid, user_id=user.id),
-            name=f"local-terminal:{created_wid}",
-        )

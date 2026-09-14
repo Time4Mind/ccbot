@@ -128,7 +128,7 @@ Switcher layout:
 ```
 
 - The active session is marked with a leading checkmark.
-- Buttons are ordered oldest → newest by `created_at` (ties broken by session id), so a session holds a stable slot and a newly created one appends to the right. A session restored from the archive counts as newest (its `created_at` is bumped on restore). Every surface that renders session buttons — including the compact switcher under `/screenshot` — uses this same order.
+- Buttons are ordered oldest → newest by `created_at` (ties broken by session id), so a session holds a stable slot and a newly created one appends to the right. A session restored from the archive counts as newest (its `created_at` is bumped on restore). Every surface that renders session buttons uses this same order.
 - Tapping a non-active session triggers a callback. The bot edits the same message in place to show a context preview of the selected session and updates the active flag.
 - After switching, all subsequent free-text from the user routes to the new active session. Background work in the previously active session continues.
 
@@ -186,7 +186,6 @@ Hidden (typed only):
 | `/kill [name]` | Stop tmux window and archive after confirmation. |
 | `/stop` | Send Esc to the active session's tmux window (interrupt current task). |
 | `/archive` | Show archived sessions, paginated, last 20d. |
-| `/screenshot` | Snapshot the active session's tmux pane as a PNG. |
 | `/usage` | Live account limits: Claude `/usage` modal or Codex app-server rate limits. |
 | `/health` | Uptime, queue stats, latency, counters. |
 | `/login` | Re-authenticate the selected backend. Claude takes its OAuth code back through chat; Codex uses the official device URL/code and waits for app-server completion without receiving the code in chat. |
@@ -211,14 +210,13 @@ Notifications come in two forms.
 
 Edits do not trigger Telegram push notifications, so this is rate-limit friendly. The card is replaced (a new card sent, the old one finalized in chat history) on session completion or error.
 
-With `card_inline_screenshots` enabled, the terminal pane is present only while
-the turn is **RUNNING**. The stable block order is `body → gap → pane → gap →
-context → background panel`. **IDLE**, final-answer, and `/clear` transitions
-remove it; the next turn adds it again. Rich-capable Bot API servers keep the
-text and pane media in one Rich Markdown message. Older servers use the legacy
-photo + caption carrier. Initial delivery falls back rich → legacy photo →
-text-only. A transient edit failure is retried by the next update; a lost
-carrier is recreated rather than immediately duplicated.
+When `card_inline_screenshots` is enabled from the active card's expanded
+Options row, the terminal pane remains in the same Rich Markdown carrier
+through **RUNNING** and **IDLE**. The stable block order is `body → gap → pane
+→ gap → context → background panel`. If rich media is unavailable, the
+same carrier falls back to text-only and a later ordinary card update retries
+the image. There is no separate screenshot command, document, photo+caption
+carrier, or screenshot navigation surface.
 
 **Push notifications** are sent as separate `send_message` calls only on key events:
 
@@ -518,8 +516,9 @@ CARD_EDIT_LAG=2.0              # live-card edit coalescing window (s)
 BG_STATUS_MAX=4                # bg badges before collapsing to "+N more"
 # Live-card coalescing also honours the per-user `live_lag` setting
 # (default 4s). Everything else about the card (history depth, page size,
-# inline screenshots, bg-notify toggles, language, auto-approve, local
-# terminal, Haiku naming) is a per-user setting in state.json, not an env
+# screenshot state/profile, option-button visibility, bg-notify toggles,
+# language, auto-approve, local terminal template, Haiku naming) is a per-user
+# setting in state.json, not an env
 # var — see SessionManager.DEFAULT_USER_SETTINGS.
 
 # Rendering

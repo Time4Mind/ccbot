@@ -112,6 +112,8 @@ RU: dict[str, str] = {
     "settings.table.contents": "Настройки",
     "settings.table.setting": "Настройка",
     "settings.table.current": "Текущее значение",
+    "settings.table.button": "Кнопка",
+    "settings.table.show": "Показывать",
     "settings.table.hint": "_Тапни раздел, чтобы открыть._",
     "settings.body": (
         "*Настройки*\n\n"
@@ -271,10 +273,6 @@ RU: dict[str, str] = {
         "Архив остаётся доступен через Меню → Архив, сессию можно восстановить."
     ),
     "settings.value.hours": "{value} ч",
-    # Local terminal — 3-state (off / manual / auto).
-    "local.off": "выкл",
-    "local.manual": "по кнопке",
-    "local.auto": "всегда",
     "settings.group.card_history": "История в карточке",
     "settings.cardhist.body": (
         "*История в карточке*\n\n"
@@ -294,22 +292,6 @@ RU: dict[str, str] = {
         "Допускается отклонение ±5 строк.\n\n"
         "Меньше = компактнее для телефона. Больше = больше контекста\n"
         "на странице, но тяжелее edits."
-    ),
-    "settings.group.card_inline_screenshots": "Скрины в карточке",
-    "settings.screens.body": (
-        "*Скрины в карточке*\n\n"
-        "Когда *on*, pane виден только во время *RUNNING*: тело → отступ →\n"
-        "pane → отступ → context → фон. В *IDLE*, после финала или /clear\n"
-        "скрин удаляется, на следующем turn появляется снова. Обновление\n"
-        "pane — не чаще ~раз в 3с.\n\n"
-        "Rich Bot API держит текст и картинку в одном сообщении; старый API\n"
-        "использует фото + подпись. При сбое: legacy-photo, затем text-only.\n"
-        "Временный edit повторится на следующем обновлении; потерянный\n"
-        "carrier пересоздастся без мгновенного дубля.\n\n"
-        "Если незавершённый активный turn замолчал, pane остаётся без push-"
-        "заглушки; у фоновой сессии появится только ⚠️ в блоке фона.\n\n"
-        "Когда *off* — остаётся обычный текстовый flow, а Shot доступен\n"
-        "через кнопку терминала в верхнем ряду."
     ),
     "screens.on": "on",
     "screens.off": "off",
@@ -356,6 +338,7 @@ RU: dict[str, str] = {
     "settings.cat.notifications": "🔔 Уведомления",
     "settings.cat.voice": "🎙 Голос",
     "settings.cat.terminal": "🖥 Локальный терминал",
+    "settings.cat.options": "⋯ Кнопки опций",
     "settings.cat.behavior": "⚙ Агент, поведение и язык",
     "settings.cat.card.body": (
         "*Карточка / вид*\n\nРаскладка, плотность и refresh живой карточки."
@@ -369,6 +352,18 @@ RU: dict[str, str] = {
     "settings.cat.terminal.body": (
         "*Локальный терминал*\n\nНативное Terminal / iTerm окно к tmux."
     ),
+    "settings.cat.options.body": "*Кнопки опций*\n\nКакие действия показывать под кнопкой Опции.",
+    "settings.group.option_button_screenshot": "🧑‍💻 Скрин",
+    "settings.group.option_button_terminal": "🖥 Терминал",
+    "settings.option_button_screenshot.body": "*Кнопка Скрин*\n\nПоказывать Скрин в Опциях.",
+    "settings.option_button_terminal.body": "*Кнопка Терминал*\n\nПоказывать Терминал в Опциях, когда он доступен.",
+    "settings.group.screenshot_capture_kib": "Объём скрина",
+    "settings.screenshot_capture.body": "*Объём скрина*\n\nМаксимальный объём свежего хвоста терминального текста для изображения.",
+    "settings.group.screenshot_profile": "Качество скрина",
+    "settings.screenshot_profile.body": "*Качество скрина*\n\nМасштаб и цветовой профиль изображения.",
+    "screenshot.profile.full8": "100%, 8 цветов",
+    "screenshot.profile.compact8": "75%, 8 цветов",
+    "screenshot.profile.fullcolor": "100%, полная палитра",
     "settings.cat.behavior.body": (
         "*Поведение и язык*\n\n"
         "Глобальный агент; авто-Yes; имена через Haiku; язык интерфейса."

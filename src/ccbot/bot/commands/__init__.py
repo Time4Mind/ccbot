@@ -3,7 +3,7 @@
 Sub-modules:
   - lifecycle: session lifecycle commands (/new, /kill, /done, /stop,
     /menu, /archive).
-  - info:     read-only info commands (/history, /screenshot,
+  - info:     read-only info commands (/history,
     /usage, /health, /help).
 
 Each command is a top-level ``async def *_command(update, context)``

@@ -60,7 +60,6 @@ from .card_registry import (
     _msg_to_session,
     _register_msg,
     lookup_session_for_message,
-    reset_card_msg_id_for_user,
     _inline_screens_enabled,
     _should_buffer,
     _repost_intent,
@@ -82,7 +81,6 @@ from .card_seed import (
 )
 from .card_carrier import (
     cancel_pending_card_edits,
-    close_card_view,
     set_card_context_pct,
     mark_card_paused,
     pause_card_view,
@@ -102,7 +100,6 @@ from .card_transport import (
     _edit_card,
     _edit_card_unlocked,
     _PHOTO_EDIT_MIN_INTERVAL,
-    _edit_photo_card,
     _deferred_edit,
 )
 from .card_updates import (
@@ -188,7 +185,6 @@ __all__ = [
     "_msg_to_session",
     "_register_msg",
     "lookup_session_for_message",
-    "reset_card_msg_id_for_user",
     "_inline_screens_enabled",
     "_should_buffer",
     "_repost_intent",
@@ -204,7 +200,6 @@ __all__ = [
     "_transcript_mtime",
     "_ensure_seeded",
     "cancel_pending_card_edits",
-    "close_card_view",
     "set_card_context_pct",
     "mark_card_paused",
     "pause_card_view",
@@ -222,7 +217,6 @@ __all__ = [
     "_edit_card",
     "_edit_card_unlocked",
     "_PHOTO_EDIT_MIN_INTERVAL",
-    "_edit_photo_card",
     "_deferred_edit",
     "update_session_card",
     "_update_session_card_locked",

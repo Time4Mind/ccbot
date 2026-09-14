@@ -1,10 +1,54 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ccbot.handlers.callback_data import CB_MM_STATUS
+from ccbot.handlers.callback_data import CB_MM_BACK, CB_MM_STATUS
+
+
+@pytest.mark.asyncio
+async def test_status_refresh_does_not_block_following_navigation() -> None:
+    from ccbot.bot.callbacks import more_menu
+
+    refresh_started = asyncio.Event()
+    release_refresh = asyncio.Event()
+
+    async def slow_refresh() -> None:
+        refresh_started.set()
+        await release_refresh.wait()
+        return None
+
+    query = MagicMock(data=CB_MM_STATUS)
+    query.answer = AsyncMock()
+    context = MagicMock(bot=MagicMock())
+    user = MagicMock(id=7)
+    edit = AsyncMock()
+
+    with (
+        patch.object(more_menu, "safe_edit", new=edit),
+        patch.object(more_menu, "set_view", new=AsyncMock()),
+        patch.object(more_menu, "get_cached_live_usage", return_value=None),
+        patch.object(more_menu, "fetch_live_usage", side_effect=slow_refresh),
+    ):
+        status_task = asyncio.create_task(more_menu.handle(query, context, user))
+        await refresh_started.wait()
+        try:
+            # The callback must be released as soon as cached status is painted;
+            # Telegram can then dispatch Back while the network refresh continues.
+            await asyncio.sleep(0)
+            assert status_task.done()
+            assert await status_task is True
+
+            query.data = CB_MM_BACK
+            assert await more_menu.handle(query, context, user) is True
+            await asyncio.sleep(0)
+            assert edit.await_count == 1
+        finally:
+            release_refresh.set()
+            if not status_task.done():
+                await status_task
 
 
 @pytest.mark.asyncio
@@ -37,6 +81,7 @@ async def test_status_shows_cached_value_before_refresh() -> None:
         patch.object(more_menu, "fetch_live_usage", new=AsyncMock(return_value=fresh)),
     ):
         assert await more_menu.handle(query, context, user) is True
+        await asyncio.sleep(0)
 
     assert len(edits) == 2
     assert "3%" in edits[0]

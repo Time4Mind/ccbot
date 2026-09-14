@@ -83,7 +83,7 @@ async def _seed_events_from_jsonl(
 
     # Walk backwards collecting indices of end_turn boundaries (final
     # assistant text). Keep only entries from the last CARD_SEED_TURNS
-    # boundaries — earlier history stays in JSONL for /screenshot or
+    # boundaries - earlier history stays in JSONL for transcript recovery or
     # other history paths.
     end_turn_idxs: list[int] = []
     for i in range(len(parsed_list) - 1, -1, -1):

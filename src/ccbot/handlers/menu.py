@@ -16,6 +16,7 @@ from .callback_data import (
     CB_FT_KILL,
     CB_FT_MORE,
     CB_FT_OPTIONS,
+    CB_FT_SCREENSHOT,
     CB_FT_STOP,
     CB_FT_TERM,
     CB_MM_ARCHIVE,
@@ -23,7 +24,6 @@ from .callback_data import (
     CB_MM_LIST,
     CB_MM_NEW,
     CB_MM_SETTINGS,
-    CB_MM_SHOT,
     CB_MM_STATUS,
     CB_PG_JUMP,
     CB_PG_NEXT,
@@ -48,7 +48,9 @@ from .menu_settings import (
     _settings_local_grid,
     _settings_main_grid,
     _settings_pagesize_grid,
-    _settings_screens_grid,
+    _settings_capture_grid,
+    _settings_option_grid,
+    _settings_profile_grid,
     _settings_voice_grid,
     _settings_weeklyday_grid,
 )
@@ -94,7 +96,9 @@ __all__ = [
     "_settings_idle_archive_grid",
     "_settings_local_grid",
     "_settings_cardhist_grid",
-    "_settings_screens_grid",
+    "_settings_option_grid",
+    "_settings_capture_grid",
+    "_settings_profile_grid",
     "_settings_haiku_grid",
     "_settings_bg_notify_grid",
     "_settings_pagesize_grid",
@@ -133,8 +137,7 @@ def can_offer_terminal(user_id: int) -> bool:
 
     Visible iff:
       * the user has an active session with a live window_id,
-      * ``local_terminal`` is ``manual`` or ``auto`` (``off`` opts out
-        of the feature entirely),
+      * Terminal visibility is enabled in Settings → Option buttons,
       * the platform can actually spawn a terminal (macOS always can;
         Linux needs a configured ``local_terminal_cmd`` whose emulator
         is on PATH — otherwise the click would silently no-op),
@@ -148,8 +151,7 @@ def can_offer_terminal(user_id: int) -> bool:
     if sess is None or not sess.window_id:
         return False
     settings = session_manager.get_user_settings(user_id)
-    mode = settings.get("local_terminal", "off")
-    if mode not in ("manual", "auto"):
+    if not settings.get("option_button_terminal", False):
         return False
     system = platform.system()
     if system == "Linux":
@@ -223,9 +225,12 @@ def _footer_top_row(
             row.append(
                 InlineKeyboardButton("🔙 Resume action", callback_data=CB_KB_RESUME)
             )
-        row.append(
-            InlineKeyboardButton(t(user_id, "btn.options"), callback_data=CB_FT_OPTIONS)
-        )
+        if _footer_options_row(user_id):
+            row.append(
+                InlineKeyboardButton(
+                    t(user_id, "btn.options"), callback_data=CB_FT_OPTIONS
+                )
+            )
     return row
 
 
@@ -239,7 +244,12 @@ def _footer_bottom_row(user_id: int) -> list[InlineKeyboardButton]:
 
 def _footer_options_row(user_id: int) -> list[InlineKeyboardButton]:
     """Actions disclosed below Options and immediately above sessions."""
-    row = [InlineKeyboardButton(t(user_id, "mm.shot"), callback_data=CB_MM_SHOT)]
+    settings = session_manager.get_user_settings(user_id)
+    row: list[InlineKeyboardButton] = []
+    if settings.get("option_button_screenshot", True):
+        row.append(
+            InlineKeyboardButton(t(user_id, "mm.shot"), callback_data=CB_FT_SCREENSHOT)
+        )
     if can_offer_terminal(user_id):
         row.append(
             InlineKeyboardButton(t(user_id, "btn.term"), callback_data=CB_FT_TERM)
@@ -347,13 +357,20 @@ def build_footer_keyboard(
         rows.extend(_settings_cardhist_grid(user_id))
     elif screen == "settings_pagesize":
         rows.extend(_settings_pagesize_grid(user_id))
-    elif screen == "settings_screens":
-        rows.extend(_settings_screens_grid(user_id))
+    elif screen == "settings_option_screenshot":
+        rows.extend(_settings_option_grid(user_id, "option_button_screenshot"))
+    elif screen == "settings_option_terminal":
+        rows.extend(_settings_option_grid(user_id, "option_button_terminal"))
+    elif screen == "settings_capture":
+        rows.extend(_settings_capture_grid(user_id))
+    elif screen == "settings_profile":
+        rows.extend(_settings_profile_grid(user_id))
     elif screen in (
         "settings_cat_card",
         "settings_cat_notifications",
         "settings_cat_voice",
         "settings_cat_terminal",
+        "settings_cat_options",
         "settings_cat_behavior",
     ):
         rows.extend(_settings_category_grid(user_id, screen))

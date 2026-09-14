@@ -6,9 +6,10 @@ import asyncio
 import logging
 import time
 
-from telegram import Bot
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from ..config import config
+from ..i18n import t
 from ..session import Session, session_manager
 from ..session_monitor import NewMessage
 from .card_model import (
@@ -25,6 +26,7 @@ from .card_model import (
     paginate_events_for_card,
 )
 from .card_binding import clear_carrier
+from .callback_data import CB_SW_USE
 from .card_types import TurnPhase
 from .switcher import session_emoji
 from .tg_format import Attachment, split_overflow
@@ -469,21 +471,24 @@ async def push_event(
     text: str,
     is_error: bool = False,
 ) -> None:
-    """Bg-session push — a bare one-line notification.
-
-    Format is strictly ``<emoji> <name> <text>``: no markdown brackets,
-    no inline keyboard, no switcher migration. Hijacking the active
-    card's footer buttons (the previous behaviour) confused users —
-    bg pushes are status pings, not navigation surfaces. Use the
-    switcher on the active card to actually visit the session.
-    """
+    """Send a compact background-session notification with an exact jump."""
     emoji = "🟥" if is_error else session_emoji(sess)
     name = sess.name or sess.id
     body = f"{emoji} {name} {text}"
     if len(body) > 3500:
         body = body[:3497] + "…"
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    t(user_id, "btn.open_session", name=name),
+                    callback_data=f"{CB_SW_USE}{sess.id}",
+                )
+            ]
+        ]
+    )
     try:
-        sent = await _legacy("safe_send")(bot, user_id, body)
+        sent = await _legacy("safe_send")(bot, user_id, body, reply_markup=keyboard)
     except Exception as e:
         logger.debug("push_event failed: %s", e)
         return

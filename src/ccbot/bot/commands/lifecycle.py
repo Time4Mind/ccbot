@@ -109,14 +109,6 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             session_manager.set_session_claude_id(sess.id, ws.session_id)
         session_manager.set_active_session(user.id, sess.id)
         bind_startup_queue(user.id, created_wid)
-        if session_manager.get_user_settings(user.id).get("local_terminal") == "auto":
-            from ...local_terminal import open_terminal_for_window
-            import asyncio
-
-            asyncio.create_task(
-                open_terminal_for_window(created_wid, user_id=user.id),
-                name=f"local-terminal:{created_wid}",
-            )
         await safe_reply(
             update.message,
             f"✅ Session `{sess.name}` ({sess.id}) created at {target_path}",

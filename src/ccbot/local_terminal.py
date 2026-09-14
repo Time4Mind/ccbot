@@ -2,7 +2,7 @@
 
 The bot already runs inside a real ``tmux`` server on the host, so any
 shell on the same machine can ``tmux attach -t ccbot``. This helper
-just automates that — when the user enables ``local_terminal`` in
+just automates that - when the user exposes and taps Terminal in
 Settings, every freshly-created Claude session also pops a native
 window pointed at its tmux window so the user can drive the session
 by hand without typing the attach command each time.

@@ -8,10 +8,17 @@ _INJECTED_USER_PREFIXES = (
     "# AGENTS.md instructions",
     "<environment_context>",
     "<turn_aborted>",
+    "<recommended_plugins>",
+    "<permissions instructions>",
+    "<collaboration_mode>",
+    "<apps_instructions>",
+    "<plugins_instructions>",
+    "<skills_instructions>",
+    "<subagent_notification>",
 )
 
 
-def _is_injected_user_text(text: str) -> bool:
+def is_injected_user_text(text: str) -> bool:
     """Return whether Codex labelled harness context as a user message."""
     stripped = text.lstrip()
     return any(stripped.startswith(prefix) for prefix in _INJECTED_USER_PREFIXES)
@@ -34,7 +41,7 @@ def normalize_codex_entry(data: dict[str, Any]) -> dict[str, Any] | None:
         event_type = payload.get("type")
         if event_type == "user_message":
             text = str(payload.get("message") or "")
-            if _is_injected_user_text(text):
+            if is_injected_user_text(text):
                 return None
             return {
                 "type": "user",
@@ -84,7 +91,7 @@ def normalize_codex_entry(data: dict[str, Any]) -> dict[str, Any] | None:
         if not content:
             return None
         if role == "user" and any(
-            _is_injected_user_text(block["text"]) for block in content
+            is_injected_user_text(block["text"]) for block in content
         ):
             return None
         phase = str(payload.get("phase") or "")

@@ -10,7 +10,6 @@ import logging
 from telegram import Bot
 
 from ..session import session_manager
-from .card_binding import clear_carrier
 from .card_model import (
     CardState,
 )
@@ -32,7 +31,6 @@ __all__ = [
     "_msg_to_session",
     "_register_msg",
     "lookup_session_for_message",
-    "reset_card_msg_id_for_user",
     "_inline_screens_enabled",
     "_should_buffer",
     "_repost_intent",
@@ -178,21 +176,6 @@ def _register_msg(user_id: int, message_id: int, session_id: str) -> None:
 def lookup_session_for_message(user_id: int, message_id: int) -> str | None:
     """Resolve a Telegram message id back to the Session.id it represents."""
     return _msg_to_session.get((user_id, message_id))
-
-
-def reset_card_msg_id_for_user(user_id: int) -> None:
-    """Drop the msg_id for every card of ``user_id`` so the next event
-    creates a fresh msg of the (possibly changed) correct type.
-
-    Called when the user toggles ``card_inline_screenshots``. We orphan
-    the old carrier so the next event starts a fresh card below the next
-    user message with the requested media layout.
-    """
-    for (uid, _sid), state in _cards.items():
-        if uid != user_id:
-            continue
-        clear_carrier(state)
-        state.last_rendered = ""
 
 
 def _inline_screens_enabled(user_id: int | None) -> bool:

@@ -121,8 +121,8 @@
 | **editMessageText** | ✅ | Status-to-content conversion, tool_result editing into tool_use messages |
 | **editMessageMedia** | ✅ | Screenshot refresh replaces image in-place |
 | **deleteMessage** | ✅ | Status message cleanup, interactive UI cleanup |
-| **BotCommand + set_my_commands** | ✅ | 10 commands registered: /start, /list, /history, /screenshot, /esc + 5 Claude Code forwards |
-| **sendDocument** | ✅ | Screenshots sent as PNG documents |
+| **BotCommand + set_my_commands** | ✅ | Commands are registered from the current bot command list |
+| **sendDocument** | ✅ | Used for user-requested file delivery; terminal screenshots stay inside rich cards |
 | **ReplyKeyboardRemove** | ✅ | Used when switching away from reply keyboard |
 | **Claude Code command forwarding** | ✅ | /clear, /compact, /cost, /help, /memory forwarded to tmux |
 | **Message rate limiting** | ✅ | 1.1s minimum interval per user to avoid flood control |

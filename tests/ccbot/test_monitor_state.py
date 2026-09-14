@@ -143,3 +143,56 @@ class TestSaveIfDirty:
         monkeypatch.setattr("ccbot.utils.atomic_write_json", fake_write)
         state.save_if_dirty()
         assert len(saved) == 0
+
+
+class TestCheckpointCoalescing:
+    def test_offset_updates_are_coalesced_until_interval(self, tmp_path):
+        clock = [0.0]
+        state_file = tmp_path / "state.json"
+        state = MonitorState(
+            state_file=state_file,
+            checkpoint_interval=30.0,
+            clock=lambda: clock[0],
+        )
+        tracked = TrackedSession(
+            session_id="s1", file_path="/a.jsonl", last_byte_offset=10
+        )
+        state.update_session(tracked)
+        state.save()
+
+        tracked.last_byte_offset = 20
+        state.update_session(tracked)
+        clock[0] = 29.0
+        state.save_if_due()
+
+        persisted = MonitorState(state_file=state_file)
+        persisted.load()
+        assert persisted.tracked_sessions["s1"].last_byte_offset == 10
+
+        clock[0] = 30.0
+        state.save_if_due()
+        persisted.load()
+        assert persisted.tracked_sessions["s1"].last_byte_offset == 20
+
+    def test_forced_checkpoint_persists_before_interval(self, tmp_path):
+        clock = [0.0]
+        state_file = tmp_path / "state.json"
+        state = MonitorState(
+            state_file=state_file,
+            checkpoint_interval=30.0,
+            clock=lambda: clock[0],
+        )
+        tracked = TrackedSession(
+            session_id="s1", file_path="/a.jsonl", last_byte_offset=10
+        )
+        state.update_session(tracked)
+        state.save()
+
+        tracked.last_byte_offset = 20
+        state.update_session(tracked)
+        clock[0] = 1.0
+        state.save_if_due(force=True)
+
+        persisted = MonitorState(state_file=state_file)
+        persisted.load()
+        assert persisted.tracked_sessions["s1"].last_byte_offset == 20

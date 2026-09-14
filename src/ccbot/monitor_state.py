@@ -9,11 +9,14 @@ Key classes: MonitorState, TrackedSession.
 
 import json
 import logging
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
+
+MONITOR_CHECKPOINT_INTERVAL = 30.0
 
 
 @dataclass
@@ -47,8 +50,27 @@ class MonitorState:
     """
 
     state_file: Path
+    checkpoint_interval: float = MONITOR_CHECKPOINT_INTERVAL
+    clock: Callable[[], float] = field(default=time.monotonic, repr=False)
     tracked_sessions: dict[str, TrackedSession] = field(default_factory=dict)
     _dirty: bool = field(default=False, repr=False)
+    _urgent: bool = field(default=False, repr=False)
+    _last_save_at: float = field(default=0.0, init=False, repr=False)
+    _committed_sessions: dict[str, TrackedSession] = field(
+        default_factory=dict, init=False, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        self._last_save_at = self.clock()
+
+    @staticmethod
+    def _clone_sessions(
+        sessions: dict[str, TrackedSession],
+    ) -> dict[str, TrackedSession]:
+        return {
+            session_id: TrackedSession.from_dict(session.to_dict())
+            for session_id, session in sessions.items()
+        }
 
     def load(self) -> None:
         """Load state from file."""
@@ -62,12 +84,19 @@ class MonitorState:
             self.tracked_sessions = {
                 k: TrackedSession.from_dict(v) for k, v in sessions.items()
             }
+            self._committed_sessions = self._clone_sessions(self.tracked_sessions)
+            self._dirty = False
+            self._urgent = False
+            self._last_save_at = self.clock()
             logger.info(
                 f"Loaded {len(self.tracked_sessions)} tracked sessions from state"
             )
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.warning(f"Failed to load state file: {e}")
             self.tracked_sessions = {}
+            self._committed_sessions = {}
+            self._dirty = False
+            self._urgent = False
 
     def save(self) -> None:
         """Save state to file atomically."""
@@ -82,6 +111,9 @@ class MonitorState:
         try:
             atomic_write_json(self.state_file, data)
             self._dirty = False
+            self._urgent = False
+            self._last_save_at = self.clock()
+            self._committed_sessions = self._clone_sessions(self.tracked_sessions)
             logger.debug(
                 "Saved %d tracked sessions to state", len(self.tracked_sessions)
             )
@@ -94,16 +126,56 @@ class MonitorState:
 
     def update_session(self, session: TrackedSession) -> None:
         """Update or add a tracked session."""
+        is_new = session.session_id not in self.tracked_sessions
         self.tracked_sessions[session.session_id] = session
         self._dirty = True
+        if is_new:
+            # Persist the initial EOF immediately. Deferring a newly tracked
+            # session would let a quick restart skip output written between
+            # first discovery and the restart.
+            self._urgent = True
 
     def remove_session(self, session_id: str) -> None:
         """Remove a tracked session."""
         if session_id in self.tracked_sessions:
             del self.tracked_sessions[session_id]
             self._dirty = True
+            self._urgent = True
 
     def save_if_dirty(self) -> None:
         """Save state only if it has been modified."""
         if self._dirty:
             self.save()
+
+    def save_if_due(self, *, force: bool = False) -> None:
+        """Checkpoint dirty offsets, coalescing ordinary streaming updates.
+
+        New/removed sessions and explicit ``force`` calls are persisted
+        immediately. Existing-session offsets may remain in memory for at
+        most ``checkpoint_interval`` seconds; this removes one fsync per
+        transcript poll without delaying message delivery.
+        """
+        if not self._dirty:
+            return
+        if (
+            force
+            or self._urgent
+            or self.clock() - self._last_save_at >= self.checkpoint_interval
+        ):
+            self.save()
+
+    def restore_committed(self, session_ids: set[str] | None = None) -> None:
+        """Restore durable offsets for all or selected failed sessions."""
+        if session_ids is None:
+            self.tracked_sessions = self._clone_sessions(self._committed_sessions)
+        else:
+            for session_id in session_ids:
+                committed = self._committed_sessions.get(session_id)
+                if committed is None:
+                    self.tracked_sessions.pop(session_id, None)
+                else:
+                    self.tracked_sessions[session_id] = TrackedSession.from_dict(
+                        committed.to_dict()
+                    )
+        self._dirty = self.tracked_sessions != self._committed_sessions
+        self._urgent = self.tracked_sessions.keys() != self._committed_sessions.keys()

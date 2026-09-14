@@ -198,6 +198,7 @@ async def test_status_tick_uses_one_window_snapshot_for_all_live_sessions():
             new_callable=AsyncMock,
         ),
         patch("ccbot.handlers.status_polling.session_manager.save_state") as save_state,
+        patch("ccbot.handlers.status_polling.time.monotonic", return_value=120.0),
         patch("ccbot.handlers.status_polling.purge_sweep"),
         patch("ccbot.handlers.status_polling.inbox_sweep"),
         patch(

@@ -278,6 +278,49 @@ class TestActiveDispatchPutsCardInFront:
         # Once to un-pause before the send, once to drop the 🎙 marker.
         assert resume.await_count == 2
 
+    @pytest.mark.asyncio
+    async def test_new_flow_opened_during_delivery_is_not_replaced_by_card(self):
+        """A late inbound completion must not close a newer New/menu flow."""
+        update = _make_update(message_id=500)
+        context = _make_context()
+        active = MagicMock(id="sessA", backend="codex")
+        card_state = MagicMock(in_menu_view=False)
+
+        async def send_then_open_new(*args, **kwargs):
+            card_state.in_menu_view = True
+            return True, "ok"
+
+        mock_sm = MagicMock()
+        mock_sm.find_session_by_window.return_value = active
+        mock_sm.send_to_window = AsyncMock(side_effect=send_then_open_new)
+        resume = AsyncMock()
+        repost = AsyncMock()
+
+        with (
+            patch("ccbot.bot.messages.session_manager", mock_sm),
+            patch("ccbot.bot.messages.is_active_for_user", return_value=True),
+            patch("ccbot.bot.messages.card_is_below", return_value=True),
+            patch("ccbot.bot.messages.get_card_state", return_value=card_state),
+            patch("ccbot.bot.messages.repost_card", new=repost),
+            patch("ccbot.bot.messages.resume_card_view", new=resume),
+            patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
+            patch("ccbot.bot.messages.get_interactive_window", return_value=None),
+            patch(
+                "ccbot.bot.messages.tmux_manager.ensure_codex_prompt_submitted",
+                new=AsyncMock(return_value=True),
+            ),
+        ):
+            from ccbot.bot.messages import _dispatch_text_to_active
+
+            assert await _dispatch_text_to_active(
+                update, context, 1, "@5", "a long request"
+            )
+
+        # One initial resume belongs to the message receipt. The navigation
+        # that happened during delivery must suppress the late second repaint.
+        assert resume.await_count == 1
+        repost.assert_not_awaited()
+
 
 class TestCardIsBelow:
     def setup_method(self) -> None:

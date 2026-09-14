@@ -44,15 +44,13 @@ def test_parses_five_hour_and_weekly_windows() -> None:
 
     rendered = format_usage_breakdown_compact(1, info)
     assert rendered is not None
-    assert "*OpenAI Codex*" in rendered
+    assert "Status · 0m" in rendered
+    assert "CLI" in rendered
+    assert "5 hours" in rendered
+    assert "Week" in rendered
     assert "23%" in rendered
     assert "61%" in rendered
-    assert "Used: 61%" in rendered
-    assert "Remaining:" not in rendered
-    assert "Today:" in rendered
-    assert "Reset:" in rendered
-    assert " · " not in rendered.split("week", 1)[1]
-    assert "\n\nUsed: 61%" in rendered
+    assert "| 🟡 Codex | 23% | 61% |" in rendered
 
 
 def test_parses_codex_status_left_percentages() -> None:
@@ -129,7 +127,7 @@ def test_parses_weekly_only_response() -> None:
     assert info.weekly.used_percent == 41
     rendered = format_usage_breakdown_compact(1, info)
     assert rendered is not None
-    assert "5h: not reported by Codex" in rendered
+    assert "| 🟢 Codex | - | 41% | - | - |" in rendered
     assert "41%" in rendered
 
 

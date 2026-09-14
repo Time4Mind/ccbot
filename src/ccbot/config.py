@@ -154,7 +154,7 @@ class Config:
         # --- DM multi-session mode ---
         # Sessions
         self.archive_purge_after: float = _parse_duration(
-            os.getenv("ARCHIVE_PURGE_AFTER", "14d"), 14 * 86400
+            os.getenv("ARCHIVE_PURGE_AFTER", "20d"), 20 * 86400
         )
         # Background-poll interval for the live /usage modal (used by the
         # quota-crossing alarms in handlers/quota_alerts.py).

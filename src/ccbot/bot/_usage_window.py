@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 
 from ..tmux_manager import tmux_manager
@@ -28,6 +29,7 @@ USAGE_WINDOW_NAME = "ccbot-usage"
 CODEX_USAGE_WINDOW_NAME = "ccbot-codex-usage"
 _usage_window_lock = asyncio.Lock()
 _live_usage_cache: dict[str, object] = {}
+_live_usage_collected_at: dict[str, float] = {}
 
 
 def get_cached_live_usage() -> object | None:
@@ -35,6 +37,13 @@ def get_cached_live_usage() -> object | None:
     from ..session import session_manager
 
     return _live_usage_cache.get(session_manager.agent_backend)
+
+
+def get_cached_live_usage_age_seconds() -> float:
+    from ..session import session_manager
+
+    collected_at = _live_usage_collected_at.get(session_manager.agent_backend)
+    return max(0.0, time.time() - collected_at) if collected_at else 0.0
 
 
 async def _confirm_trust_dialog_if_present(wid: str) -> None:
@@ -375,4 +384,5 @@ async def fetch_live_usage() -> object | None:
         info = await fetch_claude_usage()
     if info is not None:
         _live_usage_cache[backend] = info
+        _live_usage_collected_at[backend] = time.time()
     return info

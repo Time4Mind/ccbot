@@ -148,6 +148,25 @@ async def test_reply_quote_is_pinned_to_quoted_session() -> None:
 
 
 @pytest.mark.asyncio
+async def test_directory_name_does_not_enqueue_or_surface_active_card() -> None:
+    context = _context()
+    context.user_data = {"state": "naming_directory"}
+    update = _update(4, text="test")
+    target = AsyncMock(return_value=True)
+
+    with (
+        patch("ccbot.bot.inbound.text_handler", new=target),
+        patch("ccbot.bot.inbound._enqueue") as enqueue,
+        patch("ccbot.bot.inbound.schedule_card_after_message") as surface,
+    ):
+        assert await text_intake_handler(update, context)
+
+    target.assert_awaited_once_with(update, context)
+    enqueue.assert_not_called()
+    surface.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_different_session_lane_is_not_blocked_by_voice() -> None:
     context = _context()
     release_voice = asyncio.Event()

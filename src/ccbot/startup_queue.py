@@ -87,6 +87,14 @@ async def capture_startup_message(
     flow = _flows.get(user.id)
     if flow is None:
         return
+    # The directory naming screen owns the next text message. This handler is
+    # registered earlier than the normal text router, so capturing it here
+    # would silently queue the folder name as a future agent prompt.
+    from .handlers.directory_browser import STATE_KEY, STATE_NAMING_DIRECTORY
+
+    state = context.user_data.get(STATE_KEY) if context.user_data else None
+    if state == STATE_NAMING_DIRECTORY and update.message.text is not None:
+        return
     text = (update.message.text or "").strip()
     if text.startswith(("/login", "/new")):
         # Control-plane commands must be able to repair/restart a failed

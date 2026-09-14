@@ -194,65 +194,6 @@ async def context_pct_for_session(sess: Session) -> int | None:
 # --- /usage modal compact renderer (Menu→Status) ---
 
 
-_WEEKDAY_INDEX: dict[str, int] = {
-    "mon": 0,
-    "tue": 1,
-    "wed": 2,
-    "thu": 3,
-    "fri": 4,
-    "sat": 5,
-    "sun": 6,
-}
-
-
-def _parse_hhmm(hh_mm: str) -> tuple[int, int] | None:
-    try:
-        h_str, m_str = hh_mm.split(":", 1)
-        hour = int(h_str)
-        minute = int(m_str)
-    except (ValueError, AttributeError):
-        return None
-    if not (0 <= hour < 24 and 0 <= minute < 60):
-        return None
-    return hour, minute
-
-
-def _hours_until_clock(hh_mm: str) -> float | None:
-    """Hours from now until the next occurrence of a 24h HH:MM wall-clock."""
-    parsed = _parse_hhmm(hh_mm)
-    if parsed is None:
-        return None
-    hour, minute = parsed
-    from datetime import datetime, timedelta
-
-    now = datetime.now()
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if target <= now:
-        target += timedelta(days=1)
-    return (target - now).total_seconds() / 3600.0
-
-
-def _days_until_weekday_clock(weekday_key: str, hh_mm: str) -> float | None:
-    """Days from now until the next occurrence of the given weekday + HH:MM."""
-    target_weekday = _WEEKDAY_INDEX.get(weekday_key)
-    if target_weekday is None:
-        return None
-    parsed = _parse_hhmm(hh_mm)
-    if parsed is None:
-        return None
-    hour, minute = parsed
-    from datetime import datetime, timedelta
-
-    now = datetime.now()
-    days_ahead = (target_weekday - now.weekday()) % 7
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0) + timedelta(
-        days=days_ahead
-    )
-    if target <= now:
-        target += timedelta(days=7)
-    return (target - now).total_seconds() / 86400.0
-
-
 def _quota_emoji(pct: int) -> str:
     """Stoplight glyph for an at-a-glance quota signal."""
     if pct < 50:
@@ -346,114 +287,72 @@ def _persisted_daily_quota_budget(
     return remaining_today
 
 
-def format_usage_breakdown_compact(user_id: int, info: object) -> str | None:
-    """Render the live /usage payload as a compact, multilingual block.
-
-    Each row: ``label: pct% · rate · resetTime`` (rate is %/h for the 5h
-    window; the weekly rows omit it because the modal doesn't expose the
-    elapsed time within the week). Returns None when info has nothing.
-    """
+def format_usage_breakdown_compact(
+    user_id: int, info: object, *, age_seconds: float = 0
+) -> str:
+    """Render one compact quota table; absent values are always ``-``."""
     from .codex_usage import CodexUsageInfo
     from .i18n import t
     from .terminal_parser import UsageInfo, extract_usage_breakdown
 
-    if isinstance(info, CodexUsageInfo):
-        from datetime import datetime
-
-        rows: list[str] = []
-
-        if info.five_hour is None:
-            rows.append(
-                f"⚪ {t(user_id, 'usage.5h')}: {t(user_id, 'usage.not_reported')}"
-            )
-        else:
-            window = info.five_hour
-            rows.append(f"{_quota_emoji(window.used_percent)} {t(user_id, 'usage.5h')}")
-            rows.append(f"{t(user_id, 'usage.used')}: {window.used_percent}%")
-            if window.resets_at is not None:
-                reset = datetime.fromtimestamp(window.resets_at).strftime("%H:%M")
-                rows.append(f"{t(user_id, 'usage.reset')}: {reset}")
-        if info.weekly is not None:
-            window = info.weekly
-            rows.append(
-                f"{_quota_emoji(window.used_percent)} {t(user_id, 'usage.week')}"
-            )
-            rows.append(f"{t(user_id, 'usage.used')}: {window.used_percent}%")
-            today_budget = _persisted_daily_quota_budget(
-                window.used_percent, window.resets_at
-            )
-            if today_budget is not None:
-                if today_budget >= 0:
-                    value = f"{t(user_id, 'usage.today_left')} {today_budget:.1f}%"
-                else:
-                    value = (
-                        f"{t(user_id, 'usage.today_overspent')} "
-                        f"{abs(today_budget):.1f}%"
-                    )
-                rows.append(f"{t(user_id, 'usage.today')}: {value}")
-            if window.resets_at is not None:
-                reset = datetime.fromtimestamp(window.resets_at).strftime("%d.%m %H:%M")
-                rows.append(f"{t(user_id, 'usage.reset')}: {reset}")
-        if not rows:
-            return None
-        return t(user_id, "usage.title.codex") + "\n\n" + "\n\n".join(rows)
-
-    if not isinstance(info, UsageInfo):
-        return None
-    b = extract_usage_breakdown(info)
-    rows: list[str] = []
-
-    # 5h: pct + hourly burn rate + reset time.
-    if b.session_pct is not None and b.session_reset_hhmm:
-        hours_left = _hours_until_clock(b.session_reset_hhmm)
-        rate_str = ""
-        if hours_left is not None:
-            elapsed = max(0.1, 5.0 - min(5.0, hours_left))
-            rate = b.session_pct / elapsed
-            rate_str = f" · {rate:.1f}%/h"
-        rows.append(
-            f"{_quota_emoji(b.session_pct)} {t(user_id, 'usage.5h')}: "
-            f"{b.session_pct}%{rate_str} · {b.session_reset_hhmm}"
-        )
-
-    # Weekly window: %/d burn rate using user-configured reset day.
-    weekly_day = session_manager.get_user_settings(user_id).get(
-        "weekly_reset_day", "mon"
+    age_minutes = max(0, int(age_seconds // 60))
+    title = t(user_id, "usage.status_age", age=age_minutes)
+    headers = (
+        t(user_id, "usage.column.cli"),
+        t(user_id, "usage.column.5h"),
+        t(user_id, "usage.column.week"),
+        t(user_id, "usage.column.today"),
+        t(user_id, "usage.column.reset"),
     )
 
-    def _weekly_rate(pct: int, reset_hhmm: str) -> str:
-        days_left = _days_until_weekday_clock(weekly_day, reset_hhmm)
-        if days_left is None:
-            return ""
-        elapsed = max(0.1, 7.0 - min(7.0, days_left))
-        return f" · {pct / elapsed:.1f}%/d"
+    def table(rows: list[tuple[str, str, str, str, str]]) -> str:
+        lines = ["| " + " | ".join(headers) + " |", "|---|---|---|---|---|"]
+        lines.extend("| " + " | ".join(row) + " |" for row in rows)
+        return f"*{title}*\n\n" + "\n".join(lines)
 
-    if b.week_pct is not None:
-        if b.week_reset_hhmm:
-            rate = _weekly_rate(b.week_pct, b.week_reset_hhmm)
-            tail = f"{rate} · {b.week_reset_hhmm}"
-        else:
-            tail = ""
-        rows.append(
-            f"{_quota_emoji(b.week_pct)} {t(user_id, 'usage.week')}: "
-            f"{b.week_pct}%{tail}"
+    if isinstance(info, CodexUsageInfo):
+        five = f"{info.five_hour.used_percent}%" if info.five_hour else "-"
+        week = f"{info.weekly.used_percent}%" if info.weekly else "-"
+        today = "-"
+        reset = "-"
+        if info.weekly:
+            budget = _persisted_daily_quota_budget(
+                info.weekly.used_percent, info.weekly.resets_at
+            )
+            if budget is not None:
+                today = f"{budget:.1f}%"
+            if info.weekly.resets_at is not None:
+                reset = datetime.fromtimestamp(info.weekly.resets_at).strftime(
+                    "%d.%m %H:%M"
+                )
+        signal = max(
+            (window.used_percent for window in (info.five_hour, info.weekly) if window),
+            default=0,
         )
+        return table([(_quota_emoji(signal) + " Codex", five, week, today, reset)])
 
+    if not isinstance(info, UsageInfo):
+        return table([("🔴 -", "-", "-", "-", "-")])
+    b = extract_usage_breakdown(info)
+    values = [pct for pct in (b.session_pct, b.week_pct) if pct is not None]
+    signal = max(values, default=0)
+    rows = [
+        (
+            _quota_emoji(signal) + " Claude",
+            f"{b.session_pct}%" if b.session_pct is not None else "-",
+            f"{b.week_pct}%" if b.week_pct is not None else "-",
+            "-",
+            b.week_reset_hhmm or "-",
+        )
+    ]
     if b.week_sonnet_pct is not None:
-        if b.week_sonnet_reset_hhmm:
-            rate = _weekly_rate(b.week_sonnet_pct, b.week_sonnet_reset_hhmm)
-            tail = f"{rate} · {b.week_sonnet_reset_hhmm}"
-        else:
-            tail = ""
         rows.append(
-            f"{_quota_emoji(b.week_sonnet_pct)} "
-            f"{t(user_id, 'usage.week_sonnet')}: "
-            f"{b.week_sonnet_pct}%{tail}"
+            (
+                _quota_emoji(b.week_sonnet_pct) + " Sonnet",
+                "-",
+                f"{b.week_sonnet_pct}%",
+                "-",
+                b.week_sonnet_reset_hhmm or "-",
+            )
         )
-
-    extra_label = t(user_id, "usage.on" if b.extra_enabled else "usage.off")
-    rows.append(f"{t(user_id, 'usage.extra')}: {extra_label}")
-
-    if not rows:
-        return None
-    return t(user_id, "usage.title") + "\n" + "\n".join(rows)
+    return table(rows)

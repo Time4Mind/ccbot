@@ -61,7 +61,7 @@ On `systemctl restart ccbot@…`:
 2. `reconcile_sessions_with_tmux()` flips any Session whose window
    vanished into the `lost` state and clears the user's
    `active_sessions` pointer if it pointed at a lost record. Lost
-   sessions are surfaced via `/archive --all` with a Restore button
+   sessions are surfaced via `/archive` with a Restore button
    that runs `claude --resume <session-id>` in the original workdir.
 3. Idle and archive sweeps resume from `last_event_at`/`archived_at`
    timestamps in `state.json`.
@@ -122,7 +122,7 @@ curl -s --max-time 8 -x "$TG_PROXY_URL" \
 - `<workdir>/.ccbot-inbox/` — uploaded photos/documents per session;
   pruned every hour past `INBOX_TTL_HOURS` (default 24h).
 - Archived Session records expire after `ARCHIVE_PURGE_AFTER` (default
-  14d). Transcripts on disk are kept for audit.
+  20d). Transcripts on disk are kept for audit.
 
 ## Без systemd: supervisor с авто-рестартом
 

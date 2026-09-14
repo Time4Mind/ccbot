@@ -12,8 +12,11 @@ from pathlib import Path
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from ...config import config
-from ...handlers.archive import DEFAULT_LOOKBACK_SECONDS, build_archive_page
+from ...handlers.archive import (
+    DEFAULT_LOOKBACK_SECONDS,
+    archive_or_delete_session,
+    build_archive_page,
+)
 from ...handlers.callback_data import (
     CB_CONF_DONE_NO,
     CB_CONF_DONE_YES,
@@ -149,7 +152,7 @@ async def archive_session(
     the matching CB_CONF_*_YES callback paths.
     """
     await teardown_session_runtime(user_id, sess, bot)
-    session_manager.mark_session_archived(sess.id, completed=completed)
+    await archive_or_delete_session(sess, completed=completed)
 
 
 async def kill_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -273,7 +276,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def archive_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """`/archive` — paginated list of archived sessions.
 
-    `--all` flag extends lookback to ARCHIVE_PURGE_AFTER (default 14d).
+    The archive is one unified 20-day list.
     """
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -281,16 +284,10 @@ async def archive_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not update.message:
         return
 
-    args = (update.message.text or "").split()
-    show_all = "--all" in args
-    lookback = config.archive_purge_after if show_all else DEFAULT_LOOKBACK_SECONDS
-    if context.user_data is not None:
-        context.user_data["_arc_show_all"] = show_all
-
     text, keyboard = await build_archive_page(
         page=0,
-        lookback_seconds=lookback,
-        show_all=show_all,
+        lookback_seconds=DEFAULT_LOOKBACK_SECONDS,
+        show_all=False,
         user_id=user.id,
     )
     await safe_reply(update.message, text, reply_markup=keyboard)

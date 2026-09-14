@@ -17,7 +17,7 @@ from ccbot.config import config
 from ccbot.handlers.callback_data import CB_ARC_RESTORE
 from ccbot.handlers import archive
 from ccbot.handlers.history import render_archived_card_pages
-from ccbot.handlers.menu import build_footer_keyboard, render_settings_text
+from ccbot.handlers.menu import build_footer_keyboard, render_settings_group_text
 from ccbot.session import SessionManager, session_manager
 from ccbot.session_import import build_import_context
 from ccbot.session_models import Session as BotSession
@@ -43,10 +43,10 @@ def test_agent_backend_is_exposed_in_settings(
         },
     )
 
-    text = render_settings_text(42)
+    text = render_settings_group_text(42, "settings_cat_behavior")
     keyboard = build_footer_keyboard(42, screen="settings_agent")
 
-    assert "Agent: `Codex`" in text
+    assert "| Agent | Codex |" in text
     assert keyboard is not None
     choices = keyboard.inline_keyboard[0]
     assert [button.callback_data for button in choices] == [

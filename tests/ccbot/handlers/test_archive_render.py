@@ -44,6 +44,12 @@ def _make_archived(idx: int) -> Session:
     )
 
 
+def test_ai_description_defaults_off() -> None:
+    from ccbot.session_state import SessionStateMixin
+
+    assert SessionStateMixin.DEFAULT_USER_SETTINGS["archive_ai_description"] is False
+
+
 @pytest.fixture
 def many_archived():
     sessions = [_make_archived(i) for i in range(PAGE_SIZE * 3)]
@@ -61,6 +67,38 @@ def many_archived():
 
 
 class TestArchivePageNumbering:
+    @pytest.mark.asyncio
+    async def test_archive_always_uses_unified_twenty_day_window(self) -> None:
+        with patch(
+            "ccbot.handlers.archive.session_manager.list_archived", return_value=[]
+        ) as listed:
+            await build_archive_page(
+                page=0,
+                lookback_seconds=72 * 3600,
+                show_all=False,
+                user_id=1,
+            )
+        listed.assert_called_once_with(max_age_seconds=20 * 86400)
+
+    @pytest.mark.asyncio
+    async def test_archive_is_table_with_cyclic_three_button_pager(
+        self, many_archived
+    ) -> None:
+        text, kb = await build_archive_page(
+            page=0, lookback_seconds=None, show_all=False, user_id=1
+        )
+        assert "Session" in text or "Сессия" in text
+        assert "Description" in text or "Описание" in text
+        pager = next(
+            row for row in kb.inline_keyboard if len(row) == 3 and row[1].text == "1/3"
+        )
+        assert [button.text for button in pager] == ["◀", "1/3", "▶"]
+        assert [button.callback_data for button in pager] == [
+            "ar:p:2",
+            "ar:p:0",
+            "ar:p:1",
+        ]
+
     @pytest.mark.asyncio
     async def test_page2_indices_bold_wrapped(self, many_archived) -> None:
         """Page-2 rows must carry ``**6.** ... **10.**`` so the line
@@ -122,78 +160,60 @@ class TestArchivePageNumbering:
         assert all(callback.startswith(f"{CB_ARC_INSPECT}2:") for callback in callbacks)
 
 
-class TestArchivePageLineBreaks:
+class TestArchiveTableLayout:
     @pytest.mark.asyncio
-    async def test_rows_separated_by_paragraph_break(self, many_archived) -> None:
-        """Rows must be separated by a blank line — single ``\\n`` is a
-        soft break and CommonMark collapses the entire page into one
-        run-on paragraph (the 2026-06-13 phone-screenshot bug)."""
+    async def test_each_session_is_one_table_row(self, many_archived) -> None:
         text, _ = await build_archive_page(
             page=0,
             lookback_seconds=None,
             show_all=True,
             user_id=1,
         )
-        # Each row's leading marker must be preceded by ``\n\n``.
+        assert "| Session | Description" in text
         for idx in range(1, PAGE_SIZE + 1):
-            marker = f"**{idx}.**"
-            assert marker in text
-            pos = text.index(marker)
-            assert text[pos - 2 : pos] == "\n\n", (
-                f"row {idx} not preceded by a paragraph break"
-            )
+            assert f"| **{idx}.**" in text
 
     @pytest.mark.asyncio
-    async def test_sublines_use_hard_break(self, many_archived) -> None:
-        """Within a row, sub-lines (blurb / workdir / goal) join with
-        ``  \\n`` — two trailing spaces force a hard line break in
-        CommonMark, instead of the soft break that collapses to a space."""
+    async def test_directory_is_secondary_inside_session_cell(
+        self, many_archived
+    ) -> None:
         text, _ = await build_archive_page(
             page=0,
             lookback_seconds=None,
             show_all=True,
             user_id=1,
         )
-        # At least one hard break per row (we seeded a blurb and a workdir).
-        assert text.count("  \n") >= PAGE_SIZE
+        assert text.count("<br><code>/tmp/x</code>") == PAGE_SIZE
 
     @pytest.mark.asyncio
-    async def test_session_divider_between_rows(self, many_archived) -> None:
-        """Each consecutive pair of session rows must be separated by
-        the visible Unicode divider, not just a blank line."""
-        from ccbot.handlers.archive import _SESSION_DIVIDER
-
+    async def test_age_has_no_ago_word(self, many_archived) -> None:
         text, _ = await build_archive_page(
             page=0,
             lookback_seconds=None,
             show_all=True,
             user_id=1,
         )
-        # One divider between every adjacent pair on the page.
-        assert text.count(_SESSION_DIVIDER) == PAGE_SIZE - 1
-        # Divider is wrapped in blank lines so it renders as its own
-        # block in CommonMark/MD V2.
-        assert f"\n\n{_SESSION_DIVIDER}\n\n" in text
-        # The page-counter line is NOT followed by a divider (only
-        # session rows are).
-        assert text.split("**1.**", 1)[0].count(_SESSION_DIVIDER) == 0, (
-            "divider leaked above the first row"
-        )
+        assert "ago" not in text
 
     @pytest.mark.asyncio
-    async def test_no_two_space_indent_remains(self, many_archived) -> None:
-        """The old MD V2-era 2-space indent on sub-lines is gone — leading
-        whitespace inside a paragraph would render as literal spaces in
-        the rich parser, not as visual indent."""
+    async def test_name_and_age_use_middle_dot(self, many_archived) -> None:
         text, _ = await build_archive_page(
             page=0,
             lookback_seconds=None,
             show_all=True,
             user_id=1,
         )
-        # ``\n  `` (line-start + 2 spaces of content) is the old pattern;
-        # the new layout uses ``  \n`` (trailing spaces before the break).
-        assert "\n  " not in text
+        assert "*sess 0* · 1h" in text
+
+    @pytest.mark.asyncio
+    async def test_archive_table_keeps_normal_font(self, many_archived) -> None:
+        from ccbot.rich import to_rich_markdown
+
+        text, _ = await build_archive_page(
+            page=0, lookback_seconds=None, show_all=False, user_id=1
+        )
+        rich = to_rich_markdown(text)
+        assert "<sub>**1.**" not in rich
 
 
 class TestDisplayName:
@@ -448,6 +468,342 @@ class TestArchiveBlurbCollectsUserMessages:
         assert "Use the lightweight model" in out
         assert "I will inspect it" not in out
 
+    @pytest.mark.asyncio
+    async def test_current_codex_response_items_skip_injected_context(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import json
+
+        from ccbot.handlers import archive
+
+        sid = "650e8400-e29b-41d4-a716-446655440000"
+        rollout = tmp_path / f"rollout-{sid}.jsonl"
+        rows = [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "# AGENTS.md instructions"},
+                        {
+                            "type": "input_text",
+                            "text": "<environment_context>cwd</environment_context>",
+                        },
+                    ],
+                },
+            },
+            *[
+                {"type": "event_msg", "payload": {"type": "token_count"}}
+                for _ in range(210)
+            ],
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "first available"}],
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "second available"}],
+                },
+            },
+        ]
+        rollout.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+        monkeypatch.setattr(archive, "build_session_file_path", lambda *_args: rollout)
+        sess = Session(
+            id="current-codex",
+            name="",
+            state="archived",
+            claude_session_id=sid,
+            workdir="/tmp/x",
+            backend="codex",
+        )
+
+        assert await archive._collect_user_messages(sess) == (
+            "first available  \nsecond available"
+        )
+
+    @pytest.mark.asyncio
+    async def test_image_markup_is_removed_from_a_captioned_text_prompt(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        import json
+
+        from ccbot.handlers import archive
+
+        rollout = tmp_path / "image-caption.jsonl"
+        rollout.write_text(
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": '<image name=[Image #1] path=".ccbot-inbox/x.jpg">',
+                            },
+                            {"type": "input_image"},
+                            {"type": "input_text", "text": "</image>"},
+                            {
+                                "type": "input_text",
+                                "text": "Переведи\n\n[Image #1]",
+                            },
+                        ],
+                    },
+                }
+            )
+            + "\n"
+        )
+        monkeypatch.setattr(archive, "build_session_file_path", lambda *_: rollout)
+        sess = Session(
+            id="image-caption",
+            name="",
+            state="archived",
+            claude_session_id="image-caption-provider",
+            workdir="/tmp/x",
+            backend="codex",
+        )
+
+        assert await archive._collect_user_messages(sess) == "Переведи"
+
+    @pytest.mark.asyncio
+    async def test_file_only_turn_is_ignored_when_any_text_prompt_exists(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        import json
+
+        from ccbot.handlers import archive
+
+        rollout = tmp_path / "file-then-text.jsonl"
+        rows = [
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": ".ccbot-inbox/report.pdf",
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "Проверь итоги"},
+            },
+        ]
+        rollout.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+        monkeypatch.setattr(archive, "build_session_file_path", lambda *_: rollout)
+        sess = Session(
+            id="file-then-text",
+            name="",
+            state="archived",
+            claude_session_id="file-then-text-provider",
+            workdir="/tmp/x",
+            backend="codex",
+        )
+
+        assert await archive._collect_user_messages(sess) == "Проверь итоги"
+
+    @pytest.mark.asyncio
+    async def test_file_only_session_gets_media_tags_instead_of_wire_markup(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        import json
+
+        from ccbot.handlers import archive
+
+        rollout = tmp_path / "files-only.jsonl"
+        rows = [
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": (
+                        '<image name=[Image #1] path=".ccbot-inbox/x.jpg">\n</image>'
+                    ),
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": ".ccbot-inbox/report.pdf",
+                },
+            },
+        ]
+        rollout.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+        monkeypatch.setattr(archive, "build_session_file_path", lambda *_: rollout)
+        sess = Session(
+            id="files-only",
+            name="",
+            state="archived",
+            claude_session_id="files-only-provider",
+            workdir="/tmp/x",
+            backend="codex",
+        )
+
+        assert await archive._collect_user_messages(sess) == "#image #document"
+        assert await archive._archive_blurb(sess, 1) == "#image #document"
+
+    @pytest.mark.asyncio
+    async def test_ai_description_uses_first_two_requests(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ccbot import naming
+        from ccbot.handlers import archive
+
+        sess = Session(
+            id="s-ai",
+            name="",
+            state="archived",
+            claude_session_id="cs-ai",
+            workdir="/tmp/x",
+        )
+        monkeypatch.setattr(
+            archive, "_collect_user_messages", _fake_collect("first  \nsecond  \nthird")
+        )
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_user_settings",
+            lambda _uid: {"archive_ai_description": True},
+        )
+        seen: list[list[str]] = []
+
+        async def describe(messages: list[str], backend: str) -> str:
+            seen.append(messages)
+            return "short AI description"
+
+        monkeypatch.setattr(naming, "generate_description", describe)
+        assert await archive._archive_blurb(sess, 1) == "short AI description"
+        assert seen == [["first", "second"]]
+
+    @pytest.mark.asyncio
+    async def test_ai_description_off_shows_two_dot_prefixed_requests(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ccbot.handlers import archive
+
+        sess = Session(
+            id="s-raw",
+            name="",
+            state="archived",
+            claude_session_id="cs-raw",
+            workdir="/tmp/x",
+        )
+        monkeypatch.setattr(
+            archive, "_collect_user_messages", _fake_collect("first  \nsecond  \nthird")
+        )
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_user_settings",
+            lambda _uid: {"archive_ai_description": False, "language": "ru"},
+        )
+        assert await archive._archive_blurb(sess, 1) == "· first<br>· second"
+
+    @pytest.mark.asyncio
+    async def test_description_has_one_70_character_budget_for_both_requests(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ccbot.handlers import archive
+
+        sess = Session(
+            id="s-budget",
+            name="",
+            state="archived",
+            claude_session_id="cs-budget",
+            workdir="/tmp/x",
+        )
+        monkeypatch.setattr(
+            archive,
+            "_collect_user_messages",
+            _fake_collect(
+                "first request with a deliberately very long explanation  \n"
+                "second request that must remain visible after truncation"
+            ),
+        )
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_user_settings",
+            lambda _uid: {"archive_ai_description": False, "language": "ru"},
+        )
+
+        blurb = await archive._archive_blurb(sess, 1)
+
+        assert len(blurb.replace("<br>", "")) <= 70
+        assert blurb.count("· ") == 2
+        assert "first" in blurb
+        assert "second" in blurb
+
+    @pytest.mark.asyncio
+    async def test_description_replaces_urls_with_meaningful_short_labels(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ccbot.handlers import archive
+
+        sess = Session(
+            id="s-links",
+            name="",
+            state="archived",
+            claude_session_id="cs-links",
+            workdir="/tmp/x",
+        )
+        monkeypatch.setattr(
+            archive,
+            "_collect_user_messages",
+            _fake_collect(
+                "посмотри https://yql.yandex-team.ru/Operations/abc  \n"
+                "и https://example.org/a/very/long/path?query=1"
+            ),
+        )
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_user_settings",
+            lambda _uid: {"archive_ai_description": False, "language": "ru"},
+        )
+
+        blurb = await archive._archive_blurb(sess, 1)
+
+        assert "ссылка в YQL" in blurb
+        assert "ссылка: example.org" in blurb
+        assert "https://" not in blurb
+        assert len(blurb.replace("<br>", "")) <= 70
+
+    @pytest.mark.asyncio
+    async def test_ai_description_is_also_limited_to_70_characters(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ccbot import naming
+        from ccbot.handlers import archive
+
+        sess = Session(
+            id="s-ai-budget",
+            name="",
+            state="archived",
+            claude_session_id="cs-ai-budget",
+            workdir="/tmp/x",
+        )
+        monkeypatch.setattr(archive, "_collect_user_messages", _fake_collect("first"))
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_user_settings",
+            lambda _uid: {"archive_ai_description": True},
+        )
+
+        async def describe(_messages: list[str], backend: str) -> str:
+            return "слово " * 20
+
+        monkeypatch.setattr(naming, "generate_description", describe)
+
+        blurb = await archive._archive_blurb(sess, 1)
+
+        assert len(blurb) <= 70
+        assert blurb.endswith("…")
+
 
 def _fake_collect(value: str):
     async def _collect(_sess):
@@ -499,9 +855,7 @@ class TestSystemUiTextFilter:
 
 
 class TestFormatBlurb:
-    """``_format_blurb`` caps the combined blurb at ``_BLURB_TOTAL_BUDGET``
-    chars on a whole-word boundary — no spoiler, no expandable block,
-    just plain text with a trailing ``…`` when content overflows."""
+    """Each early prompt has its own bounded display budget."""
 
     def test_short_single_message_verbatim(self) -> None:
         from ccbot.handlers.archive import _format_blurb
@@ -531,7 +885,7 @@ class TestFormatBlurb:
             "regression that crept in last week — reproduce on staging "
             "and confirm the fix locally before opening a PR after the "
             "follow-up review with the platform team."
-        )
+        ) * 2
         assert len(long_msg) > _BLURB_TOTAL_BUDGET
         out = _format_blurb([long_msg])
         assert out.endswith("…")
@@ -544,28 +898,25 @@ class TestFormatBlurb:
         assert long_msg.startswith(head)
         assert long_msg[len(head)] == " "
 
-    def test_overflow_drops_later_messages_keeps_first_whole(self) -> None:
+    def test_long_first_prompt_does_not_drop_second(self) -> None:
         from ccbot.handlers.archive import _BLURB_TOTAL_BUDGET, _format_blurb
 
-        first = "a" * (_BLURB_TOTAL_BUDGET - 10)  # fits whole
-        second = "b" * 30  # would overshoot
+        first = "a" * (_BLURB_TOTAL_BUDGET - 10)
+        second = "b" * 30
         out = _format_blurb([first, second])
-        # First message kept whole, no ellipsis, second dropped.
-        assert out == first
-        assert "…" not in out
+        assert first in out
+        assert second in out
 
-    def test_two_short_messages_third_dropped_if_over(self) -> None:
-        from ccbot.handlers.archive import _BLURB_TOTAL_BUDGET, _format_blurb
+    def test_three_prompts_are_independently_bounded(self) -> None:
+        from ccbot.handlers.archive import _format_blurb
 
         first = "x" * 60
         second = "y" * 60  # +3 separator → 123 ≤ 140
         third = "z" * 30  # +3 separator → 156 > 140 → dropped
-        assert len(first) + 3 + len(second) <= _BLURB_TOTAL_BUDGET
-        assert len(first) + 3 + len(second) + 3 + len(third) > _BLURB_TOTAL_BUDGET
         out = _format_blurb([first, second, third])
         assert first in out
         assert second in out
-        assert third not in out
+        assert third in out
 
 
 class TestDedupConsecutiveMessages:

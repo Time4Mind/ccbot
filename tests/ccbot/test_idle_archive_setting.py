@@ -94,6 +94,10 @@ async def test_idle_archive_cancels_startup_watcher() -> None:
         ),
         patch.object(session_manager, "find_idle_to_archive", return_value=[sess]),
         patch("ccbot.handlers.archive.teardown_session_runtime", new=teardown),
+        patch(
+            "ccbot.handlers.archive._archive_context_status",
+            new=AsyncMock(return_value=True),
+        ),
         patch.object(session_manager, "mark_session_archived"),
     ):
         archived = await idle_archive_sweep(MagicMock(), 42)
@@ -101,3 +105,24 @@ async def test_idle_archive_cancels_startup_watcher() -> None:
     assert archived == 1
     teardown.assert_awaited_once()
     assert teardown.await_args.args[1] is sess
+
+
+@pytest.mark.asyncio
+async def test_idle_archive_deletes_proven_empty_session() -> None:
+    sess = SimpleNamespace(window_id="@9", claude_session_id="", id="empty")
+    with (
+        patch.object(
+            session_manager,
+            "get_user_settings",
+            return_value={"session_idle_hours": 12},
+        ),
+        patch.object(session_manager, "find_idle_to_archive", return_value=[sess]),
+        patch("ccbot.handlers.archive.teardown_session_runtime", new=AsyncMock()),
+        patch.object(session_manager, "delete_session", return_value=True) as delete,
+        patch.object(session_manager, "mark_session_archived") as archive,
+    ):
+        archived = await idle_archive_sweep(MagicMock(), 42)
+
+    assert archived == 0
+    delete.assert_called_once_with("empty")
+    archive.assert_not_called()

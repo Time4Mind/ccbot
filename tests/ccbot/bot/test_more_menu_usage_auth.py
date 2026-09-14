@@ -72,4 +72,5 @@ async def test_codex_usage_failure_does_not_replace_working_auth() -> None:
     ):
         assert await more_menu.handle(query, context, user) is True
 
-    assert edits[-1] == "usage.unavailable"
+    assert "🔴 -" in edits[-1]
+    assert "| CLI |" in edits[-1]

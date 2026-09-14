@@ -16,7 +16,8 @@ import aiofiles
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from ..config import config
-from ..i18n import t
+from ..i18n import get_user_lang, t
+from ..rich import RICH_TABLE_NORMAL_FONT
 from ..session import (
     DEFAULT_IDLE_ARCHIVE_HOURS,
     IDLE_ARCHIVE_HOUR_CHOICES,
@@ -31,59 +32,41 @@ from .archive_blurb import (
     _RE_SYSTEM_UI_TEXT,
     _clean_user_msg,
     _display_name,
+    _fit_archive_description,
+    _shorten_links,
     _shorten_workdir,
+    _strip_media_payload,
     _truncate_at_word,
 )
-from .callback_data import CB_ARC_ALL, CB_ARC_INSPECT, CB_ARC_PAGE
+from .callback_data import CB_ARC_INSPECT, CB_ARC_PAGE
 from .cleanup import teardown_session_runtime
 
 logger = logging.getLogger(__name__)
 
 _BLURB_CACHE: dict[str, str] = {}
-_BLURB_TOTAL_BUDGET = 140
+_BLURB_TOTAL_BUDGET = 240
 _BLURB_MAX_MESSAGES = 3
-_SESSION_DIVIDER = "─────"
 PAGE_SIZE = 6
-DEFAULT_LOOKBACK_SECONDS = 72 * 3600
+DEFAULT_LOOKBACK_SECONDS = 20 * 86400
 
 
 def _format_blurb(messages: list[str]) -> str:
-    """Lay out ``messages`` into a blurb capped at ``_BLURB_TOTAL_BUDGET``
-    chars.
-
-    * No messages → empty string.
-    * First message alone exceeds the cap → truncated at a word
-      boundary with ``…``. Subsequent messages are dropped.
-    * First message fits → include later messages one by one as long as
-      the running total stays under the cap. Joined with ``  \\n`` so
-      each one renders on its own line in the rich-message body.
-    """
+    """Lay out early prompts with an independent per-prompt display cap."""
     if not messages:
         return ""
-    first = messages[0]
-    if len(first) > _BLURB_TOTAL_BUDGET:
-        return _truncate_at_word(first, _BLURB_TOTAL_BUDGET)
-    out: list[str] = [first]
-    total = len(first)
     sep = "  \n"
-    for msg in messages[1:]:
-        # Account for the hard-break separator we'll glue in front.
-        if total + len(sep) + len(msg) > _BLURB_TOTAL_BUDGET:
-            break
-        out.append(msg)
-        total += len(sep) + len(msg)
-    return sep.join(out)
+    return sep.join(
+        _truncate_at_word(message, _BLURB_TOTAL_BUDGET) for message in messages
+    )
 
 
 async def _collect_user_messages(sess: Session) -> str:
     """Walk the JSONL and assemble a blurb from the first 1-3 real user
     messages.
 
-    Stops accumulating as soon as the next message would push the
-    combined length past ``_BLURB_TOTAL_BUDGET`` — but the *first*
-    message is always included whole, even if it alone exceeds the
-    budget (the user's own words trump the soft cap). Overflow lands in
-    an expandable-quote block so the visible row stays compact.
+    Keeps scanning until the earliest three usable requests are found.
+    Each request is independently truncated only for display, so a long
+    first request can never make the second one disappear.
 
     Skips Claude Code's wrapper user-messages (``<system-reminder>``,
     ``<local-command-caveat>``, bash chrome) and its own UI events
@@ -102,18 +85,12 @@ async def _collect_user_messages(sess: Session) -> str:
         fp = matches[0]
 
     messages: list[str] = []
-    total = 0
+    media_kinds: list[str] = []
     scanned = 0
     try:
         async with aiofiles.open(fp, "r", encoding="utf-8") as f:
             async for line in f:
                 scanned += 1
-                # Honest sessions wedge the first 3 user messages
-                # well inside the first 200 lines (system prelude +
-                # opening assistant turn + 3 turns of dialogue). Cap
-                # the scan to bail on long-running sessions.
-                if scanned > 200:
-                    break
                 if len(messages) >= _BLURB_MAX_MESSAGES:
                     break
                 line = line.strip()
@@ -125,14 +102,39 @@ async def _collect_user_messages(sess: Session) -> str:
                     continue
                 if sess.backend == "codex":
                     payload = data.get("payload")
+                    raw_messages: list[str] = []
                     if (
                         data.get("type") != "event_msg"
                         or not isinstance(payload, dict)
                         or payload.get("type") != "user_message"
                     ):
-                        continue
-                    raw = str(payload.get("message") or "").strip()
-                    if not raw:
+                        if (
+                            data.get("type") != "response_item"
+                            or not isinstance(payload, dict)
+                            or payload.get("type") != "message"
+                            or payload.get("role") != "user"
+                        ):
+                            continue
+                        content = payload.get("content")
+                        if not isinstance(content, list):
+                            continue
+                        text_parts = [
+                            str(item.get("text") or "").strip()
+                            for item in content
+                            if isinstance(item, dict)
+                            and item.get("type") == "input_text"
+                        ]
+                        has_image = any(
+                            isinstance(item, dict) and item.get("type") == "input_image"
+                            for item in content
+                        )
+                        combined = "\n".join(part for part in text_parts if part)
+                        if has_image and "<image" not in combined.lower():
+                            combined = f"<image></image>\n{combined}"
+                        raw_messages = [combined]
+                    else:
+                        raw_messages = [str(payload.get("message") or "").strip()]
+                    if not any(raw_messages):
                         continue
                 else:
                     if not TranscriptParser.is_user_message(data):
@@ -140,50 +142,118 @@ async def _collect_user_messages(sess: Session) -> str:
                     parsed = TranscriptParser.parse_message(data)
                     if not parsed or not parsed.text.strip():
                         continue
-                    raw = parsed.text.strip()
-                if _RE_INJECTED_USER_MSG.search(raw):
-                    continue
-                if _RE_SYSTEM_UI_TEXT.match(raw):
-                    continue
-                cleaned = _clean_user_msg(raw)
-                if not cleaned:
-                    continue
-                # Drop a consecutive duplicate — when the user re-sends
-                # the same prompt (typical "didn't go through" double
-                # tap), the blurb shouldn't echo it twice. Only the
-                # immediately-previous message counts; a later repeat
-                # of an earlier message stays.
-                if messages and cleaned == messages[-1]:
-                    continue
-                # First message: always include whole. Subsequent ones:
-                # only if they still fit under the cumulative budget.
-                if messages and total + len(cleaned) > _BLURB_TOTAL_BUDGET:
-                    break
-                messages.append(cleaned)
-                total += len(cleaned)
+                    raw_messages = [parsed.text.strip()]
+                for raw in raw_messages:
+                    if (
+                        not raw
+                        or _RE_INJECTED_USER_MSG.search(raw)
+                        or _RE_SYSTEM_UI_TEXT.match(raw)
+                        or raw.startswith("# AGENTS.md instructions")
+                        or raw.startswith("<environment_context>")
+                        or raw.startswith("<turn_aborted>")
+                    ):
+                        continue
+                    prompt_text, kinds = _strip_media_payload(raw)
+                    for kind in kinds:
+                        if kind not in media_kinds:
+                            media_kinds.append(kind)
+                    cleaned = _clean_user_msg(prompt_text)
+                    if not cleaned or (messages and cleaned == messages[-1]):
+                        continue
+                    messages.append(cleaned)
+                    if len(messages) >= _BLURB_MAX_MESSAGES:
+                        break
     except OSError as e:
         logger.debug("archive blurb read failed for %s: %s", fp, e)
         return ""
 
-    return _format_blurb(messages)
+    if messages:
+        return _format_blurb(messages)
+    return " ".join(f"#{kind}" for kind in media_kinds)
 
 
-async def _archive_blurb(sess: Session) -> str:
+async def _archive_blurb(sess: Session, user_id: int | None = None) -> str:
     """Return the "what was this session about" line for an archived row.
 
-    Source: the user's own first 1-3 messages from the JSONL transcript.
-    No model-generated summary may replace those words. The result is cached
-    per agent session id because archived transcripts are append-frozen.
+    Source: the first two real user messages from the JSONL transcript. With
+    ``archive_ai_description`` enabled, the cheap naming model condenses them;
+    otherwise both prompts are shown with a middle-dot prefix. Results are
+    cached because archived transcripts are append-frozen.
     """
     sid = sess.claude_session_id
     if not sid:
         return ""
-    cached = _BLURB_CACHE.get(sid)
+    if user_id is None:
+        cached = _BLURB_CACHE.get(sid)
+        if cached is not None:
+            return cached
+        blurb = await _collect_user_messages(sess)
+        _BLURB_CACHE[sid] = blurb
+        return blurb
+    ai_enabled = bool(
+        session_manager.get_user_settings(user_id).get("archive_ai_description", False)
+    )
+    cache_key = f"{sid}:{int(ai_enabled)}:{get_user_lang(user_id)}"
+    cached = _BLURB_CACHE.get(cache_key)
     if cached is not None:
         return cached
     blurb = await _collect_user_messages(sess)
-    _BLURB_CACHE[sid] = blurb
-    return blurb
+    if blurb.startswith("#") and "  \n" not in blurb:
+        media_description = _truncate_at_word(blurb, 69)
+        _BLURB_CACHE[cache_key] = media_description
+        return media_description
+    messages = [part.strip() for part in blurb.split("  \n") if part.strip()][:2]
+    if ai_enabled and messages:
+        from ..naming import generate_description
+
+        generated = await generate_description(messages, backend=sess.backend)
+        if generated:
+            description = _truncate_at_word(_shorten_links(generated, user_id), 69)
+            _BLURB_CACHE[cache_key] = description
+            return description
+    fallback = _fit_archive_description(messages, user_id)
+    _BLURB_CACHE[cache_key] = fallback
+    return fallback
+
+
+async def _archive_context_status(sess: Session) -> bool | None:
+    """Return whether a session has user context, or None if unreadable."""
+    if not sess.claude_session_id:
+        return False
+    fp = build_session_file_path(sess.claude_session_id, sess.workdir)
+    if fp is None or not fp.exists():
+        return None
+    return bool((await _collect_user_messages(sess)).strip())
+
+
+async def archive_or_delete_session(sess: Session, *, completed: bool) -> bool:
+    """Archive resumable sessions and discard proven-empty shells.
+
+    Returns True when an archive record remains, False when an empty record
+    was removed. Missing transcripts are preserved because absence of local
+    evidence is not proof that the provider session is empty.
+    """
+    has_context = await _archive_context_status(sess)
+    if has_context is False:
+        deleted = session_manager.delete_session(sess.id)
+        if deleted:
+            logger.info("Deleted empty session instead of archiving: %s", sess.id)
+        return False
+    session_manager.mark_session_archived(sess.id, completed=completed)
+    return True
+
+
+async def purge_empty_archive_records() -> list[str]:
+    """Delete terminal session records whose empty context is proven."""
+    deleted: list[str] = []
+    for sess in list(session_manager.list_archived()):
+        if await _archive_context_status(sess) is not False:
+            continue
+        if session_manager.delete_session(sess.id):
+            deleted.append(sess.id)
+    if deleted:
+        logger.info("Deleted %d empty archive record(s): %s", len(deleted), deleted)
+    return deleted
 
 
 def _format_age(user_id: int, ts: float, now: float | None = None) -> str:
@@ -223,6 +293,8 @@ async def build_archive_page(
     "what was this session about" blurb — cached by claude_session_id
     so subsequent paints are instant.
     """
+    del show_all
+    lookback_seconds = DEFAULT_LOOKBACK_SECONDS
     sessions = session_manager.list_archived(max_age_seconds=lookback_seconds)
     total = len(sessions)
     pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
@@ -234,26 +306,29 @@ async def build_archive_page(
     # cache (archived JSONLs don't change); cold paths walk the JSONL
     # once and pick up the first 1-3 user messages. Fan-out kept tiny
     # by PAGE_SIZE=6.
-    blurbs: dict[str, str] = {}
-    for sess in chunk:
+    async def _safe_blurb(sess: Session) -> tuple[str, str]:
         try:
-            blurbs[sess.id] = await _archive_blurb(sess)
+            return sess.id, await _archive_blurb(sess, user_id)
         except Exception as e:
             logger.debug("archive blurb fetch failed for %s: %s", sess.id, e)
-            blurbs[sess.id] = ""
+            return sess.id, ""
+
+    blurbs = dict(await asyncio.gather(*(_safe_blurb(sess) for sess in chunk)))
 
     title = t(user_id, "archive.title")
-    range_suffix = t(user_id, "archive.range_14d" if show_all else "archive.range_72h")
-    header = f"*{title}*{range_suffix}"
+    header = f"*{title}*"
     if total == 0:
         body = [t(user_id, "archive.empty")]
     else:
-        body = [
-            t(user_id, "archive.page_line", page=page + 1, pages=pages, total=total)
+        body = []
+        table_rows = [
+            f"| {t(user_id, 'archive.column.session')} | "
+            f"{t(user_id, 'archive.column.description')}{RICH_TABLE_NORMAL_FONT} |",
+            "|---|---|",
         ]
         for idx, sess in enumerate(chunk, start=start + 1):
-            # ✓ marks /done-completed sessions; · is plain archive.
-            label = "✓" if sess.state == "completed" else "·"
+            # ✓ marks /done-completed sessions; plain archives need no badge.
+            label = "✓ " if sess.state == "completed" else ""
             ts = sess.archived_at or sess.last_event_at
             age = _format_age(user_id, ts) if ts else "?"
             display_name = _display_name(sess)
@@ -267,18 +342,17 @@ async def build_archive_page(
             # newline). Without the hard break the rich parser treats
             # each row's blurb / workdir / goal as a soft break and
             # collapses the whole page into one wall-of-text paragraph.
-            parts: list[str] = [
-                f"**{idx}.** {label} *{display_name}*{lost_tag} — {age}"
-            ]
+            first = f"**{idx}.** {label}*{display_name}*{lost_tag} · {age}"
             blurb = blurbs.get(sess.id) or ""
-            if blurb:
-                parts.append(blurb)
             wd = _shorten_workdir(sess.workdir) if sess.workdir else ""
             if wd:
-                parts.append(f"`{wd}`")
-            if sess.goal:
-                parts.append(f"_{sess.goal}_")
-            body.append("  \n".join(parts))
+                first += f"<br><code>{wd}</code>"
+            description = blurb or "-"
+            table_rows.append(
+                f"| {first.replace('|', '\\|')} | "
+                f"{description.replace('|', '\\|')}{RICH_TABLE_NORMAL_FONT} |"
+            )
+        body.append("\n".join(table_rows))
 
     # One button per session, paired up two-per-row (PAGE_SIZE=6 gives
     # 2+2+2). Each button's label carries the matching number so the
@@ -301,40 +375,27 @@ async def build_archive_page(
     if row:
         rows.append(row)
 
-    nav_row: list[InlineKeyboardButton] = []
-    if page > 0:
-        nav_row.append(
-            InlineKeyboardButton("◀", callback_data=f"{CB_ARC_PAGE}{page - 1}")
+    if pages > 1:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "◀", callback_data=f"{CB_ARC_PAGE}{(page - 1) % pages}"
+                ),
+                InlineKeyboardButton(
+                    f"{page + 1}/{pages}", callback_data=f"{CB_ARC_PAGE}0"
+                ),
+                InlineKeyboardButton(
+                    "▶", callback_data=f"{CB_ARC_PAGE}{(page + 1) % pages}"
+                ),
+            ]
         )
-    nav_row.append(
-        InlineKeyboardButton(
-            t(user_id, "btn.to_14d" if not show_all else "btn.to_72h"),
-            callback_data=CB_ARC_ALL,
-        )
-    )
-    if page < pages - 1:
-        nav_row.append(
-            InlineKeyboardButton("▶", callback_data=f"{CB_ARC_PAGE}{page + 1}")
-        )
-    rows.append(nav_row)
 
     if back_callback is not None:
         rows.append(
             [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=back_callback)]
         )
 
-    # Paragraph break between header / page counter / sessions block;
-    # session rows themselves are separated by the more visible
-    # ``_SESSION_DIVIDER`` so the boundary between two sessions is
-    # easy to spot on the phone (a blank line alone was easy to miss
-    # in a list of long blurbs).
-    if total == 0:
-        text = "\n\n".join([header, *body])
-    else:
-        page_line = body[0]
-        session_rows = body[1:]
-        sessions_block = f"\n\n{_SESSION_DIVIDER}\n\n".join(session_rows)
-        text = "\n\n".join(p for p in (header, page_line, sessions_block) if p)
+    text = "\n\n".join([header, *body])
     return text, InlineKeyboardMarkup(rows)
 
 
@@ -509,8 +570,8 @@ async def idle_archive_sweep(bot: Bot, user_id: int) -> int:
     archived = 0
     for sess in candidates:
         await teardown_session_runtime(user_id, sess, bot)
-        session_manager.mark_session_archived(sess.id, completed=False)
-        archived += 1
+        if await archive_or_delete_session(sess, completed=False):
+            archived += 1
     if archived:
         logger.info("Archived %d idle sessions", archived)
     return archived

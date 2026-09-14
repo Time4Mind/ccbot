@@ -13,6 +13,7 @@ from ..session import session_manager
 from .callback_data import (
     CB_MM_SETTINGS,
     CB_ST_APPROVE,
+    CB_ST_ARCHIVE_AI,
     CB_ST_AGENT,
     CB_ST_BACK,
     CB_ST_BGNOTIFY,
@@ -50,6 +51,7 @@ __all__ = [
     "_settings_cardhist_grid",
     "_settings_screens_grid",
     "_settings_haiku_grid",
+    "_settings_archive_ai_grid",
     "_settings_bg_notify_grid",
     "_settings_pagesize_grid",
     "_settings_weeklyday_grid",
@@ -96,7 +98,7 @@ def _format_setting_value(user_id: int, value_key: str, cur: object) -> str:
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
     if value_key in ("bg_notify_finished", "bg_notify_error", "bg_notify_needs_action"):
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
-    if value_key == "haiku_naming":
+    if value_key in ("haiku_naming", "archive_ai_description"):
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
     if value_key == "agent_backend":
         return str(cur).capitalize()
@@ -136,24 +138,17 @@ def _settings_category_grid(
         if sname == screen_name:
             members = m
             break
-    s = session_manager.get_user_settings(user_id)
     groups_by_key = {key: (lk, sc, vk) for key, lk, sc, vk in _SETTINGS_GROUPS}
     rows: list[list[InlineKeyboardButton]] = []
     for member_key in members:
         if member_key not in groups_by_key:
             continue
-        label_key, _sub_screen, value_key = groups_by_key[member_key]
-        cur = (
-            session_manager.agent_backend
-            if value_key == "agent_backend"
-            else s.get(value_key, "")
-        )
+        label_key, _sub_screen, _value_key = groups_by_key[member_key]
         label = t(user_id, label_key)
-        value_str = _format_setting_value(user_id, value_key, cur)
         rows.append(
             [
                 InlineKeyboardButton(
-                    f"{label}: {value_str}",
+                    label,
                     callback_data=f"{CB_ST_GRP}{member_key}",
                 )
             ]
@@ -419,6 +414,30 @@ def _settings_haiku_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
         [
             InlineKeyboardButton(
                 t(user_id, "btn.back"), callback_data=_parent_cat_cb("haiku_naming")
+            )
+        ],
+    ]
+
+
+def _settings_archive_ai_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
+    cur = bool(
+        session_manager.get_user_settings(user_id).get("archive_ai_description", False)
+    )
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(t(user_id, "screens.on"), cur),
+                callback_data=f"{CB_ST_ARCHIVE_AI}on",
+            ),
+            InlineKeyboardButton(
+                _highlight(t(user_id, "screens.off"), not cur),
+                callback_data=f"{CB_ST_ARCHIVE_AI}off",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("archive_ai_description"),
             )
         ],
     ]

@@ -123,6 +123,16 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     # Restore button.
     await session_manager.reconcile_sessions_with_tmux()
 
+    # Remove old empty shells and any future terminal records that have no
+    # usable user context. Run off the startup critical path: the Telegram bot
+    # is already online, and archive cleanup is local filesystem work.
+    from ..handlers.archive import purge_empty_archive_records
+
+    asyncio.create_task(
+        purge_empty_archive_records(), name="purge-empty-archive-records"
+    )
+    logger.info("Empty-archive cleanup scheduled")
+
     # A fresh Codex host should be operable from Telegram alone. Read auth
     # state after the bot is online and automatically start the official
     # device-code flow when no account is present.

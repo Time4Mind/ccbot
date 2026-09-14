@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from ..session import Session
 
@@ -17,9 +18,32 @@ __all__ = [
     "_RE_SYSTEM_UI_TEXT",
     "_shorten_workdir",
     "_clean_user_msg",
+    "_strip_media_payload",
     "_truncate_at_word",
+    "_shorten_links",
+    "_fit_archive_description",
     "_display_name",
 ]
+
+_URL_RE = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
+_IMAGE_BLOCK_RE = re.compile(r"<image\b[^>]*>.*?</image>", re.IGNORECASE | re.DOTALL)
+_IMAGE_REF_RE = re.compile(r"\[Image\s*#?\d+\]", re.IGNORECASE)
+_INBOX_PATH_RE = re.compile(r"(?:^|(?<=\s))\.?/?\.ccbot-inbox/[^\s<>`\"']+")
+_IMAGE_SUFFIXES = {".avif", ".bmp", ".gif", ".heic", ".jpeg", ".jpg", ".png", ".webp"}
+_DOCUMENT_SUFFIXES = {
+    ".csv",
+    ".doc",
+    ".docx",
+    ".md",
+    ".pdf",
+    ".ppt",
+    ".pptx",
+    ".rtf",
+    ".txt",
+    ".xls",
+    ".xlsm",
+    ".xlsx",
+}
 
 _RE_INJECTED_USER_MSG = re.compile(
     r"<(bash-input|bash-stdout|bash-stderr|local-command-caveat|system-reminder)"
@@ -68,6 +92,34 @@ def _clean_user_msg(text: str) -> str:
     return cleaned.strip("` ")
 
 
+def _strip_media_payload(text: str) -> tuple[str, list[str]]:
+    """Remove transport markup and return its semantic media kinds."""
+    kinds: list[str] = []
+
+    def add(kind: str) -> None:
+        if kind not in kinds:
+            kinds.append(kind)
+
+    if _IMAGE_BLOCK_RE.search(text):
+        add("image")
+        text = _IMAGE_BLOCK_RE.sub(" ", text)
+    text = _IMAGE_REF_RE.sub(" ", text)
+
+    def remove_inbox_path(match: re.Match[str]) -> str:
+        raw = match.group(0).rstrip(".,;:!?)]}")
+        suffix = Path(raw).suffix.lower()
+        if suffix in _IMAGE_SUFFIXES:
+            add("image")
+        elif suffix in _DOCUMENT_SUFFIXES:
+            add("document")
+        else:
+            add("file")
+        return " "
+
+    text = _INBOX_PATH_RE.sub(remove_inbox_path, text)
+    return text, kinds
+
+
 def _truncate_at_word(text: str, budget: int) -> str:
     """Clip ``text`` to ``budget`` chars on the nearest whole-word
     boundary, appending ``…``.
@@ -82,6 +134,72 @@ def _truncate_at_word(text: str, budget: int) -> str:
     if cut < budget - 24:
         cut = budget
     return text[:cut].rstrip() + "…"
+
+
+def _shorten_links(text: str, user_id: int) -> str:
+    """Replace full URLs with compact labels that retain their destination."""
+
+    def replace(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        url = raw.rstrip(".,;:!?)]}")
+        suffix = raw[len(url) :]
+        host = (urlsplit(url).hostname or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        known = (
+            (("yql.yandex-team.ru", "yql.yandex.ru"), "archive.link.yql"),
+            (("st.yandex-team.ru", "tracker.yandex.ru"), "archive.link.tracker"),
+            (("github.com",), "archive.link.github"),
+            (("arcanum.yandex-team.ru",), "archive.link.arcanum"),
+            (("wiki.yandex-team.ru",), "archive.link.wiki"),
+        )
+        from ..i18n import t
+
+        for hosts, key in known:
+            if host in hosts:
+                return t(user_id, key) + suffix
+        return t(user_id, "archive.link.generic", host=host or "link") + suffix
+
+    return _URL_RE.sub(replace, text)
+
+
+def _fit_archive_description(
+    messages: list[str], user_id: int, budget: int = 70
+) -> str:
+    """Render at most two dot-prefixed prompts within one visible-char budget."""
+    cleaned = [
+        _shorten_links(message.strip(), user_id)
+        for message in messages
+        if message.strip()
+    ][:2]
+    if not cleaned or budget <= 0:
+        return ""
+    content_budget = max(0, budget - 2 * len(cleaned))
+    caps = [content_budget // len(cleaned)] * len(cleaned)
+    for index in range(content_budget % len(cleaned)):
+        caps[index] += 1
+
+    # A short prompt donates its unused share to the other prompt.
+    spare = sum(max(0, cap - len(message)) for cap, message in zip(caps, cleaned))
+    caps = [min(cap, len(message)) for cap, message in zip(caps, cleaned)]
+    while spare:
+        recipients = [i for i, message in enumerate(cleaned) if caps[i] < len(message)]
+        if not recipients:
+            break
+        for index in recipients:
+            if not spare:
+                break
+            caps[index] += 1
+            spare -= 1
+
+    def clip(message: str, cap: int) -> str:
+        if len(message) <= cap:
+            return message
+        if cap <= 1:
+            return "…"[:cap]
+        return _truncate_at_word(message, cap - 1)
+
+    return "<br>".join(f"· {clip(message, cap)}" for message, cap in zip(cleaned, caps))
 
 
 def _display_name(sess: Session) -> str:

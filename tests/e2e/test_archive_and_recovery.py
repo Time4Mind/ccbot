@@ -76,6 +76,25 @@ async def test_archive_completed_tags_done(fake_tmux, fake_bot):
 
 
 @pytest.mark.asyncio
+async def test_archive_deletes_session_without_provider_context(fake_tmux, fake_bot):
+    fake_tmux.add_window(WINDOW_ID, name="empty", cwd=WORKDIR)
+    sess = seed_session(
+        session_manager,
+        sid="empty000",
+        name="empty",
+        window_id=WINDOW_ID,
+        workdir=WORKDIR,
+        claude_session_id="",
+        active_for=USER_ID,
+    )
+
+    await archive_session(USER_ID, fake_bot, sess, completed=False)
+
+    assert WINDOW_ID in fake_tmux.killed
+    assert "empty000" not in session_manager.sessions
+
+
+@pytest.mark.asyncio
 async def test_resolve_stale_ids_remaps_by_display_name(fake_tmux):
     # Persisted window_state under a STALE id (@100) whose display name is
     # "proj". After a tmux restart the same window is now @300; a second

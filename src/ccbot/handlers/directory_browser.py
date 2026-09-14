@@ -29,6 +29,7 @@ from ..i18n import t
 from .callback_data import (
     CB_DIR_CANCEL,
     CB_DIR_CONFIRM,
+    CB_DIR_CREATE,
     CB_DIR_PAGE,
     CB_DIR_SELECT,
     CB_DIR_UP,
@@ -231,6 +232,7 @@ SESSIONS_PER_PAGE = 8
 # User state keys
 STATE_KEY = "state"
 STATE_BROWSING_DIRECTORY = "browsing_directory"
+STATE_NAMING_DIRECTORY = "naming_directory"
 STATE_SELECTING_WINDOW = "selecting_window"
 BROWSE_PATH_KEY = "browse_path"
 BROWSE_PAGE_KEY = "browse_page"
@@ -363,18 +365,17 @@ async def build_directory_browser(
         buttons.append(row)
 
     if total_pages > 1:
-        nav: list[InlineKeyboardButton] = []
-        if page > 0:
-            nav.append(
-                InlineKeyboardButton("◀", callback_data=f"{CB_DIR_PAGE}{page - 1}")
-            )
-        nav.append(
-            InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="noop")
-        )
-        if page < total_pages - 1:
-            nav.append(
-                InlineKeyboardButton("▶", callback_data=f"{CB_DIR_PAGE}{page + 1}")
-            )
+        nav = [
+            InlineKeyboardButton(
+                "◀", callback_data=f"{CB_DIR_PAGE}{(page - 1) % total_pages}"
+            ),
+            InlineKeyboardButton(
+                f"{page + 1}/{total_pages}", callback_data=f"{CB_DIR_PAGE}0"
+            ),
+            InlineKeyboardButton(
+                "▶", callback_data=f"{CB_DIR_PAGE}{(page + 1) % total_pages}"
+            ),
+        ]
         buttons.append(nav)
 
     action_row: list[InlineKeyboardButton] = []
@@ -390,6 +391,13 @@ async def build_directory_browser(
         InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_DIR_CANCEL)
     )
     buttons.append(action_row)
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                t(user_id, "dir.btn.create"), callback_data=CB_DIR_CREATE
+            )
+        ]
+    )
 
     display_path = str(path).replace(str(Path.home()), "~")
     title = t(user_id, "dir.title")

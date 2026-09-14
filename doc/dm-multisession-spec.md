@@ -78,7 +78,7 @@ A session is defined by its goal, not by its working directory. The user can `cd
 ### Lifecycle
 
 ```
-[create] -> active -> idle (selected 6/12/24h) -> archived -> [restore | purged at 14d]
+[create] -> active -> idle (selected 6/12/24h) -> archived -> [restore | purged at 20d]
             ^                                   |
             +-----------------------------------+
                           restore
@@ -89,8 +89,8 @@ A session is defined by its goal, not by its working directory. The user can `cd
 - **archived**: tmux window killed, backend and native session id stored.
   Same-backend restore uses `claude --resume <id>` or
   `codex resume <thread-id>`. Cross-backend restore creates a fresh target
-  session from a bounded handoff. Visible in `/archive` for 0–72h, in
-  `/archive --all` for up to 14d, then purged
+  session from a bounded handoff. Visible in one `/archive` list for up to
+  20d, then purged
 - **purged**: state removed from `state.json`; transcripts on disk are kept for audit
 
 ### Goal closure (P1)
@@ -185,7 +185,7 @@ Hidden (typed only):
 | `/new [name] [path]` | Create a new session. Without args, opens the directory browser. |
 | `/kill [name]` | Stop tmux window and archive after confirmation. |
 | `/stop` | Send Esc to the active session's tmux window (interrupt current task). |
-| `/archive` | Show archived sessions, paginated, last 0–72h. |
+| `/archive` | Show archived sessions, paginated, last 20d. |
 | `/screenshot` | Snapshot the active session's tmux pane as a PNG. |
 | `/usage` | Live account limits: Claude `/usage` modal or Codex app-server rate limits. |
 | `/health` | Uptime, queue stats, latency, counters. |
@@ -347,8 +347,7 @@ Transcript and quota data have separate sources:
 
 ### Browsing
 
-- `/archive` — paginated list, 0–72h, newest first, 5 per page.
-- `/archive --all` — 0–14d.
+- `/archive` — one paginated 20-day list, newest first.
 - Each archived row has inline buttons:
   - `Restore` — recreate tmux window, run `claude --resume <id> --dangerously-skip-permissions` in the original workdir, move back to active. `created_at` is bumped to now, so the session re-enters the switcher as the newest button (§4.1).
   - `Delete` — purge state record (transcript files retained on disk).
@@ -356,7 +355,7 @@ Transcript and quota data have separate sources:
 
 ### Purge
 
-- After 14d in archive, the state record is purged automatically. Transcripts on disk are kept for audit.
+- After 20d in archive, the state record is purged automatically. Transcripts on disk are kept for audit.
 
 ### Edge case: claude resume gotchas
 
@@ -506,7 +505,7 @@ CODEX_NAMING_MODEL=gpt-5.6-luna
 
 # Sessions
 # Active -> archived TTL is selected per user in Settings: 6h / 12h / 24h.
-ARCHIVE_PURGE_AFTER=14d
+ARCHIVE_PURGE_AFTER=20d
 
 # Quota alerts
 QUOTA_ALERT_POLL_INTERVAL=10m  # background poll of /usage modal

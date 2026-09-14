@@ -389,6 +389,9 @@ class SessionStateMixin:
         # the session's lifetime. The persisted key keeps its historical
         # name for state-file compatibility.
         "haiku_naming": True,
+        # Summarise the first two user requests in Archive with the same
+        # isolated cheap model used for session naming. Off shows both prompts.
+        "archive_ai_description": False,
     }
 
     def get_user_settings(self, user_id: int) -> dict[str, Any]:

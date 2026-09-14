@@ -109,6 +109,36 @@ def test_codex_startup_screen_poll_uses_250ms_interval(
     assert delays == [0.25]
 
 
+@pytest.mark.asyncio
+async def test_codex_startup_watcher_uses_writable_manager_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    screens = iter(
+        [
+            [
+                "Do you trust the contents of this directory?",
+                "1. Yes, continue",
+            ],
+            ["OpenAI Codex", "›"],
+        ]
+    )
+
+    class Pane:
+        def capture_pane(self) -> list[str]:
+            return next(screens)
+
+        def send_keys(self, _value: str, enter: bool = True) -> None:
+            raise AssertionError("read-only libtmux client must not send keys")
+
+    mgr = TmuxManager()
+    send = AsyncMock(return_value=True)
+    monkeypatch.setattr(mgr, "send_keys", send)
+    monkeypatch.setattr("ccbot.tmux_manager.asyncio.sleep", AsyncMock())
+
+    assert await mgr._watch_codex_startup_screens(Pane(), "@7") is True
+    send.assert_awaited_once_with("@7", "", enter=True, literal=False)
+
+
 def test_codex_ready_prompt_is_not_auto_confirmed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -841,7 +871,8 @@ async def test_tmux_builds_codex_resume_command(
     send_startup = AsyncMock(return_value=True)
     monkeypatch.setattr(mgr, "send_keys", send_startup)
 
-    async def wait_for_trust(_pane: object) -> bool:
+    async def wait_for_trust(_pane: object, window_id: str) -> bool:
+        assert window_id == "@7"
         trust_started.set()
         await asyncio.to_thread(release_trust.wait, 2.0)
         return True

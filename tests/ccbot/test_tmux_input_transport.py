@@ -79,6 +79,16 @@ async def test_literal_input_pastes_chunks_in_order_then_one_carriage_return() -
 
 
 @pytest.mark.asyncio
+async def test_special_key_uses_detached_tmux_command_client() -> None:
+    with patch(
+        "ccbot.tmux_input_transport._run_tmux",
+        new=AsyncMock(return_value=(0, b"")),
+    ) as run:
+        assert await tmux_input_transport.send_special_key("@5", "Down", enter=True)
+    run.assert_awaited_once_with("send-keys", "-t", "@5", "Down", "C-m")
+
+
+@pytest.mark.asyncio
 async def test_ambiguous_paste_is_not_retried_and_finalizes_once() -> None:
     manager = TmuxManager(session_name="ccbot")
     with (
@@ -107,19 +117,17 @@ async def test_ambiguous_paste_is_not_retried_and_finalizes_once() -> None:
 @pytest.mark.asyncio
 async def test_bang_command_keeps_existing_tui_path() -> None:
     manager = TmuxManager(session_name="ccbot")
-    pane = MagicMock()
-
-    class _Windows:
-        def get(self, **_kwargs):
-            return type("Window", (), {"active_pane": pane})()
-
-    manager.get_session = lambda: type("Session", (), {"windows": _Windows()})()
     with (
         patch("ccbot.tmux_manager.asyncio.sleep", new=AsyncMock()),
         patch(
-            "ccbot.tmux_manager.tmux_input_transport.send_literal_chunked",
+            "ccbot.tmux_manager.tmux_input_transport.paste_literal",
             new=AsyncMock(return_value=True),
-        ) as send_chunked,
+        ) as paste_literal,
+        patch(
+            "ccbot.tmux_manager.tmux_input_transport.send_special_key",
+            new=AsyncMock(return_value=True),
+        ) as send_enter,
     ):
         assert await manager.send_keys("@5", "!pwd", backend="claude")
-    send_chunked.assert_not_awaited()
+    assert paste_literal.await_args_list == [call("@5", "!"), call("@5", "pwd")]
+    send_enter.assert_awaited_once_with("@5", "", enter=True)

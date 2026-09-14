@@ -122,7 +122,7 @@ Most-frequently-tweaked optionals:
 | `CODEX_COMMAND`             | `codex`      | Codex CLI binary (an absolute Termux path is accepted) |
 | `CODEX_FLAGS`               | bypass + hook trust + hooks + `--no-alt-screen` | flags appended to `codex` |
 | `CODEX_NAMING_MODEL`        | `gpt-5.6-luna` | lightweight Codex model for automatic session names |
-| `ARCHIVE_PURGE_AFTER`       | `14d`        | archived sessions purged from state after this |
+| `ARCHIVE_PURGE_AFTER`       | `20d`        | archived sessions purged from state after this |
 | `QUOTA_ALERT_POLL_INTERVAL` | `10m`        | how often the live `/usage` modal is sampled |
 | `VOICE_BACKEND`             | `auto`       | `auto` / `parakeet` / `whisper` / `apple` / `off`; `auto` selects Parakeet |
 | `PARAKEET_BIN`              | `nemo-speech` | NeMo-Speech.cpp binary |

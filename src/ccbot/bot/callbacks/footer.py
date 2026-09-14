@@ -164,12 +164,9 @@ async def handle(
             # was set explicitly). ``None`` means "stick to latest".
             state.current_page_idx = None
         elif data == CB_PG_PREV:
-            new_idx = max(0, idx - 1)
-            state.current_page_idx = new_idx if new_idx < total - 1 else None
+            state.current_page_idx = (idx - 1) % total
         else:  # CB_PG_NEXT
-            new_idx = min(total - 1, idx + 1)
-            # Reaching the last page sticks the user to "auto-follow latest".
-            state.current_page_idx = new_idx if new_idx < total - 1 else None
+            state.current_page_idx = (idx + 1) % total
         desired_page_idx = state.current_page_idx
         refreshed = False
         try:

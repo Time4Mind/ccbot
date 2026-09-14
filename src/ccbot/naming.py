@@ -69,6 +69,12 @@ _PROMPT_TEMPLATE = (
     "no quotes."
 )
 
+_DESCRIPTION_PROMPT_TEMPLATE = (
+    "Write one short plain-text description of a coding session from these first "
+    "two user requests. Use the requests' language, describe the goal, and reply "
+    "with only the description (max 90 characters):\n{seed}"
+)
+
 
 # Refusal openers Haiku sometimes returns instead of a name (most often
 # when the seed mentions a real person, sensitive context, or otherwise
@@ -241,6 +247,50 @@ async def generate_name(seed_text: str, backend: str = "claude") -> str | None:
         logger.debug("naming: rejected raw output: %r", raw[:80])
         return None
     return name
+
+
+async def generate_description(
+    user_messages: list[str], backend: str = "claude"
+) -> str | None:
+    """Generate one short archive description with the cheap naming model."""
+    seed = "\n".join(f"· {message.strip()}" for message in user_messages[:2] if message.strip())
+    if not seed:
+        return None
+    prompt = _DESCRIPTION_PROMPT_TEMPLATE.format(seed=seed[:500])
+    if backend == "codex":
+        command = shlex.split(config.codex_command or "codex")
+        if not command or not config.codex_naming_model:
+            return None
+        raw = await _run(
+            *command,
+            "exec",
+            "--model",
+            config.codex_naming_model,
+            "-c",
+            'model_reasoning_effort="low"',
+            "--ephemeral",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--sandbox",
+            "read-only",
+            "--skip-git-repo-check",
+            prompt,
+            timeout=30.0,
+        )
+    else:
+        raw = await _run(
+            config.claude_command or "claude",
+            "--model",
+            "haiku",
+            "--print",
+            prompt,
+            timeout=30.0,
+            env=_build_naming_env(),
+        )
+    if raw is None or _looks_like_refusal(raw):
+        return None
+    description = " ".join(raw.strip().strip("'\"`").split())
+    return description[:89] + "…" if len(description) > 90 else description or None
 
 
 async def maybe_auto_name(

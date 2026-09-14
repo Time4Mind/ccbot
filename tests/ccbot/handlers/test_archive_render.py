@@ -62,6 +62,38 @@ def many_archived():
 
 class TestArchivePageNumbering:
     @pytest.mark.asyncio
+    async def test_archive_always_uses_unified_twenty_day_window(self) -> None:
+        with patch(
+            "ccbot.handlers.archive.session_manager.list_archived", return_value=[]
+        ) as listed:
+            await build_archive_page(
+                page=0,
+                lookback_seconds=72 * 3600,
+                show_all=False,
+                user_id=1,
+            )
+        listed.assert_called_once_with(max_age_seconds=20 * 86400)
+
+    @pytest.mark.asyncio
+    async def test_archive_is_table_with_cyclic_three_button_pager(
+        self, many_archived
+    ) -> None:
+        text, kb = await build_archive_page(
+            page=0, lookback_seconds=None, show_all=False, user_id=1
+        )
+        assert "Session" in text or "Сессия" in text
+        assert "Description" in text or "Описание" in text
+        pager = next(
+            row for row in kb.inline_keyboard if len(row) == 3 and row[1].text == "1/3"
+        )
+        assert [button.text for button in pager] == ["◀", "1/3", "▶"]
+        assert [button.callback_data for button in pager] == [
+            "ar:p:2",
+            "ar:p:0",
+            "ar:p:1",
+        ]
+
+    @pytest.mark.asyncio
     async def test_page2_indices_bold_wrapped(self, many_archived) -> None:
         """Page-2 rows must carry ``**6.** ... **10.**`` so the line
         starts with ``*`` rather than a digit — CommonMark can't read
@@ -122,78 +154,50 @@ class TestArchivePageNumbering:
         assert all(callback.startswith(f"{CB_ARC_INSPECT}2:") for callback in callbacks)
 
 
-class TestArchivePageLineBreaks:
+class TestArchiveTableLayout:
     @pytest.mark.asyncio
-    async def test_rows_separated_by_paragraph_break(self, many_archived) -> None:
-        """Rows must be separated by a blank line — single ``\\n`` is a
-        soft break and CommonMark collapses the entire page into one
-        run-on paragraph (the 2026-06-13 phone-screenshot bug)."""
+    async def test_each_session_is_one_table_row(self, many_archived) -> None:
         text, _ = await build_archive_page(
             page=0,
             lookback_seconds=None,
             show_all=True,
             user_id=1,
         )
-        # Each row's leading marker must be preceded by ``\n\n``.
+        assert "| Session | Description |" in text
         for idx in range(1, PAGE_SIZE + 1):
-            marker = f"**{idx}.**"
-            assert marker in text
-            pos = text.index(marker)
-            assert text[pos - 2 : pos] == "\n\n", (
-                f"row {idx} not preceded by a paragraph break"
-            )
+            assert f"| **{idx}.**" in text
 
     @pytest.mark.asyncio
-    async def test_sublines_use_hard_break(self, many_archived) -> None:
-        """Within a row, sub-lines (blurb / workdir / goal) join with
-        ``  \\n`` — two trailing spaces force a hard line break in
-        CommonMark, instead of the soft break that collapses to a space."""
+    async def test_directory_is_secondary_inside_session_cell(
+        self, many_archived
+    ) -> None:
         text, _ = await build_archive_page(
             page=0,
             lookback_seconds=None,
             show_all=True,
             user_id=1,
         )
-        # At least one hard break per row (we seeded a blurb and a workdir).
-        assert text.count("  \n") >= PAGE_SIZE
+        assert text.count("<br><code>/tmp/x</code>") == PAGE_SIZE
 
     @pytest.mark.asyncio
-    async def test_session_divider_between_rows(self, many_archived) -> None:
-        """Each consecutive pair of session rows must be separated by
-        the visible Unicode divider, not just a blank line."""
-        from ccbot.handlers.archive import _SESSION_DIVIDER
-
+    async def test_age_has_no_ago_word(self, many_archived) -> None:
         text, _ = await build_archive_page(
             page=0,
             lookback_seconds=None,
             show_all=True,
             user_id=1,
         )
-        # One divider between every adjacent pair on the page.
-        assert text.count(_SESSION_DIVIDER) == PAGE_SIZE - 1
-        # Divider is wrapped in blank lines so it renders as its own
-        # block in CommonMark/MD V2.
-        assert f"\n\n{_SESSION_DIVIDER}\n\n" in text
-        # The page-counter line is NOT followed by a divider (only
-        # session rows are).
-        assert text.split("**1.**", 1)[0].count(_SESSION_DIVIDER) == 0, (
-            "divider leaked above the first row"
-        )
+        assert "ago" not in text
 
     @pytest.mark.asyncio
-    async def test_no_two_space_indent_remains(self, many_archived) -> None:
-        """The old MD V2-era 2-space indent on sub-lines is gone — leading
-        whitespace inside a paragraph would render as literal spaces in
-        the rich parser, not as visual indent."""
+    async def test_name_and_age_use_middle_dot(self, many_archived) -> None:
         text, _ = await build_archive_page(
             page=0,
             lookback_seconds=None,
             show_all=True,
             user_id=1,
         )
-        # ``\n  `` (line-start + 2 spaces of content) is the old pattern;
-        # the new layout uses ``  \n`` (trailing spaces before the break).
-        assert "\n  " not in text
+        assert "*sess 0* · 1h" in text
 
 
 class TestDisplayName:
@@ -447,6 +451,61 @@ class TestArchiveBlurbCollectsUserMessages:
         assert "Investigate archive latency" in out
         assert "Use the lightweight model" in out
         assert "I will inspect it" not in out
+
+    @pytest.mark.asyncio
+    async def test_ai_description_uses_first_two_requests(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ccbot import naming
+        from ccbot.handlers import archive
+
+        sess = Session(
+            id="s-ai",
+            name="",
+            state="archived",
+            claude_session_id="cs-ai",
+            workdir="/tmp/x",
+        )
+        monkeypatch.setattr(
+            archive, "_collect_user_messages", _fake_collect("first  \nsecond  \nthird")
+        )
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_user_settings",
+            lambda _uid: {"archive_ai_description": True},
+        )
+        seen: list[list[str]] = []
+
+        async def describe(messages: list[str], backend: str) -> str:
+            seen.append(messages)
+            return "short AI description"
+
+        monkeypatch.setattr(naming, "generate_description", describe)
+        assert await archive._archive_blurb(sess, 1) == "short AI description"
+        assert seen == [["first", "second"]]
+
+    @pytest.mark.asyncio
+    async def test_ai_description_off_shows_two_dot_prefixed_requests(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ccbot.handlers import archive
+
+        sess = Session(
+            id="s-raw",
+            name="",
+            state="archived",
+            claude_session_id="cs-raw",
+            workdir="/tmp/x",
+        )
+        monkeypatch.setattr(
+            archive, "_collect_user_messages", _fake_collect("first  \nsecond  \nthird")
+        )
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_user_settings",
+            lambda _uid: {"archive_ai_description": False},
+        )
+        assert await archive._archive_blurb(sess, 1) == "· first<br>· second"
 
 
 def _fake_collect(value: str):

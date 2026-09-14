@@ -19,6 +19,7 @@ from ..handlers.directory_browser import (
     BROWSE_PATH_KEY,
     STATE_BROWSING_DIRECTORY,
     STATE_KEY,
+    STATE_NAMING_DIRECTORY,
     STATE_SELECTING_SESSION,
     STATE_SELECTING_WINDOW,
     build_directory_browser,
@@ -457,6 +458,44 @@ async def text_handler(
 
     # Ignore text while a picker UI is mid-flight.
     state = context.user_data.get(STATE_KEY) if context.user_data else None
+    if state == STATE_NAMING_DIRECTORY:
+        current_path = (
+            context.user_data.get(BROWSE_PATH_KEY) if context.user_data else None
+        )
+        name = text.strip()
+        if (
+            not current_path
+            or not name
+            or name in (".", "..")
+            or Path(name).name != name
+            or "/" in name
+            or "\\" in name
+            or "\x00" in name
+        ):
+            await safe_reply(update.message, "Некорректное имя папки. Введите одно имя без слешей.")
+            return True
+        target = (Path(current_path) / name).resolve()
+        if target.parent != Path(current_path).resolve():
+            await safe_reply(update.message, "Некорректное имя папки.")
+            return True
+        try:
+            target.mkdir()
+        except FileExistsError:
+            await safe_reply(update.message, "Такая папка уже существует.")
+            return True
+        except OSError:
+            await safe_reply(update.message, "Не удалось создать папку.")
+            return True
+        msg_text, keyboard, subdirs = await build_directory_browser(
+            str(target), user_id=user.id
+        )
+        if context.user_data is not None:
+            context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
+            context.user_data[BROWSE_PATH_KEY] = str(target)
+            context.user_data[BROWSE_PAGE_KEY] = 0
+            context.user_data[BROWSE_DIRS_KEY] = subdirs
+        await safe_reply(update.message, msg_text, reply_markup=keyboard)
+        return True
     if state in (
         STATE_SELECTING_WINDOW,
         STATE_BROWSING_DIRECTORY,

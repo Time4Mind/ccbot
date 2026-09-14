@@ -35,7 +35,11 @@ from ...handlers.notifications import paint_card_on_carrier
 from ...i18n import t
 from ...session import session_manager
 from .._common import set_view
-from .._usage_window import fetch_live_usage, get_cached_live_usage
+from .._usage_window import (
+    fetch_live_usage,
+    get_cached_live_usage,
+    get_cached_live_usage_age_seconds,
+)
 from ..commands.info import emit_screenshot_compact
 
 logger = logging.getLogger(__name__)
@@ -137,16 +141,22 @@ async def handle(
         ]
         kb = InlineKeyboardMarkup([refresh_row] + [list(r) for r in base_rows])
         cached_info = get_cached_live_usage()
-        cached_block = format_usage_breakdown_compact(user.id, cached_info)
-        shown_text = cached_block or t(user.id, "usage.fetching")
+        cached_block = format_usage_breakdown_compact(
+            user.id,
+            cached_info,
+            age_seconds=get_cached_live_usage_age_seconds(),
+        )
+        shown_text = cached_block
         await safe_edit(query, shown_text, reply_markup=kb)
         usage_info = await fetch_live_usage()
         live_block = format_usage_breakdown_compact(
-            user.id, usage_info if usage_info is not None else cached_info
+            user.id,
+            usage_info if usage_info is not None else cached_info,
+            age_seconds=0 if usage_info is not None else get_cached_live_usage_age_seconds(),
         )
         # Status is a read-only operation. Failure to load quota data must not
         # start or replace the user's otherwise-working Codex authorization.
-        text = live_block or t(user.id, "usage.unavailable")
+        text = live_block
         if text != shown_text:
             await safe_edit(query, text, reply_markup=kb)
         return True
@@ -169,8 +179,6 @@ async def handle(
     if data == CB_MM_ARCHIVE:
         await query.answer()
 
-        if context.user_data is not None:
-            context.user_data["_arc_show_all"] = False
         text, kb = await build_archive_page(
             page=0,
             lookback_seconds=DEFAULT_LOOKBACK_SECONDS,

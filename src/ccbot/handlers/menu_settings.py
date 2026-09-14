@@ -13,6 +13,7 @@ from ..session import session_manager
 from .callback_data import (
     CB_MM_SETTINGS,
     CB_ST_APPROVE,
+    CB_ST_ARCHIVE_AI,
     CB_ST_AGENT,
     CB_ST_BACK,
     CB_ST_BGNOTIFY,
@@ -50,6 +51,7 @@ __all__ = [
     "_settings_cardhist_grid",
     "_settings_screens_grid",
     "_settings_haiku_grid",
+    "_settings_archive_ai_grid",
     "_settings_bg_notify_grid",
     "_settings_pagesize_grid",
     "_settings_weeklyday_grid",
@@ -96,7 +98,7 @@ def _format_setting_value(user_id: int, value_key: str, cur: object) -> str:
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
     if value_key in ("bg_notify_finished", "bg_notify_error", "bg_notify_needs_action"):
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
-    if value_key == "haiku_naming":
+    if value_key in ("haiku_naming", "archive_ai_description"):
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
     if value_key == "agent_backend":
         return str(cur).capitalize()
@@ -412,6 +414,32 @@ def _settings_haiku_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
         [
             InlineKeyboardButton(
                 t(user_id, "btn.back"), callback_data=_parent_cat_cb("haiku_naming")
+            )
+        ],
+    ]
+
+
+def _settings_archive_ai_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
+    cur = bool(
+        session_manager.get_user_settings(user_id).get(
+            "archive_ai_description", True
+        )
+    )
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(t(user_id, "screens.on"), cur),
+                callback_data=f"{CB_ST_ARCHIVE_AI}on",
+            ),
+            InlineKeyboardButton(
+                _highlight(t(user_id, "screens.off"), not cur),
+                callback_data=f"{CB_ST_ARCHIVE_AI}off",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("archive_ai_description"),
             )
         ],
     ]

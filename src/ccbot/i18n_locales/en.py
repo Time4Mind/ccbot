@@ -97,8 +97,6 @@ EN: dict[str, str] = {
     "btn.inspect": "🔍 Inspect",
     "btn.open_session": "📜 {name}",
     "btn.delete": "🗑 Delete",
-    "btn.to_14d": "→ 14d",
-    "btn.to_72h": "→ 72h",
     # More menu
     "mm.sessions": "📋 Sessions",
     "mm.status": "📊 Status",
@@ -181,6 +179,8 @@ EN: dict[str, str] = {
     "dir.hint": "Tap a folder to enter, or select current directory",
     "dir.btn.up": "..",
     "dir.btn.select": "Select",
+    "dir.btn.create": "Create folder",
+    "dir.create.prompt": "{path}\n\nEnter one new folder name without slashes.",
     # Session picker
     "picker.title": "*Resume Session?*",
     "picker.summary": "page {page}/{pages} — {total} session(s) in this directory.",
@@ -205,21 +205,25 @@ EN: dict[str, str] = {
     "toast.invalid_page": "Invalid page",
     "toast.session_not_found": "Session not found",
     "toast.restore_failed": "Restore failed: {msg}",
-    "toast.range_14d": "→ 14d",
-    "toast.range_72h": "→ 72h",
     # Archive screen
     "archive.title": "Archived sessions",
-    "archive.range_72h": " (0–72h)",
-    "archive.range_14d": " (0–14d)",
     "archive.empty": "No archived sessions in this window.",
     "archive.page_line": "page {page}/{pages} — {total} total",
-    "archive.age.s": "{n}s ago",
-    "archive.age.m": "{n}m ago",
-    "archive.age.h": "{n}h ago",
-    "archive.age.d": "{n}d ago",
+    "archive.age.s": "{n}s",
+    "archive.age.m": "{n}m",
+    "archive.age.h": "{n}h",
+    "archive.age.d": "{n}d",
+    "archive.column.session": "Session",
+    "archive.column.description": "Description",
     # /usage compact display
     "usage.title": "*Claude Code*",
     "usage.title.codex": "*OpenAI Codex*",
+    "usage.status_age": "Status · {age}m",
+    "usage.column.cli": "CLI",
+    "usage.column.5h": "5 hours",
+    "usage.column.week": "Week",
+    "usage.column.today": "Today",
+    "usage.column.reset": "Reset",
     "usage.unavailable": "Live usage unavailable.",
     "usage.auth_required": (
         "Codex authorization is required to load Usage. Complete the sign-in "
@@ -337,6 +341,12 @@ EN: dict[str, str] = {
         "to miss."
     ),
     "settings.group.haiku_naming": "AI session names",
+    "settings.group.archive_ai_description": "AI-description",
+    "settings.archive_ai_description.body": (
+        "*AI-description*\n\nOn creates one short archive description from the "
+        "first two user requests with the cheap model. Off shows those two "
+        "requests directly, each prefixed with ·."
+    ),
     "settings.haiku.body": (
         "*AI session names*\n\n"
         "When *on*, every new session is renamed after the first user "

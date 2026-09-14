@@ -26,6 +26,7 @@ CB_DIR_UP = "db:up"
 CB_DIR_CONFIRM = "db:confirm"
 CB_DIR_CANCEL = "db:cancel"
 CB_DIR_PAGE = "db:page:"
+CB_DIR_CREATE = "db:create"
 
 # Window picker (bind existing unbound window)
 CB_WIN_BIND = "wb:sel:"  # wb:sel:<index>
@@ -111,6 +112,7 @@ CB_ST_SCREENS = "st:scr:"  # st:scr:<on|off>  inline screenshots toggle
 CB_ST_CAT = "st:cat:"  # st:cat:<screen_name>  open settings category sub-screen
 CB_ST_BGNOTIFY = "st:bgn:"  # st:bgn:<key>:<on|off>  bg-notification toggles
 CB_ST_HAIKU = "st:hk:"  # st:hk:<on|off>  Haiku auto-rename of new sessions
+CB_ST_ARCHIVE_AI = "st:aidesc:"  # archive AI-description toggle
 CB_ST_IDLE = "st:idle:"  # st:idle:<6|12|24>  idle hours before auto-archive
 CB_ST_AGENT = "st:agent:"  # st:agent:<claude|codex> bot-wide agent backend
 CB_ST_VOICE_INSTALL_GO = "st:vi:go"  # confirm whisper.cpp auto-install
@@ -136,4 +138,3 @@ CB_ARC_RESTORE = "ar:r:"  # ar:r:<session.id>
 CB_ARC_INSPECT = "ar:i:"  # ar:i:<page>:<session.id> (old <session.id> accepted)
 CB_ARC_DELETE = "ar:d:"  # ar:d:<session.id>
 CB_ARC_BACK = "ar:back"  # ar:back:<page> from inspect to originating list page
-CB_ARC_ALL = "ar:all"  # toggle 0-72h vs 0-14d

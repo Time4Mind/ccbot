@@ -36,6 +36,7 @@ from .menu_settings import (
     _highlight,
     _parent_cat_cb,
     _settings_agent_grid,
+    _settings_archive_ai_grid,
     _settings_approve_grid,
     _settings_bg_notify_grid,
     _settings_cardhist_grid,
@@ -88,6 +89,7 @@ __all__ = [
     "_settings_voice_grid",
     "_settings_language_grid",
     "_settings_agent_grid",
+    "_settings_archive_ai_grid",
     "_settings_approve_grid",
     "_settings_idle_archive_grid",
     "_settings_local_grid",
@@ -375,6 +377,8 @@ def build_footer_keyboard(
         )
     elif screen == "settings_haiku":
         rows.extend(_settings_haiku_grid(user_id))
+    elif screen == "settings_archive_ai_description":
+        rows.extend(_settings_archive_ai_grid(user_id))
     else:
         # In-card pagination row at the very top — [◀] [N/M] [▶].
         # ``N/M`` taps jump to the default-focus page (latest answer).

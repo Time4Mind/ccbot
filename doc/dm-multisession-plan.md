@@ -120,8 +120,8 @@ After Phase 1 the bot routes correctly in DM but has no UI for switching — the
 |---|---|---|---|---|
 | 4.1 | `feat(session): goal field, life-cycle states (active/idle/archived)` | `session.py`, `state.json` schema | ~90 | New states wired through. Idle is purely informational v0.1. |
 | 4.2 | `feat(archive): SESSION_IDLE_TTL — auto-archive idle sessions` | `handlers/status_polling.py`, `session.py` | ~80 | After 4h no input → tmux window killed, claude session id stored, session removed from switcher. Test with override `SESSION_IDLE_TTL=60s`. |
-| 4.3 | `feat(archive): /archive with pagination, Restore/Inspect/Delete buttons` | `bot.py`, `handlers/` (new `archive.py`) | ~180 | List shows 5 per page, 0–72h. `--all` flag extends to 14d. Restore reruns `claude --resume <id>` in original cwd, makes session active. |
-| 4.4 | `chore(archive): purge state record after 14d` | `handlers/status_polling.py` | ~30 | Daily sweep removes stale archive entries. Transcripts on disk kept. |
+| 4.3 | `feat(archive): /archive with pagination, Restore/Inspect/Delete buttons` | `bot.py`, `handlers/` (new `archive.py`) | ~180 | One cyclicly paginated 20-day list. Restore reruns `claude --resume <id>` in original cwd, makes session active. |
+| 4.4 | `chore(archive): purge state record after 20d` | `handlers/status_polling.py` | ~30 | Daily sweep removes stale archive entries. Transcripts on disk kept. |
 
 ### Phase 5 — Naming and budgets
 

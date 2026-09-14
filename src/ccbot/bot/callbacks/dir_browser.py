@@ -11,6 +11,7 @@ from telegram.ext import ContextTypes
 from ...handlers.callback_data import (
     CB_DIR_CANCEL,
     CB_DIR_CONFIRM,
+    CB_DIR_CREATE,
     CB_DIR_PAGE,
     CB_DIR_SELECT,
     CB_DIR_UP,
@@ -28,14 +29,14 @@ from ...handlers.directory_browser import (
     SESSIONS_PAGE_KEY,
     STATE_BROWSING_DIRECTORY,
     STATE_KEY,
-    STATE_SELECTING_SESSION,
+    STATE_NAMING_DIRECTORY,
     build_directory_browser,
     build_session_picker,
     clear_browse_state,
     clear_session_picker_state,
 )
 from ...handlers.message_sender import safe_edit
-from ...session import session_manager
+from ...i18n import t
 from .._common import open_more_in_place
 from ..messages import create_and_activate_session
 
@@ -198,19 +199,24 @@ async def handle(
             await safe_edit(query, msg_text, reply_markup=keyboard)
             return True
 
-        sessions = await session_manager.list_sessions_for_directory(selected_path)
-        if sessions:
-            if context.user_data is not None:
-                context.user_data[STATE_KEY] = STATE_SELECTING_SESSION
-                context.user_data[SESSIONS_KEY] = sessions
-                context.user_data["_selected_path"] = selected_path
-                context.user_data[SESSIONS_PAGE_KEY] = 0
-            await emit_session_picker(query, context, sessions, page=0, user_id=user.id)
-            await query.answer()
-            return True
-
         clear_browse_state(context.user_data)
         await create_and_activate_session(query, context, user, selected_path)
+        return True
+
+    if data == CB_DIR_CREATE:
+        selected_path = (
+            context.user_data.get(BROWSE_PATH_KEY) if context.user_data else None
+        )
+        if not selected_path:
+            await query.answer("Directory selection expired", show_alert=True)
+            return True
+        if context.user_data is not None:
+            context.user_data[STATE_KEY] = STATE_NAMING_DIRECTORY
+        await safe_edit(
+            query,
+            t(user.id, "dir.create.prompt", path=selected_path),
+        )
+        await query.answer()
         return True
 
     if data == CB_DIR_CANCEL:

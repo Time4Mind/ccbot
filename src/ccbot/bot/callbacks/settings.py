@@ -12,6 +12,7 @@ from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from ... import voice_install
 from ...handlers.callback_data import (
     CB_ST_APPROVE,
+    CB_ST_ARCHIVE_AI,
     CB_ST_AGENT,
     CB_ST_BACK,
     CB_ST_BGNOTIFY,
@@ -206,6 +207,7 @@ _GROUP_TO_SCREEN: dict[str, Screen] = {
     "card_history": "settings_cardhist",
     "card_page_lines": "settings_pagesize",
     "card_inline_screenshots": "settings_screens",
+    "archive_ai_description": "settings_archive_ai_description",
 }
 
 
@@ -292,6 +294,7 @@ async def handle(
         CB_ST_SCREENS,
         CB_ST_BGNOTIFY,
         CB_ST_HAIKU,
+        CB_ST_ARCHIVE_AI,
         CB_ST_IDLE,
     )
     if not any(data.startswith(p) for p in setter_prefixes):
@@ -416,6 +419,13 @@ async def handle(
         if sval in ("on", "off"):
             session_manager.update_user_setting(user.id, "haiku_naming", sval == "on")
         screen_name = "settings_haiku"
+    elif data.startswith(CB_ST_ARCHIVE_AI):
+        sval = data[len(CB_ST_ARCHIVE_AI) :]
+        if sval in ("on", "off"):
+            session_manager.update_user_setting(
+                user.id, "archive_ai_description", sval == "on"
+            )
+        screen_name = "settings_archive_ai_description"
 
     text = render_settings_group_text(user.id, screen_name)
     keyboard = build_footer_keyboard(user.id, screen=screen_name)

@@ -97,8 +97,6 @@ RU: dict[str, str] = {
     "btn.inspect": "🔍 Просмотр",
     "btn.open_session": "📜 {name}",
     "btn.delete": "🗑 Удалить",
-    "btn.to_14d": "→ 14д",
-    "btn.to_72h": "→ 72ч",
     "mm.sessions": "📋 Сессии",
     "mm.status": "📊 Статус",
     "mm.history": "📜 История",
@@ -173,6 +171,8 @@ RU: dict[str, str] = {
     "dir.hint": "Тапни папку, чтобы войти, или выбери текущую",
     "dir.btn.up": "..",
     "dir.btn.select": "Выбрать",
+    "dir.btn.create": "Создать папку",
+    "dir.create.prompt": "{path}\n\nВведи имя новой папки без слешей.",
     "picker.title": "*Возобновить сессию?*",
     "picker.summary": "стр. {page}/{pages} — {total} сессий в этой папке.",
     "picker.btn.start_fresh": "🆕 С нуля",
@@ -195,20 +195,24 @@ RU: dict[str, str] = {
     "toast.invalid_page": "Неверная страница",
     "toast.session_not_found": "Сессия не найдена",
     "toast.restore_failed": "Не удалось восстановить: {msg}",
-    "toast.range_14d": "→ 14д",
-    "toast.range_72h": "→ 72ч",
     # Archive screen
     "archive.title": "Архивные сессии",
-    "archive.range_72h": " (0–72ч)",
-    "archive.range_14d": " (0–14д)",
     "archive.empty": "Архивных сессий в этом окне нет.",
     "archive.page_line": "стр. {page}/{pages} — всего {total}",
-    "archive.age.s": "{n}с назад",
-    "archive.age.m": "{n}мин назад",
-    "archive.age.h": "{n}ч назад",
-    "archive.age.d": "{n}д назад",
+    "archive.age.s": "{n}с",
+    "archive.age.m": "{n}м",
+    "archive.age.h": "{n}ч",
+    "archive.age.d": "{n}д",
+    "archive.column.session": "Сессия",
+    "archive.column.description": "Описание",
     "usage.title": "*Claude Code*",
     "usage.title.codex": "*OpenAI Codex*",
+    "usage.status_age": "Статус · {age}м",
+    "usage.column.cli": "CLI",
+    "usage.column.5h": "5 часов",
+    "usage.column.week": "Неделя",
+    "usage.column.today": "Сегодня",
+    "usage.column.reset": "Сброс",
     "usage.unavailable": "Живые данные usage недоступны.",
     "usage.auth_required": (
         "Для загрузки Usage нужна авторизация Codex. Заверши вход по сообщению "
@@ -321,6 +325,12 @@ RU: dict[str, str] = {
         "Иначе только ❓ бейдж в bg-panel — легко пропустить."
     ),
     "settings.group.haiku_naming": "Имена сессий через AI",
+    "settings.group.archive_ai_description": "AI-описание",
+    "settings.archive_ai_description.body": (
+        "*AI-описание*\n\nПри *on* легковесная модель формулирует одно короткое "
+        "описание архива по первым двум запросам. При *off* показываются сами "
+        "два запроса, каждый начинается с ·."
+    ),
     "settings.haiku.body": (
         "*Имена сессий через AI*\n\n"
         "При *on* каждая новая сессия переименовывается после первого\n"

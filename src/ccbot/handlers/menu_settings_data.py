@@ -41,6 +41,7 @@ Screen = Literal[
     "settings_bg_notify_error",
     "settings_bg_notify_needs_action",
     "settings_haiku",
+    "settings_archive_ai_description",
     "settings_idle_archive",
 ]
 
@@ -116,6 +117,12 @@ _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
         "settings_haiku",
         "haiku_naming",
     ),
+    (
+        "archive_ai_description",
+        "settings.group.archive_ai_description",
+        "settings_archive_ai_description",
+        "archive_ai_description",
+    ),
 )
 
 
@@ -158,6 +165,7 @@ SETTINGS_CATEGORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
             "auto_approve",
             "session_idle_hours",
             "haiku_naming",
+            "archive_ai_description",
             "language",
         ),
     ),
@@ -187,5 +195,6 @@ _GROUP_TEXT_KEYS: dict[str, str] = {
     "settings_bg_notify_error": "settings.bg_notify.error.body",
     "settings_bg_notify_needs_action": "settings.bg_notify.needs_action.body",
     "settings_haiku": "settings.haiku.body",
+    "settings_archive_ai_description": "settings.archive_ai_description.body",
     "settings_idle_archive": "settings.idle_archive.body",
 }

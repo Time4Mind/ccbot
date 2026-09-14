@@ -1,7 +1,4 @@
-"""Archive callbacks (CB_ARC_*).
-
-Pagination, restore, inspect, delete-confirmation, and the 72h ↔ 14d window toggle.
-"""
+"""Archive callbacks: cyclic pagination, restore, inspect and delete."""
 
 from __future__ import annotations
 
@@ -11,14 +8,12 @@ from typing import Any
 from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from ...config import config
 from ...handlers.archive import (
     DEFAULT_LOOKBACK_SECONDS,
     build_archive_page,
     restore_session,
 )
 from ...handlers.callback_data import (
-    CB_ARC_ALL,
     CB_ARC_BACK,
     CB_ARC_DELETE,
     CB_ARC_INSPECT,
@@ -37,10 +32,6 @@ from ...session import Session, session_manager
 from .._common import render_session_preview
 
 logger = logging.getLogger(__name__)
-
-
-def _show_all(context: ContextTypes.DEFAULT_TYPE) -> bool:
-    return bool(context.user_data and context.user_data.get("_arc_show_all", False))
 
 
 async def _build_inspect_text(sess: Session, user_id: int | None = None) -> str:
@@ -67,10 +58,6 @@ async def _build_inspect_text(sess: Session, user_id: int | None = None) -> str:
         prefix = f"_… {len(pages) - 1} older page(s) — restore to read fully ({total} events)_\n\n"
         last = prefix + last
     return last
-
-
-def _lookback(show_all: bool) -> float:
-    return config.archive_purge_after if show_all else DEFAULT_LOOKBACK_SECONDS
 
 
 def _inspect_target(data: str) -> tuple[int, str]:
@@ -108,45 +95,15 @@ async def handle(
         except ValueError:
             await query.answer(t(user.id, "toast.invalid_page"))
             return True
-        show_all = _show_all(context)
         text, keyboard = await build_archive_page(
             page=page,
-            lookback_seconds=_lookback(show_all),
-            show_all=show_all,
+            lookback_seconds=DEFAULT_LOOKBACK_SECONDS,
+            show_all=False,
             user_id=user.id,
             back_callback=CB_MM_BACK,
         )
         await safe_edit(query, text, reply_markup=keyboard)
         await query.answer()
-        return True
-
-    if data == CB_ARC_ALL:
-        new = not _show_all(context)
-        if context.user_data is not None:
-            context.user_data["_arc_show_all"] = new
-        # When expanding 72h → 14d, the *new* content is the
-        # 3-14d-aged sessions appended to the END of the list (newest-
-        # first sort). Landing on page 0 would re-show the same
-        # 72h-aged sessions the user just saw, hiding the older
-        # entries that motivated the expand tap. Skip forward to the
-        # page where the previously-hidden sessions start.
-        page = 0
-        if new:
-            from ...handlers.archive import PAGE_SIZE
-
-            sessions_72h = session_manager.list_archived(
-                max_age_seconds=DEFAULT_LOOKBACK_SECONDS
-            )
-            page = len(sessions_72h) // PAGE_SIZE
-        text, keyboard = await build_archive_page(
-            page=page,
-            lookback_seconds=_lookback(new),
-            show_all=new,
-            user_id=user.id,
-            back_callback=CB_MM_BACK,
-        )
-        await safe_edit(query, text, reply_markup=keyboard)
-        await query.answer(t(user.id, "toast.range_14d" if new else "toast.range_72h"))
         return True
 
     if data.startswith(CB_ARC_RESTORE):
@@ -207,11 +164,10 @@ async def handle(
         return True
 
     if data.startswith(CB_ARC_BACK):
-        show_all = _show_all(context)
         text, keyboard = await build_archive_page(
             page=_back_page(data),
-            lookback_seconds=_lookback(show_all),
-            show_all=show_all,
+            lookback_seconds=DEFAULT_LOOKBACK_SECONDS,
+            show_all=False,
             user_id=user.id,
             back_callback=CB_MM_BACK,
         )

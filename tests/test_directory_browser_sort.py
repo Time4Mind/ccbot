@@ -10,6 +10,7 @@ import pytest
 
 from ccbot.handlers import directory_browser
 from ccbot.handlers.directory_browser import (
+    DIRS_PER_PAGE,
     _refresh_recency_tree,
     build_directory_browser,
 )
@@ -180,3 +181,30 @@ class TestBuildDirectoryBrowserOrder:
         await _wait_for_refreshes()
 
         assert directory_browser._RECENCY_CACHE[str(nested)][1] == 8000.0
+
+    @pytest.mark.asyncio
+    async def test_pagination_cycles_and_create_folder_is_visible(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "ccbot.handlers.directory_browser.config.show_hidden_dirs", False
+        )
+        for idx in range(DIRS_PER_PAGE + 1):
+            (tmp_path / f"dir-{idx}").mkdir()
+
+        _text, keyboard, _subdirs = await build_directory_browser(
+            str(tmp_path), page=0, user_id=1
+        )
+        rows = keyboard.inline_keyboard
+        pager = next(row for row in rows if any(button.text == "1/2" for button in row))
+        assert [button.text for button in pager] == ["◀", "1/2", "▶"]
+        assert [button.callback_data for button in pager] == [
+            "db:page:1",
+            "db:page:0",
+            "db:page:1",
+        ]
+        assert any(
+            button.callback_data == "db:create"
+            for row in rows
+            for button in row
+        )

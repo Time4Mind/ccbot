@@ -34,7 +34,7 @@ from .archive_blurb import (
     _shorten_workdir,
     _truncate_at_word,
 )
-from .callback_data import CB_ARC_ALL, CB_ARC_INSPECT, CB_ARC_PAGE
+from .callback_data import CB_ARC_INSPECT, CB_ARC_PAGE
 from .cleanup import teardown_session_runtime
 
 logger = logging.getLogger(__name__)
@@ -42,9 +42,8 @@ logger = logging.getLogger(__name__)
 _BLURB_CACHE: dict[str, str] = {}
 _BLURB_TOTAL_BUDGET = 140
 _BLURB_MAX_MESSAGES = 3
-_SESSION_DIVIDER = "─────"
 PAGE_SIZE = 6
-DEFAULT_LOOKBACK_SECONDS = 72 * 3600
+DEFAULT_LOOKBACK_SECONDS = 20 * 86400
 
 
 def _format_blurb(messages: list[str]) -> str:
@@ -168,22 +167,45 @@ async def _collect_user_messages(sess: Session) -> str:
     return _format_blurb(messages)
 
 
-async def _archive_blurb(sess: Session) -> str:
+async def _archive_blurb(sess: Session, user_id: int | None = None) -> str:
     """Return the "what was this session about" line for an archived row.
 
-    Source: the user's own first 1-3 messages from the JSONL transcript.
-    No model-generated summary may replace those words. The result is cached
-    per agent session id because archived transcripts are append-frozen.
+    Source: the first two real user messages from the JSONL transcript. With
+    ``archive_ai_description`` enabled, the cheap naming model condenses them;
+    otherwise both prompts are shown with a middle-dot prefix. Results are
+    cached because archived transcripts are append-frozen.
     """
     sid = sess.claude_session_id
     if not sid:
         return ""
-    cached = _BLURB_CACHE.get(sid)
+    if user_id is None:
+        cached = _BLURB_CACHE.get(sid)
+        if cached is not None:
+            return cached
+        blurb = await _collect_user_messages(sess)
+        _BLURB_CACHE[sid] = blurb
+        return blurb
+    ai_enabled = bool(
+        session_manager.get_user_settings(user_id).get(
+            "archive_ai_description", True
+        )
+    )
+    cache_key = f"{sid}:{int(ai_enabled)}"
+    cached = _BLURB_CACHE.get(cache_key)
     if cached is not None:
         return cached
     blurb = await _collect_user_messages(sess)
-    _BLURB_CACHE[sid] = blurb
-    return blurb
+    messages = [part.strip() for part in blurb.split("  \n") if part.strip()][:2]
+    if ai_enabled and messages:
+        from ..naming import generate_description
+
+        generated = await generate_description(messages, backend=sess.backend)
+        if generated:
+            _BLURB_CACHE[cache_key] = generated
+            return generated
+    fallback = "<br>".join(f"· {message}" for message in messages)
+    _BLURB_CACHE[cache_key] = fallback
+    return fallback
 
 
 def _format_age(user_id: int, ts: float, now: float | None = None) -> str:
@@ -223,6 +245,8 @@ async def build_archive_page(
     "what was this session about" blurb — cached by claude_session_id
     so subsequent paints are instant.
     """
+    del show_all
+    lookback_seconds = DEFAULT_LOOKBACK_SECONDS
     sessions = session_manager.list_archived(max_age_seconds=lookback_seconds)
     total = len(sessions)
     pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
@@ -234,26 +258,28 @@ async def build_archive_page(
     # cache (archived JSONLs don't change); cold paths walk the JSONL
     # once and pick up the first 1-3 user messages. Fan-out kept tiny
     # by PAGE_SIZE=6.
-    blurbs: dict[str, str] = {}
-    for sess in chunk:
+    async def _safe_blurb(sess: Session) -> tuple[str, str]:
         try:
-            blurbs[sess.id] = await _archive_blurb(sess)
+            return sess.id, await _archive_blurb(sess, user_id)
         except Exception as e:
             logger.debug("archive blurb fetch failed for %s: %s", sess.id, e)
-            blurbs[sess.id] = ""
+            return sess.id, ""
+
+    blurbs = dict(await asyncio.gather(*(_safe_blurb(sess) for sess in chunk)))
 
     title = t(user_id, "archive.title")
-    range_suffix = t(user_id, "archive.range_14d" if show_all else "archive.range_72h")
-    header = f"*{title}*{range_suffix}"
+    header = f"*{title}*"
     if total == 0:
         body = [t(user_id, "archive.empty")]
     else:
-        body = [
-            t(user_id, "archive.page_line", page=page + 1, pages=pages, total=total)
+        body = []
+        table_rows = [
+            f"| {t(user_id, 'archive.column.session')} | {t(user_id, 'archive.column.description')} |",
+            "|---|---|",
         ]
         for idx, sess in enumerate(chunk, start=start + 1):
-            # ✓ marks /done-completed sessions; · is plain archive.
-            label = "✓" if sess.state == "completed" else "·"
+            # ✓ marks /done-completed sessions; plain archives need no badge.
+            label = "✓ " if sess.state == "completed" else ""
             ts = sess.archived_at or sess.last_event_at
             age = _format_age(user_id, ts) if ts else "?"
             display_name = _display_name(sess)
@@ -267,18 +293,16 @@ async def build_archive_page(
             # newline). Without the hard break the rich parser treats
             # each row's blurb / workdir / goal as a soft break and
             # collapses the whole page into one wall-of-text paragraph.
-            parts: list[str] = [
-                f"**{idx}.** {label} *{display_name}*{lost_tag} — {age}"
-            ]
+            first = f"**{idx}.** {label}*{display_name}*{lost_tag} · {age}"
             blurb = blurbs.get(sess.id) or ""
-            if blurb:
-                parts.append(blurb)
             wd = _shorten_workdir(sess.workdir) if sess.workdir else ""
             if wd:
-                parts.append(f"`{wd}`")
-            if sess.goal:
-                parts.append(f"_{sess.goal}_")
-            body.append("  \n".join(parts))
+                first += f"<br><code>{wd}</code>"
+            description = blurb or "-"
+            table_rows.append(
+                f"| {first.replace('|', '\\|')} | {description.replace('|', '\\|')} |"
+            )
+        body.append("\n".join(table_rows))
 
     # One button per session, paired up two-per-row (PAGE_SIZE=6 gives
     # 2+2+2). Each button's label carries the matching number so the
@@ -301,40 +325,27 @@ async def build_archive_page(
     if row:
         rows.append(row)
 
-    nav_row: list[InlineKeyboardButton] = []
-    if page > 0:
-        nav_row.append(
-            InlineKeyboardButton("◀", callback_data=f"{CB_ARC_PAGE}{page - 1}")
+    if pages > 1:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "◀", callback_data=f"{CB_ARC_PAGE}{(page - 1) % pages}"
+                ),
+                InlineKeyboardButton(
+                    f"{page + 1}/{pages}", callback_data=f"{CB_ARC_PAGE}0"
+                ),
+                InlineKeyboardButton(
+                    "▶", callback_data=f"{CB_ARC_PAGE}{(page + 1) % pages}"
+                ),
+            ]
         )
-    nav_row.append(
-        InlineKeyboardButton(
-            t(user_id, "btn.to_14d" if not show_all else "btn.to_72h"),
-            callback_data=CB_ARC_ALL,
-        )
-    )
-    if page < pages - 1:
-        nav_row.append(
-            InlineKeyboardButton("▶", callback_data=f"{CB_ARC_PAGE}{page + 1}")
-        )
-    rows.append(nav_row)
 
     if back_callback is not None:
         rows.append(
             [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=back_callback)]
         )
 
-    # Paragraph break between header / page counter / sessions block;
-    # session rows themselves are separated by the more visible
-    # ``_SESSION_DIVIDER`` so the boundary between two sessions is
-    # easy to spot on the phone (a blank line alone was easy to miss
-    # in a list of long blurbs).
-    if total == 0:
-        text = "\n\n".join([header, *body])
-    else:
-        page_line = body[0]
-        session_rows = body[1:]
-        sessions_block = f"\n\n{_SESSION_DIVIDER}\n\n".join(session_rows)
-        text = "\n\n".join(p for p in (header, page_line, sessions_block) if p)
+    text = "\n\n".join([header, *body])
     return text, InlineKeyboardMarkup(rows)
 
 

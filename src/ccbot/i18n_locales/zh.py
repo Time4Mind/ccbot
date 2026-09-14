@@ -95,6 +95,11 @@ ZH: dict[str, str] = {
     "menu.empty": "*菜单*\n\n无活动会话——从切换器选一个或点 🆕 新建。",
     "menu.active": "*菜单* · 活动: *{name}*",
     "settings.title": "*设置*",
+    "settings.table.section": "分区",
+    "settings.table.contents": "设置项",
+    "settings.table.setting": "设置",
+    "settings.table.current": "当前值",
+    "settings.table.hint": "_点击分区打开。_",
     "settings.body": (
         "*设置*\n\n"
         "代理: `{agent}`\n"

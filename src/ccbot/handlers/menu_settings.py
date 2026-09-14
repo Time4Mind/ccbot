@@ -136,24 +136,17 @@ def _settings_category_grid(
         if sname == screen_name:
             members = m
             break
-    s = session_manager.get_user_settings(user_id)
     groups_by_key = {key: (lk, sc, vk) for key, lk, sc, vk in _SETTINGS_GROUPS}
     rows: list[list[InlineKeyboardButton]] = []
     for member_key in members:
         if member_key not in groups_by_key:
             continue
-        label_key, _sub_screen, value_key = groups_by_key[member_key]
-        cur = (
-            session_manager.agent_backend
-            if value_key == "agent_backend"
-            else s.get(value_key, "")
-        )
+        label_key, _sub_screen, _value_key = groups_by_key[member_key]
         label = t(user_id, label_key)
-        value_str = _format_setting_value(user_id, value_key, cur)
         rows.append(
             [
                 InlineKeyboardButton(
-                    f"{label}: {value_str}",
+                    label,
                     callback_data=f"{CB_ST_GRP}{member_key}",
                 )
             ]

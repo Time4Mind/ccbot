@@ -113,6 +113,11 @@ EN: dict[str, str] = {
     "menu.active": "*Menu* · active: *{name}*",
     # Settings — top
     "settings.title": "*Settings*",
+    "settings.table.section": "Section",
+    "settings.table.contents": "Settings",
+    "settings.table.setting": "Setting",
+    "settings.table.current": "Current value",
+    "settings.table.hint": "_Tap a section to open it._",
     "settings.body": (
         "*Settings*\n\n"
         "Agent: `{agent}`\n"

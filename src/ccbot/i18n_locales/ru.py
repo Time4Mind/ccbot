@@ -110,6 +110,11 @@ RU: dict[str, str] = {
     "menu.empty": "*Меню*\n\nАктивной сессии нет — выбери в свитчере или тапни 🆕 Новая.",
     "menu.active": "*Меню* · активна: *{name}*",
     "settings.title": "*Настройки*",
+    "settings.table.section": "Раздел",
+    "settings.table.contents": "Настройки",
+    "settings.table.setting": "Настройка",
+    "settings.table.current": "Текущее значение",
+    "settings.table.hint": "_Тапни раздел, чтобы открыть._",
     "settings.body": (
         "*Настройки*\n\n"
         "Агент: `{agent}`\n"

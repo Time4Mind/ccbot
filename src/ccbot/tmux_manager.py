@@ -577,6 +577,22 @@ class TmuxManager:
         needle = " ".join(text.split())
         if not needle:
             return False
+        # Codex collapses a fast/long paste to a placeholder instead of
+        # keeping the literal text visible.  Treat a matching placeholder as
+        # the same pending prompt; otherwise the submit verifier sees none of
+        # ``text`` and incorrectly reports successful delivery while the
+        # request is still sitting in the composer.
+        for raw_count in re.findall(
+            r"\[Pasted Content\s+([\d,._ ]+)\s+chars?\](?:\s*#\d+)?",
+            prompt,
+            re.IGNORECASE,
+        ):
+            try:
+                count = int(re.sub(r"\D", "", raw_count))
+            except ValueError:
+                continue
+            if count == len(text):
+                return True
         if len(needle) <= 80:
             return needle in prompt
         # A long TUI input may have scrolled its beginning out of the pane.

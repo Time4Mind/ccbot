@@ -73,6 +73,28 @@ _ANSI_COLORS: dict[int, tuple[int, int, int]] = {
 _DEFAULT_FG = (212, 212, 212)  # Light gray
 _DEFAULT_BG = (30, 30, 30)  # Dark gray
 
+# A content-adaptive eight-colour palette made the whole terminal image drift
+# toward brown/sepia whenever one warm ANSI colour dominated the current pane.
+# Keep the compact P-mode/PNG resource profile, but quantize against a stable
+# terminal palette so identical ANSI colours never change with surrounding text.
+_SCREENSHOT_8_COLORS: tuple[tuple[int, int, int], ...] = (
+    _DEFAULT_BG,
+    _DEFAULT_FG,
+    _ANSI_COLORS[1],
+    _ANSI_COLORS[2],
+    _ANSI_COLORS[3],
+    _ANSI_COLORS[4],
+    _ANSI_COLORS[5],
+    _ANSI_COLORS[6],
+)
+
+
+def _screenshot_palette() -> Image.Image:
+    palette = Image.new("P", (1, 1))
+    flat = [channel for color in _SCREENSHOT_8_COLORS for channel in color]
+    palette.putpalette(flat + [0] * (768 - len(flat)))
+    return palette
+
 
 @dataclass
 class TextStyle:
@@ -385,8 +407,7 @@ async def text_to_image(
             )
         if profile in ("full8", "compact8"):
             img = img.quantize(
-                colors=8,
-                method=Image.Quantize.FASTOCTREE,
+                palette=_screenshot_palette(),
                 dither=Image.Dither.NONE,
             )
         elif profile != "fullcolor":

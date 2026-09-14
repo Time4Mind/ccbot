@@ -64,7 +64,9 @@ def _build_event(msg: NewMessage) -> Event:
             body=spoiler_body,
             started_at=started,
             tool_use_id=msg.tool_use_id,
-            tool_name=msg.tool_name,
+            tool_name=name or msg.tool_name,
+            tool_args=args,
+            tool_content=content,
         )
     if msg.content_type == "tool_result":
         name, args, summary, content = _split_tool_text(raw_body)
@@ -81,6 +83,9 @@ def _build_event(msg: NewMessage) -> Event:
             body=spoiler_body,
             started_at=started,
             tool_use_id=msg.tool_use_id,
+            tool_name=name or msg.tool_name,
+            tool_args=args,
+            tool_content=content,
             image_data=msg.image_data,
             is_error=msg.is_error,
         )
@@ -121,6 +126,8 @@ def _apply_tool_result(state: CardState, result: Event) -> bool:
         if ev.type == "tool_use" and ev.tool_use_id == result.tool_use_id:
             ev.completed_at = result.started_at
             ev.body = result.body or ev.body
+            ev.tool_args = result.tool_args or ev.tool_args
+            ev.tool_content = result.tool_content or ev.tool_content
             ev.text = result.text or ev.text
             ev.is_error = result.is_error
             ev.image_data = result.image_data

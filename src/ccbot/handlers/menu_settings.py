@@ -27,6 +27,7 @@ from .callback_data import (
     CB_ST_LCLAUDE,
     CB_ST_LTERM,
     CB_ST_PAGESIZE,
+    CB_ST_SPOILER_LINES,
     CB_ST_CAPTURE,
     CB_ST_OPTION,
     CB_ST_PROFILE,
@@ -57,6 +58,7 @@ __all__ = [
     "_settings_archive_ai_grid",
     "_settings_bg_notify_grid",
     "_settings_pagesize_grid",
+    "_settings_spoiler_lines_grid",
     "_settings_weeklyday_grid",
 ]
 
@@ -96,6 +98,8 @@ def _format_setting_value(user_id: int, value_key: str, cur: object) -> str:
     if value_key == "card_history":
         return f"{int(cur)} turns" if cur else "?"  # type: ignore[arg-type]
     if value_key == "card_page_lines":
+        return f"{int(cur)} lines" if cur else "?"  # type: ignore[arg-type]
+    if value_key == "spoiler_block_lines":
         return f"{int(cur)} lines" if cur else "?"  # type: ignore[arg-type]
     if value_key in ("option_button_screenshot", "option_button_terminal"):
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
@@ -531,6 +535,29 @@ def _settings_pagesize_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
             InlineKeyboardButton(
                 t(user_id, "btn.back"),
                 callback_data=_parent_cat_cb("card_page_lines"),
+            )
+        ],
+    ]
+
+
+def _settings_spoiler_lines_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
+    raw = session_manager.get_user_settings(user_id).get("spoiler_block_lines", 7)
+    try:
+        cur = int(raw)
+    except (TypeError, ValueError):
+        cur = 7
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(str(v), cur == v),
+                callback_data=f"{CB_ST_SPOILER_LINES}{v}",
+            )
+            for v in (3, 7, 20)
+        ],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("spoiler_block_lines"),
             )
         ],
     ]

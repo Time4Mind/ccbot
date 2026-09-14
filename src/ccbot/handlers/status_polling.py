@@ -16,6 +16,7 @@ Key components:
 
 import asyncio
 import logging
+import re
 import time
 from typing import TYPE_CHECKING
 
@@ -37,6 +38,7 @@ from ..tmux_manager import tmux_manager
 from . import bg_status
 from .archive import idle_archive_sweep, purge_sweep
 from .cleanup import clear_session_state
+from .card_types import TurnPhase
 from .inbox import inbox_sweep
 from .interactive_ui import (
     clear_interactive_msg,
@@ -44,6 +46,7 @@ from .interactive_ui import (
     handle_interactive_ui,
 )
 from .notifications import (
+    get_card_state,
     is_card_busy,
     is_card_finalized,
     is_card_in_menu_view,
@@ -207,6 +210,10 @@ UNCHANGED_STATUS_RECHECK = 4.0
 # treat it as stale and stop firing TYPING off of it.
 _pane_status_cache: dict[tuple[int, str], tuple[str, float]] = {}
 _PANE_STATUS_STALE_AFTER = 3.0
+_BACKGROUND_TERMINAL_RE = re.compile(
+    r"(\d+\s+background (?:terminal|agent)(?:s)? running)", re.IGNORECASE
+)
+_WORKING_PANE_REFRESH_SECONDS = 4.0
 
 
 def _pane_status_is_changing(user_id: int, key_suffix: str, status_line: str) -> bool:
@@ -411,14 +418,50 @@ async def _drive_typing_indicator(
     )
     in_menu = sess is not None and is_card_in_menu_view(user_id, sess.id)
     card_busy = sess is not None and is_card_busy(user_id, sess.id)
+    background_match = _BACKGROUND_TERMINAL_RE.search(status_line)
+    background_work = background_match is not None
     # When the card is finalized (last event = ``final_text`` /
     # ``error``), pane_busy is a lie — the spinner line is just
     # scrollback that hasn't scrolled off yet (observed: ``Sautéed
     # for 11m 16s · 1 shell still running`` sticks around after the
     # turn ends because a background shell is still attached). Trust
     # the JSONL signal in that case.
-    if pane_busy and sess is not None and is_card_finalized(user_id, sess.id):
+    if (
+        pane_busy
+        and sess is not None
+        and is_card_finalized(user_id, sess.id)
+        and not background_work
+    ):
         pane_busy = False
+
+    if sess is not None:
+        state = get_card_state(user_id, sess)
+        prior_status = state.pane_status
+        if background_match is not None:
+            count_text = background_match.group(1).lower()
+            state.pane_status = f"Working · {count_text}"
+            state.turn_phase = TurnPhase.RUNNING
+        else:
+            state.pane_status = ""
+            if prior_status and is_card_finalized(user_id, sess.id):
+                state.turn_phase = TurnPhase.IDLE
+
+        status_changed = prior_status != state.pane_status
+        refresh_now = time.monotonic()
+        refresh_due = (
+            pane_busy
+            and refresh_now - state.last_stall_pane_refresh_ts
+            >= _WORKING_PANE_REFRESH_SECONDS
+        )
+        if not is_bg_session and not in_menu and (status_changed or refresh_due):
+            if await refresh_panel(
+                bot,
+                user_id,
+                immediate=True,
+                refresh_keyboard=True,
+                refresh_pane=True,
+            ):
+                state.last_stall_pane_refresh_ts = refresh_now
 
     # Silent unfinished turn: keep the active session's live pane refreshing;
     # for a background session expose only a ⚠️ row in the active card panel.

@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from telegram import Bot
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from ..config import config
 from ..handlers.menu import build_footer_keyboard
@@ -171,6 +171,35 @@ async def open_more_in_place(query: Any, user_id: int) -> None:
         session_manager.set_last_switcher_msg(user_id, query.message.message_id)
 
 
+async def open_sessions_in_place(query: Any, bot: Bot, user_id: int) -> None:
+    """Return the current carrier to the active session or Sessions empty state."""
+    from ..handlers.callback_data import CB_MM_BACK, CB_SW_NEW
+    from ..handlers.notifications import paint_card_on_carrier
+    from ..i18n import t
+
+    active = session_manager.get_active_session(user_id)
+    if active is None or not active.window_id:
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("+ new", callback_data=CB_SW_NEW),
+                    InlineKeyboardButton(
+                        t(user_id, "btn.back"), callback_data=CB_MM_BACK
+                    ),
+                ]
+            ]
+        )
+        await safe_edit(query, t(user_id, "list.empty"), reply_markup=keyboard)
+        message = getattr(query, "message", None)
+        if message:
+            session_manager.set_last_switcher_msg(user_id, message.message_id)
+        return
+    message = getattr(query, "message", None)
+    message_id = message.message_id if message else None
+    if message_id is not None:
+        await paint_card_on_carrier(bot, user_id, active, message_id)
+
+
 __all__ = [
     "CC_COMMANDS",
     "active_window",
@@ -178,6 +207,7 @@ __all__ = [
     "is_user_allowed",
     "logger",
     "open_more_in_place",
+    "open_sessions_in_place",
     "render_session_preview",
     "resolve_ident",
     "set_view",

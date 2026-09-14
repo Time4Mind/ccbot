@@ -14,7 +14,7 @@ import asyncio
 import logging
 from typing import Any
 
-from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import CallbackQuery
 from telegram.ext import ContextTypes
 
 from ...handlers.archive import DEFAULT_LOOKBACK_SECONDS, build_archive_page
@@ -25,7 +25,6 @@ from ...handlers.callback_data import (
     CB_MM_NEW,
     CB_MM_SETTINGS,
     CB_MM_STATUS,
-    CB_SW_NEW,
 )
 from ...handlers.menu import (
     build_footer_keyboard,
@@ -33,10 +32,8 @@ from ...handlers.menu import (
     render_settings_text,
 )
 from ...handlers.message_sender import safe_edit, safe_send
-from ...handlers.notifications import paint_card_on_carrier
-from ...i18n import t
 from ...session import session_manager
-from .._common import set_view
+from .._common import open_sessions_in_place, set_view
 from .._usage_window import (
     fetch_live_usage,
     get_cached_live_usage,
@@ -150,35 +147,10 @@ async def handle(
 
     if data == CB_MM_LIST:
         await query.answer()
-        # Menu → Sessions is not a separate screen — it lands on the
-        # active session's live card (which already carries the switcher
-        # row + in-card pagination). Single rendering, one surface.
-
-        active_sess = session_manager.get_active_session(user.id)
-        if active_sess is None or not active_sess.window_id:
-            # No active session — thin empty-state with [+ new][Back].
-            empty_kb = InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton("+ new", callback_data=CB_SW_NEW),
-                        InlineKeyboardButton(
-                            t(user.id, "btn.back"), callback_data=CB_MM_BACK
-                        ),
-                    ]
-                ]
-            )
-            await safe_edit(query, t(user.id, "list.empty"), reply_markup=empty_kb)
-            return True
-        carrier_msg_id = query.message.message_id if query.message else None
-        if carrier_msg_id is None:
-            return True
         try:
-            await paint_card_on_carrier(
-                context.bot, user.id, active_sess, carrier_msg_id
-            )
+            await open_sessions_in_place(query, context.bot, user.id)
         except Exception as e:
             logger.debug("mm sessions paint failed: %s", e)
-            await safe_edit(query, t(user.id, "list.empty"))
         return True
 
     if data == CB_MM_STATUS:

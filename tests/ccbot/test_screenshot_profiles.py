@@ -26,6 +26,25 @@ async def test_screenshot_profiles_have_deterministic_scale_and_palette() -> Non
 
 
 @pytest.mark.asyncio
+async def test_eight_color_profile_uses_stable_terminal_palette() -> None:
+    text = "\x1b[31mred\x1b[0m \x1b[32mgreen\x1b[0m \x1b[34mblue\x1b[0m"
+    rendered = Image.open(io.BytesIO(await text_to_image(text, profile="full8")))
+    colors = {rgb for _count, rgb in rendered.convert("RGB").getcolors(256) or []}
+
+    expected = {
+        (30, 30, 30),
+        (212, 212, 212),
+        (205, 49, 49),
+        (13, 188, 121),
+        (229, 229, 16),
+        (36, 114, 200),
+        (188, 63, 188),
+        (17, 168, 205),
+    }
+    assert colors <= expected
+
+
+@pytest.mark.asyncio
 async def test_screenshot_profile_output_is_deterministic() -> None:
     first = await text_to_image("same pane", profile="full8")
     second = await text_to_image("same pane", profile="full8")

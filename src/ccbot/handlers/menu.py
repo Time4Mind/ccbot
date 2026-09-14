@@ -47,6 +47,7 @@ from .menu_settings import (
     _settings_local_grid,
     _settings_main_grid,
     _settings_pagesize_grid,
+    _settings_spoiler_lines_grid,
     _settings_capture_grid,
     _settings_option_grid,
     _settings_profile_grid,
@@ -101,6 +102,7 @@ __all__ = [
     "_settings_haiku_grid",
     "_settings_bg_notify_grid",
     "_settings_pagesize_grid",
+    "_settings_spoiler_lines_grid",
     "_settings_weeklyday_grid",
     "build_footer_keyboard",
     "render_settings_text",
@@ -355,6 +357,8 @@ def build_footer_keyboard(
         rows.extend(_settings_cardhist_grid(user_id))
     elif screen == "settings_pagesize":
         rows.extend(_settings_pagesize_grid(user_id))
+    elif screen == "settings_spoiler_lines":
+        rows.extend(_settings_spoiler_lines_grid(user_id))
     elif screen == "settings_option_screenshot":
         rows.extend(_settings_option_grid(user_id, "option_button_screenshot"))
     elif screen == "settings_option_terminal":

@@ -95,6 +95,33 @@ async def test_voice_and_followup_pin_before_first_await() -> None:
 
 
 @pytest.mark.asyncio
+async def test_voice_intake_marks_recognition_before_fifo_runs() -> None:
+    context = _context()
+    voice = _update(11, voice=True)
+    sess = SimpleNamespace(id="s1")
+    state = SimpleNamespace(voice_pending=False, current_page_idx=3)
+    observed: list[tuple[bool, object]] = []
+
+    def surface(_bot, _uid, _sess, _message_id):
+        observed.append((state.voice_pending, state.current_page_idx))
+
+    with (
+        patch("ccbot.bot.inbound.is_user_allowed", return_value=True),
+        patch("ccbot.bot.inbound.active_window", return_value="@A"),
+        patch(
+            "ccbot.bot.inbound.session_manager.find_session_by_window",
+            return_value=sess,
+        ),
+        patch("ccbot.bot.inbound.get_card_state", return_value=state, create=True),
+        patch("ccbot.bot.inbound.schedule_card_after_message", side_effect=surface),
+        patch("ccbot.bot.inbound.enqueue_inbound"),
+    ):
+        assert await voice_intake_handler(voice, context)
+
+    assert observed == [(True, None)]
+
+
+@pytest.mark.asyncio
 async def test_failed_item_does_not_stall_tail() -> None:
     context = _context()
     events: list[str] = []

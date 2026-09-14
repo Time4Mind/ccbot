@@ -412,6 +412,15 @@ def parse_status_line(pane_text: str) -> str | None:
 
     lines = pane_text.split("\n")
 
+    # Codex TUI has no horizontal separator around its prompt. Its live line
+    # is nevertheless unambiguous: a bullet + ``Working`` + elapsed stats.
+    # Search only the tail so a completed turn in old scrollback cannot keep
+    # the session permanently busy.
+    for raw_line in reversed(lines[-12:]):
+        line = raw_line.strip()
+        if line.startswith("• Working ") and _STATUS_TIME_STATS_RE.search(line):
+            return line[1:].strip()
+
     # Anchor on the chrome separator (first ──── line in the tail).
     chrome_idx: int | None = None
     search_start = max(0, len(lines) - 14)

@@ -388,15 +388,11 @@ async def build_directory_browser(
         InlineKeyboardButton(t(user_id, "dir.btn.select"), callback_data=CB_DIR_CONFIRM)
     )
     action_row.append(
-        InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_DIR_CANCEL)
+        InlineKeyboardButton(t(user_id, "dir.btn.create"), callback_data=CB_DIR_CREATE)
     )
     buttons.append(action_row)
     buttons.append(
-        [
-            InlineKeyboardButton(
-                t(user_id, "dir.btn.create"), callback_data=CB_DIR_CREATE
-            )
-        ]
+        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_DIR_CANCEL)]
     )
 
     display_path = str(path).replace(str(Path.home()), "~")

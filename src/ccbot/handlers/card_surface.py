@@ -157,6 +157,7 @@ async def refresh_panel(
     *,
     immediate: bool = False,
     refresh_keyboard: bool = False,
+    refresh_pane: bool | None = None,
 ) -> bool:
     """Re-render the active session's live card so the bg-status panel
     (and active quota glyph) reflects the latest bg_status state.
@@ -208,7 +209,7 @@ async def refresh_panel(
         user_id,
         state,
         text=text,
-        refresh_pane=not immediate,
+        refresh_pane=(not immediate if refresh_pane is None else refresh_pane),
     ):
         state.last_rendered = text
         state.last_edit_ts = time.monotonic()

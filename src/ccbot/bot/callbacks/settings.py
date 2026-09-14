@@ -21,6 +21,7 @@ from ...handlers.callback_data import (
     CB_ST_CHIST,
     CB_ST_OPTION,
     CB_ST_PAGESIZE,
+    CB_ST_SPOILER_LINES,
     CB_ST_PROFILE,
     CB_ST_GRP,
     CB_ST_HAIKU,
@@ -207,6 +208,7 @@ _GROUP_TO_SCREEN: dict[str, Screen] = {
     "local_terminal": "settings_local",
     "card_history": "settings_cardhist",
     "card_page_lines": "settings_pagesize",
+    "spoiler_block_lines": "settings_spoiler_lines",
     "screenshot_capture_kib": "settings_capture",
     "screenshot_profile": "settings_profile",
     "option_button_screenshot": "settings_option_screenshot",
@@ -299,6 +301,7 @@ async def handle(
         CB_ST_CAPTURE,
         CB_ST_OPTION,
         CB_ST_PAGESIZE,
+        CB_ST_SPOILER_LINES,
         CB_ST_PROFILE,
         CB_ST_BGNOTIFY,
         CB_ST_HAIKU,
@@ -392,6 +395,14 @@ async def handle(
         if v in (10, 20, 40, 70):
             session_manager.update_user_setting(user.id, "card_page_lines", v)
         screen_name = "settings_pagesize"
+    elif data.startswith(CB_ST_SPOILER_LINES):
+        try:
+            v = int(data[len(CB_ST_SPOILER_LINES) :])
+        except ValueError:
+            v = 7
+        if v in (3, 7, 20):
+            session_manager.update_user_setting(user.id, "spoiler_block_lines", v)
+        screen_name = "settings_spoiler_lines"
     elif data.startswith(CB_ST_CAPTURE):
         try:
             value = int(data[len(CB_ST_CAPTURE) :])

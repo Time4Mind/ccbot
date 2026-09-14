@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 
-_DEFAULT_ADAPTIVE_LAG = 4.0
+_MIN_LIVE_LAG = 2.0
 _started_at = time.monotonic()
 _last_user_activity: dict[int, float] = {}
 
@@ -26,23 +26,17 @@ def effective_live_lag(
     *,
     now: float | None = None,
 ) -> float:
-    """Increase the default card lag as explicit user inactivity grows.
-
-    Custom lag choices retain their existing fixed behavior. Only the current
-    default of four seconds gets the adaptive 4/6/10/20-second schedule.
-    """
-    base = max(0.0, float(configured_lag))
-    if base != _DEFAULT_ADAPTIVE_LAG:
-        return base
+    """Increase every supported card lag as explicit user inactivity grows."""
+    base = max(_MIN_LIVE_LAG, float(configured_lag))
     current = time.monotonic() if now is None else now
     idle = max(0.0, current - last_seen(user_id))
     if idle >= 65 * 60:
-        return 20.0
+        return base * 5.0
     if idle >= 35 * 60:
-        return 10.0
+        return base * 2.5
     if idle >= 15 * 60:
-        return 6.0
-    return _DEFAULT_ADAPTIVE_LAG
+        return base * 1.5
+    return base
 
 
 def reset_for_test(*, started_at: float | None = None) -> None:

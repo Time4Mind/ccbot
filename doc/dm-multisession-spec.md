@@ -150,7 +150,9 @@ Live update of the preview:
 
 - On click: snapshot at click time.
 - After the click, if the previewed session emits new events on the bot side (assistant message, tool call), the preview message is `editMessageText`-updated.
-- Coalesce updates with a base lag from the per-user `live_lag` setting (default 4 seconds). Setting `0` disables live updates.
+- Coalesce updates with a base lag from the per-user `live_lag` setting
+  (`2`, `4`, or `8` seconds; default `4`). After `15/35/65` minutes without
+  user actions every base value grows by `1.5/2.5/5x`; legacy `0` reads as `2`.
 
 ### 4.2 Reply-quote (one-shot routing)
 
@@ -372,7 +374,10 @@ Transcript and quota data have separate sources:
 
 ### Outbound
 
-- The former filesystem-polled `ccbot send-file` relay is removed. A future flow will expose actions for full local file paths directly in Telegram rich-message markdown.
+- The former filesystem-polled `ccbot send-file` relay is removed. Existing
+  absolute local file paths in Rich Markdown render as the filename without its
+  final extension followed by an extension-only callback button. Tapping that
+  button sends the revalidated local file; fenced code is left literal.
 - A silent unfinished turn is never converted into a synthetic final warning. If it is active, its RUNNING card keeps refreshing the terminal pane; if it is background, only a `⚠️` status appears beside it in the background panel. No separate stall push is sent.
 
 ---

@@ -62,3 +62,24 @@ class TestSession:
             Session(id="x", name="codex", backend="codex").to_dict()
         )
         assert restored.backend == "codex"
+
+    def test_screenshot_cache_round_trip(self) -> None:
+        restored = Session.from_dict(
+            Session(
+                id="x",
+                name="cached",
+                screenshot_file_id="photo-id",
+                screenshot_pane_hash="pane-hash",
+                screenshot_cached_at=123.5,
+                screenshot_user_id=42,
+                screenshot_capture_kib=64,
+                screenshot_profile="compact8",
+            ).to_dict()
+        )
+
+        assert restored.screenshot_file_id == "photo-id"
+        assert restored.screenshot_pane_hash == "pane-hash"
+        assert restored.screenshot_cached_at == 123.5
+        assert restored.screenshot_user_id == 42
+        assert restored.screenshot_capture_kib == 64
+        assert restored.screenshot_profile == "compact8"

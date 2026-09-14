@@ -71,6 +71,7 @@ async def update_session_card(
 
     state = get_card_state(user_id, sess)
     state.turn_phase = TurnPhase.RUNNING
+    state.completion_marker_pending = False
     state.stall_watch_active = False
     state.last_stall_pane_refresh_ts = 0.0
     # First event after a bot restart: pull JSONL history into events
@@ -317,6 +318,7 @@ async def _retry_final_render(
                 if delivered:
                     state.last_rendered = text
                     state.last_edit_ts = time.monotonic()
+                    state.completion_marker_pending = False
                     return
     finally:
         if state.pending_edit is current:
@@ -369,6 +371,20 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
         await _drain_pending_edit(state)
         buffered = _should_buffer(user_id, sess.id, state)
 
+        old_card_msg_id = state.msg_id
+        if final_events and not buffered and old_card_msg_id is not None:
+            # Freeze the page exactly as the user left it. Only remove its
+            # controls; the final answer gets a brand-new live carrier.
+            try:
+                await bot.edit_message_reply_markup(
+                    chat_id=user_id,
+                    message_id=old_card_msg_id,
+                    reply_markup=None,
+                )
+            except Exception as exc:
+                logger.debug("final card keyboard strip failed: %s", exc)
+            clear_carrier(state)
+
         if final_events:
             state.events.extend(final_events)
             if len(state.events) > CARD_MAX_EVENTS:
@@ -379,6 +395,8 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
                 state.current_page_idx = max(0, len(pages_after) - len(final_events))
             else:
                 state.current_page_idx = None
+            if not buffered:
+                state.completion_marker_pending = True
 
         if not buffered and sess.window_id:
             try:
@@ -395,7 +413,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
             text = _legacy("_render_card")(sess, state, user_id=user_id)
             state.pending_edit_in_flight = True
             try:
-                if state.msg_id is None:
+                if final_events or state.msg_id is None:
                     sent = await _legacy("_send_card")(
                         bot,
                         user_id,
@@ -421,6 +439,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
             if delivered:
                 state.last_rendered = text
                 state.last_edit_ts = time.monotonic()
+                state.completion_marker_pending = False
 
     if attachments:
         await _legacy("_send_attachments")(bot, user_id, attachments)

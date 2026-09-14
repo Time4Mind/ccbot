@@ -72,16 +72,17 @@ natively on the phone. Rules that matter:
 
 ## Writing files for download
 
-The filesystem-polled `ccbot send-file` relay is intentionally absent.
-Until local-path actions are implemented with Telegram rich-message buttons:
+The filesystem-polled `ccbot send-file` relay is intentionally absent. For a
+downloadable result:
 
 1. Create the file in the current `cwd` (don't scatter into `/tmp`,
    the user can't reach it via Telegram).
 2. Use a memorable relative path: `data/forecast.xlsx`,
    `out/users-2026-05-10.parquet`.
-3. Print exactly one line in the response so the path is grep-able:
-   `📎 data/forecast.xlsx ready` (use the literal `📎` glyph).
-4. The user fetches via SCP / git / manual copy.
+3. Print exactly one line with the absolute path; ccbot replaces it in Rich
+   Markdown with the filename stem followed by an extension-only download
+   button:
+   `📎 /absolute/workdir/data/forecast.xlsx ready` (use the literal `📎` glyph).
 
 ## What stays the same
 

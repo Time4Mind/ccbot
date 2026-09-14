@@ -46,13 +46,33 @@ def test_any_new_user_activity_resets_adaptive_lag() -> None:
     assert user_activity.effective_live_lag(42, 4, now=4100.0) == 4.0
 
 
-@pytest.mark.parametrize("configured", [0, 2, 8])
-def test_explicit_non_default_live_lag_remains_fixed(configured: int) -> None:
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        (2, (2.0, 3.0, 5.0, 10.0)),
+        (4, (4.0, 6.0, 10.0, 20.0)),
+        (8, (8.0, 12.0, 20.0, 40.0)),
+    ],
+)
+def test_every_live_lag_uses_same_inactivity_formula(
+    configured: int, expected: tuple[float, ...]
+) -> None:
     user_activity.record(42, now=200.0)
 
-    assert user_activity.effective_live_lag(42, configured, now=5000.0) == float(
-        configured
+    assert (
+        tuple(
+            user_activity.effective_live_lag(42, configured, now=200.0 + idle)
+            for idle in (0, 15 * 60, 35 * 60, 65 * 60)
+        )
+        == expected
     )
+
+
+def test_removed_zero_lag_is_normalized_to_two_seconds() -> None:
+    user_activity.record(42, now=200.0)
+
+    assert user_activity.effective_live_lag(42, 0, now=200.0) == 2.0
+    assert user_activity.effective_live_lag(42, 0, now=4100.0) == 10.0
 
 
 def test_no_user_action_uses_process_start_as_idle_anchor() -> None:

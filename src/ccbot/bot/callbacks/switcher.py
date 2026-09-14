@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,9 @@ from ...handlers.notifications import (
     get_card_state,
     paint_card_on_carrier,
     pause_card_view,
+    refresh_cached_screenshot,
 )
+from ...handlers.card_carrier import SCREENSHOT_CACHE_FRESH_SECONDS
 from ...session import session_manager
 from ...terminal_parser import extract_interactive_content, is_interactive_ui
 from ...tmux_manager import tmux_manager
@@ -89,6 +92,9 @@ async def handle(
             )
         else:
             session_manager.set_active_session(user.id, target_id)
+        # Dismiss Telegram's tap spinner before any screenshot render/upload.
+        # The carrier is already atomically owned by the target session here.
+        await query.answer(f"→ {sess.name or sess.id}")
         # The TO session already had a live card on a DIFFERENT message
         # (typical after a voice message pinned to it finished landing
         # while the user was elsewhere). It just lost ownership to the
@@ -209,10 +215,35 @@ async def handle(
             painted = False
             if sess.window_id and query.message is not None:
                 try:
+                    cached_file_id = getattr(sess, "screenshot_file_id", "")
+                    cached_at = float(getattr(sess, "screenshot_cached_at", 0.0))
+                    used_cached_screenshot = bool(
+                        cached_file_id
+                        and get_card_state(user.id, sess).rich_media_file_id
+                        == cached_file_id
+                    )
                     await paint_card_on_carrier(
-                        context.bot, user.id, sess, query.message.message_id
+                        context.bot,
+                        user.id,
+                        sess,
+                        query.message.message_id,
+                        refresh_pane=not used_cached_screenshot,
                     )
                     painted = True
+                    if (
+                        used_cached_screenshot
+                        and time.time() - cached_at > SCREENSHOT_CACHE_FRESH_SECONDS
+                    ):
+                        import asyncio as _asyncio
+
+                        _asyncio.create_task(
+                            refresh_cached_screenshot(
+                                context.bot,
+                                user.id,
+                                sess,
+                                query.message.message_id,
+                            )
+                        )
                 except Exception as e:
                     logger.debug("paint_card_on_carrier failed: %s", e)
             if not painted:
@@ -234,7 +265,6 @@ async def handle(
         # session will re-render the card naturally; the panel update
         # arrives with it.
 
-        await query.answer(f"→ {sess.name or sess.id}")
         return True
 
     if data == CB_SW_NEW:

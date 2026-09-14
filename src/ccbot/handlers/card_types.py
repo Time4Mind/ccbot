@@ -158,6 +158,10 @@ class CardState:
     # final, clear, and buffered completion paths leave the card IDLE until a
     # new inbound turn or non-final event explicitly starts work again.
     turn_phase: TurnPhase = TurnPhase.RUNNING
+    # A newly spawned final-answer card gets one visible completion marker.
+    # The flag is cleared after creation; the next ordinary update rerenders
+    # the header without it.
+    completion_marker_pending: bool = False
     last_pane_hash: str = ""  # SHA-256 of the exact last rendered PNG
     last_photo_edit_ts: float = 0.0  # monotonic seconds; 3s throttle
     # Cached context-window fill percentage for the active session, set by

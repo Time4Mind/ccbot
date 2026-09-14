@@ -93,7 +93,7 @@ Additional modules:
   tmux_window.py      ─ backend command assembly and tmux window creation
   logging_setup.py    ─ Logging config (level via LOG_LEVEL, JSON via CCBOT_LOG_FORMAT)
   metrics.py          ─ In-process counters → metrics.json
-  rich.py             ─ Bot API 10.2 rich messages via raw Bot._post
+  rich.py             ─ Bot API 10.3 rich messages via raw Bot._post
                        (sendRichMessage / rich edit; to_rich_markdown
                        escapes bare < and maps expandable-quote sentinels
                        to <details>); safe_* try rich first, fall back to

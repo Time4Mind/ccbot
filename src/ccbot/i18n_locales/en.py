@@ -135,7 +135,8 @@ EN: dict[str, str] = {
     "settings.lag.body": (
         "*Live preview lag*\n\n"
         "Coalescing window for live-card edits.\n"
-        "`0s` = update on every event, higher = quieter chat."
+        "Every selected value grows by `1.5/2.5/5x` after "
+        "`15/35/65 min` of inactivity."
     ),
     "settings.voice.body": (
         "*Voice transcription*\n\n"

@@ -14,8 +14,6 @@ from ..session import Session, session_manager
 from .card_binding import (
     bind_carrier,
     clear_carrier,
-    restore_carrier,
-    snapshot_carrier,
 )
 from .card_model import (
     CardState,
@@ -26,6 +24,7 @@ from .card_registry import (
     _cards,
     _card_lock,
     _carrier_edit_lock,
+    _inline_screens_enabled,
     _strip_stale_switchers,
     _register_msg,
     reset_card,
@@ -33,6 +32,8 @@ from .card_registry import (
 )
 
 logger = logging.getLogger(__name__)
+
+SCREENSHOT_CACHE_FRESH_SECONDS = 10.0
 
 
 __all__ = [
@@ -47,9 +48,57 @@ __all__ = [
     "release_card_message",
     "resume_card_view",
     "paint_card_on_carrier",
+    "refresh_cached_screenshot",
     "restore_card",
     "clear_card",
 ]
+
+
+def _bind_session_screenshot_cache(
+    user_id: int,
+    state: CardState,
+    sess: Session | object | None,
+    message_id: int,
+) -> bool:
+    """Bind a session's persisted screenshot to a carrier without capture."""
+    settings = session_manager.get_user_settings(user_id)
+    cache_matches_settings = bool(
+        sess is not None
+        and getattr(sess, "screenshot_user_id", 0) == user_id
+        and getattr(sess, "screenshot_capture_kib", 0)
+        == int(settings.get("screenshot_capture_kib", 48))
+        and getattr(sess, "screenshot_profile", "")
+        == str(settings.get("screenshot_profile", "full8"))
+    )
+    cached_file_id = (
+        getattr(sess, "screenshot_file_id", "")
+        if cache_matches_settings and _inline_screens_enabled(user_id)
+        else ""
+    )
+    if not cached_file_id:
+        bind_carrier(state, message_id, CarrierKind.TEXT)
+        return False
+    cached_hash = getattr(sess, "screenshot_pane_hash", "")
+    cached_at = float(getattr(sess, "screenshot_cached_at", 0.0))
+    cache_age = max(0.0, time.time() - cached_at)
+    photo_edit_ts = time.monotonic()
+    if cache_age > SCREENSHOT_CACHE_FRESH_SECONDS:
+        photo_edit_ts -= cache_age
+    bind_carrier(
+        state,
+        message_id,
+        CarrierKind.RICH_MEDIA,
+        rich_media_file_id=cached_file_id,
+        pane_hash=cached_hash,
+        photo_edit_ts=photo_edit_ts,
+    )
+    if cached_hash:
+        state.rich_media_cache = [
+            item for item in state.rich_media_cache if item[0] != cached_hash
+        ]
+        state.rich_media_cache.append((cached_hash, cached_file_id))
+        del state.rich_media_cache[:-3]
+    return True
 
 
 async def cancel_pending_card_edits(timeout: float = 2.0) -> None:
@@ -179,12 +228,10 @@ def transfer_card_to_carrier(
         )
         return None
     from_msg_id_was: int | None = None
-    source_binding = None
     if from_session_id:
         from_state = _cards.get((user_id, from_session_id))
         if from_state is not None:
             from_msg_id_was = from_state.msg_id
-            source_binding = snapshot_carrier(from_state)
             if (
                 from_state.pending_edit is not None
                 and not from_state.pending_edit.done()
@@ -197,10 +244,13 @@ def transfer_card_to_carrier(
     if to_state.pending_edit is not None and not to_state.pending_edit.done():
         to_state.pending_edit.cancel()
     to_state.pending_edit = None
-    if source_binding is not None and source_binding.msg_id == target_message_id:
-        restore_carrier(to_state, source_binding)
-    else:
-        bind_carrier(to_state, target_message_id, CarrierKind.TEXT)
+    target_session = session_manager.get_session(to_session_id)
+    _bind_session_screenshot_cache(
+        user_id,
+        to_state,
+        target_session,
+        target_message_id,
+    )
     session_manager.set_card_msg(user_id, target_message_id)
     # Pause the TO card across the switch window. The caller (CB_SW_USE)
     # will paint history on this message_id next, and then call
@@ -446,6 +496,8 @@ async def paint_card_on_carrier(
     user_id: int,
     sess: Session,
     carrier_msg_id: int,
+    *,
+    refresh_pane: bool = True,
 ) -> None:
     """Claim ``carrier_msg_id`` as ``sess``'s live card and paint it.
 
@@ -462,7 +514,8 @@ async def paint_card_on_carrier(
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
     state.pending_edit = None
-    bind_carrier(state, carrier_msg_id, CarrierKind.TEXT)
+    if state.msg_id != carrier_msg_id:
+        bind_carrier(state, carrier_msg_id, CarrierKind.TEXT)
     state.in_menu_view = False
     state.last_rendered = ""
     _register_msg(user_id, carrier_msg_id, sess.id)
@@ -471,15 +524,49 @@ async def paint_card_on_carrier(
     keyboard = _legacy("build_footer_keyboard")(
         user_id, screen="main", is_busy=_card_is_busy(state)
     )
-    if await _legacy("_edit_card")(
-        bot, user_id, state, text=text, reply_markup=keyboard
-    ):
+    edit_kwargs = {"text": text, "reply_markup": keyboard}
+    if not refresh_pane:
+        edit_kwargs["refresh_pane"] = False
+    if await _legacy("_edit_card")(bot, user_id, state, **edit_kwargs):
         state.last_rendered = text
         state.last_edit_ts = time.monotonic()
         # Migrate the switcher pointer onto the new carrier so previous
         # switcher rows in chat stop being the canonical surface.
         await _strip_stale_switchers(bot, user_id, carrier_msg_id, sess.id)
         session_manager.set_last_switcher_msg(user_id, carrier_msg_id)
+
+
+async def refresh_cached_screenshot(
+    bot: Bot,
+    user_id: int,
+    sess: Session,
+    carrier_msg_id: int,
+) -> None:
+    """Refresh a stale pane cache without reclaiming or moving the card."""
+    state = _cards.get((user_id, sess.id))
+    if (
+        state is None
+        or state.msg_id != carrier_msg_id
+        or state.in_menu_view
+        or not state.rich_media_file_id
+    ):
+        return
+    active = session_manager.get_active_session(user_id)
+    if active is None or active.id != sess.id:
+        return
+    text = _legacy("_render_card")(sess, state, user_id=user_id)
+    keyboard = _legacy("build_footer_keyboard")(
+        user_id, screen="main", is_busy=_card_is_busy(state)
+    )
+    if await _legacy("_edit_card")(
+        bot,
+        user_id,
+        state,
+        text=text,
+        reply_markup=keyboard,
+    ):
+        state.last_rendered = text
+        state.last_edit_ts = time.monotonic()
 
 
 async def restore_card(bot: Bot, user_id: int, sess: Session, card_msg_id: int) -> bool:
@@ -503,7 +590,12 @@ async def restore_card(bot: Bot, user_id: int, sess: Session, card_msg_id: int) 
         # for this session — leave it alone rather than fight it.
         return True
     state = _cards.setdefault((user_id, sess.id), CardState())
-    bind_carrier(state, card_msg_id, CarrierKind.TEXT)
+    loaded_cached_screenshot = _bind_session_screenshot_cache(
+        user_id,
+        state,
+        sess,
+        card_msg_id,
+    )
     state.last_rendered = ""
     await _legacy("_ensure_seeded")(user_id, sess, state)
     state.turn_phase = TurnPhase.RUNNING if _card_is_busy(state) else TurnPhase.IDLE
@@ -512,9 +604,10 @@ async def restore_card(bot: Bot, user_id: int, sess: Session, card_msg_id: int) 
     keyboard = _legacy("build_footer_keyboard")(
         user_id, screen="main", is_busy=_card_is_busy(state)
     )
-    if await _legacy("_edit_card")(
-        bot, user_id, state, text=text, reply_markup=keyboard
-    ):
+    edit_kwargs = {"text": text, "reply_markup": keyboard}
+    if loaded_cached_screenshot:
+        edit_kwargs["refresh_pane"] = False
+    if await _legacy("_edit_card")(bot, user_id, state, **edit_kwargs):
         state.last_rendered = text
         state.last_edit_ts = time.monotonic()
         return True

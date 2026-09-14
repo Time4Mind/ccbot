@@ -13,6 +13,7 @@ from telegram.error import BadRequest, RetryAfter
 from .. import rich
 from ..config import config
 from ..session import session_manager
+from ..session_models import Session
 from .card_binding import bind_carrier, clear_carrier
 from .card_types import CardState, CarrierKind
 from .card_registry import lookup_session_for_message
@@ -43,6 +44,34 @@ def remember_rich_photo(state: CardState, pane_hash: str, file_id: str) -> None:
     ]
     state.rich_media_cache.append((pane_hash, file_id))
     del state.rich_media_cache[:-3]
+
+
+def persist_session_screenshot(
+    sess: object | None, user_id: int, pane_hash: str, file_id: str
+) -> None:
+    """Persist the newest confirmed Telegram screenshot cache per session."""
+    if not isinstance(sess, Session) or not pane_hash or not file_id:
+        return
+    now = time.time()
+    settings = session_manager.get_user_settings(user_id)
+    capture_kib = int(settings.get("screenshot_capture_kib", 48))
+    profile = str(settings.get("screenshot_profile", "full8"))
+    needs_save = (
+        sess.screenshot_file_id != file_id
+        or sess.screenshot_pane_hash != pane_hash
+        or sess.screenshot_user_id != user_id
+        or sess.screenshot_capture_kib != capture_kib
+        or sess.screenshot_profile != profile
+        or now - sess.screenshot_cached_at >= 10.0
+    )
+    sess.screenshot_file_id = file_id
+    sess.screenshot_pane_hash = pane_hash
+    sess.screenshot_cached_at = now
+    sess.screenshot_user_id = user_id
+    sess.screenshot_capture_kib = capture_kib
+    sess.screenshot_profile = profile
+    if needs_save:
+        session_manager.save_state()
 
 
 async def send_rich_media_card(
@@ -122,6 +151,11 @@ async def edit_rich_media_card(
             else:
                 photo = png
                 uploaded_new_pane = True
+        elif png is not None and captured_hash and photo is not None:
+            # A real capture confirmed that the existing Telegram image is
+            # still current. Advance both throttles without uploading it.
+            pane_hash = captured_hash
+            reused_cached_pane = True
 
     if photo is None:
         logger.warning(
@@ -169,6 +203,7 @@ async def edit_rich_media_card(
             photo_edit_ts=time.monotonic(),
         )
         remember_rich_photo(state, pane_hash, new_file_id or "")
+        persist_session_screenshot(sess, user_id, pane_hash, new_file_id or "")
     elif reused_cached_pane:
         bind_carrier(
             state,
@@ -178,6 +213,7 @@ async def edit_rich_media_card(
             pane_hash=pane_hash,
             photo_edit_ts=time.monotonic(),
         )
+        persist_session_screenshot(sess, user_id, pane_hash, str(photo))
     return True
 
 

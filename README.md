@@ -53,13 +53,14 @@ and not negotiable:
 - **Multi-session, inline-switcher.** A single user can have many
   sessions in the same DM; an inline keyboard under the most recent
   bot message switches between them.
-- **Rich messages first.** Output goes out as a Bot API 10.1 rich
+- **Rich messages first.** Output goes out as a Bot API 10.3 rich
   message (native markdown: GFM tables ≤ 20 columns, headings,
   `<details>`, footnotes, math), falling back to the MarkdownV2
   pipeline (`telegramify-markdown`) and then to plain text on any
   failure. Fenced shell commands (including PowerShell and cmd) become
   copyable code text so Telegram exposes Copy; source-code blocks retain
-  their highlighting and layout. Kill switch:
+  their highlighting and layout. Existing absolute file paths become a
+  filename stem plus an extension-only download button. Kill switch:
   `CCBOT_RICH_MESSAGES=off`. Upstream uses HTML.
 - **Hook-based session tracking.** The selected agent's `SessionStart` +
   `UserPromptSubmit` hooks write `session_map.json`; the monitor polls
@@ -133,7 +134,7 @@ Most-frequently-tweaked optionals:
 | `WHISPER_THREADS`           | `6`          | threads for `whisper-cli` (its own default is 4) |
 | `BG_STATUS_MAX`             | `4`          | max badges in the bg-status panel; older entries collapse to `+N more` |
 | `CARD_EDIT_LAG`             | `2.0`        | coalescing window for live-card edits (seconds) |
-| `CCBOT_RICH_MESSAGES`       | `on`         | `off` disables Bot API 10.1 rich messages (MarkdownV2 only) |
+| `CCBOT_RICH_MESSAGES`       | `on`         | `off` disables Bot API 10.3 rich messages (MarkdownV2 only) |
 | `CCBOT_HOST`                | hostname     | deployment label exported to sessions as `CCBOT_HOST` |
 | `TG_PROXY_URL`              | _(unset)_    | outbound proxy for the Bot API (`socks5://…` or `http://…`) |
 

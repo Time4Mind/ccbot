@@ -93,15 +93,8 @@ def projects_path(tmp_path, monkeypatch) -> Path:
 
 @pytest.fixture
 def no_card_lag(monkeypatch):
-    """Drop the live-card edit-coalescing lag so a single event renders
-    immediately (the default ``live_lag`` is 4s)."""
-    from ccbot.session import session_manager
-
-    orig = session_manager.get_user_settings
-
-    def _patched(user_id: int):
-        merged = dict(orig(user_id))
-        merged["live_lag"] = 0
-        return merged
-
-    monkeypatch.setattr(session_manager, "get_user_settings", _patched)
+    """Use an internal immediate-edit seam; user-facing lag starts at 2s."""
+    monkeypatch.setattr(
+        "ccbot.handlers.card_updates.effective_live_lag",
+        lambda *_args, **_kwargs: 0.0,
+    )

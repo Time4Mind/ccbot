@@ -128,8 +128,10 @@ def _render_line_cached(
     width = 0
     for text, _fg, _bg, tier in segments:
         bbox = measure.textbbox((0, 0), text, font=fonts[tier])
-        advance = bbox[2] - bbox[0]
-        metrics.append((bbox[0], bbox[2], advance))
+        left = int(bbox[0])
+        right = int(bbox[2])
+        advance = right - left
+        metrics.append((left, right, advance))
         width += advance
     if width <= 0:
         return 0, b""

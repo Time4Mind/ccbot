@@ -27,16 +27,13 @@ from pathlib import Path
 
 import libtmux
 
+from . import tmux_input_transport
 from . import tmux_window as _tmux_window
 from .config import SENSITIVE_ENV_VARS, config
 from .tmux_control import TmuxControlClient
 from .tmux_process import kill_orphan_processes
 
 logger = logging.getLogger(__name__)
-
-_TERMINAL_INPUT_CHUNK_BYTES = 900
-_TERMINAL_INPUT_CHUNK_PACE = 0.025
-_CODEX_LITERAL_INPUT_BARRIER = " "
 
 # Validate before passing to pgrep so we never inject arbitrary regex
 # into the command line. Claude and Codex session ids are UUIDs.
@@ -483,7 +480,9 @@ class TmuxManager:
         backend: str = "",
     ) -> bool:
         if literal and enter and not text.startswith("!"):
-            return await self._send_literal_chunked(window_id, text, backend=backend)
+            return await tmux_input_transport.send_literal_chunked(
+                window_id, text, backend=backend
+            )
 
         if literal and enter:
             # Split into text + delay + Enter via libtmux.
@@ -570,124 +569,6 @@ class TmuxManager:
                 return False
 
         return await asyncio.to_thread(_sync_send_keys)
-
-    @staticmethod
-    def _terminal_input_chunks(text: str, *, backend: str = "") -> list[bytes]:
-        """Return ordered chunks without splitting a UTF-8 code point."""
-        transport_text = text
-        if backend.strip().lower() == "codex":
-            transport_text += _CODEX_LITERAL_INPUT_BARRIER
-        payload = transport_text.encode("utf-8")
-        if not payload:
-            return [b""]
-        chunks: list[bytes] = []
-        while payload:
-            cut = min(len(payload), _TERMINAL_INPUT_CHUNK_BYTES)
-            while cut < len(payload) and cut > 0 and payload[cut] & 0xC0 == 0x80:
-                cut -= 1
-            chunks.append(payload[:cut])
-            payload = payload[cut:]
-        return chunks
-
-    async def _run_tmux_input(
-        self, *args: str, input_bytes: bytes | None = None
-    ) -> tuple[int, bytes]:
-        """Run one bounded tmux transport command."""
-        proc = await asyncio.create_subprocess_exec(
-            "tmux",
-            *args,
-            stdin=asyncio.subprocess.PIPE if input_bytes is not None else None,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _stdout, stderr = await proc.communicate(input=input_bytes)
-        return proc.returncode or 0, stderr
-
-    async def _delete_tmux_buffer(self, buffer_name: str) -> None:
-        try:
-            await self._run_tmux_input("delete-buffer", "-b", buffer_name)
-        except Exception:
-            logger.debug("Failed to clean tmux input buffer %s", buffer_name)
-
-    async def _paste_literal_chunk(
-        self, window_id: str, buffer_name: str, chunk: bytes
-    ) -> tuple[bool, bool]:
-        """Paste one chunk; second result marks an ambiguous paste outcome."""
-        loaded = False
-        try:
-            code, stderr = await self._run_tmux_input(
-                "load-buffer", "-b", buffer_name, "-", input_bytes=chunk
-            )
-            if code:
-                logger.error(
-                    "tmux load-buffer failed window=%s: %s",
-                    window_id,
-                    stderr.decode(errors="replace"),
-                )
-                return False, False
-            loaded = True
-            try:
-                code, stderr = await self._run_tmux_input(
-                    "paste-buffer", "-d", "-b", buffer_name, "-t", window_id
-                )
-            except Exception as exc:
-                logger.error(
-                    "tmux paste-buffer ambiguous window=%s: %s", window_id, exc
-                )
-                return False, True
-            if code:
-                logger.error(
-                    "tmux paste-buffer failed window=%s: %s",
-                    window_id,
-                    stderr.decode(errors="replace"),
-                )
-                return False, False
-            loaded = False
-            return True, False
-        except Exception as exc:
-            logger.error("tmux load-buffer failed window=%s: %s", window_id, exc)
-            return False, False
-        finally:
-            if loaded:
-                await self._delete_tmux_buffer(buffer_name)
-
-    async def _send_carriage_return(self, window_id: str) -> bool:
-        try:
-            code, stderr = await self._run_tmux_input(
-                "send-keys", "-t", window_id, "C-m"
-            )
-        except Exception as exc:
-            logger.error("tmux C-m failed window=%s: %s", window_id, exc)
-            return False
-        if code:
-            logger.error(
-                "tmux C-m failed window=%s: %s",
-                window_id,
-                stderr.decode(errors="replace"),
-            )
-            return False
-        return True
-
-    async def _send_literal_chunked(
-        self, window_id: str, text: str, *, backend: str = ""
-    ) -> bool:
-        chunks = self._terminal_input_chunks(text, backend=backend)
-        operation = f"ccbot-{secrets.token_hex(8)}"
-        pasted = 0
-        for index, chunk in enumerate(chunks):
-            name = operation if index == 0 else f"{operation}-{index}"
-            ok, ambiguous = await self._paste_literal_chunk(window_id, name, chunk)
-            if not ok:
-                if pasted or ambiguous:
-                    if backend.strip().lower() == "codex" and not chunk.endswith(b" "):
-                        await self._paste_literal_chunk(
-                            window_id, f"{operation}-barrier", b" "
-                        )
-                    await self._send_carriage_return(window_id)
-                return False
-            pasted += 1
-            await asyncio.sleep(_TERMINAL_INPUT_CHUNK_PACE)
-        return await self._send_carriage_return(window_id)
 
     @staticmethod
     def _codex_prompt_contains(pane_text: str, text: str) -> bool:

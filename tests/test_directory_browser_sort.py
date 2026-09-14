@@ -204,7 +204,5 @@ class TestBuildDirectoryBrowserOrder:
             "db:page:1",
         ]
         assert any(
-            button.callback_data == "db:create"
-            for row in rows
-            for button in row
+            button.callback_data == "db:create" for row in rows for button in row
         )

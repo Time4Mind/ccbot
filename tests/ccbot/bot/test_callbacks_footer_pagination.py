@@ -55,7 +55,9 @@ async def test_pagination_wraps_cyclically(
     user = SimpleNamespace(id=42)
     session = SimpleNamespace(id="s1")
     state = CardState(msg_id=9, current_page_idx=current)
-    monkeypatch.setattr(footer.session_manager, "get_active_session", lambda _uid: session)
+    monkeypatch.setattr(
+        footer.session_manager, "get_active_session", lambda _uid: session
+    )
     monkeypatch.setattr(footer, "get_card_state", lambda _uid, _sess: state)
     monkeypatch.setattr(footer, "card_page_info", lambda _state, _uid: (current, 3))
     monkeypatch.setattr(footer, "refresh_panel", AsyncMock(return_value=True))

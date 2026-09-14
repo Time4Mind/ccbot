@@ -152,7 +152,9 @@ async def handle(
         live_block = format_usage_breakdown_compact(
             user.id,
             usage_info if usage_info is not None else cached_info,
-            age_seconds=0 if usage_info is not None else get_cached_live_usage_age_seconds(),
+            age_seconds=0
+            if usage_info is not None
+            else get_cached_live_usage_age_seconds(),
         )
         # Status is a read-only operation. Failure to load quota data must not
         # start or replace the user's otherwise-working Codex authorization.

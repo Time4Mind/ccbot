@@ -81,9 +81,7 @@ def render_settings_text(user_id: int) -> str:
         member_labels = [
             t(user_id, group_catalog[key][0]) for key in members if key in group_catalog
         ]
-        rows.append(
-            (t(user_id, category_label_key), ", ".join(member_labels))
-        )
+        rows.append((t(user_id, category_label_key), ", ".join(member_labels)))
     return "\n\n".join(
         (
             t(user_id, "settings.title"),

@@ -253,7 +253,9 @@ async def generate_description(
     user_messages: list[str], backend: str = "claude"
 ) -> str | None:
     """Generate one short archive description with the cheap naming model."""
-    seed = "\n".join(f"· {message.strip()}" for message in user_messages[:2] if message.strip())
+    seed = "\n".join(
+        f"· {message.strip()}" for message in user_messages[:2] if message.strip()
+    )
     if not seed:
         return None
     prompt = _DESCRIPTION_PROMPT_TEMPLATE.format(seed=seed[:500])

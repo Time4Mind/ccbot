@@ -816,14 +816,14 @@ async def test_archive_restore_rebuilds_live_card_on_existing_carrier(
 async def test_tmux_builds_codex_resume_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    sent: list[str] = []
     trust_started = threading.Event()
     release_trust = threading.Event()
 
     class Pane:
         def send_keys(self, value: str, enter: bool = True) -> None:
-            assert enter is True
-            sent.append(value)
+            raise AssertionError(
+                "startup must not inherit libtmux's possibly read-only client"
+            )
 
     class Window:
         window_id = "@7"
@@ -838,6 +838,8 @@ async def test_tmux_builds_codex_resume_command(
 
     mgr = TmuxManager()
     monkeypatch.setattr(mgr, "get_or_create_session", lambda: Session())
+    send_startup = AsyncMock(return_value=True)
+    monkeypatch.setattr(mgr, "send_keys", send_startup)
 
     async def wait_for_trust(_pane: object) -> bool:
         trust_started.set()
@@ -866,11 +868,15 @@ async def test_tmux_builds_codex_resume_command(
     )
     assert ok is True
     assert wid == "@7"
-    assert "CCBOT_AGENT_BACKEND=codex" in sent[0]
-    assert f"CCBOT_DIR={config.config_dir}" in sent[0]
-    assert "/data/data/com.termux/files/usr/bin/codex" in sent[0]
-    assert " resume 550e8400-e29b-41d4-a716-446655440000" in sent[0]
-    assert "--resume" not in sent[0]
+    send_startup.assert_awaited_once()
+    assert send_startup.await_args.args[0] == "@7"
+    startup_command = send_startup.await_args.args[1]
+    assert send_startup.await_args.kwargs == {"backend": ""}
+    assert "CCBOT_AGENT_BACKEND=codex" in startup_command
+    assert f"CCBOT_DIR={config.config_dir}" in startup_command
+    assert "/data/data/com.termux/files/usr/bin/codex" in startup_command
+    assert " resume 550e8400-e29b-41d4-a716-446655440000" in startup_command
+    assert "--resume" not in startup_command
     # create_window returned even though its startup-prompt worker is still
     # blocked. Trust handling must never hold the Telegram callback open.
     assert await asyncio.to_thread(trust_started.wait, 1.0)

@@ -49,6 +49,84 @@ async def test_status_refresh_does_not_block_following_navigation() -> None:
             release_refresh.set()
             if not status_task.done():
                 await status_task
+            refresh_task = more_menu._status_refresh_tasks.get(user.id)
+            if refresh_task is not None:
+                await refresh_task
+
+
+@pytest.mark.asyncio
+async def test_repeated_status_refresh_reuses_inflight_probe() -> None:
+    from ccbot.bot.callbacks import more_menu
+
+    refresh_started = asyncio.Event()
+    release_refresh = asyncio.Event()
+    calls = 0
+
+    async def slow_refresh() -> None:
+        nonlocal calls
+        calls += 1
+        refresh_started.set()
+        await release_refresh.wait()
+        return None
+
+    query = MagicMock(data=CB_MM_STATUS)
+    query.answer = AsyncMock()
+    context = MagicMock(bot=MagicMock())
+    user = MagicMock(id=8)
+
+    with (
+        patch.object(more_menu, "safe_edit", new=AsyncMock()),
+        patch.object(more_menu, "get_cached_live_usage", return_value=None),
+        patch.object(more_menu, "fetch_live_usage", side_effect=slow_refresh),
+    ):
+        assert await more_menu.handle(query, context, user) is True
+        await refresh_started.wait()
+        assert await more_menu.handle(query, context, user) is True
+        await asyncio.sleep(0)
+        assert calls == 1
+        release_refresh.set()
+        task = more_menu._status_refresh_tasks.get(user.id)
+        if task is not None:
+            await task
+
+
+@pytest.mark.asyncio
+async def test_back_hides_status_but_does_not_cancel_inflight_probe() -> None:
+    from ccbot.bot.callbacks import more_menu
+
+    refresh_started = asyncio.Event()
+    release_refresh = asyncio.Event()
+    completed = asyncio.Event()
+
+    async def slow_refresh() -> None:
+        refresh_started.set()
+        await release_refresh.wait()
+        completed.set()
+        return None
+
+    query = MagicMock(data=CB_MM_STATUS)
+    query.answer = AsyncMock()
+    context = MagicMock(bot=MagicMock())
+    user = MagicMock(id=9)
+    edit = AsyncMock()
+
+    with (
+        patch.object(more_menu, "safe_edit", new=edit),
+        patch.object(more_menu, "set_view", new=AsyncMock()),
+        patch.object(more_menu, "get_cached_live_usage", return_value=None),
+        patch.object(more_menu, "fetch_live_usage", side_effect=slow_refresh),
+    ):
+        assert await more_menu.handle(query, context, user) is True
+        await refresh_started.wait()
+        query.data = CB_MM_BACK
+        assert await more_menu.handle(query, context, user) is True
+        release_refresh.set()
+        task = more_menu._status_refresh_tasks.get(user.id)
+        if task is not None:
+            await task
+
+    assert completed.is_set()
+    assert edit.await_count == 1
 
 
 @pytest.mark.asyncio

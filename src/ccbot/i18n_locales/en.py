@@ -89,6 +89,7 @@ EN: dict[str, str] = {
     "btn.yes_delete": "⚠ Yes, delete",
     "btn.yes_clear": "⚠ Yes, clear",
     "btn.refresh": "🔄 Refresh",
+    "btn.refreshing": "⏳ Refreshing…",
     "btn.save": "Saved",
     "btn.cancelled": "Cancelled",
     # Archive buttons

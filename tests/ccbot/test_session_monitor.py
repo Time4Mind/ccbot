@@ -395,3 +395,42 @@ class TestMonitorCheckpointOrdering:
         assert delivered == ["s1"]
         assert persisted.tracked_sessions["s1"].last_byte_offset == 20
         assert persisted.tracked_sessions["s2"].last_byte_offset == 10
+
+    @pytest.mark.asyncio
+    async def test_shutdown_during_callback_does_not_commit_unfinished_delivery(
+        self, tmp_path, monkeypatch
+    ):
+        import asyncio
+
+        from ccbot.session import session_manager
+
+        state_file = tmp_path / "monitor_state.json"
+        monitor = SessionMonitor(state_file=state_file, poll_interval=0.0)
+        tracked = TrackedSession("s1", "/tmp/s1.jsonl", 10)
+        monitor.state.update_session(tracked)
+        monitor.state.save()
+
+        async def check_for_updates(*_args, **_kwargs):
+            tracked.last_byte_offset = 20
+            monitor.state.update_session(tracked)
+            return [self._terminal_message()]
+
+        async def callback(_msg):
+            raise asyncio.CancelledError
+
+        monitor.check_for_updates = check_for_updates
+        monitor.set_message_callback(callback)
+        monitor._cleanup_all_stale_sessions = AsyncMock()
+        monitor._load_current_session_map = AsyncMock(return_value={"@1": "s1"})
+        monitor._current_session_targets = lambda: ({"@1": "s1"}, [])
+        monitor._detect_and_cleanup_changes = AsyncMock(return_value={"@1": "s1"})
+        monkeypatch.setattr(session_manager, "load_session_map", AsyncMock())
+
+        monitor._running = True
+        with pytest.raises(asyncio.CancelledError):
+            await monitor._monitor_loop()
+
+        monitor.state.save()
+        persisted = MonitorState(state_file=state_file)
+        persisted.load()
+        assert persisted.tracked_sessions["s1"].last_byte_offset == 10

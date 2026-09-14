@@ -215,6 +215,12 @@ EN: dict[str, str] = {
     "archive.age.d": "{n}d",
     "archive.column.session": "Session",
     "archive.column.description": "Description",
+    "archive.link.yql": "YQL link",
+    "archive.link.tracker": "Tracker link",
+    "archive.link.github": "GitHub link",
+    "archive.link.arcanum": "Arcanum link",
+    "archive.link.wiki": "Wiki link",
+    "archive.link.generic": "link: {host}",
     # /usage compact display
     "usage.title": "*Claude Code*",
     "usage.title.codex": "*OpenAI Codex*",

@@ -16,7 +16,7 @@ import aiofiles
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from ..config import config
-from ..i18n import t
+from ..i18n import get_user_lang, t
 from ..rich import RICH_TABLE_NORMAL_FONT
 from ..session import (
     DEFAULT_IDLE_ARCHIVE_HOURS,
@@ -32,6 +32,8 @@ from .archive_blurb import (
     _RE_SYSTEM_UI_TEXT,
     _clean_user_msg,
     _display_name,
+    _fit_archive_description,
+    _shorten_links,
     _shorten_workdir,
     _truncate_at_word,
 )
@@ -173,11 +175,9 @@ async def _archive_blurb(sess: Session, user_id: int | None = None) -> str:
         _BLURB_CACHE[sid] = blurb
         return blurb
     ai_enabled = bool(
-        session_manager.get_user_settings(user_id).get(
-            "archive_ai_description", False
-        )
+        session_manager.get_user_settings(user_id).get("archive_ai_description", False)
     )
-    cache_key = f"{sid}:{int(ai_enabled)}"
+    cache_key = f"{sid}:{int(ai_enabled)}:{get_user_lang(user_id)}"
     cached = _BLURB_CACHE.get(cache_key)
     if cached is not None:
         return cached
@@ -188,9 +188,10 @@ async def _archive_blurb(sess: Session, user_id: int | None = None) -> str:
 
         generated = await generate_description(messages, backend=sess.backend)
         if generated:
-            _BLURB_CACHE[cache_key] = generated
-            return generated
-    fallback = "<br>".join(f"· {message}" for message in messages)
+            description = _truncate_at_word(_shorten_links(generated, user_id), 69)
+            _BLURB_CACHE[cache_key] = description
+            return description
+    fallback = _fit_archive_description(messages, user_id)
     _BLURB_CACHE[cache_key] = fallback
     return fallback
 

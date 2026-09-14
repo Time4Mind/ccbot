@@ -486,7 +486,10 @@ class TestArchiveBlurbCollectsUserMessages:
                     "role": "user",
                     "content": [
                         {"type": "input_text", "text": "# AGENTS.md instructions"},
-                        {"type": "input_text", "text": "<environment_context>cwd</environment_context>"},
+                        {
+                            "type": "input_text",
+                            "text": "<environment_context>cwd</environment_context>",
+                        },
                     ],
                 },
             },
@@ -577,9 +580,108 @@ class TestArchiveBlurbCollectsUserMessages:
         monkeypatch.setattr(
             archive.session_manager,
             "get_user_settings",
-            lambda _uid: {"archive_ai_description": False},
+            lambda _uid: {"archive_ai_description": False, "language": "ru"},
         )
         assert await archive._archive_blurb(sess, 1) == "· first<br>· second"
+
+    @pytest.mark.asyncio
+    async def test_description_has_one_70_character_budget_for_both_requests(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ccbot.handlers import archive
+
+        sess = Session(
+            id="s-budget",
+            name="",
+            state="archived",
+            claude_session_id="cs-budget",
+            workdir="/tmp/x",
+        )
+        monkeypatch.setattr(
+            archive,
+            "_collect_user_messages",
+            _fake_collect(
+                "first request with a deliberately very long explanation  \n"
+                "second request that must remain visible after truncation"
+            ),
+        )
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_user_settings",
+            lambda _uid: {"archive_ai_description": False, "language": "ru"},
+        )
+
+        blurb = await archive._archive_blurb(sess, 1)
+
+        assert len(blurb.replace("<br>", "")) <= 70
+        assert blurb.count("· ") == 2
+        assert "first" in blurb
+        assert "second" in blurb
+
+    @pytest.mark.asyncio
+    async def test_description_replaces_urls_with_meaningful_short_labels(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ccbot.handlers import archive
+
+        sess = Session(
+            id="s-links",
+            name="",
+            state="archived",
+            claude_session_id="cs-links",
+            workdir="/tmp/x",
+        )
+        monkeypatch.setattr(
+            archive,
+            "_collect_user_messages",
+            _fake_collect(
+                "посмотри https://yql.yandex-team.ru/Operations/abc  \n"
+                "и https://example.org/a/very/long/path?query=1"
+            ),
+        )
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_user_settings",
+            lambda _uid: {"archive_ai_description": False, "language": "ru"},
+        )
+
+        blurb = await archive._archive_blurb(sess, 1)
+
+        assert "ссылка в YQL" in blurb
+        assert "ссылка: example.org" in blurb
+        assert "https://" not in blurb
+        assert len(blurb.replace("<br>", "")) <= 70
+
+    @pytest.mark.asyncio
+    async def test_ai_description_is_also_limited_to_70_characters(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ccbot import naming
+        from ccbot.handlers import archive
+
+        sess = Session(
+            id="s-ai-budget",
+            name="",
+            state="archived",
+            claude_session_id="cs-ai-budget",
+            workdir="/tmp/x",
+        )
+        monkeypatch.setattr(archive, "_collect_user_messages", _fake_collect("first"))
+        monkeypatch.setattr(
+            archive.session_manager,
+            "get_user_settings",
+            lambda _uid: {"archive_ai_description": True},
+        )
+
+        async def describe(_messages: list[str], backend: str) -> str:
+            return "слово " * 20
+
+        monkeypatch.setattr(naming, "generate_description", describe)
+
+        blurb = await archive._archive_blurb(sess, 1)
+
+        assert len(blurb) <= 70
+        assert blurb.endswith("…")
 
 
 def _fake_collect(value: str):

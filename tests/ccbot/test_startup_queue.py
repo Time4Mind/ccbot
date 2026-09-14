@@ -82,6 +82,17 @@ async def test_new_command_can_retry_failed_creation_flow() -> None:
 
 
 @pytest.mark.asyncio
+async def test_directory_name_bypasses_agent_startup_queue() -> None:
+    context = MagicMock()
+    context.user_data = {"state": "naming_directory"}
+    begin_startup_queue(42)
+
+    await capture_startup_message(_update(10, text="test"), context)
+
+    assert pending_startup_count(42) == 0
+
+
+@pytest.mark.asyncio
 async def test_drain_includes_messages_arriving_while_window_becomes_ready() -> None:
     context = MagicMock()
     begin_startup_queue(42)

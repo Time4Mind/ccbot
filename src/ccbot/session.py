@@ -451,7 +451,7 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                     self._resuming_windows.discard(window_id)
                     break
                 for text in pending:
-                    ok = await tmux_manager.send_keys(window_id, text)
+                    ok = await tmux_manager.send_keys(window_id, text, backend=backend)
                     if ok and backend == "codex":
                         ok = await tmux_manager.ensure_codex_prompt_submitted(
                             window_id, text
@@ -668,7 +668,9 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                 len(text),
             )
             return True, f"Queued for {display} (session starting)"
-        success = await tmux_manager.send_keys(window.window_id, text)
+        sess = self.find_session_by_window(window_id)
+        backend = sess.backend if sess is not None else ""
+        success = await tmux_manager.send_keys(window.window_id, text, backend=backend)
         if success:
             return True, f"Sent to {display}"
         return False, "Failed to send keys"

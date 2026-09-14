@@ -27,6 +27,7 @@ from pathlib import Path
 
 import libtmux
 
+from . import tmux_input_transport
 from . import tmux_window as _tmux_window
 from .config import SENSITIVE_ENV_VARS, config
 from .tmux_control import TmuxControlClient
@@ -437,7 +438,13 @@ class TmuxManager:
             return None
 
     async def send_keys(
-        self, window_id: str, text: str, enter: bool = True, literal: bool = True
+        self,
+        window_id: str,
+        text: str,
+        enter: bool = True,
+        literal: bool = True,
+        *,
+        backend: str = "",
     ) -> bool:
         """Send keys to a specific window.
 
@@ -451,20 +458,32 @@ class TmuxManager:
         Returns:
             True if successful, False otherwise
 
-        Serialized per window: the literal+enter path types the text, waits
-        ~0.5s, then presses Enter. A concurrent send on the same pane during
-        that gap (classically a voice transcription completing right as the
-        user typed text into the same session) would otherwise interleave
-        its keystrokes into the same input box — both messages merge into
-        one submission and one of the two Enters lands on an empty prompt.
-        The lock makes each send atomic against every other send on the pane.
+        Serialized per window: ordinary literal input is pasted in bounded
+        chunks and submitted once. A concurrent send on the same pane
+        (classically a voice transcription completing right as the user typed
+        text into the same session) would otherwise interleave into the same
+        input box. The lock makes each send atomic against every other send on
+        the pane.
         """
         async with self._send_lock_for(window_id):
-            return await self._send_keys_locked(window_id, text, enter, literal)
+            return await self._send_keys_locked(
+                window_id, text, enter, literal, backend=backend
+            )
 
     async def _send_keys_locked(
-        self, window_id: str, text: str, enter: bool, literal: bool
+        self,
+        window_id: str,
+        text: str,
+        enter: bool,
+        literal: bool,
+        *,
+        backend: str = "",
     ) -> bool:
+        if literal and enter and not text.startswith("!"):
+            return await tmux_input_transport.send_literal_chunked(
+                window_id, text, backend=backend
+            )
+
         if literal and enter:
             # Split into text + delay + Enter via libtmux.
             # Claude Code's TUI sometimes interprets a rapid-fire Enter

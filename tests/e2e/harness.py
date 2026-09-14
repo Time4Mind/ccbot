@@ -116,7 +116,10 @@ class FakeTmuxManager:
         text: str,
         enter: bool = True,
         literal: bool = True,
+        *,
+        backend: str = "",
     ) -> bool:
+        del backend
         self.sent.append((window_id, text, enter, literal))
         return window_id in self._windows
 

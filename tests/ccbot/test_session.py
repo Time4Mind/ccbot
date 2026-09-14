@@ -306,7 +306,9 @@ class TestResumeSettleGate:
         mock_tmux.send_keys.assert_not_awaited()
         task = mgr._resume_settle_tasks["@1"]
         await task
-        mock_tmux.send_keys.assert_awaited_once_with("@1", "fix startup")
+        mock_tmux.send_keys.assert_awaited_once_with(
+            "@1", "fix startup", backend="codex"
+        )
         mock_tmux.ensure_codex_prompt_submitted.assert_awaited_once_with(
             "@1", "fix startup"
         )

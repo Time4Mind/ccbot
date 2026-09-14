@@ -458,6 +458,47 @@ def test_codex_0147_rollout_normalizes_numbered_message_items() -> None:
     assert parsed[-1].stop_reason == "end_turn"
 
 
+def test_codex_0147_rollout_skips_injected_user_context() -> None:
+    entries = [
+        {
+            **_line(
+                "response_item",
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "# AGENTS.md instructions\n<INSTRUCTIONS>hidden</INSTRUCTIONS>",
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "<environment_context>hidden</environment_context>",
+                        },
+                    ],
+                },
+            ),
+            "ordinal": 1,
+        },
+        {
+            **_line(
+                "response_item",
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Fix the card"}],
+                },
+            ),
+            "ordinal": 2,
+        },
+    ]
+
+    parsed, pending = TranscriptParser.parse_entries(entries)
+
+    assert pending == {}
+    assert [(item.role, item.text) for item in parsed] == [("user", "Fix the card")]
+
+
 def test_codex_0146_unnumbered_message_items_do_not_duplicate_events() -> None:
     entries = [
         _line(

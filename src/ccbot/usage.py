@@ -288,7 +288,11 @@ def _persisted_daily_quota_budget(
 
 
 def format_usage_breakdown_compact(
-    user_id: int, info: object, *, age_seconds: float = 0
+    user_id: int,
+    info: object,
+    *,
+    age_seconds: float = 0,
+    refreshing: bool = False,
 ) -> str:
     """Render one compact quota table; absent values are always ``-``."""
     from .codex_usage import CodexUsageInfo
@@ -297,6 +301,8 @@ def format_usage_breakdown_compact(
 
     age_minutes = max(0, int(age_seconds // 60))
     title = t(user_id, "usage.status_age", age=age_minutes)
+    if refreshing:
+        title += " ⏳"
     headers = (
         t(user_id, "usage.column.cli"),
         t(user_id, "usage.column.5h"),

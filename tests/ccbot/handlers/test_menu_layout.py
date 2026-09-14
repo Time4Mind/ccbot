@@ -17,12 +17,33 @@ from ccbot.handlers.callback_data import (
     CB_FT_OPTIONS,
     CB_FT_STOP,
     CB_FT_TERM,
+    CB_MM_ARCHIVE,
+    CB_MM_LIST,
+    CB_MM_NEW,
+    CB_MM_SETTINGS,
+    CB_MM_STATUS,
     CB_SW_NEW,
     CB_SW_NOOP,
 )
 from ccbot.session import session_manager
 
 SCREENSHOT_CB = "ft:shot"
+
+
+def test_main_menu_has_four_buttons_and_no_status_button(monkeypatch) -> None:
+    monkeypatch.setattr(menu, "_has_active_session", lambda _uid: True)
+
+    keyboard = menu.build_footer_keyboard(42, screen="more")
+
+    assert keyboard is not None
+    callbacks = [
+        [button.callback_data for button in row] for row in keyboard.inline_keyboard
+    ]
+    assert callbacks == [
+        [CB_MM_LIST, CB_MM_ARCHIVE],
+        [CB_MM_NEW, CB_MM_SETTINGS],
+    ]
+    assert CB_MM_STATUS not in {value for row in callbacks for value in row}
 
 
 def _patch_active(monkeypatch: pytest.MonkeyPatch, *, terminal: bool) -> None:

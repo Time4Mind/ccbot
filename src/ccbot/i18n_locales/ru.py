@@ -89,7 +89,6 @@ RU: dict[str, str] = {
     "btn.yes_delete": "⚠ Да, удалить",
     "btn.yes_clear": "⚠ Да, очистить",
     "btn.refresh": "🔄 Обновить",
-    "btn.refreshing": "⏳ Обновляю…",
     "btn.save": "Сохранено",
     "btn.cancelled": "Отменено",
     # Archive buttons

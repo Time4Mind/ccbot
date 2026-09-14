@@ -38,7 +38,6 @@ from ...handlers.callback_data import (
 from ...handlers.menu import (
     Screen,
     build_footer_keyboard,
-    render_more_text,
     render_settings_group_text,
     render_settings_text,
 )
@@ -222,7 +221,9 @@ async def handle(
     data = query.data or ""
 
     if data == CB_ST_BACK:
-        text = render_more_text(user.id)
+        from .more_menu import render_menu_text
+
+        text = render_menu_text(user.id)
         keyboard = build_footer_keyboard(user.id, screen="more")
         await safe_edit(query, text, reply_markup=keyboard)
         if query.message and keyboard is not None:

@@ -334,7 +334,7 @@ class SessionStateMixin:
         # closest supported migration from the historical global 4h default.
         "session_idle_hours": DEFAULT_IDLE_ARCHIVE_HOURS,
         # Day-of-week the Anthropic weekly window resets on. Drives the %/d
-        # burn-rate computation in Menu → Status. Values: "mon".."sun".
+        # burn-rate computation in the Menu quota table. Values: "mon".."sun".
         "weekly_reset_day": "mon",
         # Auto-approve interactive Yes/No prompts that --dangerously-skip-
         # permissions doesn't already bypass (e.g. WebFetch per-domain

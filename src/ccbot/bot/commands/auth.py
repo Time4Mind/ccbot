@@ -33,7 +33,7 @@ from ...claude_auth import (
 from ... import codex_auth
 from ...config import config
 from ...handlers.callback_data import CB_AUTH_CANCEL, CB_AUTH_LOGIN
-from ...handlers.menu import build_footer_keyboard, render_more_text
+from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_send
 from ...handlers.notifications import repost_card
 from ...i18n import t
@@ -301,7 +301,9 @@ async def _restore_working_surface(bot: Bot, user_id: int) -> None:
             return
         except Exception as exc:  # noqa: BLE001 — fall back to the Menu
             logger.debug("post-login card repost failed: %s", exc)
-    text = render_more_text(user_id)
+    from ..callbacks.more_menu import render_menu_text
+
+    text = render_menu_text(user_id)
     keyboard = build_footer_keyboard(user_id, screen="more")
     sent = await safe_send(bot, user_id, text, reply_markup=keyboard)
     if sent is not None and keyboard is not None:

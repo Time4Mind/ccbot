@@ -74,7 +74,6 @@ ZH: dict[str, str] = {
     "btn.yes_delete": "⚠ 是，删除",
     "btn.yes_clear": "⚠ 是，清空",
     "btn.refresh": "🔄 刷新",
-    "btn.refreshing": "⏳ 正在刷新…",
     "btn.save": "已保存",
     "btn.cancelled": "已取消",
     # Archive buttons

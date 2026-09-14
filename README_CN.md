@@ -204,8 +204,9 @@ Codex backend 在启动时通过 app-server 的 `account/read` 检查账号。
 不会触发它。一次新的登录会把凭据期限往后推约 30 天;真正重要的就是这个
 期限,因为 refresh token 轮换并不会移动它。
 
-其余动作藏在内联菜单后面:`Sessions`、`Archive`、`Status`、`New`、
-`Settings`。活动卡片的 *Options* 按钮会在会话切换器上方展开已配置的
+内联菜单保留四个动作:`Sessions`、`Archive`、`New`、`Settings`。
+当前限额表嵌入在按钮上方。每次点击 Menu 都会立即显示缓存,在其年龄旁
+显示 `⏳`,并在后台刷新。活动卡片的 *Options* 按钮会在会话切换器上方展开已配置的
 操作。Screenshot 全局切换终端图像,Terminal 只打开当前会话;
 Terminal 默认隐藏。
 
@@ -314,9 +315,10 @@ Telegram 聊天头部的 **`正在输入…`** 指示由真实的 claude 事件�
   *菜单 → Status* 里的 `%/天` 消耗速率。
 - **语言** — 机器人自身 UI 字符串的 `en` / `ru` / `zh`。
 
-### 配额与状态
+### Menu 中的配额
 
-*≡ 菜单 → 📊 Status* 使用当前 backend 的权威数据源：Claude 通过
+嵌入 *≡ Menu* 的配额表使用当前 backend 的权威数据源;
+没有单独的 Status 或 Refresh 按钮。Claude 通过
 专用 `ccbot-usage` tmux 窗口读取 `/usage`；Codex 通过 app-server
 的 `account/rateLimits/read` 读取，不向工作会话发送命令。
 

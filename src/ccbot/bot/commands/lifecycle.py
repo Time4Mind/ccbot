@@ -33,7 +33,7 @@ from ...handlers.directory_browser import (
     build_directory_browser,
     clear_browse_state,
 )
-from ...handlers.menu import build_footer_keyboard, render_more_text
+from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_reply
 from ...i18n import t
 from ...session import Session, session_manager
@@ -255,11 +255,14 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     if not update.message:
         return
-    text = render_more_text(user.id)
+    from ..callbacks.more_menu import begin_menu_refresh, render_menu_text
+
+    text = render_menu_text(user.id, refreshing=True)
     keyboard = build_footer_keyboard(user.id, screen="more")
     sent = await safe_reply(update.message, text, reply_markup=keyboard)
     if sent and keyboard is not None:
         session_manager.set_last_switcher_msg(user.id, sent.message_id)
+        begin_menu_refresh(sent, user.id)
 
 
 # --- /archive ---

@@ -171,7 +171,7 @@ Published:
 
 | Command | Effect |
 |---|---|
-| `/menu` | Open the inline Menu surface (Sessions / Status / Shot / Archive / Settings). |
+| `/menu` | Open the inline Menu surface with its quota table and four actions: Sessions / Archive / New / Settings. |
 | `/help` | Inline mini-doc with section buttons. |
 | `/history` | Paginated transcript of the active session from the JSONL. |
 | `/done [name]` | Mark goal achieved. Archives with a "completed" tag. |
@@ -191,9 +191,8 @@ Hidden (typed only):
 | `/login` | Re-authenticate the selected backend. Claude takes its OAuth code back through chat; Codex uses the official device URL/code and waits for app-server completion without receiving the code in chat. |
 | `/restore-file <msg_id>` | _(Planned — no handler implemented yet.)_ Re-fetch a previously-uploaded inbox file from Telegram. |
 
-The legacy ``/status`` command was retired — Menu → Status surfaces
-the same Anthropic-quota numbers via the dedicated `ccbot-usage` tmux
-window.
+The legacy ``/status`` command and separate Status button are retired. Menu
+embeds the same quota table and refreshes it in the background on entry.
 
 `/stop` is also exposed as an inline button at the bottom of the active session's most recent bot message.
 
@@ -241,11 +240,11 @@ short push per *state transition* — `finished` / `error` /
 default on); turning all three off makes background work silent
 except for the badge.
 
-### 4.5 Status (Menu → Status)
+### 4.5 Status in Menu
 
-Menu → 📊 Status selects an authoritative source by backend. Claude
-fetches its own `/usage` modal via the dedicated `ccbot-usage` tmux
-window:
+The quota table embedded in Menu selects an authoritative source by backend.
+Cached values render immediately with `⏳` beside their age while Claude
+fetches `/usage` via the dedicated `ccbot-usage` tmux window:
 
 ```
 Claude Code
@@ -560,7 +559,7 @@ The fork ships when all of the following are true on a fresh Linux arm64 VPS ins
 6. After the selected 6h, 12h, or 24h without activity, a session auto-archives. `/archive` shows it. `Restore` brings it back via `claude --resume`.
 7. Voice message is transcribed locally via whisper.cpp; no OpenAI key configured.
 8. Photo / document upload lands in `.ccbot-inbox` and the active session receives the relative path (optionally prefixed by the user's caption).
-9. Menu → Status reflects Claude's live `/usage` modal (5h / weekly / Sonnet) — JSONL-derived counters were retired. Per-session ``context: N%`` is rendered on the card (JSONL approximation, ±10 % from `/context`).
+9. Menu embeds Claude's live `/usage` limits (5h / weekly / Sonnet), refreshes them on entry, and exposes only Sessions / Archive / New / Settings. Per-session ``context: N%`` is rendered on the card (JSONL approximation, ±10 % from `/context`).
 10. `/done <name>` archives the session and `/archive` reflects it.
 11. After VPS reboot, `systemctl restart ccbot` recovers all sessions whose tmux windows still exist; lost ones are listed with `Restore`.
 12. No `--dangerously-load-development-channels`, no Anthropic API key, no OpenAI API key required for any of the above.

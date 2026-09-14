@@ -28,7 +28,6 @@ from ...handlers.callback_data import (
 )
 from ...handlers.menu import (
     build_footer_keyboard,
-    render_more_text,
     toggle_footer_options,
 )
 from ...handlers.notifications import (
@@ -134,9 +133,12 @@ async def handle(
         sess = session_manager.get_active_session(user.id)
         if sess is not None:
             pause_card_view(user.id, sess.id)
-        text = render_more_text(user.id)
+        from .more_menu import begin_menu_refresh, render_menu_text
+
+        text = render_menu_text(user.id, refreshing=True)
         keyboard = build_footer_keyboard(user.id, screen="more")
-        await set_view(query, context.bot, user.id, text, keyboard)
+        target = await set_view(query, context.bot, user.id, text, keyboard)
+        begin_menu_refresh(target or query, user.id)
         await query.answer()
         return True
 

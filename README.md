@@ -235,8 +235,10 @@ writes about a dead login won't trigger it. A fresh login moves the
 credential deadline out by ~30 days; that deadline is the only thing that
 matters, since refresh-token rotation keeps it fixed.
 
-The remaining actions live behind the menu - `Sessions`, `Archive`,
-`Status`, `New`, `Settings`. The active card has an *Options* button;
+The four remaining actions live behind the menu - `Sessions`, `Archive`,
+`New`, `Settings`. The current quota table is embedded above them. Every Menu
+tap paints cached limits immediately, marks their age with `⏳`, and refreshes
+them in the background. The active card has an *Options* button;
 when expanded it shows the configured actions above the session switcher.
 The screenshot action toggles terminal images globally, while Terminal opens
 only the current session. Terminal is hidden by default. Most users never type
@@ -381,9 +383,10 @@ language. Worth knowing:
   reset timestamp through app-server.
 - **Language** — `en` / `ru` / `zh` for the bot's own UI strings.
 
-### Quota and status
+### Quota in Menu
 
-*≡ Menu → 📊 Status* uses the selected backend's authoritative source:
+The quota table embedded in *≡ Menu* uses the selected backend's authoritative
+source. There is no separate Status or Refresh button:
 
 - Claude: its live `/usage` modal through the dedicated `ccbot-usage`
   tmux window;

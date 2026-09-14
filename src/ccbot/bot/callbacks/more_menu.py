@@ -1,9 +1,11 @@
-"""Menu screen actions (CB_MM_*) — Sessions / Status / Shot / New /
-Archive / Settings / Back.
+"""Menu screen actions (CB_MM_*) - Sessions / Archive / New / Settings / Back.
 
 Sessions is not a separate rendering — it lands on the active session's
 live card. The card already has the switcher row in its footer, so it
 doubles as a session-list surface.
+
+The quota table lives directly in Menu and refreshes in the background on
+each explicit Menu entry.
 """
 
 from __future__ import annotations
@@ -43,49 +45,51 @@ from .._usage_window import (
 
 logger = logging.getLogger(__name__)
 
-_status_refresh_tasks: dict[int, asyncio.Task[None]] = {}
-_status_views: dict[int, CallbackQuery] = {}
+_menu_refresh_tasks: dict[int, asyncio.Task[None]] = {}
+_menu_views: dict[int, Any] = {}
 
 
-def _status_keyboard(user_id: int, *, refreshing: bool) -> InlineKeyboardMarkup:
-    base = build_footer_keyboard(user_id, screen="more", exclude_more="status")
-    base_rows = list(base.inline_keyboard) if base is not None else []
-    label = t(user_id, "btn.refreshing" if refreshing else "btn.refresh")
-    refresh_row = [InlineKeyboardButton(label, callback_data=CB_MM_STATUS)]
-    return InlineKeyboardMarkup([refresh_row] + [list(row) for row in base_rows])
+def render_menu_text(user_id: int, *, refreshing: bool = False) -> str:
+    """Render the menu header plus the latest cached quota table."""
+    from ...usage import format_usage_breakdown_compact
+
+    status = format_usage_breakdown_compact(
+        user_id,
+        get_cached_live_usage(),
+        age_seconds=get_cached_live_usage_age_seconds(),
+        refreshing=refreshing,
+    )
+    return f"{render_more_text(user_id)}\n\n{status}"
 
 
-async def _refresh_status_live(
-    user_id: int,
-    cached_info: object | None,
-) -> None:
-    """Refresh quota once while status navigation remains non-blocking."""
+def begin_menu_refresh(target: Any, user_id: int) -> None:
+    """Track the visible menu and ensure one background quota refresh."""
+    _menu_views[user_id] = target
+    task = _menu_refresh_tasks.get(user_id)
+    if task is None or task.done():
+        task = asyncio.create_task(_refresh_menu_usage(user_id))
+        _menu_refresh_tasks[user_id] = task
+
+
+async def _refresh_menu_usage(user_id: int) -> None:
+    """Refresh quota once while menu navigation remains non-blocking."""
     current = asyncio.current_task()
     try:
-        from ...usage import format_usage_breakdown_compact
-
-        usage_info = await fetch_live_usage()
-        live_block = format_usage_breakdown_compact(
-            user_id,
-            usage_info if usage_info is not None else cached_info,
-            age_seconds=0
-            if usage_info is not None
-            else get_cached_live_usage_age_seconds(),
-        )
-        query = _status_views.get(user_id)
-        if _status_refresh_tasks.get(user_id) is current and query is not None:
+        await fetch_live_usage()
+        target = _menu_views.get(user_id)
+        if _menu_refresh_tasks.get(user_id) is current and target is not None:
             await safe_edit(
-                query,
-                live_block,
-                reply_markup=_status_keyboard(user_id, refreshing=False),
+                target,
+                render_menu_text(user_id),
+                reply_markup=build_footer_keyboard(user_id, screen="more"),
             )
     except asyncio.CancelledError:
         return
     except Exception as exc:
-        logger.debug("status live refresh failed: %s", exc)
+        logger.debug("menu usage refresh failed: %s", exc)
     finally:
-        if _status_refresh_tasks.get(user_id) is current:
-            _status_refresh_tasks.pop(user_id, None)
+        if _menu_refresh_tasks.get(user_id) is current:
+            _menu_refresh_tasks.pop(user_id, None)
 
 
 async def _emit_new_flow(
@@ -132,14 +136,13 @@ async def handle(
 ) -> bool:
     data = query.data or ""
 
-    if data != CB_MM_STATUS:
-        # Leaving Status must be instant, but the already-started quota probe
-        # remains useful: let it finish and refresh the shared cache without
-        # repainting whichever screen the user navigated to.
-        _status_views.pop(user.id, None)
+    # Any button in the menu leaves its top-level surface. The already-started
+    # quota probe may still refresh the cache, but must not repaint the next
+    # screen.
+    _menu_views.pop(user.id, None)
 
     if data == CB_MM_BACK:
-        text = render_more_text(user.id)
+        text = render_menu_text(user.id)
         keyboard = build_footer_keyboard(user.id, screen="more")
         await set_view(query, context.bot, user.id, text, keyboard)
         await query.answer()
@@ -179,27 +182,15 @@ async def handle(
         return True
 
     if data == CB_MM_STATUS:
+        # Compatibility for an old Telegram keyboard: Status now returns to
+        # the top-level menu and refreshes its embedded quota table.
         await query.answer()
-
-        from ...usage import format_usage_breakdown_compact
-
-        kb = _status_keyboard(user.id, refreshing=True)
-        cached_info = get_cached_live_usage()
-        cached_block = format_usage_breakdown_compact(
-            user.id,
-            cached_info,
-            age_seconds=get_cached_live_usage_age_seconds(),
+        await safe_edit(
+            query,
+            render_menu_text(user.id, refreshing=True),
+            reply_markup=build_footer_keyboard(user.id, screen="more"),
         )
-        shown_text = cached_block
-        await safe_edit(query, shown_text, reply_markup=kb)
-        _status_views[user.id] = query
-        # Quota collection may involve a slow CLI/network probe. Keep it out of
-        # the callback handler so a following Back tap is dispatched at once.
-        # Repeated taps reuse the in-flight probe instead of cancelling it.
-        task = _status_refresh_tasks.get(user.id)
-        if task is None or task.done():
-            task = asyncio.create_task(_refresh_status_live(user.id, cached_info))
-            _status_refresh_tasks[user.id] = task
+        begin_menu_refresh(query, user.id)
         return True
 
     if data == CB_MM_NEW:

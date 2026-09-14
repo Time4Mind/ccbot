@@ -191,6 +191,12 @@ logger = logging.getLogger(__name__)
 
 # Status polling interval
 STATUS_POLL_INTERVAL = 1.0  # seconds — fast feedback; rate limiting is at send layer.
+ACTIVITY_CAPTURE_GRACE = 2.0
+# A changed pane is still processed on the next one-second poll.  Re-running
+# every regex/parser/reconciliation step on an identical cached pane has no
+# user-visible effect; four seconds also keeps Telegram's five-second typing
+# action alive and bounds the unchanged-pane stall check.
+UNCHANGED_STATUS_RECHECK = 4.0
 
 # Per-session cache of the last status-line seen by ``parse_status_line``,
 # used to tell "active spinner that just changed text" from "frozen
@@ -453,6 +459,7 @@ async def update_status_message(
     window_id: str,
     *,
     window: "TmuxWindow | None" = None,
+    pane_text: str | None = None,
 ) -> None:
     """Poll terminal: detect interactive UIs and drive the typing indicator.
 
@@ -464,7 +471,8 @@ async def update_status_message(
     if not w:
         return
 
-    pane_text = await tmux_manager.capture_pane(w.window_id)
+    if pane_text is None:
+        pane_text = await tmux_manager.capture_pane(w.window_id)
     if not pane_text:
         return
 
@@ -519,6 +527,10 @@ async def status_poll_loop(bot: Bot) -> None:
     logger.info("Status polling started (interval: %ss)", STATUS_POLL_INTERVAL)
     last_archive_sweep = 0.0
     last_purge_sweep = 0.0
+    pane_cache: dict[str, str] = {}
+    captured_activity: dict[str, int] = {}
+    activity_grace_until: dict[str, float] = {}
+    last_status_check: dict[str, float] = {}
     while True:
         try:
             now = time.monotonic()
@@ -557,6 +569,40 @@ async def status_poll_loop(bot: Bot) -> None:
                 window.window_id: window
                 for window in await tmux_manager.polling_snapshot()
             }
+            live_ids = {wid for _, wid in pairs}
+            for stale_id in pane_cache.keys() - live_ids:
+                pane_cache.pop(stale_id, None)
+                captured_activity.pop(stale_id, None)
+                activity_grace_until.pop(stale_id, None)
+                last_status_check.pop(stale_id, None)
+
+            capture_ids: list[str] = []
+            for _, wid in pairs:
+                window = windows_by_id.get(wid)
+                if window is None:
+                    continue
+                previous_activity = captured_activity.get(wid)
+                activity_changed = (
+                    previous_activity is None or window.activity != previous_activity
+                )
+                if (
+                    window.activity <= 0
+                    or wid not in pane_cache
+                    or activity_changed
+                    or now < activity_grace_until.get(wid, 0.0)
+                ):
+                    capture_ids.append(wid)
+
+            captured_now: set[str] = set()
+            if capture_ids:
+                captured_panes = await tmux_manager.capture_panes(capture_ids)
+                pane_cache.update(captured_panes)
+                captured_now.update(captured_panes)
+                for wid in captured_panes:
+                    window = windows_by_id[wid]
+                    if captured_activity.get(wid) != window.activity:
+                        activity_grace_until[wid] = now + ACTIVITY_CAPTURE_GRACE
+                    captured_activity[wid] = window.activity
 
             for user_id, wid in pairs:
                 try:
@@ -574,17 +620,40 @@ async def status_poll_loop(bot: Bot) -> None:
                         )
                         continue
 
-                    # Keep the history-pages cache populated so the
-                    # live-card's pagination counter has a stable value
-                    # to render across streaming events (avoid the
-                    # "blinking" keyboard where the counter appears
-                    # and disappears). Throttled to once per 3s per
-                    # window so the parse cost is bounded.
-                    from .history import kick_prewarm
+                    cached_pane = pane_cache.get(wid)
+                    if cached_pane is None:
+                        continue
+                    # Pane activity gives immediate one-second response to new
+                    # prompts/status changes.  Cached, byte-identical panes
+                    # only need a periodic typing/stall reconciliation pass.
+                    # Interactive teardown and auto-approval remain fast even
+                    # if tmux's second-resolution activity value did not move.
+                    if wid not in captured_now:
+                        from .notifications import has_pending_kb
 
-                    kick_prewarm(wid)
-
-                    await update_status_message(bot, user_id, wid, window=w)
+                        sess = session_manager.find_session_by_window(wid)
+                        pending_kb = sess is not None and any(
+                            has_pending_kb(user_id, sess.id)
+                        )
+                        needs_fast_recheck = (
+                            get_interactive_window(user_id) == wid
+                            or (user_id, wid) in _auto_approve_attempts
+                            or pending_kb
+                        )
+                        if (
+                            not needs_fast_recheck
+                            and now - last_status_check.get(wid, 0.0)
+                            < UNCHANGED_STATUS_RECHECK
+                        ):
+                            continue
+                    last_status_check[wid] = now
+                    await update_status_message(
+                        bot,
+                        user_id,
+                        wid,
+                        window=w,
+                        pane_text=cached_pane,
+                    )
                 except Exception as e:
                     logger.debug(
                         "Status update error for user %d window %s: %s",

@@ -21,6 +21,9 @@ from .kb_mode import _capture_pane_png
 
 logger = logging.getLogger(__name__)
 
+_SCREENSHOT_SAVE_INTERVAL = 60.0
+_last_screenshot_save: dict[str, float] = {}
+
 # Keep the same visible gap used between card events. Telegram collapses an
 # empty ``<p><br></p>`` around media, while a non-breaking-space paragraph is
 # preserved as its own rich block by every transport path.
@@ -69,8 +72,14 @@ def persist_session_screenshot(
     sess.screenshot_user_id = user_id
     sess.screenshot_capture_kib = capture_kib
     sess.screenshot_profile = profile
-    if needs_save:
+    # A busy rich card may receive a new Telegram file id every few seconds.
+    # Keep every update in memory, but do not fsync the whole session state for
+    # each frame.  Any unrelated state save includes the newest values; this
+    # interval only bounds the dedicated crash-recovery checkpoint.
+    last_save = _last_screenshot_save.get(sess.id, 0.0)
+    if needs_save and now - last_save >= _SCREENSHOT_SAVE_INTERVAL:
         session_manager.save_state()
+        _last_screenshot_save[sess.id] = now
 
 
 async def send_rich_media_card(

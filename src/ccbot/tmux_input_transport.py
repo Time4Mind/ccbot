@@ -121,6 +121,42 @@ async def _send_carriage_return(window_id: str) -> bool:
     return True
 
 
+async def send_special_key(window_id: str, key: str, *, enter: bool = False) -> bool:
+    """Send named tmux keys through an independent writable command client."""
+    keys = [key] if key else []
+    if enter:
+        keys.append("C-m")
+    if not keys:
+        return True
+    try:
+        code, stderr = await _run_tmux("send-keys", "-t", window_id, *keys)
+    except Exception as exc:
+        logger.error("tmux special key failed window=%s: %s", window_id, exc)
+        return False
+    if code:
+        logger.error(
+            "tmux special key failed window=%s: %s",
+            window_id,
+            stderr.decode(errors="replace"),
+        )
+        return False
+    return True
+
+
+async def paste_literal(window_id: str, text: str) -> bool:
+    """Paste literal text without Enter through writable command clients."""
+    if not text:
+        return True
+    operation = f"ccbot-{secrets.token_hex(8)}"
+    for index, chunk in enumerate(terminal_input_chunks(text)):
+        name = operation if index == 0 else f"{operation}-{index}"
+        ok, _ambiguous = await _paste_chunk(window_id, name, chunk)
+        if not ok:
+            return False
+        await asyncio.sleep(_CHUNK_PACE)
+    return True
+
+
 async def send_literal_chunked(window_id: str, text: str, *, backend: str = "") -> bool:
     chunks = terminal_input_chunks(text, backend=backend)
     operation = f"ccbot-{secrets.token_hex(8)}"

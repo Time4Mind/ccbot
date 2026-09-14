@@ -17,6 +17,37 @@ from typing import Any
 _CODEX_STARTUP_POLL_SECONDS = 0.25
 
 
+def inspect_codex_startup_screen(
+    pane: object, *, trust_prompt: str, trust_yes: str
+) -> tuple[list[tuple[str, bool]], bool]:
+    """Return required key actions and whether the normal prompt is ready."""
+    capture = getattr(pane, "capture_pane", None)
+    if not callable(capture):
+        return [], True
+    try:
+        lines = capture()
+        text = "\n".join(lines) if isinstance(lines, list) else str(lines)
+    except Exception:
+        return [], True
+    if trust_prompt in text and trust_yes in text:
+        return [("", True)], False
+    if (
+        "Choose working directory to resume this session" in text
+        and "1. Use session directory" in text
+        and "2. Use current directory" in text
+        and "Press enter to continue" in text
+    ):
+        return [("Down", False), ("", True)], False
+    if (
+        "Update available!" in text
+        and "1. Update now" in text
+        and "2. Skip" in text
+        and "Press enter to continue" in text
+    ):
+        return [("Down", False), ("", True)], False
+    return [], "OpenAI Codex" in text and "›" in text
+
+
 def handle_codex_startup_screen(
     pane: object,
     *,
@@ -29,41 +60,17 @@ def handle_codex_startup_screen(
     Returns ``(acted, terminal)``. Terminal means the normal Codex input
     is ready or the pane can no longer be inspected.
     """
-    capture = getattr(pane, "capture_pane", None)
     send_keys = getattr(pane, "send_keys", None)
-    if not callable(capture) or not callable(send_keys):
+    if not callable(send_keys):
         return False, True
-    try:
-        lines = capture()
-        text = "\n".join(lines) if isinstance(lines, list) else str(lines)
-    except Exception:
-        return False, True
-    if trust_prompt in text and trust_yes in text:
-        send_keys("", enter=True)
-        logger_obj.info("Accepted Codex directory trust prompt")
-        return True, False
-    if (
-        "Choose working directory to resume this session" in text
-        and "1. Use session directory" in text
-        and "2. Use current directory" in text
-        and "Press enter to continue" in text
-    ):
-        send_keys("Down", enter=False)
-        send_keys("", enter=True)
-        logger_obj.info("Selected current directory for Codex resume")
-        return True, False
-    if (
-        "Update available!" in text
-        and "1. Update now" in text
-        and "2. Skip" in text
-        and "Press enter to continue" in text
-    ):
-        # Never mutate the host toolchain from a Telegram session.
-        send_keys("Down", enter=False)
-        send_keys("", enter=True)
-        logger_obj.info("Skipped Codex CLI update prompt")
-        return True, False
-    return False, "OpenAI Codex" in text and "›" in text
+    actions, terminal = inspect_codex_startup_screen(
+        pane, trust_prompt=trust_prompt, trust_yes=trust_yes
+    )
+    for key, enter in actions:
+        send_keys(key, enter=enter)
+    if actions:
+        logger_obj.info("Handled Codex startup prompt")
+    return bool(actions), terminal
 
 
 def accept_codex_directory_trust(
@@ -97,14 +104,19 @@ async def watch_codex_startup_screens(
     timeout: float,
     sleep: Any,
     to_thread: Any,
-    handler: Any,
+    inspector: Any,
+    sender: Any,
 ) -> bool:
     """Cancellation-safe long watcher for cold Codex launches."""
     accepted = False
     attempts = max(18, int(max(timeout, 4.5) / _CODEX_STARTUP_POLL_SECONDS))
     for _ in range(attempts):
         await sleep(_CODEX_STARTUP_POLL_SECONDS)
-        acted, terminal = await to_thread(handler, pane)
+        actions, terminal = await to_thread(inspector, pane)
+        acted = False
+        for key, enter in actions:
+            if await sender(key, enter=enter, literal=False):
+                acted = True
         accepted = accepted or acted
         if terminal:
             return accepted
@@ -247,7 +259,7 @@ async def create_window(
         # draws its startup UI. The background task accepts only the two
         # known directory prompts; normal input is never confirmed.
         task = asyncio.create_task(
-            manager._watch_codex_startup_screens(created_pane),
+            manager._watch_codex_startup_screens(created_pane, result[3]),
             name=f"codex-startup-trust:{result[3]}",
         )
         manager._startup_tasks.add(task)

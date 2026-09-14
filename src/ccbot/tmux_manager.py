@@ -121,15 +121,26 @@ class TmuxManager:
             handler=cls._handle_codex_startup_screen,
         )
 
-    @classmethod
-    async def _watch_codex_startup_screens(cls, pane: object) -> bool:
+    async def _watch_codex_startup_screens(self, pane: object, window_id: str) -> bool:
         """Cancellation-safe long watcher for cold Codex launches."""
+
+        def inspect(target_pane: object) -> tuple[list[tuple[str, bool]], bool]:
+            return _tmux_window.inspect_codex_startup_screen(
+                target_pane,
+                trust_prompt=_CODEX_TRUST_PROMPT,
+                trust_yes=_CODEX_TRUST_YES,
+            )
+
+        async def send(key: str, *, enter: bool, literal: bool) -> bool:
+            return await self.send_keys(window_id, key, enter=enter, literal=literal)
+
         return await _tmux_window.watch_codex_startup_screens(
             pane,
             timeout=config.resume_settle_timeout,
             sleep=asyncio.sleep,
             to_thread=asyncio.to_thread,
-            handler=cls._handle_codex_startup_screen,
+            inspector=inspect,
+            sender=send,
         )
 
     @property
@@ -485,90 +496,36 @@ class TmuxManager:
             )
 
         if literal and enter:
-            # Split into text + delay + Enter via libtmux.
+            # Split into text + delay + Enter.
             # Claude Code's TUI sometimes interprets a rapid-fire Enter
             # (arriving in the same input batch as the text) as a newline
             # rather than submit.  A 500ms gap lets the TUI process the
             # text before receiving Enter.
-            def _send_literal(chars: str) -> bool:
-                session = self.get_session()
-                if not session:
-                    logger.error("No tmux session found")
-                    return False
-                try:
-                    window = session.windows.get(window_id=window_id)
-                    if not window:
-                        logger.error(f"Window {window_id} not found")
-                        return False
-                    pane = window.active_pane
-                    if not pane:
-                        logger.error(f"No active pane in window {window_id}")
-                        return False
-                    pane.send_keys(chars, enter=False, literal=True)
-                    return True
-                except Exception as e:
-                    logger.error(f"Failed to send keys to window {window_id}: {e}")
-                    return False
-
-            def _send_enter() -> bool:
-                session = self.get_session()
-                if not session:
-                    return False
-                try:
-                    window = session.windows.get(window_id=window_id)
-                    if not window:
-                        return False
-                    pane = window.active_pane
-                    if not pane:
-                        return False
-                    pane.send_keys("", enter=True, literal=False)
-                    return True
-                except Exception as e:
-                    logger.error(f"Failed to send Enter to window {window_id}: {e}")
-                    return False
-
             # Claude Code's ! command mode: send "!" first so the TUI
             # switches to bash mode, wait 1s, then send the rest.
             if text.startswith("!"):
-                if not await asyncio.to_thread(_send_literal, "!"):
+                if not await tmux_input_transport.paste_literal(window_id, "!"):
                     return False
                 rest = text[1:]
                 if rest:
                     await asyncio.sleep(1.0)
-                    if not await asyncio.to_thread(_send_literal, rest):
+                    if not await tmux_input_transport.paste_literal(window_id, rest):
                         return False
             else:
-                if not await asyncio.to_thread(_send_literal, text):
+                if not await tmux_input_transport.paste_literal(window_id, text):
                     return False
             await asyncio.sleep(0.5)
-            return await asyncio.to_thread(_send_enter)
+            return await tmux_input_transport.send_special_key(
+                window_id, "", enter=True
+            )
 
-        # Other cases: special keys (literal=False) or no-enter
-        def _sync_send_keys() -> bool:
-            session = self.get_session()
-            if not session:
-                logger.error("No tmux session found")
+        if literal:
+            if not await tmux_input_transport.paste_literal(window_id, text):
                 return False
-
-            try:
-                window = session.windows.get(window_id=window_id)
-                if not window:
-                    logger.error(f"Window {window_id} not found")
-                    return False
-
-                pane = window.active_pane
-                if not pane:
-                    logger.error(f"No active pane in window {window_id}")
-                    return False
-
-                pane.send_keys(text, enter=enter, literal=literal)
-                return True
-
-            except Exception as e:
-                logger.error(f"Failed to send keys to window {window_id}: {e}")
-                return False
-
-        return await asyncio.to_thread(_sync_send_keys)
+            return not enter or await tmux_input_transport.send_special_key(
+                window_id, "", enter=True
+            )
+        return await tmux_input_transport.send_special_key(window_id, text, enter=enter)
 
     @staticmethod
     def _codex_prompt_contains(pane_text: str, text: str) -> bool:

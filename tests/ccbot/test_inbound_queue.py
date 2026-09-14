@@ -214,6 +214,15 @@ def test_application_registers_fast_blocking_intake_handlers() -> None:
     assert "screenshot" not in commands
 
 
+def test_application_records_every_user_message_before_flow_capture() -> None:
+    from ccbot.bot.app import create_bot
+
+    app = create_bot()
+
+    callbacks = [handler.callback.__name__ for handler in app.handlers[-2]]
+    assert callbacks == ["record_user_message_activity"]
+
+
 @pytest.mark.asyncio
 async def test_ordered_voice_uses_intake_card_as_its_only_receipt() -> None:
     from ccbot.bot import inbound

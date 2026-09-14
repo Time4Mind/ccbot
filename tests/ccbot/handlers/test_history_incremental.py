@@ -6,6 +6,7 @@ import asyncio
 import json
 import time
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -91,6 +92,22 @@ def _point_window_at(monkeypatch: pytest.MonkeyPatch, transcript: Path) -> None:
     monkeypatch.setattr(
         history.session_manager, "get_display_name", lambda _wid: "incremental"
     )
+
+
+@pytest.mark.asyncio
+async def test_kick_prewarm_default_throttle_is_four_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(history, "prewarm_pages_cache", AsyncMock(return_value=True))
+
+    history._last_prewarm_attempt["@1"] = time.monotonic() - 3.9
+    history.kick_prewarm("@1")
+    await asyncio.sleep(0)
+    history._last_prewarm_attempt["@1"] = time.monotonic() - 4.1
+    history.kick_prewarm("@1")
+    await asyncio.sleep(0)
+
+    assert history.prewarm_pages_cache.await_count == 1
 
 
 @pytest.mark.asyncio

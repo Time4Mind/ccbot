@@ -14,6 +14,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from .._common import is_user_allowed
+from ...user_activity import record as record_user_activity
 from . import (
     archive,
     auth as auth_callbacks,
@@ -66,6 +67,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         except Exception:
             pass
         return
+
+    # Every allowed button tap is an explicit user action, including noop
+    # buttons that only dismiss Telegram's spinner.
+    record_user_activity(user.id)
 
     if query.data == "noop":
         await query.answer()

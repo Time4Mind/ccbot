@@ -135,7 +135,7 @@ _last_prewarm_attempt: dict[str, float] = {}
 _prewarm_tasks: dict[str, asyncio.Task[bool]] = {}
 
 
-def kick_prewarm(window_id: str, min_interval: float = 3.0) -> None:
+def kick_prewarm(window_id: str, min_interval: float = 4.0) -> None:
     """Schedule a background prewarm of the pages cache for ``window_id``.
 
     Fire-and-forget: returns immediately; the actual JSONL parse runs

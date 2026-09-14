@@ -130,6 +130,26 @@ async def test_codex_status_polls_every_250ms(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
+async def test_codex_usage_prompt_readiness_uses_250ms_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delays: list[float] = []
+
+    async def _record_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr(_usage_window.asyncio, "sleep", _record_sleep)
+    monkeypatch.setattr(
+        _usage_window,
+        "_capture_with_scrollback",
+        _capture_returning(iter(["starting", "OpenAI Codex\n›"])),
+    )
+
+    assert await _usage_window._wait_for_codex_usage_prompt("@2") is True
+    assert delays == [0.25]
+
+
+@pytest.mark.asyncio
 async def test_codex_status_never_advances_sign_in_screen(
     monkeypatch: pytest.MonkeyPatch,
 ):

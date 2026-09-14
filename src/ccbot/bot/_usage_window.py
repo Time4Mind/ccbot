@@ -29,6 +29,7 @@ USAGE_WINDOW_NAME = "ccbot-usage"
 CODEX_USAGE_WINDOW_NAME = "ccbot-codex-usage"
 _CODEX_STATUS_POLL_SECONDS = 0.25
 _CODEX_STATUS_POLL_ATTEMPTS = int(12 / _CODEX_STATUS_POLL_SECONDS)
+_CODEX_USAGE_READY_ATTEMPTS = int(9 / _CODEX_STATUS_POLL_SECONDS)
 _usage_window_lock = asyncio.Lock()
 _live_usage_cache: dict[str, object] = {}
 _live_usage_collected_at: dict[str, float] = {}
@@ -295,7 +296,7 @@ async def _ensure_codex_usage_window() -> str | None:
 
 async def _wait_for_codex_usage_prompt(wid: str) -> bool:
     """Wait until Codex is ready, without advancing an authorization screen."""
-    for _ in range(30):  # up to 9 seconds for the Node wrapper and TUI
+    for _ in range(_CODEX_USAGE_READY_ATTEMPTS):
         pane = await _capture_with_scrollback(wid)
         if pane:
             lower = pane.lower()
@@ -308,7 +309,7 @@ async def _wait_for_codex_usage_prompt(wid: str) -> bool:
                 return False
             if "openai codex" in lower and ("›" in pane or ">" in pane):
                 return True
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(_CODEX_STATUS_POLL_SECONDS)
     return False
 
 

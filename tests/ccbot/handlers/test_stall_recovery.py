@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ccbot.handlers import card_updates
+from ccbot.handlers import card_stall, card_updates
 from ccbot.handlers.card_types import CardState, Event, TurnPhase
 
 
@@ -38,3 +38,7 @@ async def test_final_clears_stall_watch(monkeypatch: pytest.MonkeyPatch) -> None
     assert state.turn_phase is TurnPhase.IDLE
     assert state.stall_watch_active is False
     assert state.last_stall_pane_refresh_ts == 0.0
+
+
+def test_stalled_card_pane_refresh_interval_is_four_seconds() -> None:
+    assert card_stall._STALL_PANE_REFRESH_SECONDS == 4.0

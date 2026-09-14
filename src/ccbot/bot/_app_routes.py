@@ -20,6 +20,7 @@ from ..startup_queue import capture_startup_message
 
 from ..config import config
 from .callbacks import callback_handler
+from .activity import record_user_message_activity
 from .commands.auth import (
     login_command,
 )
@@ -74,6 +75,17 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
         ).get_updates_request(HTTPXRequest(proxy=config.tg_proxy_url))
         logger.info("TG proxy enabled: %s", config.tg_proxy_url)
     application = builder.build()
+
+    # Activity is observed in its own earlier group so messages captured by
+    # the new-session flow and visible slash commands count as user actions
+    # too. This handler never stops propagation.
+    application.add_handler(
+        MessageHandler(
+            filters.ALL & ~filters.StatusUpdate.ALL,
+            record_user_message_activity,
+        ),
+        group=-2,
+    )
 
     # Group -1 runs before commands and content handlers. It is a no-op unless
     # a new-session flow is open; while open it captures the update and stops

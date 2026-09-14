@@ -100,7 +100,7 @@ def is_card_busy(user_id: int, session_id: str) -> bool:
 STALL_FINALIZE_AFTER_SECONDS = 90.0
 STALL_FINALIZE_TOOL_USE_SECONDS = 300.0
 
-_STALL_PANE_REFRESH_SECONDS = 3.0
+_STALL_PANE_REFRESH_SECONDS = 4.0
 
 
 async def maybe_finalize_stalled(

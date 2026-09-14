@@ -12,6 +12,7 @@ from ..config import config
 from ..i18n import t
 from ..session import Session, session_manager
 from ..session_monitor import NewMessage
+from ..user_activity import effective_live_lag
 from .card_model import (
     CARD_MAX_EVENTS,
     CardState,
@@ -211,7 +212,7 @@ async def _update_session_card_locked(
     user_lag = session_manager.get_user_settings(user_id).get("live_lag")
     if user_lag is None:
         user_lag = config.card_edit_lag
-    lag = max(0.0, float(user_lag))
+    lag = effective_live_lag(user_id, float(user_lag))
     elapsed = time.monotonic() - state.last_edit_ts if state.last_edit_ts else lag
     if lag <= 0 or elapsed >= lag:
         edited = await _legacy("_edit_card")(bot, user_id, state, text=text)

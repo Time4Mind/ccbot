@@ -29,6 +29,7 @@ import libtmux
 
 from . import tmux_window as _tmux_window
 from .config import SENSITIVE_ENV_VARS, config
+from .tmux_control import TmuxControlClient
 from .tmux_process import kill_orphan_processes
 
 logger = logging.getLogger(__name__)
@@ -78,94 +79,14 @@ class TmuxManager:
         # session readiness/queued input is handled independently by
         # SessionManager's startup gate.
         self._startup_tasks: set[asyncio.Task[bool]] = set()
-        self._control_proc: asyncio.subprocess.Process | None = None
-        self._control_lock = asyncio.Lock()
+        self._control_client = TmuxControlClient(self.session_name)
 
     async def _drop_control_client(self) -> None:
-        proc = self._control_proc
-        self._control_proc = None
-        if proc is None or proc.returncode is not None:
-            return
-        proc.terminate()
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=0.5)
-        except TimeoutError:
-            proc.kill()
-            await proc.wait()
-
-    async def _start_control_client(self) -> bool:
-        if self._control_proc is not None and self._control_proc.returncode is None:
-            return True
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "/usr/bin/script",
-                "-q",
-                "/dev/null",
-                "tmux",
-                "-C",
-                "attach-session",
-                "-f",
-                "read-only,ignore-size,no-output",
-                "-t",
-                self.session_name,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-        except Exception as exc:
-            logger.debug("Tmux control client start failed: %s", exc)
-            return False
-        self._control_proc = proc
-        if proc.stdout is None or proc.stdin is None:
-            await self._drop_control_client()
-            return False
-        try:
-            while True:
-                raw = await asyncio.wait_for(proc.stdout.readline(), timeout=2.0)
-                if not raw:
-                    raise RuntimeError("tmux control client exited during startup")
-                line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-                if line.startswith("%session-changed "):
-                    return True
-                if line.startswith("%exit"):
-                    raise RuntimeError(line)
-        except Exception as exc:
-            logger.debug("Tmux control client handshake failed: %s", exc)
-            await self._drop_control_client()
-            return False
+        await self._control_client.close()
 
     async def _control_request(self, command: str) -> str | None:
         """Run a read-only command through one persistent tmux client."""
-        async with self._control_lock:
-            if not await self._start_control_client():
-                return None
-            proc = self._control_proc
-            assert (
-                proc is not None and proc.stdin is not None and proc.stdout is not None
-            )
-            try:
-                proc.stdin.write((command + "\n").encode())
-                await proc.stdin.drain()
-                in_block = False
-                lines: list[str] = []
-                while True:
-                    raw = await asyncio.wait_for(proc.stdout.readline(), timeout=2.0)
-                    if not raw:
-                        raise RuntimeError("tmux control client closed")
-                    line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-                    if line.startswith("%begin "):
-                        in_block = True
-                        lines = []
-                    elif in_block and line.startswith("%end "):
-                        return "\n".join(lines) + ("\n" if lines else "")
-                    elif in_block and line.startswith("%error "):
-                        raise RuntimeError("tmux control command failed")
-                    elif in_block:
-                        lines.append(line)
-            except Exception as exc:
-                logger.debug("Tmux control request failed: %s", exc)
-                await self._drop_control_client()
-                return None
+        return await self._control_client.request(command)
 
     def _send_lock_for(self, window_id: str) -> asyncio.Lock:
         """Return the per-window send lock, creating it on first use.

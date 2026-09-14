@@ -530,6 +530,127 @@ class TestArchiveBlurbCollectsUserMessages:
         )
 
     @pytest.mark.asyncio
+    async def test_image_markup_is_removed_from_a_captioned_text_prompt(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        import json
+
+        from ccbot.handlers import archive
+
+        rollout = tmp_path / "image-caption.jsonl"
+        rollout.write_text(
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": '<image name=[Image #1] path=".ccbot-inbox/x.jpg">',
+                            },
+                            {"type": "input_image"},
+                            {"type": "input_text", "text": "</image>"},
+                            {
+                                "type": "input_text",
+                                "text": "Переведи\n\n[Image #1]",
+                            },
+                        ],
+                    },
+                }
+            )
+            + "\n"
+        )
+        monkeypatch.setattr(archive, "build_session_file_path", lambda *_: rollout)
+        sess = Session(
+            id="image-caption",
+            name="",
+            state="archived",
+            claude_session_id="image-caption-provider",
+            workdir="/tmp/x",
+            backend="codex",
+        )
+
+        assert await archive._collect_user_messages(sess) == "Переведи"
+
+    @pytest.mark.asyncio
+    async def test_file_only_turn_is_ignored_when_any_text_prompt_exists(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        import json
+
+        from ccbot.handlers import archive
+
+        rollout = tmp_path / "file-then-text.jsonl"
+        rows = [
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": ".ccbot-inbox/report.pdf",
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "Проверь итоги"},
+            },
+        ]
+        rollout.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+        monkeypatch.setattr(archive, "build_session_file_path", lambda *_: rollout)
+        sess = Session(
+            id="file-then-text",
+            name="",
+            state="archived",
+            claude_session_id="file-then-text-provider",
+            workdir="/tmp/x",
+            backend="codex",
+        )
+
+        assert await archive._collect_user_messages(sess) == "Проверь итоги"
+
+    @pytest.mark.asyncio
+    async def test_file_only_session_gets_media_tags_instead_of_wire_markup(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        import json
+
+        from ccbot.handlers import archive
+
+        rollout = tmp_path / "files-only.jsonl"
+        rows = [
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": (
+                        '<image name=[Image #1] path=".ccbot-inbox/x.jpg">\n</image>'
+                    ),
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": ".ccbot-inbox/report.pdf",
+                },
+            },
+        ]
+        rollout.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+        monkeypatch.setattr(archive, "build_session_file_path", lambda *_: rollout)
+        sess = Session(
+            id="files-only",
+            name="",
+            state="archived",
+            claude_session_id="files-only-provider",
+            workdir="/tmp/x",
+            backend="codex",
+        )
+
+        assert await archive._collect_user_messages(sess) == "#image #document"
+        assert await archive._archive_blurb(sess, 1) == "#image #document"
+
+    @pytest.mark.asyncio
     async def test_ai_description_uses_first_two_requests(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

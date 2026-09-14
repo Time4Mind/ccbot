@@ -35,6 +35,7 @@ from .archive_blurb import (
     _fit_archive_description,
     _shorten_links,
     _shorten_workdir,
+    _strip_media_payload,
     _truncate_at_word,
 )
 from .callback_data import CB_ARC_INSPECT, CB_ARC_PAGE
@@ -84,6 +85,7 @@ async def _collect_user_messages(sess: Session) -> str:
         fp = matches[0]
 
     messages: list[str] = []
+    media_kinds: list[str] = []
     scanned = 0
     try:
         async with aiofiles.open(fp, "r", encoding="utf-8") as f:
@@ -116,12 +118,20 @@ async def _collect_user_messages(sess: Session) -> str:
                         content = payload.get("content")
                         if not isinstance(content, list):
                             continue
-                        raw_messages = [
+                        text_parts = [
                             str(item.get("text") or "").strip()
                             for item in content
                             if isinstance(item, dict)
                             and item.get("type") == "input_text"
                         ]
+                        has_image = any(
+                            isinstance(item, dict) and item.get("type") == "input_image"
+                            for item in content
+                        )
+                        combined = "\n".join(part for part in text_parts if part)
+                        if has_image and "<image" not in combined.lower():
+                            combined = f"<image></image>\n{combined}"
+                        raw_messages = [combined]
                     else:
                         raw_messages = [str(payload.get("message") or "").strip()]
                     if not any(raw_messages):
@@ -143,7 +153,11 @@ async def _collect_user_messages(sess: Session) -> str:
                         or raw.startswith("<turn_aborted>")
                     ):
                         continue
-                    cleaned = _clean_user_msg(raw)
+                    prompt_text, kinds = _strip_media_payload(raw)
+                    for kind in kinds:
+                        if kind not in media_kinds:
+                            media_kinds.append(kind)
+                    cleaned = _clean_user_msg(prompt_text)
                     if not cleaned or (messages and cleaned == messages[-1]):
                         continue
                     messages.append(cleaned)
@@ -153,7 +167,9 @@ async def _collect_user_messages(sess: Session) -> str:
         logger.debug("archive blurb read failed for %s: %s", fp, e)
         return ""
 
-    return _format_blurb(messages)
+    if messages:
+        return _format_blurb(messages)
+    return " ".join(f"#{kind}" for kind in media_kinds)
 
 
 async def _archive_blurb(sess: Session, user_id: int | None = None) -> str:
@@ -182,6 +198,10 @@ async def _archive_blurb(sess: Session, user_id: int | None = None) -> str:
     if cached is not None:
         return cached
     blurb = await _collect_user_messages(sess)
+    if blurb.startswith("#") and "  \n" not in blurb:
+        media_description = _truncate_at_word(blurb, 69)
+        _BLURB_CACHE[cache_key] = media_description
+        return media_description
     messages = [part.strip() for part in blurb.split("  \n") if part.strip()][:2]
     if ai_enabled and messages:
         from ..naming import generate_description

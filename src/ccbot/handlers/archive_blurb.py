@@ -18,6 +18,7 @@ __all__ = [
     "_RE_SYSTEM_UI_TEXT",
     "_shorten_workdir",
     "_clean_user_msg",
+    "_strip_media_payload",
     "_truncate_at_word",
     "_shorten_links",
     "_fit_archive_description",
@@ -25,6 +26,24 @@ __all__ = [
 ]
 
 _URL_RE = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
+_IMAGE_BLOCK_RE = re.compile(r"<image\b[^>]*>.*?</image>", re.IGNORECASE | re.DOTALL)
+_IMAGE_REF_RE = re.compile(r"\[Image\s*#?\d+\]", re.IGNORECASE)
+_INBOX_PATH_RE = re.compile(r"(?:^|(?<=\s))\.?/?\.ccbot-inbox/[^\s<>`\"']+")
+_IMAGE_SUFFIXES = {".avif", ".bmp", ".gif", ".heic", ".jpeg", ".jpg", ".png", ".webp"}
+_DOCUMENT_SUFFIXES = {
+    ".csv",
+    ".doc",
+    ".docx",
+    ".md",
+    ".pdf",
+    ".ppt",
+    ".pptx",
+    ".rtf",
+    ".txt",
+    ".xls",
+    ".xlsm",
+    ".xlsx",
+}
 
 _RE_INJECTED_USER_MSG = re.compile(
     r"<(bash-input|bash-stdout|bash-stderr|local-command-caveat|system-reminder)"
@@ -71,6 +90,34 @@ def _clean_user_msg(text: str) -> str:
         head, _, rest = cleaned.partition(" ")
         cleaned = rest if rest else head
     return cleaned.strip("` ")
+
+
+def _strip_media_payload(text: str) -> tuple[str, list[str]]:
+    """Remove transport markup and return its semantic media kinds."""
+    kinds: list[str] = []
+
+    def add(kind: str) -> None:
+        if kind not in kinds:
+            kinds.append(kind)
+
+    if _IMAGE_BLOCK_RE.search(text):
+        add("image")
+        text = _IMAGE_BLOCK_RE.sub(" ", text)
+    text = _IMAGE_REF_RE.sub(" ", text)
+
+    def remove_inbox_path(match: re.Match[str]) -> str:
+        raw = match.group(0).rstrip(".,;:!?)]}")
+        suffix = Path(raw).suffix.lower()
+        if suffix in _IMAGE_SUFFIXES:
+            add("image")
+        elif suffix in _DOCUMENT_SUFFIXES:
+            add("document")
+        else:
+            add("file")
+        return " "
+
+    text = _INBOX_PATH_RE.sub(remove_inbox_path, text)
+    return text, kinds
 
 
 def _truncate_at_word(text: str, budget: int) -> str:

@@ -18,7 +18,7 @@ from telegram.ext import ContextTypes
 
 from ..handlers.message_sender import safe_edit
 from ..handlers.notifications import (
-    detach_paused_cards_at_message,
+    activate_card_on_carrier,
     paint_card_on_carrier,
 )
 from ..i18n import t
@@ -36,11 +36,13 @@ async def create_and_activate_session(
     selected_path: str,
     resume_session_id: str | None = None,
 ) -> None:
-    """Create a tmux window, register a Session, make it active, forward pending text."""
+    """Create a session and atomically replace the browser with its live card."""
     from telegram import CallbackQuery, User
 
     assert isinstance(query, CallbackQuery)
     assert isinstance(user, User)
+
+    previous_active = session_manager.get_active_session(user.id)
 
     # Acknowledge the callback up-front so Telegram's 15-second
     # ``answer_callback_query`` deadline doesn't expire under slow
@@ -50,14 +52,6 @@ async def create_and_activate_session(
         await query.answer()
     except Exception as e:
         logger.debug("Early query.answer failed: %s", e)
-
-    # The carrier message is about to host this new session's "Created"
-    # status — release any OLD card-state pause that was bound to the
-    # same message_id. Otherwise the previously-active session's pause
-    # never resumes and its events buffer forever, leaving the user
-    # with a frozen card when they switch back via the switcher.
-    if query.message is not None:
-        detach_paused_cards_at_message(user.id, query.message.message_id)
 
     if session_manager.agent_backend == "codex":
         from .commands.auth import ensure_codex_authenticated
@@ -122,7 +116,15 @@ async def create_and_activate_session(
     ws = session_manager.get_window_state(created_wid)
     if ws.session_id:
         session_manager.set_session_claude_id(sess.id, ws.session_id)
-    session_manager.set_active_session(user.id, sess.id)
+    if query.message is not None:
+        await activate_card_on_carrier(
+            user.id,
+            previous_active.id if previous_active is not None else None,
+            sess.id,
+            query.message.message_id,
+        )
+    else:
+        session_manager.set_active_session(user.id, sess.id)
 
     # Every inbound captured since the user pressed Start is now owned by
     # this window. The drain waits for proven TUI readiness and replays the

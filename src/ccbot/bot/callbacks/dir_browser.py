@@ -36,7 +36,9 @@ from ...handlers.directory_browser import (
     clear_session_picker_state,
 )
 from ...handlers.message_sender import safe_edit
+from ...handlers.notifications import resume_card_view
 from ...i18n import t
+from ...session import session_manager
 from .._common import open_more_in_place
 from ..messages import create_and_activate_session
 
@@ -74,10 +76,14 @@ async def emit_session_picker(
 async def _close_modal(
     query: CallbackQuery, user_id: int, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Bail out of any modal flow → always Menu."""
+    """Leave the new-session flow and restore the active live card."""
     if context.user_data is not None:
         context.user_data.pop("menu_origin", None)
-    await open_more_in_place(query, user_id)
+    active = session_manager.get_active_session(user_id)
+    if active is not None:
+        await resume_card_view(context.bot, user_id, active)
+    else:
+        await open_more_in_place(query, user_id)
 
 
 async def handle(

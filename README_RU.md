@@ -436,11 +436,6 @@ OpenAI Codex
 - **Фото и документы** ложатся в `<workdir>/.ccbot-inbox/`, Claude
   получает синтетическое сообщение через tmux. Файлы авто-чистятся
   через 24 часа.
-- **Исходящие файлы** — в обратную сторону по требованию: сессия
-  вызывает `ccbot send-file <путь> [--caption ТЕКСТ]`, и бот сразу
-  отправляет файл в DM (картинки через `sendPhoto`, остальное через
-  `sendDocument`). Команда печатает строку успеха/ошибки на каждый
-  чат — Claude видит, дошло ли.
 - **Пересланные посты с медиа** (channel-posts с video / GIF /
   sticker и текстом-caption) — caption + скрытые `text_link`-URL
   извлекаются и роутятся в активную сессию с префиксом
@@ -453,7 +448,7 @@ OpenAI Codex
 
 ```
 src/ccbot/
-├── main.py                 — CLI entry point (`ccbot`, `ccbot hook`, `ccbot send-file`)
+├── main.py                 — CLI entry point (`ccbot`, `ccbot hook`)
 ├── config.py               — загрузчик env-vars (singleton)
 ├── session.py              — Session + SessionManager (state.json)
 ├── session_monitor.py      — JSONL polling, NewMessage callbacks
@@ -469,7 +464,6 @@ src/ccbot/
 ├── telegram_sender.py      — split_message по 4096-char лимиту
 ├── transcribe.py           — voice → text диспетчер
 ├── voice_install.py        — авто-установщик whisper.cpp + моделей
-├── send_file.py            — исходящая доставка `ccbot send-file`
 ├── local_terminal.py       — аттач нативного терминала
 ├── usage.py                — токен-агрегатор, context %, alert-логика
 ├── i18n.py                 — UI-строки en / ru / zh

@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 USAGE_WINDOW_NAME = "ccbot-usage"
 CODEX_USAGE_WINDOW_NAME = "ccbot-codex-usage"
+_CODEX_STATUS_POLL_SECONDS = 0.25
+_CODEX_STATUS_POLL_ATTEMPTS = int(12 / _CODEX_STATUS_POLL_SECONDS)
 _usage_window_lock = asyncio.Lock()
 _live_usage_cache: dict[str, object] = {}
 _live_usage_collected_at: dict[str, float] = {}
@@ -323,8 +325,8 @@ async def _poll_codex_status(wid: str) -> object | None:
             await tmux_manager.send_keys(wid, "/status")
             last: tuple[int | None, int | None] | None = None
             refresh_requested = False
-            for _ in range(60):  # 12 seconds for the rate-limit rows to populate
-                await asyncio.sleep(0.2)
+            for _ in range(_CODEX_STATUS_POLL_ATTEMPTS):
+                await asyncio.sleep(_CODEX_STATUS_POLL_SECONDS)
                 pane = await _capture_with_scrollback(wid)
                 if not pane:
                     continue

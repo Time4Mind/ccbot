@@ -1,10 +1,8 @@
 """Application entry point — CLI dispatcher and bot bootstrap.
 
-Handles three execution modes:
+Handles two execution modes:
   1. `ccbot hook` — delegates to hook.hook_main() for Claude Code hook processing.
-  2. `ccbot send-file` — delegates to send_file.send_file_main() for on-demand
-     outbound delivery from a running session (see send_file.py).
-  3. Default — configures logging, initializes tmux session, and starts the
+  2. Default — configures logging, initializes tmux session, and starts the
      Telegram bot polling loop via bot.create_bot().
 
 Also enforces a single-bot mutex via flock on ``$CCBOT_DIR/ccbot.lock``
@@ -92,10 +90,8 @@ def main() -> None:
         return
 
     if len(sys.argv) > 1 and sys.argv[1] == "send-file":
-        from .send_file import send_file_main
-
-        send_file_main()
-        return
+        print("Error: ccbot send-file has been removed", file=sys.stderr)
+        raise SystemExit(2)
 
     from .logging_setup import configure_logging
 

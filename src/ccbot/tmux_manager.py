@@ -610,7 +610,6 @@ class TmuxManager:
         window_name: str | None = None,
         start_claude: bool = True,
         resume_session_id: str | None = None,
-        owner_user_id: int | None = None,
         backend: str | None = None,
         initial_prompt: str | None = None,
     ) -> tuple[bool, str, str, str]:
@@ -621,7 +620,6 @@ class TmuxManager:
             window_name=window_name,
             start_claude=start_claude,
             resume_session_id=resume_session_id,
-            owner_user_id=owner_user_id,
             backend=backend,
             initial_prompt=initial_prompt,
             config_obj=config,

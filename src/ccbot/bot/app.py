@@ -292,7 +292,6 @@ _LIFECYCLE_STATE_NAMES = (
     "_heartbeat_task",
     "_auth_preflight_task",
     "_usage_prewarm_task",
-    "_send_file_relay_task",
     "_last_heartbeat",
 )
 

@@ -367,10 +367,6 @@ OpenAI Codex
   显式选择 Whisper 时，*设置 → 🎙 语音* 可安装 whisper.cpp 和两个模型。
 - **照片和文档** 落到 `<workdir>/.ccbot-inbox/`,Claude 通过 tmux
   收到通知。文件在上传 24 小时后自动清理。
-- **出站文件** 是反方向的按需通道:会话运行
-  `ccbot send-file <路径> [--caption 文本]`,机器人立刻把文件发进
-  DM(图片扩展名走 `sendPhoto`,其余走 `sendDocument`)。该命令按
-  目标聊天打印成功/失败行,Claude 能看到是否送达。
 - **带媒体的转发消息**(包含视频 / GIF / 贴纸但有 caption 文本的
   频道帖子) — caption 加上任何隐藏的 `text_link` URL 都会被提取
   并路由到活动会话,前缀为 `[forwarded from @channel]`。媒体本体
@@ -382,7 +378,7 @@ OpenAI Codex
 
 ```
 src/ccbot/
-├── main.py                 — CLI entry point (`ccbot`, `ccbot hook`, `ccbot send-file`)
+├── main.py                 — CLI entry point (`ccbot`, `ccbot hook`)
 ├── config.py               — env-var 加载器(singleton)
 ├── session.py              — Session + SessionManager (state.json)
 ├── session_monitor.py      — JSONL polling, NewMessage callbacks
@@ -394,7 +390,6 @@ src/ccbot/
 ├── telegram_sender.py      — split_message 在 4096 字符限制处分割
 ├── transcribe.py           — 语音 → 文本 dispatcher
 ├── voice_install.py        — whisper.cpp + 模型自动安装器
-├── send_file.py            — `ccbot send-file` 出站投递
 ├── local_terminal.py       — 原生终端挂载助手
 ├── usage.py                — token 聚合器、context %、提醒逻辑
 ├── i18n.py                 — en / ru / zh UI 字符串

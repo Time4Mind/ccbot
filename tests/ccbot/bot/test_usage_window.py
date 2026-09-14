@@ -107,6 +107,29 @@ async def test_codex_status_uses_parked_prompt(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
+async def test_codex_status_polls_every_250ms(monkeypatch: pytest.MonkeyPatch):
+    delays: list[float] = []
+
+    async def _record_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    frames = iter(
+        [
+            "OpenAI Codex\n›",
+            "5h limit: 80% left\nWeekly limit: 60% left",
+            "5h limit: 80% left\nWeekly limit: 60% left",
+        ]
+    )
+    monkeypatch.setattr(_usage_window.asyncio, "sleep", _record_sleep)
+    monkeypatch.setattr(
+        _usage_window, "_capture_with_scrollback", _capture_returning(frames)
+    )
+
+    assert await _usage_window._poll_codex_status("@2") is not None
+    assert delays == [0.25, 0.25]
+
+
+@pytest.mark.asyncio
 async def test_codex_status_never_advances_sign_in_screen(
     monkeypatch: pytest.MonkeyPatch,
 ):

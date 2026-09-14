@@ -89,6 +89,26 @@ def test_codex_directory_trust_prompt_is_accepted(
     assert pane.sent == [("", True)]
 
 
+def test_codex_startup_screen_poll_uses_250ms_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delays: list[float] = []
+
+    class Pane:
+        def capture_pane(self) -> list[str]:
+            return ["OpenAI Codex", "›"]
+
+        def send_keys(self, _value: str, enter: bool = True) -> None:
+            raise AssertionError("ready prompt must not be modified")
+
+    monkeypatch.setattr(
+        "ccbot.tmux_manager.time.sleep", lambda delay: delays.append(delay)
+    )
+
+    assert TmuxManager._accept_codex_directory_trust(Pane()) is False
+    assert delays == [0.25]
+
+
 def test_codex_ready_prompt_is_not_auto_confirmed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -842,14 +862,12 @@ async def test_tmux_builds_codex_resume_command(
     ok, _message, _name, wid = await mgr.create_window(
         str(tmp_path),
         resume_session_id="550e8400-e29b-41d4-a716-446655440000",
-        owner_user_id=42,
         backend="codex",
     )
     assert ok is True
     assert wid == "@7"
     assert "CCBOT_AGENT_BACKEND=codex" in sent[0]
     assert f"CCBOT_DIR={config.config_dir}" in sent[0]
-    assert "CCBOT_CHAT_ID=42" in sent[0]
     assert "/data/data/com.termux/files/usr/bin/codex" in sent[0]
     assert " resume 550e8400-e29b-41d4-a716-446655440000" in sent[0]
     assert "--resume" not in sent[0]

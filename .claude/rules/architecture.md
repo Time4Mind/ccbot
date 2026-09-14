@@ -77,11 +77,8 @@ Additional modules:
   i18n_locales/       ─ English / Russian / Chinese translation catalogs
   naming.py           ─ lightweight-model-generated session names
   usage.py            ─ Token usage aggregator + per-session token alerts
-  main.py             ─ CLI entry point (ccbot / ccbot hook / ccbot send-file)
+  main.py             ─ CLI entry point (ccbot / ccbot hook)
   config.py           ─ Env-var loader (singleton `config`), .env priority
-  send_file.py        ─ `ccbot send-file` — on-demand outbound delivery
-                       (photo vs document by extension; chat resolution:
-                       --chat-id > $CCBOT_CHAT_ID > all ALLOWED_USERS)
   utils.py            ─ Shared utilities (ccbot_dir, atomic_write_json)
   session_models.py   ─ Session / WindowState / ClaudeSession dataclasses
   session_state.py    ─ active routing, lifecycle, settings, persistence helpers

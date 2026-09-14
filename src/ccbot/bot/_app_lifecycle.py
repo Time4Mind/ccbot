@@ -51,7 +51,6 @@ _metrics_flush_task: asyncio.Task[None] | None = None
 _heartbeat_task: asyncio.Task[None] | None = None
 _auth_preflight_task: asyncio.Task[None] | None = None
 _usage_prewarm_task: asyncio.Task[None] | None = None
-_send_file_relay_task: asyncio.Task[None] | None = None
 
 
 async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") -> None:
@@ -65,19 +64,12 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
         _heartbeat_task, \
         _auth_preflight_task, \
         _usage_prewarm_task, \
-        _send_file_relay_task, \
         _last_heartbeat, \
         _conflict_app
 
     # Reachable from ``_error_handler`` for the sustained-Conflict exit
     # path (Conflict updates carry no chat, so ``update`` is not an Update).
     _conflict_app = application
-
-    # Agent sessions may have neither network nor cross-process socket access.
-    # Consume filesystem-relay requests and perform Telegram delivery here.
-    from ..send_file import send_file_relay_loop
-
-    _send_file_relay_task = asyncio.create_task(send_file_relay_loop(application.bot))
 
     # Warm the directory browser's recursive index off the startup path. The
     # picker itself always paints from cache/shallow metadata and never waits
@@ -314,8 +306,7 @@ async def post_shutdown(
         _metrics_flush_task, \
         _heartbeat_task, \
         _auth_preflight_task, \
-        _usage_prewarm_task, \
-        _send_file_relay_task
+        _usage_prewarm_task
 
     if _usage_prewarm_task:
         if not _usage_prewarm_task.done():
@@ -331,12 +322,6 @@ async def post_shutdown(
     await shutdown_auth_flows()
     await shutdown_inbound_queues()
     await shutdown_card_surface_tasks()
-
-    if _send_file_relay_task:
-        _send_file_relay_task.cancel()
-        await asyncio.gather(_send_file_relay_task, return_exceptions=True)
-        _send_file_relay_task = None
-        logger.info("send-file filesystem relay stopped")
 
     if _status_poll_task:
         _status_poll_task.cancel()

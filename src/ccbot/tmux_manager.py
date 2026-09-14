@@ -437,7 +437,12 @@ class TmuxManager:
             return None
 
     async def send_keys(
-        self, window_id: str, text: str, enter: bool = True, literal: bool = True
+        self,
+        window_id: str,
+        text: str,
+        enter: bool = True,
+        literal: bool = True,
+        submit_key: str = "Enter",
     ) -> bool:
         """Send keys to a specific window.
 
@@ -460,10 +465,17 @@ class TmuxManager:
         The lock makes each send atomic against every other send on the pane.
         """
         async with self._send_lock_for(window_id):
-            return await self._send_keys_locked(window_id, text, enter, literal)
+            return await self._send_keys_locked(
+                window_id, text, enter, literal, submit_key
+            )
 
     async def _send_keys_locked(
-        self, window_id: str, text: str, enter: bool, literal: bool
+        self,
+        window_id: str,
+        text: str,
+        enter: bool,
+        literal: bool,
+        submit_key: str,
     ) -> bool:
         if literal and enter:
             # Split into text + delay + Enter via libtmux.
@@ -491,7 +503,7 @@ class TmuxManager:
                     logger.error(f"Failed to send keys to window {window_id}: {e}")
                     return False
 
-            def _send_enter() -> bool:
+            def _send_submit() -> bool:
                 session = self.get_session()
                 if not session:
                     return False
@@ -502,7 +514,10 @@ class TmuxManager:
                     pane = window.active_pane
                     if not pane:
                         return False
-                    pane.send_keys("", enter=True, literal=False)
+                    if submit_key == "Enter":
+                        pane.send_keys("", enter=True, literal=False)
+                    else:
+                        pane.send_keys(submit_key, enter=False, literal=False)
                     return True
                 except Exception as e:
                     logger.error(f"Failed to send Enter to window {window_id}: {e}")
@@ -522,7 +537,7 @@ class TmuxManager:
                 if not await asyncio.to_thread(_send_literal, text):
                     return False
             await asyncio.sleep(0.5)
-            return await asyncio.to_thread(_send_enter)
+            return await asyncio.to_thread(_send_submit)
 
         # Other cases: special keys (literal=False) or no-enter
         def _sync_send_keys() -> bool:

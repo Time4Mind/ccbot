@@ -441,6 +441,34 @@ class TestResumeSettleGate:
         mock_tmux.capture_pane.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_long_codex_followup_uses_tui_queue_while_turn_is_busy(
+        self, mgr: SessionManager, monkeypatch, fast_gate
+    ) -> None:
+        """Long Telegram follow-ups must survive an already-running turn.
+
+        Enter is a steer action while Codex is working and did not preserve
+        the reported 425-character request.  Tab is Codex's explicit FIFO
+        queue action and is safe for the next turn.
+        """
+        busy = "● Working (3s)\n" + "─" * 26 + "\n›\n" + "─" * 26
+        mock_tmux = self._mock_tmux(monkeypatch, lambda _w: busy)
+        mgr.sessions["codex"] = Session(
+            id="codex",
+            name="codex",
+            window_id="@1",
+            backend="codex",
+            state="active",
+        )
+        text = "x" * 425
+
+        ok, _ = await mgr.send_to_window("@1", text)
+
+        assert ok is True
+        mock_tmux.send_keys.assert_awaited_once_with(
+            "@1", text, submit_key="Tab"
+        )
+
+    @pytest.mark.asyncio
     async def test_watcher_stops_when_window_disappears(
         self, mgr: SessionManager, monkeypatch, fast_gate
     ) -> None:

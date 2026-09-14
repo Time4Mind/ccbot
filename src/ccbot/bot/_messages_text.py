@@ -317,6 +317,7 @@ async def _dispatch_text_to_active(
     # If the user typed while looking at a Menu / sub-screen on this
     # session's card, drop the pause so incoming events render again.
     sess = session_manager.find_session_by_window(wid)
+    card_state = None
     owns_card = sess is not None and is_active_for_user(user_id, sess)
     if owns_card and sess is not None:
         await resume_card_view(context.bot, user_id, sess)
@@ -368,7 +369,8 @@ async def _dispatch_text_to_active(
         # switcher has already handed to the new active session.
         owns_card = sess is not None and is_active_for_user(user_id, sess)
         if sess is not None:
-            get_card_state(user_id, sess).turn_phase = TurnPhase.RUNNING
+            card_state = get_card_state(user_id, sess)
+            card_state.turn_phase = TurnPhase.RUNNING
             session_manager.touch_session(sess.id)
             # ``maybe_auto_name`` honours the user's ``haiku_naming``
             # setting and the directory-basename guard internally — we
@@ -400,6 +402,13 @@ async def _dispatch_text_to_active(
                     await refresh_panel(context.bot, user_id)
                 except Exception as e:
                     logger.debug("refresh_panel after bg dispatch failed: %s", e)
+            return True
+
+        # The prompt may take seconds to reach Codex. During that wait the
+        # user can tap New/Menu on the receipt card. That newer navigation is
+        # authoritative: do not let this older inbound handler clear
+        # ``in_menu_view`` and repaint the session over the directory browser.
+        if card_state is not None and card_state.in_menu_view:
             return True
 
         # Put the live card below the user's message (the card_position

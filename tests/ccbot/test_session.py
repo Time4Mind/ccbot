@@ -441,17 +441,16 @@ class TestResumeSettleGate:
         mock_tmux.capture_pane.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_long_codex_followup_uses_tui_queue_while_turn_is_busy(
+    async def test_long_codex_prompt_uses_tui_queue_key_even_while_idle(
         self, mgr: SessionManager, monkeypatch, fast_gate
     ) -> None:
-        """Long Telegram follow-ups must survive an already-running turn.
+        """Long Telegram prompts use Codex's paste-safe submit path.
 
-        Enter is a steer action while Codex is working and did not preserve
-        the reported 425-character request.  Tab is Codex's explicit FIFO
-        queue action and is safe for the next turn.
+        Tab submits immediately while idle and queues while busy.  Unlike
+        Enter, it is handled before Codex's paste-burst state and preserves
+        the reported 342/425-character requests in both states.
         """
-        busy = "● Working (3s)\n" + "─" * 26 + "\n›\n" + "─" * 26
-        mock_tmux = self._mock_tmux(monkeypatch, lambda _w: busy)
+        mock_tmux = self._mock_tmux(monkeypatch, lambda _w: _IDLE_PANE)
         mgr.sessions["codex"] = Session(
             id="codex",
             name="codex",

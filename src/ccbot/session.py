@@ -671,19 +671,17 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
         send_kwargs: dict[str, str] = {}
         sess = self.find_session_by_window(window_id)
         if sess is not None and sess.backend == "codex" and len(text) >= 200:
-            pane = await tmux_manager.capture_pane(window_id)
-            if pane and parse_status_line(pane) is not None:
-                # Enter steers the running turn and long paste-burst input can
-                # disappear before Codex persists it. Tab is the TUI's
-                # explicit FIFO queue action, so preserve long follow-ups for
-                # the next turn instead of accepting a lossy steer.
-                send_kwargs["submit_key"] = "Tab"
-                logger.info(
-                    "send_to_window: explicitly queueing long Codex follow-up "
-                    "window=%s text_len=%d",
-                    window_id,
-                    len(text),
-                )
+            # Codex handles Tab before its paste-burst state: while idle it
+            # submits immediately, while busy it appends to the FIFO queue.
+            # Enter lost both idle and busy 342/425-character Telegram
+            # prompts, so use the paste-safe action for every long prompt.
+            send_kwargs["submit_key"] = "Tab"
+            logger.info(
+                "send_to_window: using paste-safe Codex submit "
+                "window=%s text_len=%d",
+                window_id,
+                len(text),
+            )
         success = await tmux_manager.send_keys(
             window.window_id, text, **send_kwargs
         )

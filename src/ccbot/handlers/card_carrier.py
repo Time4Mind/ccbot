@@ -189,6 +189,7 @@ def transfer_card_to_carrier(
     from_session_id: str | None,
     to_session_id: str,
     target_message_id: int,
+    persist: bool = True,
 ) -> int | None:
     """Hand off ownership of ``target_message_id`` from one session's
     live card to another's. Called when the switcher flips active.
@@ -251,7 +252,7 @@ def transfer_card_to_carrier(
         target_session,
         target_message_id,
     )
-    session_manager.set_card_msg(user_id, target_message_id)
+    session_manager.set_card_msg(user_id, target_message_id, persist)
     # Pause the TO card across the switch window. The caller (CB_SW_USE)
     # will paint history on this message_id next, and then call
     # ``release_card_message`` which clears both ``msg_id`` and
@@ -310,7 +311,9 @@ async def activate_card_on_carrier(
             from_session_id,
             to_session_id,
             target_message_id,
+            False,
         )
+        # One durable checkpoint contains both the new carrier and active route.
         session_manager.set_active_session(user_id, to_session_id)
         return orphan_msg_id
 

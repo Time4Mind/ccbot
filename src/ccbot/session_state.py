@@ -534,12 +534,14 @@ class SessionStateMixin:
     def get_card_msg(self, user_id: int) -> int | None:
         return self.card_msg_id.get(user_id)
 
-    def set_card_msg(self, user_id: int, message_id: int) -> None:
+    def set_card_msg(self, user_id: int, message_id: int, persist: bool = True) -> None:
         if self.card_msg_id.get(user_id) == message_id:
             return
         self.card_msg_id[user_id] = message_id
         # Persist eagerly so a restart can repaint the live card in place.
-        self.save_state()
+        # Atomic carrier hand-off persists this together with active_sessions.
+        if persist:
+            self.save_state()
 
     def clear_card_msg(self, user_id: int) -> None:
         if user_id in self.card_msg_id:

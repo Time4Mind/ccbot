@@ -73,10 +73,8 @@ async def enter_kb_mode(
     """
     state = get_card_state(user_id, sess)
     # Short-circuit ONLY when the kb-mode card is actually present in
-    # chat. After ``close_card_view`` (Shot tap) ``msg_id`` is None but
-    # ``in_kb_mode`` stays True — without the ``msg_id is not None``
-    # check, subsequent status_polling re-detections of the same UI
-    # would no-op and the kb-mode card would never be re-spawned.
+    # chat. A lost carrier can leave ``msg_id`` empty while ``in_kb_mode``
+    # stays True; subsequent polling must then re-spawn the card.
     if (
         state.in_kb_mode
         and state.kb_prompt == prompt_content

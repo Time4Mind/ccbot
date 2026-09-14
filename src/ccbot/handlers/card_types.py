@@ -100,7 +100,6 @@ class CarrierKind(str, Enum):
 
     TEXT = "text"
     RICH_MEDIA = "rich_media"
-    LEGACY_PHOTO = "legacy_photo"
 
 
 @dataclass
@@ -139,27 +138,27 @@ class CardState:
     # push. State machine:
     #   kb_prompt non-empty + in_kb_mode=True  → card msg = kb-mode view
     #   kb_prompt non-empty + in_kb_mode=False → user tapped Back; card
-    #     shows regular view but with [🔙 Resume action] on Shot slot
+    #     shows regular view but with [🔙 Resume action] in the controls
     #   kb_prompt empty                        → no pending action
     kb_prompt: str = ""  # current prompt content (snapshot from pane)
     kb_ui_name: str = ""  # AskUserQuestion / ExitPlanMode / Permission
     in_kb_mode: bool = False
     # Inline-screenshots mode (Task #48). On Bot API versions with rich
     # media support, the pane render is the final media block of the Rich
-    # Markdown card. ``is_photo_msg`` remains the compatibility fallback
-    # for older Bot API servers / rich-disabled deployments.
+    # Markdown card.
     is_rich_media_msg: bool = False
     rich_media_file_id: str = ""
+    # Up to three confirmed exact PNG digest -> Telegram file_id pairs.
+    rich_media_cache: list[tuple[str, str]] = field(default_factory=list)
     # Raw-text boundary recorded by ``_render_card`` immediately before the
     # service tail (context row + background-session panel). Rich-media
     # transport inserts the terminal image at this boundary.
     media_anchor_offset: int = 0
-    # Durable task lifecycle. Terminal media is allowed only while RUNNING;
+    # Durable task lifecycle. Terminal media may persist through IDLE;
     # final, clear, and buffered completion paths leave the card IDLE until a
     # new inbound turn or non-final event explicitly starts work again.
     turn_phase: TurnPhase = TurnPhase.RUNNING
-    is_photo_msg: bool = False
-    last_pane_hash: str = ""  # md5 of last captured pane text
+    last_pane_hash: str = ""  # SHA-256 of the exact last rendered PNG
     last_photo_edit_ts: float = 0.0  # monotonic seconds; 3s throttle
     # Cached context-window fill percentage for the active session, set by
     # session_events whenever a new assistant turn lands. Rendered as a

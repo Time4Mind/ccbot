@@ -499,6 +499,68 @@ def test_codex_0147_rollout_skips_injected_user_context() -> None:
     assert [(item.role, item.text) for item in parsed] == [("user", "Fix the card")]
 
 
+def test_codex_rollout_skips_subagent_notification_harness_message() -> None:
+    entries = [
+        {
+            **_line(
+                "response_item",
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                '<subagent_notification>\n{"status":"completed"}'
+                                "\n</subagent_notification>"
+                            ),
+                        }
+                    ],
+                },
+            ),
+            "ordinal": 1,
+        },
+        {
+            **_line(
+                "response_item",
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Real prompt"}],
+                },
+            ),
+            "ordinal": 2,
+        },
+    ]
+
+    parsed, pending = TranscriptParser.parse_entries(entries)
+
+    assert pending == {}
+    assert [(item.role, item.text) for item in parsed] == [("user", "Real prompt")]
+
+
+def test_shared_parser_boundary_skips_injected_user_text() -> None:
+    entries = [
+        {
+            "type": "user",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "<subagent_notification>hidden</subagent_notification>",
+                    }
+                ]
+            },
+        }
+    ]
+
+    parsed, pending = TranscriptParser.parse_entries(entries)
+
+    assert pending == {}
+    assert parsed == []
+
+
 def test_codex_0146_unnumbered_message_items_do_not_duplicate_events() -> None:
     entries = [
         _line(

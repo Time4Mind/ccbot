@@ -34,6 +34,17 @@ class RichCardSend:
     photo_file_id: str
 
 
+def remember_rich_photo(state: CardState, pane_hash: str, file_id: str) -> None:
+    """Keep the three newest confirmed exact-image Telegram identifiers."""
+    if not pane_hash or not file_id:
+        return
+    state.rich_media_cache = [
+        item for item in state.rich_media_cache if item[0] != pane_hash
+    ]
+    state.rich_media_cache.append((pane_hash, file_id))
+    del state.rich_media_cache[:-3]
+
+
 async def send_rich_media_card(
     bot: Any,
     user_id: int,
@@ -43,7 +54,7 @@ async def send_rich_media_card(
     *,
     reply_markup: InlineKeyboardMarkup | None,
 ) -> RichCardSend | None:
-    """Send a rich card containing ``pane_png``; None requests legacy fallback."""
+    """Send a rich card containing ``pane_png``; None requests text fallback."""
     if not config.rich_messages:
         return None
     try:
@@ -88,16 +99,29 @@ async def edit_rich_media_card(
     photo: bytes | str | None = state.rich_media_file_id or None
     pane_hash = state.last_pane_hash
     uploaded_new_pane = False
+    reused_cached_pane = False
     if window_id and (photo is None or refresh_pane and elapsed >= min_photo_interval):
-        png, captured_hash = await _capture_pane_png(window_id)
+        png, captured_hash = await _capture_pane_png(window_id, user_id=user_id)
         if (
             png is not None
             and captured_hash
             and (photo is None or captured_hash != state.last_pane_hash)
         ):
-            photo = png
             pane_hash = captured_hash
-            uploaded_new_pane = True
+            cached_file_id = next(
+                (
+                    file_id
+                    for digest, file_id in reversed(state.rich_media_cache)
+                    if digest == captured_hash
+                ),
+                "",
+            )
+            if cached_file_id:
+                photo = cached_file_id
+                reused_cached_pane = True
+            else:
+                photo = png
+                uploaded_new_pane = True
 
     if photo is None:
         logger.warning(
@@ -141,6 +165,16 @@ async def edit_rich_media_card(
             state.msg_id,
             CarrierKind.RICH_MEDIA,
             rich_media_file_id=new_file_id or "",
+            pane_hash=pane_hash,
+            photo_edit_ts=time.monotonic(),
+        )
+        remember_rich_photo(state, pane_hash, new_file_id or "")
+    elif reused_cached_pane:
+        bind_carrier(
+            state,
+            state.msg_id,
+            CarrierKind.RICH_MEDIA,
+            rich_media_file_id=str(photo),
             pane_hash=pane_hash,
             photo_edit_ts=time.monotonic(),
         )

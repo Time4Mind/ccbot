@@ -129,8 +129,12 @@ def render_settings_group_text(user_id: int, screen: Screen) -> str:
             body,
             _table(
                 (
-                    t(user_id, "settings.table.setting"),
-                    t(user_id, "settings.table.current"),
+                    t(user_id, "settings.table.button")
+                    if screen == "settings_cat_options"
+                    else t(user_id, "settings.table.setting"),
+                    t(user_id, "settings.table.show")
+                    if screen == "settings_cat_options"
+                    else t(user_id, "settings.table.current"),
                 ),
                 rows,
             ),

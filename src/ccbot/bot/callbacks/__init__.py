@@ -24,7 +24,6 @@ from . import (
     history_pagination,
     interactive_ui,
     more_menu,
-    screenshot_keys,
     settings as settings_callbacks,
     switcher,
     window_picker,
@@ -46,7 +45,6 @@ _HANDLERS = (
     settings_callbacks.handle,
     confirm.handle,
     interactive_ui.handle,
-    screenshot_keys.handle,
     help_callbacks.handle,
 )
 

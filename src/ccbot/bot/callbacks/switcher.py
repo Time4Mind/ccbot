@@ -154,7 +154,7 @@ async def handle(
 
         # The switcher tap always lands the user on the session's
         # history view, regardless of which view fired it (main card,
-        # /screenshot, etc.). The Menu button anchored to the bottom row
+        # history and other card views). The Menu button anchored to the bottom row
         # keeps the layout visually stable across the transition.
 
         # If this bg session has a stashed AskUserQuestion / ExitPlanMode /

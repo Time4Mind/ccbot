@@ -30,7 +30,21 @@ logger = logging.getLogger(__name__)
 __all__ = ["_capture_pane_png", "build_kb_mode_keyboard"]
 
 
-async def _capture_pane_png(window_id: str) -> tuple[bytes | None, str]:
+def _utf8_complete_suffix(text: str, limit_bytes: int) -> str:
+    raw = text.encode("utf-8", "replace")
+    if len(raw) <= limit_bytes:
+        return text
+    suffix = raw[-limit_bytes:].decode("utf-8", "ignore")
+    # The byte cut usually starts inside a terminal row. Prefer complete rows
+    # so the screenshot begins at a meaningful visual boundary.
+    if "\n" in suffix:
+        suffix = suffix.split("\n", 1)[1]
+    return suffix
+
+
+async def _capture_pane_png(
+    window_id: str, *, user_id: int | None = None
+) -> tuple[bytes | None, str]:
     """Render the tmux pane to PNG bytes and return its content hash.
 
     Returns (png_bytes, content_hash). On capture failure: (None, "").
@@ -40,6 +54,7 @@ async def _capture_pane_png(window_id: str) -> tuple[bytes | None, str]:
     import hashlib
 
     from ..screenshot import text_to_image
+    from ..session import session_manager
     from ..tmux_manager import tmux_manager
 
     if not window_id:
@@ -54,13 +69,36 @@ async def _capture_pane_png(window_id: str) -> tuple[bytes | None, str]:
         return None, ""
     if not text:
         return None, ""
-    pane_hash = hashlib.md5(text.encode("utf-8", "replace")).hexdigest()
+    settings = session_manager.get_user_settings(user_id) if user_id is not None else {}
+    capture_kib = int(settings.get("screenshot_capture_kib", 48))
+    if capture_kib not in (48, 64, 86):
+        capture_kib = 48
+    profile = str(settings.get("screenshot_profile", "full8"))
+    if profile not in ("full8", "compact8", "fullcolor"):
+        profile = "full8"
+
+    bounded = _utf8_complete_suffix(text, capture_kib * 1024)
+    max_rows, max_columns = {
+        48: (120, 180),
+        64: (160, 220),
+        86: (220, 280),
+    }[capture_kib]
+    rows = bounded.splitlines()[-max_rows:]
+    bounded = "\n".join(row[: max_columns * 4] for row in rows)
     try:
-        png = await text_to_image(text, with_ansi=True)
+        png = await text_to_image(bounded, with_ansi=True, profile=profile)
+        # A pathological full-color pane may still compress poorly. Remove
+        # oldest rows until it fits the agreed rich-photo byte ceiling.
+        while len(png) > 1024 * 1024 and len(rows) > 1:
+            rows = rows[max(1, len(rows) // 8) :]
+            bounded = "\n".join(rows)
+            png = await text_to_image(bounded, with_ansi=True, profile=profile)
+        if len(png) > 1024 * 1024:
+            return None, ""
     except Exception as e:
         logger.debug("capture_pane_png: render failed: %s", e)
         return None, ""
-    return png, pane_hash
+    return png, hashlib.sha256(png).hexdigest()
 
 
 def build_kb_mode_keyboard(
@@ -68,7 +106,7 @@ def build_kb_mode_keyboard(
 ) -> InlineKeyboardMarkup:
     """Build the kb-mode keyboard shown when the card msg is in kb-mode.
 
-    Layout (per current /screenshot kb-mode 3×3 grid):
+    Layout (matching the live prompt 3×3 grid):
         [␣ Space] [↑] [⇥ Tab]
         [←]       [↓] [→]
         [⎋ Esc]   [^C] [⏎ Enter]

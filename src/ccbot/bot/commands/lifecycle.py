@@ -33,7 +33,7 @@ from ...handlers.directory_browser import (
     build_directory_browser,
     clear_browse_state,
 )
-from ...handlers.menu import build_footer_keyboard, render_more_text
+from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_reply
 from ...i18n import t
 from ...session import Session, session_manager
@@ -109,14 +109,6 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             session_manager.set_session_claude_id(sess.id, ws.session_id)
         session_manager.set_active_session(user.id, sess.id)
         bind_startup_queue(user.id, created_wid)
-        if session_manager.get_user_settings(user.id).get("local_terminal") == "auto":
-            from ...local_terminal import open_terminal_for_window
-            import asyncio
-
-            asyncio.create_task(
-                open_terminal_for_window(created_wid, user_id=user.id),
-                name=f"local-terminal:{created_wid}",
-            )
         await safe_reply(
             update.message,
             f"✅ Session `{sess.name}` ({sess.id}) created at {target_path}",
@@ -263,11 +255,14 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     if not update.message:
         return
-    text = render_more_text(user.id)
+    from ..callbacks.more_menu import begin_menu_refresh, render_menu_text
+
+    text = render_menu_text(user.id, refreshing=True)
     keyboard = build_footer_keyboard(user.id, screen="more")
     sent = await safe_reply(update.message, text, reply_markup=keyboard)
     if sent and keyboard is not None:
         session_manager.set_last_switcher_msg(user.id, sent.message_id)
+        begin_menu_refresh(sent, user.id)
 
 
 # --- /archive ---

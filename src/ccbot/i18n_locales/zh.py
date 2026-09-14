@@ -97,6 +97,8 @@ ZH: dict[str, str] = {
     "settings.table.contents": "设置项",
     "settings.table.setting": "设置",
     "settings.table.current": "当前值",
+    "settings.table.button": "按钮",
+    "settings.table.show": "显示",
     "settings.table.hint": "_点击分区打开。_",
     "settings.body": (
         "*设置*\n\n"
@@ -244,10 +246,6 @@ ZH: dict[str, str] = {
         "归档会话仍可通过菜单 → 归档恢复。"
     ),
     "settings.value.hours": "{value}小时",
-    # Local terminal — 3-state (off / manual / auto).
-    "local.off": "关",
-    "local.manual": "按钮",
-    "local.auto": "总是",
     "settings.group.card_history": "卡片历史",
     "settings.cardhist.body": (
         "*卡片历史*\n\n"
@@ -264,20 +262,6 @@ ZH: dict[str, str] = {
         "拆分多页 — 不会在单词中间断开。允许 ±5 行偏差。\n\n"
         "更小 = 手机视图更紧凑。更大 = 单页更多上下文,\n"
         "但 edit 消息更重。"
-    ),
-    "settings.group.card_inline_screenshots": "卡片内嵌截图",
-    "settings.screens.body": (
-        "*卡片内嵌截图*\n\n"
-        "*开启* 时,pane 仅在 turn 为 *RUNNING* 时显示:正文 → 间距 →\n"
-        "pane → 间距 → context → 后台面板。进入 *IDLE*、收到最终回答\n"
-        "或执行 /clear 时移除;下一轮开始后再次出现。pane 更新约 3 秒\n"
-        "节流。\n\n"
-        "Rich Bot API 将文本和媒体保留在同一条消息中;旧版 API 使用\n"
-        "图片 + 说明文字。发送失败依次回退到 legacy 图片和纯文本;\n"
-        "临时 edit 失败在下次更新重试,carrier 丢失则重建且不立即重复。\n\n"
-        "未完成的活动 turn 长时间无响应时保留 pane,不发送警告 push;后台\n"
-        "会话只在后台面板中标记 ⚠️。\n\n"
-        "*关闭* 时，保持普通纯文本流程，Shot 可从顶部终端按钮打开。"
     ),
     "screens.on": "开",
     "screens.off": "关",
@@ -300,6 +284,7 @@ ZH: dict[str, str] = {
     "settings.cat.notifications": "🔔 通知",
     "settings.cat.voice": "🎙 语音",
     "settings.cat.terminal": "🖥 本地终端",
+    "settings.cat.options": "⋯ 选项按钮",
     "settings.cat.behavior": "⚙ 代理、行为和语言",
     "settings.cat.card.body": "*卡片 / 视图*\n\n实时会话卡片的布局、密度和刷新。",
     "settings.cat.notifications.body": (
@@ -307,6 +292,18 @@ ZH: dict[str, str] = {
     ),
     "settings.cat.voice.body": "*语音*\n\n语音消息的 STT 后端。",
     "settings.cat.terminal.body": "*本地终端*\n\n附加到每个新会话的本地终端窗口。",
+    "settings.cat.options.body": "*选项按钮*\n\n选择在选项下显示的操作。",
+    "settings.group.option_button_screenshot": "🧑‍💻 截图",
+    "settings.group.option_button_terminal": "🖥 终端",
+    "settings.option_button_screenshot.body": "*截图按钮*\n\n在选项中显示截图。",
+    "settings.option_button_terminal.body": "*终端按钮*\n\n可用时在选项中显示终端。",
+    "settings.group.screenshot_capture_kib": "截图捕获大小",
+    "settings.screenshot_capture.body": "*截图捕获大小*\n\n用于图像的最新终端文本上限。",
+    "settings.group.screenshot_profile": "截图质量",
+    "settings.screenshot_profile.body": "*截图质量*\n\n图像缩放和颜色配置。",
+    "screenshot.profile.full8": "100%，8色",
+    "screenshot.profile.compact8": "75%，8色",
+    "screenshot.profile.fullcolor": "100%，全色",
     "settings.group.archive_ai_description": "AI 描述",
     "settings.archive_ai_description.body": (
         "*AI 描述*\n\n开启后，轻量模型根据前两个用户请求生成简短的归档描述。"

@@ -206,7 +206,7 @@ plus an inline `≡ Menu` button on the most recent bot message:
 Claude Code's own pickers (`/model`, `/effort`, `/compact`, `/memory`)
 are forwarded into the active session and published alongside them.
 A few more commands work when typed but stay out of the `/`-menu:
-`/new`, `/kill`, `/stop`, `/archive`, `/screenshot`, `/usage`,
+`/new`, `/kill`, `/stop`, `/archive`, `/usage`,
 `/health`, `/login`.
 
 **`/login` — re-authenticating Claude from the phone.** When the OAuth
@@ -235,12 +235,14 @@ writes about a dead login won't trigger it. A fresh login moves the
 credential deadline out by ~30 days; that deadline is the only thing that
 matters, since refresh-token rotation keeps it fixed.
 
-The remaining actions live behind the menu — `Sessions`, `Archive`,
-`Status`, `New`, `Settings`. The 🧑‍💻 *Shot* (terminal screenshot)
-button lives in the main view's control row and in *Menu → Sessions* —
-next to *Kill* and *Clear* — so it's always reachable from the
-transcript surface itself. Most users never type slash commands at all
-once they discover the menu.
+The four remaining actions live behind the menu - `Sessions`, `Archive`,
+`New`, `Settings`. The current quota table is embedded above them. Every Menu
+tap paints cached limits immediately, marks their age with `⏳`, and refreshes
+them in the background. The active card has an *Options* button;
+when expanded it shows the configured actions above the session switcher.
+The screenshot action toggles terminal images globally, while Terminal opens
+only the current session. Terminal is hidden by default. Most users never type
+slash commands at all once they discover the menu.
 
 ### Sessions and switcher
 
@@ -276,16 +278,14 @@ takes that spot in *Menu → Sessions* / *Archive*).
 Switcher buttons read **oldest → newest**: each session keeps the same
 slot for its whole life and a newly created one appends to the right,
 so muscle memory survives switching. Restoring a session from the
-archive re-enters it as the newest button rather than in its original
-slot. The compact switcher under `/screenshot` uses the same order.
+archive re-enters it as the newest button rather than in its original slot.
 
 Tapping a non-active session **paints the full transcript history**
 of that session onto the carrier message and switches the active
 session in one go. Pagination buttons (◀ Older / Newer ▶) keep the
 footer keyboard under them — they're the navigation affordance, so
 there is no separate "History" entry in the Menu. Tapping the
-already-active button is a no-op. `Back` from `/screenshot` reposts
-the live card.
+already-active button is a no-op.
 
 Reply-quoting a bot message belonging to a non-active session routes
 that single reply there without changing the active session.
@@ -343,16 +343,18 @@ Card knobs live under *Settings → 🃏 Card / view*:
 | ------- | ------- | ------ |
 | `Card history` | `20` | end-of-turn boundaries seeded into a fresh card from the JSONL (survives bot restarts) |
 | `Page size` | `20` lines | max lines per card page; longer bodies chunk across pages on paragraph/sentence boundaries |
-| `Inline screenshots` | `off` | shows the live terminal pane inside the active card while a turn is running |
+| `Screenshot capture` | `48 KiB` | maximum newest terminal-text suffix used for the image |
+| `Screenshot quality` | `100%, 8 colors` | image scale and colour profile |
 | `Live lag` | `4s` | coalescing window for preview updates |
 
-The inline pane exists only in the **RUNNING** state. Its order is
-`body → gap → pane → gap → context → background panel`; it is removed on
-**IDLE**, final answer, and `/clear`, then appears again when the next turn
-starts. Rich-capable Bot API servers keep text and media in one Rich Markdown
-message. Older servers use photo + caption. A failed rich send falls back to
-legacy photo, then text-only; transient edits retry on the next update, and a
-lost carrier is recreated without posting an immediate duplicate.
+Screenshot and Terminal button visibility lives under *Settings → Options
+buttons*. Screenshot visibility defaults on, Terminal off. Expanding *Options*
+and tapping Screenshot toggles the global screenshot state without leaving the
+active card. The latest pane image persists through **IDLE**. Its order is
+`body → gap → pane → gap → context → background panel`. Rich-capable
+Bot API servers keep text and media in one Rich Markdown message. If rich media
+is unavailable, the same carrier falls back to text-only and retries on a later
+ordinary card update.
 If an unfinished turn goes silent, the active card keeps its pane instead of
 inserting a warning or sending a push. The same condition on a background
 session is shown only as `⚠️` beside that session in the background panel.
@@ -364,8 +366,8 @@ fade within Telegram's ~5s window.
 
 ### Other settings
 
-*≡ Menu → Settings* groups everything into five categories: 🃏 Card /
-view, 🔔 Notifications, 🎙 Voice, 🖥 Local terminal, ⚙ Behavior &
+*≡ Menu → Settings* includes 🃏 Card / view, 🔔 Notifications,
+🎙 Voice, 🖥 Local terminal, 🧩 Option buttons, and ⚙ Behavior &
 language. Worth knowing:
 
 - **Auto-approve** (`off` by default) — auto-answers the interactive
@@ -373,19 +375,18 @@ language. Worth knowing:
   (WebFetch domain trust and friends). When an auto-Yes doesn't clear
   the prompt, the bot escalates to the manual keyboard instead of
   looping.
-- **Local terminal** (`off` / `manual` / `auto`) — pops a native
-  Terminal.app / iTerm2 / Linux emulator window attached to the
-  session's tmux window, so you can drive the same session by hand.
-  `manual` only shows the 🖥 *Term* button; `auto` also spawns one per
-  new session. Killing the session closes the tab it opened.
+- **Local terminal** selects a Linux emulator where required. Button
+  visibility is configured separately under *Option buttons*; terminals are
+  never opened automatically for a new session.
 - **Weekly reset** — only needed for Claude, whose `/usage` reports a
   clock time but not a complete timestamp. Codex supplies its exact
   reset timestamp through app-server.
 - **Language** — `en` / `ru` / `zh` for the bot's own UI strings.
 
-### Quota and status
+### Quota in Menu
 
-*≡ Menu → 📊 Status* uses the selected backend's authoritative source:
+The quota table embedded in *≡ Menu* uses the selected backend's authoritative
+source. There is no separate Status or Refresh button:
 
 - Claude: its live `/usage` modal through the dedicated `ccbot-usage`
   tmux window;

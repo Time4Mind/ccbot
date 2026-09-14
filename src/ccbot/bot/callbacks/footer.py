@@ -17,6 +17,7 @@ from ...handlers.callback_data import (
     CB_FT_KILL,
     CB_FT_MORE,
     CB_FT_OPTIONS,
+    CB_FT_SCREENSHOT,
     CB_FT_STOP,
     CB_FT_TERM,
     CB_KB_BACK,
@@ -27,7 +28,6 @@ from ...handlers.callback_data import (
 )
 from ...handlers.menu import (
     build_footer_keyboard,
-    render_more_text,
     toggle_footer_options,
 )
 from ...handlers.notifications import (
@@ -133,15 +133,29 @@ async def handle(
         sess = session_manager.get_active_session(user.id)
         if sess is not None:
             pause_card_view(user.id, sess.id)
-        text = render_more_text(user.id)
+        from .more_menu import begin_menu_refresh, render_menu_text
+
+        text = render_menu_text(user.id, refreshing=True)
         keyboard = build_footer_keyboard(user.id, screen="more")
-        await set_view(query, context.bot, user.id, text, keyboard)
+        target = await set_view(query, context.bot, user.id, text, keyboard)
+        begin_menu_refresh(target or query, user.id)
         await query.answer()
         return True
 
     if data == CB_FT_OPTIONS:
         toggle_footer_options(user.id)
         await query.answer()
+        await refresh_panel(context.bot, user.id, immediate=True, refresh_keyboard=True)
+        return True
+
+    if data == CB_FT_SCREENSHOT:
+        settings = session_manager.get_user_settings(user.id)
+        enabled = not bool(settings.get("card_inline_screenshots", False))
+        session_manager.update_user_setting(user.id, "card_inline_screenshots", enabled)
+        await query.answer()
+        # Keep Options expanded and transform the existing carrier in place.
+        # Rich-media failures leave the text card intact and retry on the next
+        # ordinary update.
         await refresh_panel(context.bot, user.id, immediate=True, refresh_keyboard=True)
         return True
 

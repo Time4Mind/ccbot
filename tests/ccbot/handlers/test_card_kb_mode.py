@@ -3,12 +3,9 @@
 Bug: when the user has the live card on Menu / List / Settings /
 History (``state.in_menu_view=True``) and claude emits an interactive
 prompt (AskUserQuestion / ExitPlanMode / permission), the kb-mode
-keyboard never appeared until the user tapped Shot. Root cause:
+keyboard could remain hidden behind the menu. Root cause:
 ``enter_kb_mode`` → ``_edit_card`` short-circuits with ``return True``
 when ``state.in_menu_view`` is set, leaving the menu screen visible.
-Shot → ``close_card_view`` dropped ``msg_id=None`` so the next poll
-cycle went through ``_send_card`` instead, finally spawning the kb
-card.
 
 Fix: ``enter_kb_mode`` clears ``in_menu_view`` before painting so
 ``_edit_card`` actually edits; ``_should_buffer`` then keeps
@@ -101,10 +98,7 @@ async def test_enter_kb_mode_clears_menu_view(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_enter_kb_mode_spawns_when_no_carrier(monkeypatch):
-    """Sanity: when ``msg_id is None`` (e.g. after Shot's
-    ``close_card_view``), ``enter_kb_mode`` spawns via ``_send_card``.
-    This is the previously-only-working path that masked the bug.
-    """
+    """When ``msg_id is None``, ``enter_kb_mode`` spawns via ``_send_card``."""
     sess = _make_sess()
     bot = AsyncMock()
     sends: list[dict] = []
@@ -121,7 +115,7 @@ async def test_enter_kb_mode_spawns_when_no_carrier(monkeypatch):
 
     state = _cards.setdefault((42, sess.id), CardState())
     state.msg_id = None
-    state.in_menu_view = True  # close_card_view leaves this set
+    state.in_menu_view = True
 
     await enter_kb_mode(bot, 42, sess, "Choose option:", "AskUserQuestion")
 

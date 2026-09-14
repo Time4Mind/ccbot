@@ -535,13 +535,6 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
             _reconcile_resume_binding(), name=f"archive-bind:{created_wid}"
         )
 
-    if session_manager.get_user_settings(user_id).get("local_terminal") == "auto":
-        from ..local_terminal import open_terminal_for_window
-
-        asyncio.create_task(
-            open_terminal_for_window(created_wid, user_id=user_id),
-            name=f"local-terminal:{created_wid}",
-        )
     note = ""
     if resume_session_id:
         note = " — if it was a large session it may compact for a minute; your first message is held until it's ready."

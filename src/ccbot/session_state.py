@@ -334,7 +334,7 @@ class SessionStateMixin:
         # closest supported migration from the historical global 4h default.
         "session_idle_hours": DEFAULT_IDLE_ARCHIVE_HOURS,
         # Day-of-week the Anthropic weekly window resets on. Drives the %/d
-        # burn-rate computation in Menu → Status. Values: "mon".."sun".
+        # burn-rate computation in the Menu quota table. Values: "mon".."sun".
         "weekly_reset_day": "mon",
         # Auto-approve interactive Yes/No prompts that --dangerously-skip-
         # permissions doesn't already bypass (e.g. WebFetch per-domain
@@ -365,12 +365,16 @@ class SessionStateMixin:
         # (each turn ≈ several events × ~500 bytes). Deep history is
         # always accessible via /history regardless of this setting.
         "card_history": 20,
-        # Inline screenshots — the pane render is the last media block of
-        # the active Rich Markdown card instead of a separate Shot photo.
-        # Updates are throttled to one media edit per ~3 sec and skipped
-        # when the pane is unchanged. Older Bot API servers fall back to
-        # the legacy photo+caption transport.
+        # Global screenshot state. The Options action toggles it and the
+        # active Rich Markdown card transforms in place; text is the fallback.
         "card_inline_screenshots": False,
+        # Which actions are disclosed by the live-card Options button.
+        # Visibility is independent from the global screenshot state above.
+        "option_button_screenshot": True,
+        "option_button_terminal": False,
+        # Pane suffix budget and deterministic image profile.
+        "screenshot_capture_kib": 48,
+        "screenshot_profile": "full8",
         # Bg session push notifications (Task #42). Three independent
         # toggles — user asked to make each granular. Default all-on
         # so the user knows what bg sessions are doing.
@@ -404,6 +408,15 @@ class SessionStateMixin:
         # user picks something on the settings screen.
         if merged.get("local_terminal") == "on":
             merged["local_terminal"] = "auto"
+        # Before option visibility had its own key, manual/auto meant that
+        # the user expected a Terminal action. Preserve that expectation but
+        # never revive the removed automatic-launch behavior.
+        if "option_button_terminal" not in stored:
+            merged["option_button_terminal"] = stored.get("local_terminal") in (
+                "on",
+                "manual",
+                "auto",
+            )
         return merged
 
     def update_user_setting(self, user_id: int, key: str, value: Any) -> None:

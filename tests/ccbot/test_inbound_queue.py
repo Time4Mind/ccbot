@@ -205,6 +205,13 @@ def test_application_registers_fast_blocking_intake_handlers() -> None:
 
     assert handlers["voice_intake_handler"]
     assert handlers["text_intake_handler"]
+    commands = {
+        command
+        for group in app.handlers.values()
+        for handler in group
+        for command in getattr(handler, "commands", ())
+    }
+    assert "screenshot" not in commands
 
 
 @pytest.mark.asyncio

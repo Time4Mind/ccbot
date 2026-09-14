@@ -27,7 +27,6 @@ from .commands.info import (
     health_command,
     help_command,
     history_command,
-    screenshot_command,
     usage_command,
 )
 from .commands.lifecycle import (
@@ -88,7 +87,6 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
 
     # Visible menu commands.
     application.add_handler(CommandHandler("history", history_command))
-    application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler("new", new_command))

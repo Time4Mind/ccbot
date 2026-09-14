@@ -436,7 +436,9 @@ class TestPostLoginSurface:
         monkeypatch.setattr(
             auth_cmd.session_manager, "get_active_session", lambda uid: None
         )
-        monkeypatch.setattr(auth_cmd, "render_more_text", lambda uid: "MENU-TEXT")
+        from ccbot.bot.callbacks import more_menu
+
+        monkeypatch.setattr(more_menu, "render_menu_text", lambda uid: "MENU-TEXT")
         monkeypatch.setattr(auth_cmd, "build_footer_keyboard", lambda uid, screen: None)
         flow = await claude_auth.start_flow(71, command=command)
         assert flow is not None

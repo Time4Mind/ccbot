@@ -115,7 +115,7 @@ def is_media_message(msg: Any) -> bool:
 
     Photo / document / video / animation messages can't be edited via
     edit_message_text — we have to delete+resend to switch back to a text
-    view. Common path when user came from /screenshot.
+    view. Common path when the active card carrier must be restored.
     """
     if msg is None:
         return False
@@ -133,7 +133,7 @@ async def set_view(
     user_id: int,
     text: str,
     reply_markup: Any | None,
-) -> None:
+) -> Any:
     """Edit the carrier message to (text, reply_markup) — or, if the carrier
     is a photo/document, delete it and send a fresh text message instead.
 
@@ -148,7 +148,7 @@ async def set_view(
         sent = await safe_send(bot, user_id, text, reply_markup=reply_markup)
         if sent and reply_markup is not None:
             session_manager.set_last_switcher_msg(user_id, sent.message_id)
-        return
+        return sent
     # safe_edit routes through ``_do_edit`` which calls Bot.edit_message_text
     # directly — bypassing the CallbackQuery shortcut chain that forwards
     # ``business_connection_id`` and would otherwise let Telegram Business-
@@ -157,13 +157,14 @@ async def set_view(
     await safe_edit(query, text, reply_markup=reply_markup)
     if query.message and reply_markup is not None:
         session_manager.set_last_switcher_msg(user_id, query.message.message_id)
+    return query
 
 
 async def open_more_in_place(query: Any, user_id: int) -> None:
     """Edit the current message into the Menu screen."""
-    from ..handlers.menu import render_more_text
+    from .callbacks.more_menu import render_menu_text
 
-    text = render_more_text(user_id)
+    text = render_menu_text(user_id)
     keyboard = build_footer_keyboard(user_id, screen="more")
     await safe_edit(query, text, reply_markup=keyboard)
     if query.message and keyboard is not None:

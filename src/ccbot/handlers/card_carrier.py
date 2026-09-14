@@ -37,7 +37,6 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "cancel_pending_card_edits",
-    "close_card_view",
     "set_card_context_pct",
     "mark_card_paused",
     "pause_card_view",
@@ -80,58 +79,6 @@ async def cancel_pending_card_edits(timeout: float = 2.0) -> None:
             timeout,
             sum(1 for t in tasks if not t.done()),
         )
-
-
-async def close_card_view(bot: Bot, user_id: int, session_id: str) -> None:
-    """Release the live card slot so the next event creates a fresh
-    message instead of editing the old carrier.
-
-    Used by the Shot button (Task #51): the screenshot photo replaces
-    the live card visually, and when the user comes back from the
-    screenshot we want a NEW card message to appear (replacement of
-    one message by another), not an in-place edit of a now-stale
-    carrier far up the chat.
-
-    Steps:
-      - Cancel any pending edit on the old carrier.
-      - **Delete** the old carrier message so the chat reads as a
-        clean replacement (per #52 follow-up — stripping the keyboard
-        was confusing, the orphaned message read like a frozen card).
-      - Drop ``msg_id`` so the next claude event / Shot Back spawns a
-        fresh card.
-      - Leave ``in_menu_view=True`` so events buffer until the user
-        actually navigates back (the Shot Back handler clears it).
-    """
-    state = _cards.get((user_id, session_id))
-    if state is None:
-        return
-    if state.pending_edit is not None and not state.pending_edit.done():
-        state.pending_edit.cancel()
-    state.pending_edit = None
-    old_msg_id = clear_carrier(state)
-    state.last_rendered = ""
-    state.in_menu_view = True
-    if old_msg_id is not None:
-        try:
-            await bot.delete_message(chat_id=user_id, message_id=old_msg_id)
-        except Exception as e:
-            logger.debug(
-                "close_card_view: delete old msg failed msg_id=%s: %s",
-                old_msg_id,
-                e,
-            )
-    logger.info(
-        "card_close user=%d sess=%s old_msg_id=%s",
-        user_id,
-        session_id,
-        old_msg_id,
-        extra={
-            "event": "card_close",
-            "user_id": user_id,
-            "session_id": session_id,
-            "old_msg_id": old_msg_id,
-        },
-    )
 
 
 def set_card_context_pct(user_id: int, session_id: str, pct: int) -> None:
@@ -472,9 +419,8 @@ async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
             state.pending_edit = None
             if state.msg_id is None:
                 # No carrier — spawn a fresh card now so the user lands on a
-                # visible surface immediately (used by Shot → Back after #51's
-                # ``close_card_view`` drops msg_id). Previously we waited for
-                # the next claude event; on quiet sessions that left the user
+                # visible surface immediately. Previously we waited for the
+                # next agent event; on quiet sessions that left the user
                 # staring at empty chat.
                 await _spawn_fresh()
                 return

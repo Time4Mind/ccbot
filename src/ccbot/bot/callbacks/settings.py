@@ -17,9 +17,11 @@ from ...handlers.callback_data import (
     CB_ST_BACK,
     CB_ST_BGNOTIFY,
     CB_ST_CAT,
+    CB_ST_CAPTURE,
     CB_ST_CHIST,
+    CB_ST_OPTION,
     CB_ST_PAGESIZE,
-    CB_ST_SCREENS,
+    CB_ST_PROFILE,
     CB_ST_GRP,
     CB_ST_HAIKU,
     CB_ST_IDLE,
@@ -36,7 +38,6 @@ from ...handlers.callback_data import (
 from ...handlers.menu import (
     Screen,
     build_footer_keyboard,
-    render_more_text,
     render_settings_group_text,
     render_settings_text,
 )
@@ -206,7 +207,10 @@ _GROUP_TO_SCREEN: dict[str, Screen] = {
     "local_terminal": "settings_local",
     "card_history": "settings_cardhist",
     "card_page_lines": "settings_pagesize",
-    "card_inline_screenshots": "settings_screens",
+    "screenshot_capture_kib": "settings_capture",
+    "screenshot_profile": "settings_profile",
+    "option_button_screenshot": "settings_option_screenshot",
+    "option_button_terminal": "settings_option_terminal",
     "archive_ai_description": "settings_archive_ai_description",
 }
 
@@ -217,7 +221,9 @@ async def handle(
     data = query.data or ""
 
     if data == CB_ST_BACK:
-        text = render_more_text(user.id)
+        from .more_menu import render_menu_text
+
+        text = render_menu_text(user.id)
         keyboard = build_footer_keyboard(user.id, screen="more")
         await safe_edit(query, text, reply_markup=keyboard)
         if query.message and keyboard is not None:
@@ -290,8 +296,10 @@ async def handle(
         CB_ST_LOCAL,
         CB_ST_LTERM,
         CB_ST_CHIST,
+        CB_ST_CAPTURE,
+        CB_ST_OPTION,
         CB_ST_PAGESIZE,
-        CB_ST_SCREENS,
+        CB_ST_PROFILE,
         CB_ST_BGNOTIFY,
         CB_ST_HAIKU,
         CB_ST_ARCHIVE_AI,
@@ -356,9 +364,8 @@ async def handle(
             session_manager.update_user_setting(user.id, "session_idle_hours", value)
         screen_name = "settings_idle_archive"
     elif data.startswith(CB_ST_LOCAL):
-        value = data[len(CB_ST_LOCAL) :]
-        if value in ("off", "manual", "auto"):
-            session_manager.update_user_setting(user.id, "local_terminal", value)
+        # Retired callback: consume stale Telegram keyboards without reviving
+        # the removed off/manual/auto terminal mode.
         screen_name = "settings_local"
     elif data.startswith(CB_ST_LTERM):
         from ...local_terminal import LINUX_TEMPLATES
@@ -385,21 +392,39 @@ async def handle(
         if v in (10, 20, 40, 70):
             session_manager.update_user_setting(user.id, "card_page_lines", v)
         screen_name = "settings_pagesize"
-    elif data.startswith(CB_ST_SCREENS):
-        sval = data[len(CB_ST_SCREENS) :]
-        if sval in ("on", "off"):
-            new_val = sval == "on"
+    elif data.startswith(CB_ST_CAPTURE):
+        try:
+            value = int(data[len(CB_ST_CAPTURE) :])
+        except ValueError:
+            value = 48
+        if value in (48, 64, 86):
             session_manager.update_user_setting(
-                user.id, "card_inline_screenshots", new_val
+                user.id, "screenshot_capture_kib", value
             )
-            # Soft reset: the next event creates a fresh carrier with the
-            # requested rich-media layout. Old artefacts stay frozen.
-            from ...handlers.notifications import (
-                reset_card_msg_id_for_user,
-            )
-
-            reset_card_msg_id_for_user(user.id)
-        screen_name = "settings_screens"
+        screen_name = "settings_capture"
+    elif data.startswith(CB_ST_PROFILE):
+        value = data[len(CB_ST_PROFILE) :]
+        if value in ("full8", "compact8", "fullcolor"):
+            session_manager.update_user_setting(user.id, "screenshot_profile", value)
+        screen_name = "settings_profile"
+    elif data.startswith(CB_ST_OPTION):
+        payload = data[len(CB_ST_OPTION) :]
+        try:
+            option, sval = payload.split(":", 1)
+        except ValueError:
+            option, sval = "", ""
+        key = {
+            "screenshot": "option_button_screenshot",
+            "terminal": "option_button_terminal",
+        }.get(option)
+        if key is not None and sval in ("on", "off"):
+            session_manager.update_user_setting(user.id, key, sval == "on")
+        screen_name = cast(
+            Screen,
+            "settings_option_screenshot"
+            if option == "screenshot"
+            else "settings_option_terminal",
+        )
     elif data.startswith(CB_ST_BGNOTIFY):
         payload = data[len(CB_ST_BGNOTIFY) :]
         try:

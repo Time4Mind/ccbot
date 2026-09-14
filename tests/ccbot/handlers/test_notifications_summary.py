@@ -1,6 +1,8 @@
 """Tests for notifications._strip_for_card."""
 
 import os
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -47,3 +49,36 @@ class TestStripForCard:
         out = _strip_for_card(src)
         assert "EXPQUOTE" not in out
         assert "~/proj" in out
+
+
+@pytest.mark.asyncio
+async def test_background_push_has_exact_session_navigation_button(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ccbot.handlers import card_updates
+    from ccbot.handlers.callback_data import CB_SW_USE
+
+    sent = SimpleNamespace(message_id=321)
+    safe_send = AsyncMock(return_value=sent)
+    registered: list[tuple[int, int, str]] = []
+    monkeypatch.setattr(
+        card_updates,
+        "_legacy",
+        lambda name: safe_send if name == "safe_send" else None,
+    )
+    monkeypatch.setattr(
+        card_updates,
+        "_register_msg",
+        lambda user_id, message_id, session_id: registered.append(
+            (user_id, message_id, session_id)
+        ),
+    )
+    session = SimpleNamespace(id="abc123", name="Target")
+
+    await card_updates.push_event(SimpleNamespace(), 42, session, text="task complete")
+
+    markup = safe_send.await_args.kwargs["reply_markup"]
+    button = markup.inline_keyboard[0][0]
+    assert button.callback_data == f"{CB_SW_USE}{session.id}"
+    assert "Target" in button.text
+    assert registered == [(42, 321, "abc123")]

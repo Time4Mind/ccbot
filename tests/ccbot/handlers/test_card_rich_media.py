@@ -83,7 +83,7 @@ async def test_interactive_text_edit_reuses_cached_photo_without_capture(
 ) -> None:
     _wire_session(monkeypatch)
     edit = AsyncMock(return_value=None)
-    capture = AsyncMock()
+    capture = AsyncMock(return_value=(b"png", "pane-hash"))
     monkeypatch.setattr(card_rich_media.rich, "edit_rich_message", edit)
     monkeypatch.setattr(card_rich_media, "_capture_pane_png", capture)
     monkeypatch.setattr(card_rich_media.time, "monotonic", lambda: 10.0)
@@ -154,6 +154,42 @@ async def test_changed_pane_uploads_and_atomically_replaces_file_id(
 
 
 @pytest.mark.asyncio
+async def test_previous_exact_png_reuses_bounded_session_file_id_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire_session(monkeypatch)
+    edit = AsyncMock(return_value=None)
+    monkeypatch.setattr(card_rich_media.rich, "edit_rich_message", edit)
+    monkeypatch.setattr(
+        card_rich_media,
+        "_capture_pane_png",
+        AsyncMock(return_value=(b"same-png", "hash-b")),
+    )
+    monkeypatch.setattr(card_rich_media.time, "monotonic", lambda: 10.0)
+    state = CardState(
+        msg_id=9,
+        is_rich_media_msg=True,
+        rich_media_file_id="current-pane",
+        last_pane_hash="hash-a",
+        last_photo_edit_ts=1.0,
+        rich_media_cache=[("hash-b", "cached-pane-b")],
+    )
+
+    assert await card_rich_media.edit_rich_media_card(
+        SimpleNamespace(),
+        42,
+        state,
+        text="back to prior pane",
+        reply_markup=None,
+        min_photo_interval=2.5,
+    )
+
+    assert edit.await_args.kwargs["photo"] == "cached-pane-b"
+    assert state.rich_media_file_id == "cached-pane-b"
+    assert state.last_pane_hash == "hash-b"
+
+
+@pytest.mark.asyncio
 async def test_lost_rich_carrier_is_released(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -183,13 +219,14 @@ async def test_lost_rich_carrier_is_released(
 
 
 @pytest.mark.asyncio
-async def test_final_edit_removes_rich_pane_media(
+async def test_final_edit_keeps_latest_rich_pane_media(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rich_edit = AsyncMock(return_value=True)
-    media_edit = AsyncMock()
+    media_edit = AsyncMock(return_value=True)
     monkeypatch.setattr(message_sender, "try_rich_edit", rich_edit)
     monkeypatch.setattr(card_transport, "edit_rich_media_card", media_edit)
+    monkeypatch.setattr(card_transport, "_inline_screens_enabled", lambda _uid: True)
     state = CardState(
         msg_id=9,
         is_rich_media_msg=True,
@@ -207,23 +244,82 @@ async def test_final_edit_removes_rich_pane_media(
         reply_markup=SimpleNamespace(),
     )
 
-    rich_edit.assert_awaited_once()
-    media_edit.assert_not_awaited()
-    assert state.is_rich_media_msg is False
-    assert state.rich_media_file_id == ""
-    assert state.last_pane_hash == ""
-    assert state.last_photo_edit_ts == 0.0
+    rich_edit.assert_not_awaited()
+    media_edit.assert_awaited_once()
+    assert state.is_rich_media_msg is True
+    assert state.rich_media_file_id == "pane-file"
+    assert state.last_pane_hash == "pane-hash"
 
 
 @pytest.mark.asyncio
-async def test_final_send_never_captures_or_attaches_pane(
+async def test_disabling_screenshot_removes_media_from_same_carrier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    capture = AsyncMock()
-    send_text = AsyncMock(return_value=SimpleNamespace(message_id=17))
+    rich_edit = AsyncMock(return_value=True)
+    monkeypatch.setattr(message_sender, "try_rich_edit", rich_edit)
+    monkeypatch.setattr(card_transport, "_inline_screens_enabled", lambda _uid: False)
+    state = CardState(
+        msg_id=9,
+        is_rich_media_msg=True,
+        rich_media_file_id="pane-file",
+        last_pane_hash="pane-hash",
+        last_photo_edit_ts=10.0,
+        turn_phase=TurnPhase.IDLE,
+    )
+
+    assert await card_transport._edit_card_unlocked(
+        SimpleNamespace(),
+        42,
+        state,
+        text="final answer",
+        reply_markup=SimpleNamespace(),
+    )
+
+    rich_edit.assert_awaited_once()
+    assert state.msg_id == 9
+    assert state.is_rich_media_msg is False
+    assert state.rich_media_file_id == ""
+
+
+@pytest.mark.asyncio
+async def test_rich_media_failure_degrades_same_carrier_to_text_and_can_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    media_edit = AsyncMock(return_value=False)
+    text_edit = AsyncMock(return_value=True)
+    monkeypatch.setattr(card_transport, "edit_rich_media_card", media_edit)
+    monkeypatch.setattr(message_sender, "try_rich_edit", text_edit)
+    monkeypatch.setattr(card_transport, "_inline_screens_enabled", lambda _uid: True)
+    state = CardState(
+        msg_id=9,
+        is_rich_media_msg=True,
+        rich_media_file_id="pane-file",
+    )
+
+    assert await card_transport._edit_card_unlocked(
+        SimpleNamespace(), 42, state, text="new text", reply_markup=SimpleNamespace()
+    )
+
+    assert state.msg_id == 9
+    assert state.is_rich_media_msg is False
+    text_edit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_final_send_keeps_latest_pane_when_screenshots_are_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capture = AsyncMock(return_value=(b"png", "pane-hash"))
+    send_text = AsyncMock(return_value=SimpleNamespace(message_id=18))
+    send_rich = AsyncMock(
+        return_value=card_rich_media.RichCardSend(
+            message=SimpleNamespace(message_id=17), photo_file_id="pane-file"
+        )
+    )
     monkeypatch.setattr(card_transport, "_inline_screens_enabled", lambda _uid: True)
     monkeypatch.setattr(card_transport, "_capture_pane_png", capture)
     monkeypatch.setattr(message_sender, "send_with_fallback", send_text)
+    monkeypatch.setattr(card_transport, "send_rich_media_card", send_rich)
     monkeypatch.setattr(card_transport, "_strip_stale_switchers", AsyncMock())
     monkeypatch.setattr(card_transport, "_register_msg", lambda *_args: None)
     monkeypatch.setattr(
@@ -244,8 +340,8 @@ async def test_final_send_never_captures_or_attaches_pane(
         reply_markup=SimpleNamespace(),
     )
 
-    capture.assert_not_awaited()
-    send_text.assert_awaited_once()
+    capture.assert_awaited_once()
+    send_rich.assert_awaited_once()
+    send_text.assert_not_awaited()
     assert state.msg_id == 17
-    assert state.is_rich_media_msg is False
-    assert state.is_photo_msg is False
+    assert state.is_rich_media_msg is True

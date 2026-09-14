@@ -7,9 +7,8 @@ Constants:
   - CB_HISTORY_*: History pagination
   - CB_DIR_*: Directory browser navigation
   - CB_WIN_*: Window picker (bind existing unbound window)
-  - CB_SCREENSHOT_*: Screenshot refresh
+  - CB_FT_SCREENSHOT: toggle inline screenshots from the expanded Options row
   - CB_ASK_*: Interactive UI navigation (arrows, enter, esc)
-  - CB_KEYS_PREFIX: Screenshot control keys (kb:<key_id>:<window>)
 """
 
 # History pagination
@@ -33,13 +32,6 @@ CB_WIN_BIND = "wb:sel:"  # wb:sel:<index>
 CB_WIN_NEW = "wb:new"  # proceed to directory browser
 CB_WIN_CANCEL = "wb:cancel"
 
-# Screenshot
-CB_SCREENSHOT_REFRESH = "ss:ref:"
-
-# Compact screenshot view (opened via the Shot button on the live card)
-CB_SHOT_SW = "sh:sw:"  # sh:sw:<sid>  switch active session + redraw screenshot
-CB_SHOT_BACK = "sh:b:"  # sh:b:<m|l>   return to main / list view
-CB_SHOT_KEYS = "shk:"  # shk:<key_id>:<origin>:<window_id>  send key in kb-mode
 
 # Interactive UI (aq: prefix kept for backward compatibility)
 CB_ASK_UP = "aq:up:"  # aq:up:<window>
@@ -59,8 +51,6 @@ CB_SESSION_CANCEL = "rs:cancel"  # cancel — drop the new flow entirely
 CB_SESSION_BACK = "rs:back"  # back to directory browser at last selected path
 CB_SESSION_PAGE = "rs:p:"  # rs:p:<page>  pagination
 
-# Screenshot control keys
-CB_KEYS_PREFIX = "kb:"  # kb:<key_id>:<window>
 
 # A8 switcher
 CB_SW_USE = "sw:"  # sw:<session.id>     — switch active session
@@ -73,6 +63,7 @@ CB_FT_KILL = "ft:kill"  # confirm-archive active session (idle state)
 CB_FT_CLEAR = "ft:clear"  # forward /clear to active session
 CB_FT_MORE = "ft:more"  # open the Menu screen (pauses live-card updates)
 CB_FT_OPTIONS = "ft:options"  # toggle per-session actions under the control row
+CB_FT_SCREENSHOT = "ft:shot"  # toggle global inline screenshots on this carrier
 CB_FT_TERM = "ft:term"  # open a native desktop terminal for the active session
 CB_KB_BACK = "kb:back"  # exit kb-mode view → regular card; Resume button stays
 CB_KB_RESUME = "kb:resume"  # re-enter kb-mode (when pending still active)
@@ -90,7 +81,6 @@ CB_PG_JUMP = "pg:jump"  # N/M — jump to default-focus page
 # More menu
 CB_MM_LIST = "mm:list"
 CB_MM_STATUS = "mm:status"
-CB_MM_SHOT = "mm:shot"
 CB_MM_NEW = "mm:new"
 CB_MM_ARCHIVE = "mm:arch"
 CB_MM_SETTINGS = "mm:set"
@@ -108,7 +98,9 @@ CB_ST_LTERM = "st:lterm:"  # st:lterm:<emulator-name>  pick Linux template
 CB_ST_LCLAUDE = "st:lcl:claude"  # send Linux Claude-fallback prompt to chat
 CB_ST_CHIST = "st:chist:"  # st:chist:<10|20|50|100>  end_turn boundaries to seed
 CB_ST_PAGESIZE = "st:psz:"  # st:psz:<15|30|50|100>  max page size in lines
-CB_ST_SCREENS = "st:scr:"  # st:scr:<on|off>  inline screenshots toggle
+CB_ST_OPTION = "st:opt:"  # st:opt:<screenshot|terminal>:<on|off>
+CB_ST_CAPTURE = "st:cap:"  # st:cap:<48|64|86> screenshot capture KiB
+CB_ST_PROFILE = "st:prof:"  # st:prof:<full8|compact8|fullcolor>
 CB_ST_CAT = "st:cat:"  # st:cat:<screen_name>  open settings category sub-screen
 CB_ST_BGNOTIFY = "st:bgn:"  # st:bgn:<key>:<on|off>  bg-notification toggles
 CB_ST_HAIKU = "st:hk:"  # st:hk:<on|off>  Haiku auto-rename of new sessions

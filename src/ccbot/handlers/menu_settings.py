@@ -25,10 +25,11 @@ from .callback_data import (
     CB_ST_LANG,
     CB_ST_LAG,
     CB_ST_LCLAUDE,
-    CB_ST_LOCAL,
     CB_ST_LTERM,
     CB_ST_PAGESIZE,
-    CB_ST_SCREENS,
+    CB_ST_CAPTURE,
+    CB_ST_OPTION,
+    CB_ST_PROFILE,
     CB_ST_VOICE,
     CB_ST_WDAY,
 )
@@ -49,7 +50,9 @@ __all__ = [
     "_settings_idle_archive_grid",
     "_settings_local_grid",
     "_settings_cardhist_grid",
-    "_settings_screens_grid",
+    "_settings_option_grid",
+    "_settings_capture_grid",
+    "_settings_profile_grid",
     "_settings_haiku_grid",
     "_settings_archive_ai_grid",
     "_settings_bg_notify_grid",
@@ -94,8 +97,12 @@ def _format_setting_value(user_id: int, value_key: str, cur: object) -> str:
         return f"{int(cur)} turns" if cur else "?"  # type: ignore[arg-type]
     if value_key == "card_page_lines":
         return f"{int(cur)} lines" if cur else "?"  # type: ignore[arg-type]
-    if value_key == "card_inline_screenshots":
+    if value_key in ("option_button_screenshot", "option_button_terminal"):
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
+    if value_key == "screenshot_capture_kib":
+        return f"{cur} KiB"
+    if value_key == "screenshot_profile":
+        return t(user_id, f"screenshot.profile.{cur}")
     if value_key in ("bg_notify_finished", "bg_notify_error", "bg_notify_needs_action"):
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
     if value_key in ("haiku_naming", "archive_ai_description"):
@@ -287,23 +294,12 @@ def _settings_local_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     from ..local_terminal import LINUX_TEMPLATES, detect_linux_emulators
 
     settings = session_manager.get_user_settings(user_id)
-    cur = settings.get("local_terminal", "off")
     cur_cmd = settings.get("local_terminal_cmd", "")
 
     rows: list[list[InlineKeyboardButton]] = []
-    rows.append(
-        [
-            InlineKeyboardButton(
-                _highlight(t(user_id, f"local.{v}"), cur == v),
-                callback_data=f"{CB_ST_LOCAL}{v}",
-            )
-            for v in ("off", "manual", "auto")
-        ]
-    )
-
-    # Linux + a terminal-enabled mode: surface the emulator picker.
-    # Empty list → fall back to the claude-typed snippet flow.
-    if cur in ("manual", "auto") and platform.system() == "Linux":
+    # Visibility is configured in Option buttons. This screen only selects
+    # the Linux emulator/template where the platform needs one.
+    if platform.system() == "Linux":
         detected = detect_linux_emulators()
         if detected:
             for i in range(0, len(detected), 2):
@@ -365,30 +361,70 @@ def _settings_cardhist_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     ]
 
 
-def _settings_screens_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
-    """Inline-screenshots on/off toggle. Settings body explains the
-    The screenshot is the final media block of the Rich Markdown card.
-    """
-    cur = bool(
-        session_manager.get_user_settings(user_id).get("card_inline_screenshots", False)
-    )
+def _settings_option_grid(user_id: int, key: str) -> list[list[InlineKeyboardButton]]:
+    cur = bool(session_manager.get_user_settings(user_id).get(key, False))
+    suffix = "screenshot" if key == "option_button_screenshot" else "terminal"
     return [
         [
             InlineKeyboardButton(
                 _highlight(t(user_id, "screens.on"), cur),
-                callback_data=f"{CB_ST_SCREENS}on",
+                callback_data=f"{CB_ST_OPTION}{suffix}:on",
             ),
             InlineKeyboardButton(
                 _highlight(t(user_id, "screens.off"), not cur),
-                callback_data=f"{CB_ST_SCREENS}off",
+                callback_data=f"{CB_ST_OPTION}{suffix}:off",
             ),
         ],
         [
             InlineKeyboardButton(
                 t(user_id, "btn.back"),
-                callback_data=_parent_cat_cb("card_inline_screenshots"),
+                callback_data=_parent_cat_cb(key),
             )
         ],
+    ]
+
+
+def _settings_capture_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
+    cur = int(
+        session_manager.get_user_settings(user_id).get("screenshot_capture_kib", 48)
+    )
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(f"{value} KiB", cur == value),
+                callback_data=f"{CB_ST_CAPTURE}{value}",
+            )
+            for value in (48, 64, 86)
+        ],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("screenshot_capture_kib"),
+            )
+        ],
+    ]
+
+
+def _settings_profile_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
+    cur = str(
+        session_manager.get_user_settings(user_id).get("screenshot_profile", "full8")
+    )
+    values = ("full8", "compact8", "fullcolor")
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(t(user_id, f"screenshot.profile.{value}"), cur == value),
+                callback_data=f"{CB_ST_PROFILE}{value}",
+            )
+        ]
+        for value in values
+    ] + [
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("screenshot_profile"),
+            )
+        ]
     ]
 
 

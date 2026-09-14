@@ -257,7 +257,11 @@ def _split_line_segments_plain(line: str) -> list[tuple[str, int]]:
 
 
 async def text_to_image(
-    text: str, font_size: int = 28, with_ansi: bool = True
+    text: str,
+    font_size: int = 28,
+    with_ansi: bool = True,
+    *,
+    profile: str = "fullcolor",
 ) -> bytes:
     """Render monospace text onto a dark-background image and return PNG bytes.
 
@@ -265,6 +269,8 @@ async def text_to_image(
         text: The text to render (may contain ANSI color codes)
         font_size: Font size in pixels
         with_ansi: If True, parse and render ANSI color codes
+        profile: ``full8`` (100%, eight colors), ``compact8`` (75%,
+            eight colors), or ``fullcolor`` (100%, full palette)
 
     Returns:
         PNG image bytes
@@ -327,6 +333,31 @@ async def text_to_image(
                 bbox = draw.textbbox((0, 0), seg.text, font=f)
                 x += bbox[2] - bbox[0]
             y += line_height
+
+        if profile == "compact8":
+            img = img.resize(
+                (max(1, round(img.width * 0.75)), max(1, round(img.height * 0.75))),
+                Image.Resampling.LANCZOS,
+            )
+        if profile in ("full8", "compact8"):
+            img = img.quantize(
+                colors=8,
+                method=Image.Quantize.FASTOCTREE,
+                dither=Image.Dither.NONE,
+            ).convert("RGB")
+        elif profile != "fullcolor":
+            raise ValueError(f"Unknown screenshot profile: {profile}")
+
+        # Telegram photo limits are stricter than generic PNG. Keep generous
+        # headroom for both the individual edge and width+height constraints.
+        scale = min(
+            1.0, 4096 / img.width, 4096 / img.height, 8000 / (img.width + img.height)
+        )
+        if scale < 1.0:
+            img = img.resize(
+                (max(1, int(img.width * scale)), max(1, int(img.height * scale))),
+                Image.Resampling.LANCZOS,
+            )
 
         buf = io.BytesIO()
         img.save(buf, format="PNG")

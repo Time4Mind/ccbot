@@ -183,7 +183,7 @@ backend 可在 `菜单 → Settings → Agent` 全局切换；当前 backend
 Claude Code 自己的选择器(`/model`、`/effort`、`/compact`、
 `/memory`)会转发到活动会话,并与上面几条一起发布。另有几个命令
 输入时可用,但不出现在 `/`-菜单里:`/new`、`/kill`、`/stop`、
-`/archive`、`/screenshot`、`/usage`、`/health`、`/login`。
+`/archive`、`/usage`、`/health`、`/login`。
 
 **`/login` —— 用手机给 Claude 重新授权。** `claude` 背后的 OAuth 登录
 过期后,所有会话都会开始报错,通常没有电脑就修不了。机器人本身不需要
@@ -204,11 +204,11 @@ Codex backend 在启动时通过 app-server 的 `account/read` 检查账号。
 不会触发它。一次新的登录会把凭据期限往后推约 30 天;真正重要的就是这个
 期限,因为 refresh token 轮换并不会移动它。
 
-其余动作藏在内联菜单后面:`Sessions`、`Archive`、`Status`、`New`、
-`Settings`。🧑‍💻 *Shot*(终端截图)按钮住在主视图的控制行和
-*菜单 → Sessions* 中 —— 紧邻 *Kill* 和 *Clear*,所以它始终在
-transcript 表面触手可及。多数用户一旦发现菜单,就再也不打 slash
-命令。
+内联菜单保留四个动作:`Sessions`、`Archive`、`New`、`Settings`。
+当前限额表嵌入在按钮上方。每次点击 Menu 都会立即显示缓存,在其年龄旁
+显示 `⏳`,并在后台刷新。活动卡片的 *Options* 按钮会在会话切换器上方展开已配置的
+操作。Screenshot 全局切换终端图像,Terminal 只打开当前会话;
+Terminal 默认隐藏。
 
 ### 会话与切换器
 
@@ -230,14 +230,12 @@ transcript 表面触手可及。多数用户一旦发现菜单,就再也不打 s
 
 切换器按钮按**从旧到新**排列:一个会话在其整个生命周期内都保持同一
 槽位,新建的会话追加到右侧,切换时的肌肉记忆不会被打乱。从归档恢复
-的会话会作为最新的按钮重新进入,而不是回到原来的槽位。`/screenshot`
-下的紧凑切换器使用相同的顺序。
+的会话会作为最新的按钮重新进入,而不是回到原来的槽位。
 
 点击非活动会话按钮会**把该会话的完整转录历史画到 carrier-消息上**
 并同时切换活动会话。分页按钮 (◀ Older / Newer ▶) 本身就是「翻看
 历史」的入口,因此菜单中不再有独立的「历史」条目;它们下方仍
-保留底部键盘。点击已活动的按钮是 no-op。`/screenshot` 中的 `Back`
-重新发布实时卡片。
+保留底部键盘。点击已活动的按钮是 no-op。
 
 引用回复(Telegram quote)非活动会话的机器人消息,会把那一条回复
 路由到该会话,但不更改活动会话。
@@ -287,16 +285,15 @@ Enter / Esc 键盘。
 | ---- | ---- | ---- |
 | `卡片历史` | `20` | 从 JSONL 预加载进新卡片的 end-of-turn 边界数(机器人重启后仍在) |
 | `页面大小` | `20` 行 | 每页最多行数;长正文按段落/句子边界跨页切分 |
-| `内联截图` | `off` | 仅在 turn 运行时于活动卡片内显示终端 pane |
+| `截图捕获大小` | `48 KiB` | 用于图像的最新终端文本上限 |
+| `截图质量` | `100%, 8 colors` | 图像缩放和颜色配置 |
 | `实时延迟` | `4s` | 预览更新的合并窗口 |
 
-Pane 仅在 **RUNNING** 状态存在,顺序为
-`正文 → 间距 → pane → 间距 → context → 后台面板`。进入 **IDLE**、
-收到最终回答或执行 `/clear` 时会移除;下一轮 turn 开始后再次出现。
-支持 Rich 的 Bot API 会把文本和媒体保留在同一条 Rich Markdown 消息
-中;旧版 API 使用图片 + 说明文字。Rich 发送失败时依次回退到 legacy
-图片和纯文本;临时 edit 失败会在下次更新重试,carrier 丢失则重新创建,
-不会立即发送重复卡片。
+Screenshot 和 Terminal 按钮的可见性在 *Settings → Options buttons* 中设置。
+Screenshot 默认可见,Terminal 默认隐藏。点击 Screenshot 会在同一卡片中切换全局
+截图状态,最新 pane 在 **IDLE** 时仍保留。顺序为
+`正文 → 间距 → pane → 间距 → context → 后台面板`。Rich media 不可用时,
+同一卡片回退为纯文本,并在之后的普通更新中重试。
 如果未完成的 turn 长时间无活动,活动卡片会保留 pane,不会插入警告占位
 或发送单独通知。后台会话只在后台面板中的会话名称旁显示 `⚠️`。
 
@@ -306,23 +303,22 @@ Telegram 聊天头部的 **`正在输入…`** 指示由真实的 claude 事件�
 
 ### 其他设置
 
-*≡ 菜单 → Settings* 把设置分成五类:🃏 卡片 / 视图、🔔 通知、
-🎙 语音、🖥 本地终端、⚙ 行为与语言。值得知道的:
+*≡ 菜单 → Settings* 包含 🃏 卡片 / 视图、🔔 通知、🎙 语音、
+🖥 本地终端、🧩 Options buttons、⚙ 行为与语言。值得知道的:
 
 - **自动确认**(默认 `off`)— 自动回答 `--dangerously-skip-permissions`
   覆盖不到的那些交互式 Yes/No 提示(WebFetch 域名信任之类)。若
   自动 Yes 没能消除提示,机器人会升级为手动键盘而不是死循环。
-- **本地终端**(`off` / `manual` / `auto`)— 打开一个附着到会话
-  tmux 窗口的原生 Terminal.app / iTerm2 / Linux 终端模拟器窗口,
-  以便你用手驱动同一个会话。`manual` 只显示 🖥 *Term* 按钮;
-  `auto` 还会为每个新会话自动开一个。kill 会话时会关掉它开的标签页。
+- **本地终端** - 必要时在此选择 Linux 终端模拟器。按钮可见性在
+  *Options buttons* 中单独设置;不会自动打开新终端。
 - **每周重置**— Anthropic 每周配额窗口翻滚的那一天;决定
   *菜单 → Status* 里的 `%/天` 消耗速率。
 - **语言** — 机器人自身 UI 字符串的 `en` / `ru` / `zh`。
 
-### 配额与状态
+### Menu 中的配额
 
-*≡ 菜单 → 📊 Status* 使用当前 backend 的权威数据源：Claude 通过
+嵌入 *≡ Menu* 的配额表使用当前 backend 的权威数据源;
+没有单独的 Status 或 Refresh 按钮。Claude 通过
 专用 `ccbot-usage` tmux 窗口读取 `/usage`；Codex 通过 app-server
 的 `account/rateLimits/read` 读取，不向工作会话发送命令。
 

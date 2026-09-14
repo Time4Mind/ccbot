@@ -1,5 +1,8 @@
 """Literal terminal input is pasted in bounded UTF-8-safe chunks."""
 
+import asyncio
+import os
+
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -20,6 +23,30 @@ def test_codex_transport_adds_only_trailing_space() -> None:
     text = "проверь @README"
     chunks = tmux_input_transport.terminal_input_chunks(text, backend="codex")
     assert b"".join(chunks).decode() == text + " "
+
+
+@pytest.mark.asyncio
+async def test_tmux_command_drops_inherited_client_identity(monkeypatch) -> None:
+    """A bot launched inside a read-only client must use a fresh command client."""
+    monkeypatch.setenv("TMUX", "/run/tmux-1000/default,123,7")
+    monkeypatch.setenv("TMUX_PANE", "%42")
+    proc = MagicMock(returncode=0)
+    proc.communicate = AsyncMock(return_value=(b"", b""))
+    create = AsyncMock(return_value=proc)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
+
+    assert await tmux_input_transport._run_tmux("send-keys", "-t", "@1", "C-m") == (
+        0,
+        b"",
+    )
+
+    argv = create.await_args.args
+    kwargs = create.await_args.kwargs
+    assert argv[:3] == ("tmux", "-S", "/run/tmux-1000/default")
+    assert argv[3:] == ("send-keys", "-t", "@1", "C-m")
+    assert "TMUX" not in kwargs["env"]
+    assert "TMUX_PANE" not in kwargs["env"]
+    assert kwargs["env"]["PATH"] == os.environ["PATH"]
 
 
 @pytest.mark.asyncio

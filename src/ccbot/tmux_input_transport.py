@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import secrets
 
 logger = logging.getLogger(__name__)
@@ -32,12 +33,25 @@ def terminal_input_chunks(text: str, *, backend: str = "") -> list[bytes]:
 
 
 async def _run_tmux(*args: str, input_bytes: bytes | None = None) -> tuple[int, bytes]:
+    env = os.environ.copy()
+    inherited_tmux = env.pop("TMUX", "")
+    env.pop("TMUX_PANE", None)
+    command = ["tmux"]
+    if inherited_tmux:
+        # Keep targeting the inherited server socket without identifying this
+        # subprocess as the attached client that launched ccbot.  That client
+        # may be read-only (notably Linux control/supervisor deployments), in
+        # which case tmux rejects ``send-keys`` with "client is read-only".
+        socket_path = inherited_tmux.rsplit(",", 2)[0]
+        if socket_path:
+            command.extend(("-S", socket_path))
     proc = await asyncio.create_subprocess_exec(
-        "tmux",
+        *command,
         *args,
         stdin=asyncio.subprocess.PIPE if input_bytes is not None else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=env,
     )
     _stdout, stderr = await proc.communicate(input=input_bytes)
     return proc.returncode or 0, stderr

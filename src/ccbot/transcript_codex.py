@@ -4,6 +4,19 @@ import json
 from typing import Any
 
 
+_INJECTED_USER_PREFIXES = (
+    "# AGENTS.md instructions",
+    "<environment_context>",
+    "<turn_aborted>",
+)
+
+
+def _is_injected_user_text(text: str) -> bool:
+    """Return whether Codex labelled harness context as a user message."""
+    stripped = text.lstrip()
+    return any(stripped.startswith(prefix) for prefix in _INJECTED_USER_PREFIXES)
+
+
 def normalize_codex_entry(data: dict[str, Any]) -> dict[str, Any] | None:
     """Translate a stable subset of Codex rollout events to Claude blocks.
 
@@ -21,6 +34,8 @@ def normalize_codex_entry(data: dict[str, Any]) -> dict[str, Any] | None:
         event_type = payload.get("type")
         if event_type == "user_message":
             text = str(payload.get("message") or "")
+            if _is_injected_user_text(text):
+                return None
             return {
                 "type": "user",
                 "timestamp": timestamp,
@@ -67,6 +82,10 @@ def normalize_codex_entry(data: dict[str, Any]) -> dict[str, Any] | None:
         elif isinstance(raw_content, str) and raw_content:
             content.append({"type": "text", "text": raw_content})
         if not content:
+            return None
+        if role == "user" and any(
+            _is_injected_user_text(block["text"]) for block in content
+        ):
             return None
         phase = str(payload.get("phase") or "")
         return {

@@ -1,9 +1,19 @@
 # Screenshot flow - agreed target and implementation TODO
 
-Status: the original agreed flow was merged in PR #217. The 2026-09-14
-follow-up is in local implementation: persistent per-session screenshot cache,
-instant cached switching, and background refresh of stale snapshots. It is not
-committed or deployed yet.
+Status: the agreed screenshot flow and its cached-switching follow-up are
+implemented. The unresolved production findings below are the next Tier 0
+investigations; they are recorded here, not fixed as part of the state-write
+optimization.
+
+## Tier 0 investigations
+
+- Rich-media delivery errors under the 2026-09-14 five-minute load audit:
+  13 `Rich_message_photo_invalid` responses and one timeout. Determine the
+  failing transition and remove the error without adding tap latency or text
+  layout shifts.
+- Old/orphan keyboard cleanup failed 15 times in the same audit. Determine why
+  Telegram rejects or misses the cleanup, and ensure obsolete session keyboards
+  become non-interactive without delaying the session switch.
 
 ## Task contract
 

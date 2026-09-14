@@ -52,6 +52,34 @@ def _session(session_id: str, name: str, window_id: str) -> Session:
 
 
 @pytest.mark.asyncio
+async def test_atomic_handoff_persists_card_and_active_session_once(monkeypatch):
+    """One switch checkpoint must contain both carrier and routing changes."""
+    user_id = 42
+    carrier_msg_id = 8000
+    old = _session("session-a", "old-session", "@1")
+    target = _session("session-b", "target-session", "@2")
+    session_manager.sessions.update({old.id: old, target.id: target})
+    session_manager.active_sessions[user_id] = old.id
+    notifications._cards[(user_id, old.id)] = CardState(msg_id=carrier_msg_id)
+    notifications._cards[(user_id, target.id)] = CardState(msg_id=7000)
+
+    saves: list[None] = []
+    monkeypatch.setattr(session_manager, "save_state", lambda: saves.append(None))
+
+    orphan_msg_id = await notifications.activate_card_on_carrier(
+        user_id,
+        old.id,
+        target.id,
+        carrier_msg_id,
+    )
+
+    assert orphan_msg_id == 7000
+    assert session_manager.get_card_msg(user_id) == carrier_msg_id
+    assert session_manager.get_active_session(user_id) is target
+    assert len(saves) == 1
+
+
+@pytest.mark.asyncio
 async def test_inflight_old_edit_finishes_before_target_owns_carrier(monkeypatch):
     """A delayed edit from A must complete before B is activated and painted."""
     user_id = 42

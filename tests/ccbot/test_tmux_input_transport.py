@@ -24,12 +24,12 @@ def test_codex_transport_adds_only_trailing_space() -> None:
 @pytest.mark.asyncio
 async def test_literal_input_pastes_chunks_in_order_then_one_carriage_return() -> None:
     manager = TmuxManager(session_name="ccbot")
-    manager._paste_literal_chunk = AsyncMock(
-        side_effect=[(True, False), (True, False)]
-    )
+    manager._paste_literal_chunk = AsyncMock(side_effect=[(True, False), (True, False)])
     manager._send_carriage_return = AsyncMock(return_value=True)
     with (
-        patch.object(manager, "_terminal_input_chunks", return_value=[b"first", b"second"]),
+        patch.object(
+            manager, "_terminal_input_chunks", return_value=[b"first", b"second"]
+        ),
         patch("ccbot.tmux_manager.asyncio.sleep", new=AsyncMock()) as sleep,
         patch("ccbot.tmux_manager.secrets.token_hex", return_value="op"),
     ):
@@ -50,7 +50,11 @@ async def test_ambiguous_paste_is_not_retried_and_finalizes_once() -> None:
     )
     manager._send_carriage_return = AsyncMock(return_value=True)
     with (
-        patch.object(manager, "_terminal_input_chunks", return_value=[b"first", b"second", b"third"]),
+        patch.object(
+            manager,
+            "_terminal_input_chunks",
+            return_value=[b"first", b"second", b"third"],
+        ),
         patch("ccbot.tmux_manager.asyncio.sleep", new=AsyncMock()),
         patch("ccbot.tmux_manager.secrets.token_hex", return_value="op"),
     ):

@@ -431,7 +431,6 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
     success, message, created_wname, created_wid = await tmux_manager.create_window(
         workdir,
         resume_session_id=resume_session_id,
-        owner_user_id=user_id,
         backend=target_backend,
         initial_prompt=initial_prompt,
     )

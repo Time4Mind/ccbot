@@ -449,11 +449,6 @@ half-rendered modal can't fire a phantom alert.
   (builds whisper.cpp, downloads both models).
 - **Photos and documents** drop into `<workdir>/.ccbot-inbox/` and
   Claude is told via tmux. Files are auto-cleaned 24h after upload.
-- **Outbound files** go the other way on demand: a session runs
-  `ccbot send-file <path> [--caption TEXT]` and the bot delivers it
-  into the DM right away (image extensions via `sendPhoto`, everything
-  else via `sendDocument`). The command prints a pass/fail line per
-  target chat, so Claude sees whether the delivery worked.
 - **Forwarded posts with media** (channel posts with video / GIF /
   sticker that carry a caption) have the caption + any hidden
   `text_link` URLs extracted and routed to the active session,
@@ -467,7 +462,7 @@ extension guide is `doc/refactor-architecture.md`. At a glance:
 
 ```
 src/ccbot/
-├── main.py                 — CLI entry point (`ccbot`, `ccbot hook`, `ccbot send-file`)
+├── main.py                 — CLI entry point (`ccbot`, `ccbot hook`)
 ├── config.py               — env-var loader (singleton)
 ├── session.py              — SessionManager compatibility facade / resume flow
 ├── session_state.py        — routing, lifecycle, settings, state.json
@@ -487,7 +482,6 @@ src/ccbot/
 ├── telegram_sender.py      — split_message at 4096-char limit
 ├── transcribe.py           — voice → text dispatcher
 ├── voice_install.py        — whisper.cpp + model auto-installer
-├── send_file.py            — `ccbot send-file` outbound delivery
 ├── local_terminal.py       — native-terminal attach helper
 ├── usage.py                — token aggregator, context %, alert logic
 ├── i18n.py                 — translation service compatibility facade

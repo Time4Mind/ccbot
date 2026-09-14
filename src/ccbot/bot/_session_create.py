@@ -65,7 +65,6 @@ async def create_and_activate_session(
     success, message, created_wname, created_wid = await tmux_manager.create_window(
         selected_path,
         resume_session_id=resume_session_id,
-        owner_user_id=user.id,
         backend=session_manager.agent_backend,
     )
     if not success:

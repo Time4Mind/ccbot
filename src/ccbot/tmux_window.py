@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Any
 
 
+_CODEX_STARTUP_POLL_SECONDS = 0.25
+
+
 def handle_codex_startup_screen(
     pane: object,
     *,
@@ -80,7 +83,7 @@ def accept_codex_directory_trust(
     """
     accepted = False
     for _ in range(30):
-        sleep(0.15)
+        sleep(_CODEX_STARTUP_POLL_SECONDS)
         acted, terminal = handler(pane)
         accepted = accepted or acted
         if terminal:
@@ -98,9 +101,9 @@ async def watch_codex_startup_screens(
 ) -> bool:
     """Cancellation-safe long watcher for cold Codex launches."""
     accepted = False
-    attempts = max(30, int(max(timeout, 4.5) / 0.15))
+    attempts = max(18, int(max(timeout, 4.5) / _CODEX_STARTUP_POLL_SECONDS))
     for _ in range(attempts):
-        await sleep(0.15)
+        await sleep(_CODEX_STARTUP_POLL_SECONDS)
         acted, terminal = await to_thread(handler, pane)
         accepted = accepted or acted
         if terminal:
@@ -114,7 +117,6 @@ async def create_window(
     window_name: str | None = None,
     start_claude: bool = True,
     resume_session_id: str | None = None,
-    owner_user_id: int | None = None,
     backend: str | None = None,
     initial_prompt: str | None = None,
     *,
@@ -128,11 +130,6 @@ async def create_window(
         window_name: Optional window name (defaults to directory name)
         start_claude: Whether to start claude command
         resume_session_id: If set, append --resume <id> to claude command
-        owner_user_id: Telegram user_id that created this session, if
-            known — exported as ``CCBOT_CHAT_ID`` so ``ccbot send-file``
-            (and Claude generally) knows which chat owns this session
-            without needing an explicit ``--chat-id``.
-
     Returns:
         Tuple of (success, message, window_name, window_id)
     """
@@ -210,10 +207,6 @@ async def create_window(
                         env_prefix += (
                             f" CCBOT_HOST={shlex.quote(config_obj.host_label)}"
                         )
-                    if owner_user_id is not None:
-                        # Lets ``ccbot send-file`` target the right
-                        # chat with no argument needed.
-                        env_prefix += f" CCBOT_CHAT_ID={owner_user_id}"
                     if config_obj.is_sandbox:
                         cmd = f"IS_SANDBOX=1 {env_prefix} {cmd}"
                     else:

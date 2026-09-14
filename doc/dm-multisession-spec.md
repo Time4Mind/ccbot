@@ -372,10 +372,8 @@ Transcript and quota data have separate sources:
 
 ### Outbound
 
-- On-demand, not polled: a session hands the user a file by running `ccbot send-file <path> [--caption TEXT]` (`send_file.py`) directly — no drop directory, no delay. Image extensions go out via `send_photo`, everything else via `send_document`; the command prints a pass/fail line per target chat so the invoking tool call carries real feedback back to Claude.
-- Target chat resolution: `--chat-id` override > `$CCBOT_CHAT_ID` (exported by `tmux_manager.create_window` at spawn time from the Telegram user who created/owns the session — see `owner_user_id`) > broadcast to every `ALLOWED_USERS` entry (used for windows with no single owner, e.g. the internal usage-check window).
+- The former filesystem-polled `ccbot send-file` relay is removed. A future flow will expose actions for full local file paths directly in Telegram rich-message markdown.
 - A silent unfinished turn is never converted into a synthetic final warning. If it is active, its RUNNING card keeps refreshing the terminal pane; if it is background, only a `⚠️` status appears beside it in the background panel. No separate stall push is sent.
-- No MCP tool involved; Claude just needs to know the convention (documented for it via the container's `~/.claude/CLAUDE.md`, keyed off `CCBOT_INTERFACE=telegram` the same way output-format guidance is).
 
 ---
 

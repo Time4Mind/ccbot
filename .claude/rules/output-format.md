@@ -72,8 +72,8 @@ natively on the phone. Rules that matter:
 
 ## Writing files for download
 
-Until ccbot ships its `send_file` MCP tool, the bot can't actively
-push files to the user. Workflow:
+The filesystem-polled `ccbot send-file` relay is intentionally absent.
+Until local-path actions are implemented with Telegram rich-message buttons:
 
 1. Create the file in the current `cwd` (don't scatter into `/tmp`,
    the user can't reach it via Telegram).
@@ -81,8 +81,7 @@ push files to the user. Workflow:
    `out/users-2026-05-10.parquet`.
 3. Print exactly one line in the response so the path is grep-able:
    `📎 data/forecast.xlsx ready` (use the literal `📎` glyph).
-4. The user fetches via SCP / git / manual copy. When `send_file`
-   ships, the bot will deliver these automatically.
+4. The user fetches via SCP / git / manual copy.
 
 ## What stays the same
 

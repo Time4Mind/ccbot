@@ -178,12 +178,12 @@ class TestSpoilerLineSettings:
     def test_legacy_shared_limit_migrates_to_both_blocks(
         self, mgr: SessionManager
     ) -> None:
-        mgr.user_settings[1] = {"spoiler_block_lines": 20}
+        mgr.user_settings[1] = {"spoiler_block_lines": 30}
 
         settings = mgr.get_user_settings(1)
 
-        assert settings["spoiler_command_lines"] == 20
-        assert settings["spoiler_result_lines"] == 20
+        assert settings["spoiler_command_lines"] == 30
+        assert settings["spoiler_result_lines"] == 30
 
     def test_removed_independent_limits_migrate_to_ten(
         self, mgr: SessionManager
@@ -191,13 +191,13 @@ class TestSpoilerLineSettings:
         mgr.user_settings[1] = {
             "spoiler_block_lines": 7,
             "spoiler_command_lines": 3,
-            "spoiler_result_lines": 20,
+            "spoiler_result_lines": 30,
         }
 
         settings = mgr.get_user_settings(1)
 
         assert settings["spoiler_command_lines"] == 10
-        assert settings["spoiler_result_lines"] == 20
+        assert settings["spoiler_result_lines"] == 30
 
 
 class TestIdleArchiveSetting:

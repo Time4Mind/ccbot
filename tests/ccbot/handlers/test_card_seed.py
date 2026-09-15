@@ -10,9 +10,11 @@ from pathlib import Path
 
 from ccbot.handlers.notifications import (
     CardState,
+    Event,
     _ensure_seeded,
     _seed_events_from_jsonl,
 )
+from ccbot.handlers.card_types import PendingPrompt
 
 
 def _write_jsonl(path: Path, entries: list[dict]) -> None:
@@ -123,6 +125,60 @@ class TestSeedFromJsonl:
 
 @pytest.mark.asyncio
 class TestEnsureSeededIdempotent:
+    async def test_seed_reconciles_pending_prompt_at_its_turn_position(
+        self, monkeypatch
+    ) -> None:
+        """A seeded user echo replaces the live tail instead of duplicating it."""
+        import ccbot.handlers.notifications as notif
+        from ccbot.session import Session
+
+        prompt = "Проверь корректные данные по Турции?"
+        seeded_prompt = Event(
+            type="user_msg",
+            text=prompt,
+            body=prompt,
+            started_at=2.0,
+            is_page_break=True,
+        )
+        seeded_work = Event(type="text", text="Проверяю данные", started_at=3.0)
+
+        async def _seed(_sess, max_turns=0):
+            del max_turns
+            return [
+                Event(
+                    type="user_msg",
+                    text="служебный контекст",
+                    started_at=1.0,
+                    is_page_break=True,
+                ),
+                seeded_prompt,
+                seeded_work,
+            ]
+
+        monkeypatch.setattr(notif, "_seed_events_from_jsonl", _seed)
+        state = CardState(
+            pending_prompts=[
+                PendingPrompt(
+                    request_id="77",
+                    text=prompt,
+                    preprocessed=True,
+                    created_at=1.5,
+                )
+            ]
+        )
+        sess = Session(id="turkey", name="turkey data", window_id="@120")
+
+        await _ensure_seeded(1, sess, state)
+
+        assert state.pending_prompts == []
+        assert state.events == [state.events[0], seeded_prompt, seeded_work]
+        assert seeded_prompt.user_icon == "👤💻"
+        from ccbot.handlers.card_layout import _render_card
+
+        rendered = _render_card(sess, state, user_id=1)
+        assert rendered.count(prompt) == 1
+        assert rendered.index(prompt) < rendered.index("Проверяю данные")
+
     async def test_no_op_when_events_present(self, monkeypatch) -> None:
         import ccbot.session_claude_io as scio
         from ccbot.handlers.notifications import Event

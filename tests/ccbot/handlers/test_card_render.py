@@ -97,7 +97,7 @@ class TestSyntaxHighlightedToolBody:
     def test_command_and_result_have_independent_bounded_blocks(self) -> None:
         from ccbot.handlers.card_model import _build_tool_spoiler_body
 
-        command = "x" * 90
+        command = "x" * 120
         result = "\n".join(f"result-{i}" for i in range(6))
         out = _build_tool_spoiler_body(
             "Bash",
@@ -108,7 +108,7 @@ class TestSyntaxHighlightedToolBody:
         )
 
         command_block, result_block = out.split("\n- - -\n", 1)
-        assert command_block == f"```bash\n{'x' * 69}…\n```"
+        assert command_block == f"```bash\n{'x' * 99}…\n```"
         assert result_block.splitlines() == [
             "result-0",
             "result-1",
@@ -117,6 +117,77 @@ class TestSyntaxHighlightedToolBody:
             "result-4",
             "result-5",
         ]
+
+    def test_json_result_is_structured_before_line_limit(self) -> None:
+        from ccbot.handlers.card_model import _build_tool_spoiler_body
+
+        out = _build_tool_spoiler_body(
+            "Bash",
+            "get-status",
+            '{"service":"ccbot","runtime":{"pid":31144,"healthy":true},'
+            '"workers":["main","voice"]}',
+            result_max_lines=5,
+        )
+        _command, result = out.split("\n- - -\n", 1)
+
+        assert result.splitlines() == [
+            "service: ccbot",
+            "runtime:",
+            "  pid: 31144",
+            "  healthy: true",
+            "… (+3 more lines)",
+        ]
+
+    def test_json_lines_result_is_structured_as_separate_records(self) -> None:
+        from ccbot.handlers.card_model import _build_tool_spoiler_body
+
+        content = (
+            '{"timestamp":"12:00","status":"started"}\n'
+            '{"timestamp":"12:01","status":"completed"}'
+        )
+        result = _build_tool_spoiler_body("Bash", "events", content).split(
+            "\n- - -\n", 1
+        )[1]
+
+        assert result == (
+            "record 1:\n"
+            "  timestamp: 12:00\n"
+            "  status: started\n"
+            "record 2:\n"
+            "  timestamp: 12:01\n"
+            "  status: completed"
+        )
+
+    def test_key_value_and_tabular_results_are_readable(self) -> None:
+        from ccbot.handlers.card_model import _build_tool_spoiler_body
+
+        key_value = _build_tool_spoiler_body(
+            "Bash", "status", "pid=31144\nstate=running"
+        ).split("\n- - -\n", 1)[1]
+        table = _build_tool_spoiler_body(
+            "Bash", "sessions", "name\tstate\npayment\tactive\nturkey\tworking"
+        ).split("\n- - -\n", 1)[1]
+
+        assert key_value == "pid: 31144\nstate: running"
+        assert table == (
+            "record 1:\n"
+            "  name: payment\n"
+            "  state: active\n"
+            "record 2:\n"
+            "  name: turkey\n"
+            "  state: working"
+        )
+
+    def test_json_string_decodes_literal_newlines_without_showing_escape_junk(
+        self,
+    ) -> None:
+        from ccbot.handlers.card_model import _build_tool_spoiler_body
+
+        result = _build_tool_spoiler_body("Bash", "show", '"first\\nsecond"').split(
+            "\n- - -\n", 1
+        )[1]
+
+        assert result == "first\nsecond"
 
     def test_read_content_picks_language_from_path_extension(self) -> None:
         from ccbot.handlers.card_model import _build_tool_spoiler_body

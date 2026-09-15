@@ -130,6 +130,27 @@ class TestToRichMarkdown:
         out = rich.to_rich_markdown(format_expandable_quote("a<y>c"))
         assert "a&lt;y>c" in out
 
+    def test_headed_tool_body_preserves_plain_result_line_breaks(self) -> None:
+        from ccbot.handlers.card_model import _headed_block
+
+        body = (
+            "```bash\nprintf ok\n```\n"
+            "- - -\n"
+            "status: completed\n"
+            "duration: 0.1 s\n"
+            "output:\n"
+            "  service: ccbot\n"
+            "  state: running"
+        )
+
+        out = rich.to_rich_markdown(
+            _headed_block("✓ Bash · 15:55", body, trim_body=False)
+        )
+
+        assert "printf ok\n```\n- - -\n" in out
+        assert "status: completed<br>\nduration: 0.1 s<br>\noutput:<br>" in out
+        assert "  service: ccbot<br>\n  state: running" in out
+
     def test_absolute_file_path_becomes_stem_and_extension_button(
         self, tmp_path: Path
     ) -> None:

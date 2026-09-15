@@ -311,12 +311,12 @@ EN: dict[str, str] = {
     "settings.group.spoiler_command_lines": "Command lines",
     "settings.spoiler_command_lines.body": (
         "*Command lines*\n\nMaximum visible command lines in a tool spoiler. "
-        "Every line is limited to 70 characters."
+        "Every line is limited to 100 characters."
     ),
     "settings.group.spoiler_result_lines": "Result lines",
     "settings.spoiler_result_lines.body": (
         "*Result lines*\n\nMaximum visible result lines in a tool spoiler. "
-        "Every line is limited to 70 characters."
+        "Every line is limited to 100 characters."
     ),
     "screens.on": "on",
     "screens.off": "off",

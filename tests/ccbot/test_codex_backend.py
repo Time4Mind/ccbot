@@ -703,7 +703,7 @@ def test_codex_rollout_keeps_structured_tool_output_text() -> None:
 
     rendered = render_event(state.events[0], in_flight=False, now=1.0)
     assert "\n- - -\n" in rendered
-    assert "line 1\nline 2" in rendered
+    assert "output:\n  line 1\n  line 2" in rendered
 
     from ccbot.rich import to_rich_markdown
 
@@ -712,6 +712,59 @@ def test_codex_rollout_keeps_structured_tool_output_text() -> None:
     assert "tools.exec_command" not in rich
     assert "\\n" not in rich
     assert "\n- - -\n" in rich
+
+
+def test_codex_exec_wrapper_accepts_real_quoted_cmd_key() -> None:
+    entries = [
+        {
+            **_line(
+                "response_item",
+                {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "quoted-cmd",
+                    "input": (
+                        'const r = await tools.exec_command({"cmd":"printf ok",'
+                        '"workdir":"/tmp"}); text(r.output);'
+                    ),
+                },
+            ),
+            "ordinal": 1,
+        }
+    ]
+
+    parsed, _pending = TranscriptParser.parse_entries(entries)
+
+    tool = next(item for item in parsed if item.tool_name == "Bash")
+    assert "printf ok" in tool.text
+    assert "tools.exec_command" not in tool.text
+
+
+def test_codex_completed_command_without_stdout_is_explicit() -> None:
+    from ccbot.transcript_codex import normalize_codex_entry
+
+    normalized = normalize_codex_entry(
+        {
+            "type": "response_item",
+            "timestamp": "2026-09-15T10:00:00Z",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "quiet-call",
+                "output": [
+                    {
+                        "type": "text",
+                        "text": "Script completed\nWall time 0.2 seconds\nOutput:\n",
+                    }
+                ],
+            },
+        }
+    )
+
+    assert normalized is not None
+    content = normalized["message"]["content"][0]["content"]
+    assert content[0]["text"] == (
+        "status: completed\nduration: 0.2 s\noutput: no output"
+    )
 
 
 def test_codex_rollout_keeps_harness_tool_hidden_across_poll_batches() -> None:

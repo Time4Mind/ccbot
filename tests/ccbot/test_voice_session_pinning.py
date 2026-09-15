@@ -658,7 +658,12 @@ class TestVoiceReactionParity:
             await voice_handler(update, context)
 
         mock_dispatch.assert_called_once_with(
-            update, context, update.effective_user.id, "@5", "hello from voice"
+            update,
+            context,
+            update.effective_user.id,
+            "@5",
+            "hello from voice",
+            input_kind="voice",
         )
 
 

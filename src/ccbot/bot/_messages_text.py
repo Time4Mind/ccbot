@@ -20,6 +20,7 @@ from ..handlers.directory_browser import (
     STATE_BROWSING_DIRECTORY,
     STATE_KEY,
     STATE_NAMING_DIRECTORY,
+    STATE_PREPROCESSING_INSTRUCTION,
     STATE_SELECTING_SESSION,
     STATE_SELECTING_WINDOW,
     build_directory_browser,
@@ -43,7 +44,6 @@ from ..handlers.notifications import (
     lookup_session_for_message,
     refresh_panel,
     repost_card,
-    resume_card_view,
 )
 from ..handlers.card_types import TurnPhase
 from ..handlers.typing import fire_typing
@@ -56,6 +56,7 @@ from ..terminal_parser import (
 )
 from ..tmux_manager import tmux_manager
 from ._common import active_window, is_user_allowed
+from ._messages_preprocessing import prepare_request_for_dispatch
 from .commands.auth import maybe_consume_code
 
 from typing import Any, TYPE_CHECKING, cast
@@ -286,6 +287,8 @@ async def _dispatch_text_to_active(
     user_id: int,
     wid: str,
     text: str,
+    *,
+    input_kind: str = "text",
 ) -> bool:
     """Send the user's text to ``wid``'s pane and run the post-send
     bookkeeping under the repost-intent bracket.
@@ -314,23 +317,31 @@ async def _dispatch_text_to_active(
     from .. import metrics
     from ..handlers import bg_status
 
-    # If the user typed while looking at a Menu / sub-screen on this
-    # session's card, drop the pause so incoming events render again.
+    prepared_dispatch = await prepare_request_for_dispatch(
+        update,
+        context,
+        user_id,
+        wid,
+        text,
+        input_kind=input_kind,
+    )
+    text = prepared_dispatch.text
+
+    # Navigation is authoritative. A session keeps accepting its pinned
+    # prompt while Menu / Settings / Archive is open, but must remain a
+    # background surface until the user explicitly returns to its card.
     sess = session_manager.find_session_by_window(wid)
     card_state = None
     owns_card = sess is not None and is_active_for_user(user_id, sess)
     if owns_card and sess is not None:
-        await resume_card_view(context.bot, user_id, sess)
-        # Lock spawning out from under us before sending keystrokes —
-        # claude can emit the first event of its reply within
-        # milliseconds of send_to_window returning, and
-        # ``update_session_card`` would otherwise grab the card lock
-        # first, see ``state.msg_id is None`` (from the previous turn's
-        # ``finalize_task``) and spawn a fresh card just for that event.
-        # ``repost_card`` would then spawn a SECOND card and try to
-        # delete the first — succeeded delete loses claude's content,
-        # failed delete leaves both visible (user-reported "2 от бота
-        # после моего сообщения"). The buffer guarantees a single spawn.
+        card_state = get_card_state(user_id, sess)
+    if (
+        owns_card
+        and sess is not None
+        and card_state is not None
+        and not card_state.in_menu_view
+    ):
+        # Buffer events until the visible card is reposted below the prompt.
         begin_repost_intent(user_id, sess.id)
 
     # Run the rest of the dispatch under a try/finally that always
@@ -347,6 +358,11 @@ async def _dispatch_text_to_active(
             metrics.inc("tg_send_failures")
             await safe_reply(update.message, f"❌ Delivery not confirmed: {message}")
             return False
+
+        # Delivery was confirmed to the originally pinned pane. Only now is
+        # it safe to remove the restart record and persist the transcript
+        # marker; a crash before this point leaves enough data for recovery.
+        prepared_dispatch.confirm_delivery()
 
         # Immediate typing-indicator so the user sees feedback within
         # ~500 ms of sending — claude can take 5-30 s before emitting
@@ -423,7 +439,12 @@ async def _dispatch_text_to_active(
             # gets two cards' worth of churn for one voice; an in-place
             # edit is enough to drain the buffer and drop the pending row.
             try:
-                await resume_card_view(context.bot, user_id, sess)
+                await refresh_panel(
+                    context.bot,
+                    user_id,
+                    immediate=True,
+                    refresh_pane=False,
+                )
             except Exception as e:
                 logger.debug("card repaint failed: %s", e)
         else:
@@ -456,6 +477,32 @@ async def text_handler(
 
     text = update.message.text
     state = context.user_data.get(STATE_KEY) if context.user_data else None
+    if state == STATE_PREPROCESSING_INSTRUCTION:
+        instruction = text.strip()
+        if (
+            not instruction
+            or len(instruction.encode("utf-8")) > 16 * 1024
+            or "\x00" in instruction
+        ):
+            await safe_reply(
+                update.message, t(user.id, "preprocessing.instruction.invalid")
+            )
+            return True
+        session_manager.update_user_setting(
+            user.id, "preprocessing_instruction", instruction
+        )
+        if context.user_data is not None:
+            context.user_data.pop(STATE_KEY, None)
+        from ..handlers.menu import build_footer_keyboard, render_settings_group_text
+
+        await safe_reply(
+            update.message,
+            render_settings_group_text(user.id, "settings_cat_preprocessing"),
+            reply_markup=build_footer_keyboard(
+                user.id, screen="settings_cat_preprocessing"
+            ),
+        )
+        return True
     if state == STATE_NAMING_DIRECTORY:
         current_path = (
             context.user_data.get(BROWSE_PATH_KEY) if context.user_data else None
@@ -525,7 +572,7 @@ async def text_handler(
         await safe_reply(update.message, "Please use the picker above, or tap Cancel.")
         return False
 
-    if await _route_reply_quote(update, user.id, text):
+    if pinned_wid is None and await _route_reply_quote(update, user.id, text):
         return True
 
     wid = await _resolve_active_window(

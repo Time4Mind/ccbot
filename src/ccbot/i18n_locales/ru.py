@@ -346,6 +346,7 @@ RU: dict[str, str] = {
     "settings.cat.voice": "🎙 Голос",
     "settings.cat.terminal": "🖥 Локальный терминал",
     "settings.cat.options": "⋯ Кнопки опций",
+    "settings.cat.preprocessing": "💻 Препроцессинг",
     "settings.cat.behavior": "⚙ Агент, поведение и язык",
     "settings.cat.card.body": (
         "*Карточка / вид*\n\nРаскладка, плотность и refresh живой карточки."
@@ -360,6 +361,26 @@ RU: dict[str, str] = {
         "*Локальный терминал*\n\nНативное Terminal / iTerm окно к tmux."
     ),
     "settings.cat.options.body": "*Кнопки опций*\n\nКакие действия показывать под кнопкой Опции.",
+    "settings.cat.preprocessing.body": (
+        "*Препроцессинг*\n\nКонсервативная подготовка запроса общей Luna перед отправкой в целевую сессию."
+    ),
+    "settings.group.preprocessing_mode": "Режим",
+    "settings.group.preprocessing_instruction": "Инструкция",
+    "settings.preprocessing_mode.body": (
+        "*Режим препроцессинга*\n\nВыключен, только голос или все текстовые и голосовые запросы."
+    ),
+    "settings.preprocessing_instruction.body": (
+        "*Инструкция препроцессинга*\n\nПустое значение использует встроенную консервативную инструкцию."
+    ),
+    "preprocessing.mode.off": "Выключен",
+    "preprocessing.mode.voice": "Только голос",
+    "preprocessing.mode.all": "Все запросы",
+    "preprocessing.instruction.builtin": "Встроенная",
+    "preprocessing.instruction.custom": "Пользовательская",
+    "preprocessing.instruction.edit": "Изменить",
+    "preprocessing.instruction.reset": "Вернуть встроенную",
+    "preprocessing.instruction.send": "Отправь новую инструкцию одним текстовым сообщением.",
+    "preprocessing.instruction.invalid": "Инструкция должна быть непустой и не длиннее 16 KiB.",
     "settings.group.option_button_screenshot": "🧑‍💻 Скрин",
     "settings.group.option_button_terminal": "🖥 Терминал",
     "settings.option_button_screenshot.body": "*Кнопка Скрин*\n\nПоказывать Скрин в Опциях.",

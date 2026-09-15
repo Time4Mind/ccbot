@@ -101,6 +101,16 @@ def render_settings_group_text(user_id: int, screen: Screen) -> str:
     """Body text for a settings group sub-screen."""
     key = _GROUP_TEXT_KEYS.get(screen, "settings.title")
     body = _settings_hard_breaks(t(user_id, key))
+    if screen == "settings_preprocessing_instruction":
+        from ..request_preprocessing import DEFAULT_PREPROCESSING_INSTRUCTION
+
+        configured = str(
+            session_manager.get_user_settings(user_id).get(
+                "preprocessing_instruction", ""
+            )
+        ).strip()
+        instruction = configured or DEFAULT_PREPROCESSING_INSTRUCTION
+        return f"{body}\n\n```text\n{instruction}\n```"
     category = _category(screen)
     if category is None or len(category[1]) <= 1:
         return body

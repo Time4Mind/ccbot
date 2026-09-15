@@ -233,6 +233,7 @@ SESSIONS_PER_PAGE = 8
 STATE_KEY = "state"
 STATE_BROWSING_DIRECTORY = "browsing_directory"
 STATE_NAMING_DIRECTORY = "naming_directory"
+STATE_PREPROCESSING_INSTRUCTION = "preprocessing_instruction"
 STATE_SELECTING_WINDOW = "selecting_window"
 BROWSE_PATH_KEY = "browse_path"
 BROWSE_PAGE_KEY = "browse_page"

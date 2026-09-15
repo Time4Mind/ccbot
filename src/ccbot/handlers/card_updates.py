@@ -46,11 +46,29 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "update_session_card",
+    "_apply_preprocessing_marker",
     "_update_session_card_locked",
     "finalize_task",
     "_send_attachments",
     "push_event",
 ]
+
+
+def _apply_preprocessing_marker(
+    sess: Session, state: CardState, event: Event, raw_text: str
+) -> None:
+    if event.type != "user_msg":
+        return
+    normalized = raw_text.strip()
+    for index, pending in enumerate(state.pending_prompts):
+        if pending.text.strip() != normalized:
+            continue
+        if pending.preprocessed:
+            event.user_icon = "👤💻"
+        state.pending_prompts.pop(index)
+        return
+    if sess.was_preprocessed_prompt(normalized):
+        event.user_icon = "👤💻"
 
 
 async def update_session_card(
@@ -95,6 +113,7 @@ async def update_session_card(
     in_menu_view_in = state.in_menu_view
 
     new_event = _build_event(msg)
+    _apply_preprocessing_marker(sess, state, new_event, msg.text or "")
     # tool_result: fold into the matching tool_use Event in place.
     # If no match (race / restart), append the placeholder as a row.
     replaced = False

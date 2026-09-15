@@ -17,13 +17,20 @@ from functools import wraps
 from types import ModuleType
 from typing import Any, Callable, cast
 
-from . import _messages_media, _messages_shared, _messages_text, _messages_voice
+from . import (
+    _messages_media,
+    _messages_preprocessing,
+    _messages_shared,
+    _messages_text,
+    _messages_voice,
+)
 from ._session_create import create_and_activate_session
 
 _IMPLEMENTATION_MODULES: tuple[ModuleType, ...] = (
     _messages_shared,
     _messages_media,
     _messages_voice,
+    _messages_preprocessing,
     _messages_text,
 )
 

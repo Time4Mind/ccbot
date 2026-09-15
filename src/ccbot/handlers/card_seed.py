@@ -125,6 +125,8 @@ async def _seed_events_from_jsonl(
             timestamp=getattr(p, "timestamp", "") or "",
         )
         ev = _build_event(msg)
+        if ev.type == "user_msg" and sess.was_preprocessed_prompt(msg.text):
+            ev.user_icon = "👤💻"
         if ct == "tool_result" and _apply_tool_result(pseudo_state, ev):
             continue
         events.append(ev)

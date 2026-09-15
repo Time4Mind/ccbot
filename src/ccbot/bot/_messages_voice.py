@@ -287,7 +287,9 @@ async def _process_voice(
     # bash-capture, interactive-UI check, card repost) once the text is
     # known. No voice-specific reply; the transcribed text just becomes
     # this message's text, same as if the user had typed it.
-    dispatched = await _dispatch_text_to_active(update, context, user.id, wid, text)
+    dispatched = await _dispatch_text_to_active(
+        update, context, user.id, wid, text, input_kind="voice"
+    )
     if dispatched is False:
         return False
     # Dispatch already verified at-most-once TUI acceptance. A later approval

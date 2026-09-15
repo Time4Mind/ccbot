@@ -176,7 +176,7 @@ def render_event(
         marker = ""
 
     if event.type == "user_msg":
-        return f"👤 {event.text}"
+        return f"{event.user_icon} {event.text}"
 
     if event.type == "thinking":
         return _headed_block(f"∴ thinking{marker}", event.body)

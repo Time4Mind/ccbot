@@ -51,6 +51,7 @@ _metrics_flush_task: asyncio.Task[None] | None = None
 _heartbeat_task: asyncio.Task[None] | None = None
 _auth_preflight_task: asyncio.Task[None] | None = None
 _usage_prewarm_task: asyncio.Task[None] | None = None
+_preprocessing_recovery_task: asyncio.Task[int] | None = None
 
 
 async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") -> None:
@@ -64,6 +65,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
         _heartbeat_task, \
         _auth_preflight_task, \
         _usage_prewarm_task, \
+        _preprocessing_recovery_task, \
         _last_heartbeat, \
         _conflict_app
 
@@ -114,6 +116,34 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     # window vanished get state=lost and surface in the switcher with a
     # Restore button.
     await session_manager.reconcile_sessions_with_tmux()
+
+    # Requests are persisted against their immutable target session before
+    # Luna starts. Resume those records after tmux reconciliation so a bot
+    # restart cannot redirect them through whichever session is active now.
+    from ..request_preprocessing import (
+        prompt_preprocessor,
+        recover_pending_preprocessing,
+    )
+
+    if any(
+        session_manager.get_user_settings(user_id).get("preprocessing_mode", "off")
+        != "off"
+        for user_id in config.allowed_users
+    ):
+        try:
+            await prompt_preprocessor.prewarm()
+            logger.info("Request preprocessing satellite pre-warmed")
+        except Exception as exc:
+            logger.warning("Request preprocessing pre-warm failed: %s", exc)
+
+    _preprocessing_recovery_task = asyncio.create_task(
+        recover_pending_preprocessing(
+            manager=session_manager,
+            processor=prompt_preprocessor,
+        ),
+        name="recover-pending-preprocessing",
+    )
+    logger.info("Pending request-preprocessing recovery scheduled")
 
     # Remove old empty shells and any future terminal records that have no
     # usable user context. Run off the startup critical path: the Telegram bot
@@ -306,7 +336,8 @@ async def post_shutdown(
         _metrics_flush_task, \
         _heartbeat_task, \
         _auth_preflight_task, \
-        _usage_prewarm_task
+        _usage_prewarm_task, \
+        _preprocessing_recovery_task
 
     if _usage_prewarm_task:
         if not _usage_prewarm_task.done():
@@ -319,8 +350,16 @@ async def post_shutdown(
             _auth_preflight_task.cancel()
         await asyncio.gather(_auth_preflight_task, return_exceptions=True)
         _auth_preflight_task = None
+    if _preprocessing_recovery_task:
+        if not _preprocessing_recovery_task.done():
+            _preprocessing_recovery_task.cancel()
+        await asyncio.gather(_preprocessing_recovery_task, return_exceptions=True)
+        _preprocessing_recovery_task = None
     await shutdown_auth_flows()
     await shutdown_inbound_queues()
+    from ..request_preprocessing import prompt_preprocessor
+
+    await prompt_preprocessor.close()
     await shutdown_card_surface_tasks()
 
     if _status_poll_task:

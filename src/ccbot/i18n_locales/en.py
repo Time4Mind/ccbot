@@ -364,6 +364,7 @@ EN: dict[str, str] = {
     "settings.cat.voice": "🎙 Voice",
     "settings.cat.terminal": "🖥 Local terminal",
     "settings.cat.options": "⋯ Option buttons",
+    "settings.cat.preprocessing": "💻 Preprocessing",
     "settings.cat.behavior": "⚙ Agent, behavior & language",
     "settings.cat.card.body": (
         "*Card / view*\n\nLayout, density and refresh of the live session card."
@@ -381,6 +382,26 @@ EN: dict[str, str] = {
         "Native Terminal / iTerm window attached to each new session."
     ),
     "settings.cat.options.body": "*Option buttons*\n\nChoose which actions appear under Options.",
+    "settings.cat.preprocessing.body": (
+        "*Preprocessing*\n\nConservative request cleanup by one shared Luna before delivery to the pinned session."
+    ),
+    "settings.group.preprocessing_mode": "Mode",
+    "settings.group.preprocessing_instruction": "Instruction",
+    "settings.preprocessing_mode.body": (
+        "*Preprocessing mode*\n\nOff, voice only, or every text and voice request."
+    ),
+    "settings.preprocessing_instruction.body": (
+        "*Preprocessing instruction*\n\nAn empty value selects the built-in conservative instruction."
+    ),
+    "preprocessing.mode.off": "Off",
+    "preprocessing.mode.voice": "Voice only",
+    "preprocessing.mode.all": "All requests",
+    "preprocessing.instruction.builtin": "Built-in",
+    "preprocessing.instruction.custom": "Custom",
+    "preprocessing.instruction.edit": "Edit",
+    "preprocessing.instruction.reset": "Restore built-in",
+    "preprocessing.instruction.send": "Send the new instruction as one text message.",
+    "preprocessing.instruction.invalid": "The instruction must be non-empty and at most 16 KiB.",
     "settings.group.option_button_screenshot": "🧑‍💻 Shot",
     "settings.group.option_button_terminal": "🖥 Terminal",
     "settings.option_button_screenshot.body": "*Shot button*\n\nShow Shot under Options.",

@@ -186,6 +186,9 @@ class SessionStateMixin:
         sess.screenshot_user_id = 0
         sess.screenshot_capture_kib = 0
         sess.screenshot_profile = ""
+        # A request admitted for this exact session must never migrate to the
+        # fallback active session after the target is closed.
+        sess.pending_preprocessing.clear()
         # If this was anyone's active session, auto-pick the
         # previously-active session as the replacement (per user
         # request: "при удалении активной сессии необходимо
@@ -240,6 +243,7 @@ class SessionStateMixin:
             return
         sess.state = "lost"
         sess.window_id = ""
+        sess.pending_preprocessing.clear()
         # Lost sessions can't make progress; remove from the bg panel.
         from .handlers import bg_status
 
@@ -336,6 +340,13 @@ class SessionStateMixin:
         "language": "en",  # "en" | "ru" | "zh" — UI strings
         "live_lag": 4,  # seconds, see PREVIEW_LIVE_LAG
         "voice": "auto",  # "auto" | "parakeet" | "whisper" | "apple" | "off"
+        # Optional conservative rewrite before a prompt reaches the pinned
+        # session. It is deliberately opt-in: migrations and new users both
+        # remain on the direct-delivery path until they choose a mode.
+        "preprocessing_mode": "off",  # "off" | "voice" | "all"
+        # Empty selects the approved built-in instruction. A custom value
+        # replaces it verbatim; it is never mixed into the main agent context.
+        "preprocessing_instruction": "",
         # Hours without activity before a live session is archived. 6h is the
         # closest supported migration from the historical global 4h default.
         "session_idle_hours": DEFAULT_IDLE_ARCHIVE_HOURS,

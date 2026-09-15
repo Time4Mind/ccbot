@@ -27,7 +27,9 @@ def _command(backend: str) -> str:
 def is_available(backend: str) -> bool:
     executable = _command(backend)
     path = Path(executable).expanduser()
-    return path.is_file() if path.is_absolute() else shutil.which(executable) is not None
+    return (
+        path.is_file() if path.is_absolute() else shutil.which(executable) is not None
+    )
 
 
 async def install(backend: str, progress: Progress) -> bool:

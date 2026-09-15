@@ -78,9 +78,7 @@ def build_backend_picker(user_id: int) -> InlineKeyboardMarkup:
                 )
                 for name in enabled
             ],
-            [
-                InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_DIR_CANCEL)
-            ],
+            [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_DIR_CANCEL)],
         ]
     )
 

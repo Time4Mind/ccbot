@@ -401,9 +401,7 @@ async def handle(
             try:
                 session_manager.set_backend_enabled(user.id, backend, enabled)
             except RuntimeError:
-                await query.answer(
-                    t(user.id, "toast.last_backend"), show_alert=True
-                )
+                await query.answer(t(user.id, "toast.last_backend"), show_alert=True)
                 return True
             from ...default_session import ensure_default_session
 

@@ -65,9 +65,7 @@ async def create_and_activate_session(
     if backend == "codex":
         from .commands.auth import ensure_codex_authenticated
 
-        if not await ensure_codex_authenticated(
-            context.bot, user.id, backend=backend
-        ):
+        if not await ensure_codex_authenticated(context.bot, user.id, backend=backend):
             await safe_edit(
                 query,
                 t(user.id, "auth.codex.required"),

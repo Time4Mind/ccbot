@@ -17,7 +17,9 @@ from ccbot.bot.callbacks.dir_browser import build_backend_picker
 def _clean_default_state():
     saved_sessions = dict(session_manager.sessions)
     saved_backend = session_manager.agent_backend
-    saved_settings = {uid: dict(values) for uid, values in session_manager.user_settings.items()}
+    saved_settings = {
+        uid: dict(values) for uid, values in session_manager.user_settings.items()
+    }
     try:
         session_manager.sessions.clear()
         session_manager.user_settings.clear()
@@ -33,7 +35,9 @@ def _clean_default_state():
 
 
 @pytest.mark.asyncio
-async def test_enabled_default_session_creates_exactly_one_reserve(monkeypatch, tmp_path):
+async def test_enabled_default_session_creates_exactly_one_reserve(
+    monkeypatch, tmp_path
+):
     user_id = 42
     project = tmp_path / "project"
     project.mkdir()
@@ -98,7 +102,10 @@ def test_disabled_default_session_creates_nothing(monkeypatch):
     create_window = AsyncMock()
     monkeypatch.setattr(default_session.tmux_manager, "create_window", create_window)
 
-    assert asyncio.run(default_session.ensure_default_session(SimpleNamespace(), 42)) is None
+    assert (
+        asyncio.run(default_session.ensure_default_session(SimpleNamespace(), 42))
+        is None
+    )
     create_window.assert_not_awaited()
 
 
@@ -114,7 +121,9 @@ async def test_disabling_default_session_removes_only_empty_reserve(monkeypatch)
     reserve.default_reserve_user_id = user_id
     ordinary = session_manager.create_session(name="project-1", window_id="@1")
 
-    assert await default_session.ensure_default_session(SimpleNamespace(), user_id) is None
+    assert (
+        await default_session.ensure_default_session(SimpleNamespace(), user_id) is None
+    )
 
     assert session_manager.get_session(reserve.id) is None
     assert session_manager.get_session(ordinary.id) is ordinary

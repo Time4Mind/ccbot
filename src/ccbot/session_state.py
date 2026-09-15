@@ -516,9 +516,7 @@ class SessionStateMixin:
         """Choose which enabled backend owns the one prewarmed reserve."""
         if backend not in self.get_enabled_backends(user_id):
             raise ValueError("default backend must be enabled")
-        self.user_settings.setdefault(user_id, {})[
-            "default_session_backend"
-        ] = backend
+        self.user_settings.setdefault(user_id, {})["default_session_backend"] = backend
         self.agent_backend = backend
         config.agent_backend = backend
         self.save_state()

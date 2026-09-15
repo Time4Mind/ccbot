@@ -292,11 +292,7 @@ async def _surface_new_interactive_ui(
     if await _maybe_auto_approve(user_id, window_id, pane_text):
         return True
 
-    if (
-        is_bg_session
-        and sess is not None
-        and not sess.default_reserve_user_id
-    ):
+    if is_bg_session and sess is not None and not sess.default_reserve_user_id:
         # Background session: prompt didn't qualify for auto-approve
         # (e.g. no "Yes" option, or feature off). Never surface in
         # chat — stash the snapshot in bg_status and flip ❓ on the

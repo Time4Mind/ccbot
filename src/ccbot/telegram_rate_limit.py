@@ -85,9 +85,7 @@ class PersistentEndpointRateLimiter(AIORateLimiter):
     def _save_cooldowns(self) -> None:
         now = time.time()
         self._cooldowns = {
-            key: deadline
-            for key, deadline in self._cooldowns.items()
-            if deadline > now
+            key: deadline for key, deadline in self._cooldowns.items() if deadline > now
         }
         self._cooldown_path.parent.mkdir(parents=True, exist_ok=True)
         fd, raw_path = tempfile.mkstemp(

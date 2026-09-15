@@ -478,6 +478,63 @@ def test_codex_0147_rollout_normalizes_numbered_message_items() -> None:
     assert parsed[-1].stop_reason == "end_turn"
 
 
+def test_codex_final_answer_strips_internal_memory_citation_block() -> None:
+    entries = [
+        {
+            **_line(
+                "response_item",
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": (
+                                "Visible answer.\n\n"
+                                "<oai-mem-citation>\n"
+                                "<citation_entries>\n"
+                                "MEMORY.md:1-2|note=[internal]\n"
+                                "</citation_entries>\n"
+                                "<rollout_ids>id</rollout_ids>\n"
+                                "</oai-mem-citation>"
+                            ),
+                        }
+                    ],
+                    "phase": "final_answer",
+                },
+            ),
+            "ordinal": 1,
+        }
+    ]
+
+    parsed, pending = TranscriptParser.parse_entries(entries)
+
+    assert pending == {}
+    assert [(item.role, item.text) for item in parsed] == [
+        ("assistant", "Visible answer.")
+    ]
+
+
+def test_codex_agent_event_strips_unclosed_memory_citation_tail() -> None:
+    entries = [
+        _line(
+            "event_msg",
+            {
+                "type": "agent_message",
+                "message": "Visible update.\n<oai-mem-citation>internal tail",
+                "phase": "final_answer",
+            },
+        )
+    ]
+
+    parsed, pending = TranscriptParser.parse_entries(entries)
+
+    assert pending == {}
+    assert [(item.role, item.text) for item in parsed] == [
+        ("assistant", "Visible update.")
+    ]
+
+
 def test_codex_0147_rollout_skips_injected_user_context() -> None:
     entries = [
         {

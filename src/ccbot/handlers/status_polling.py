@@ -424,9 +424,16 @@ async def _drive_typing_indicator(
         user_id, sess.id if sess else window_id, status_line
     )
     in_menu = sess is not None and is_card_in_menu_view(user_id, sess.id)
-    card_busy = sess is not None and is_card_busy(user_id, sess.id)
     background_match = _BACKGROUND_TERMINAL_RE.search(status_line)
     background_work = background_match is not None
+    state = get_card_state(user_id, sess) if sess is not None else None
+    if state is not None and state.user_stopped:
+        # Escape can leave the last TUI spinner visible for several polls.
+        # Explicit user intent wins until a new inbound request clears it.
+        pane_busy = False
+        background_match = None
+        background_work = False
+    card_busy = sess is not None and is_card_busy(user_id, sess.id)
     # When the card is finalized (last event = ``final_text`` /
     # ``error``), pane_busy is a lie — the spinner line is just
     # scrollback that hasn't scrolled off yet (observed: ``Sautéed
@@ -441,9 +448,10 @@ async def _drive_typing_indicator(
     ):
         pane_busy = False
 
-    if sess is not None:
-        state = get_card_state(user_id, sess)
+    if sess is not None and state is not None:
         prior_status = state.pane_status
+        prior_pane_busy = state.pane_busy
+        state.pane_busy = pane_busy
         if background_match is not None:
             count_text = background_match.group(1).lower()
             state.pane_status = f"Working · {count_text}"
@@ -454,13 +462,18 @@ async def _drive_typing_indicator(
                 state.turn_phase = TurnPhase.IDLE
 
         status_changed = prior_status != state.pane_status
+        busy_changed = prior_pane_busy != state.pane_busy
         refresh_now = time.monotonic()
         refresh_due = (
             pane_busy
             and refresh_now - state.last_stall_pane_refresh_ts
             >= _WORKING_PANE_REFRESH_SECONDS
         )
-        if not is_bg_session and not in_menu and (status_changed or refresh_due):
+        if (
+            not is_bg_session
+            and not in_menu
+            and (status_changed or busy_changed or refresh_due)
+        ):
             if await refresh_panel(
                 bot,
                 user_id,

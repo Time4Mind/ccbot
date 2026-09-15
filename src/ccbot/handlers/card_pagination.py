@@ -443,14 +443,14 @@ def _card_is_busy(state: CardState) -> bool:
     """Is this card actually producing output right now? Drives the
     Stop ↔ Kill keyboard split AND the polling-side TYPING indicator.
 
-    Busy iff ALL of:
-      1. ``msg_id`` set (card alive).
-      2. There IS an event log AND its tail is not a terminal event
+    Explicit user Stop always wins. Otherwise busy when the card is alive and
+    either the polled pane is actively working or ALL of:
+      1. There IS an event log AND its tail is not a terminal event
          (``final_text`` / ``error``). After ``finalize_task`` lands
          a ``final_text`` chunk the turn is done — TYPING and the
          Stop button should clear immediately, not linger for the
          grace window.
-      3. Last event was within ``2 × CARD_EDIT_LAG`` (bridges the
+      2. Last event was within ``2 × CARD_EDIT_LAG`` (bridges the
          100-500 ms ``tool_use`` ↔ ``tool_result`` gap; longer gaps
          where claude is silently thinking are picked up by
          ``status_polling`` via the pane spinner instead).
@@ -459,6 +459,10 @@ def _card_is_busy(state: CardState) -> bool:
 
     if state.msg_id is None:
         return False
+    if state.user_stopped:
+        return False
+    if state.pane_busy and state.turn_phase is TurnPhase.RUNNING:
+        return True
     if state.pane_status and state.turn_phase is TurnPhase.RUNNING:
         return True
     if state.last_event_ts <= 0:

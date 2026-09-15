@@ -203,6 +203,39 @@ async def test_codex_background_terminal_reopens_working_surface(monkeypatch) ->
 
 
 @pytest.mark.asyncio
+async def test_live_pane_work_keeps_stop_visible_between_transcript_events(
+    monkeypatch,
+) -> None:
+    """A silent working pane remains busy after the short event grace expires."""
+    from ccbot.handlers import status_polling
+
+    sess = SimpleNamespace(id="s1", window_id="@1")
+    state = CardState(
+        msg_id=9,
+        events=[Event(type="tool_use", text="call", started_at=1.0)],
+        last_event_ts=1.0,
+        turn_phase=TurnPhase.RUNNING,
+    )
+    monkeypatch.setattr(status_polling, "get_card_state", lambda *_a: state)
+    monkeypatch.setattr(status_polling, "parse_status_line", lambda _p: "Working (17s)")
+    monkeypatch.setattr(status_polling, "is_card_in_menu_view", lambda *_a: False)
+    monkeypatch.setattr(status_polling, "is_card_busy", lambda *_a: False)
+    monkeypatch.setattr(status_polling, "is_card_finalized", lambda *_a: False)
+    monkeypatch.setattr(status_polling, "_pane_status_is_changing", lambda *_a: True)
+    monkeypatch.setattr(status_polling, "maybe_finalize_stalled", AsyncMock())
+    monkeypatch.setattr(status_polling, "refresh_panel", AsyncMock(return_value=True))
+    monkeypatch.setattr(status_polling, "fire_typing", AsyncMock())
+    monkeypatch.setattr(status_polling, "is_interactive_ui", lambda _p: False)
+    monkeypatch.setattr(status_polling, "get_interactive_window", lambda _u: None)
+
+    await _drive_typing_indicator(
+        object(), 42, "@1", "Working (17s - esc to interrupt)", sess, False
+    )
+
+    assert _card_is_busy(state) is True
+
+
+@pytest.mark.asyncio
 async def test_status_tick_uses_one_window_snapshot_for_all_live_sessions():
     """One poll tick has fixed discovery cost instead of one scan per session."""
     sessions = [

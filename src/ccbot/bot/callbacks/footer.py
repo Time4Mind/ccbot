@@ -26,11 +26,13 @@ from ...handlers.callback_data import (
     CB_PG_NEXT,
     CB_PG_PREV,
 )
+from ...handlers.card_model import TurnPhase
 from ...handlers.menu import (
     build_footer_keyboard,
     toggle_footer_options,
 )
 from ...handlers.notifications import (
+    _card_is_busy,
     card_page_info,
     enter_kb_mode,
     exit_kb_mode,
@@ -61,7 +63,19 @@ async def handle(
             await query.answer(t(user.id, "toast.window_gone"), show_alert=False)
             return True
         await tmux_manager.send_keys(w.window_id, "\x1b", enter=False)
+        # Stop is an authoritative user transition. A stale pane spinner or
+        # late transcript event from the interrupted turn must not flip the
+        # button back to Stop and trap the session in an unclosable state.
+        sess = session_manager.get_active_session(user.id)
+        if sess is not None and sess.window_id == w.window_id:
+            state = get_card_state(user.id, sess)
+            state.user_stopped = True
+            state.pane_busy = False
+            state.pane_status = ""
+            state.turn_phase = TurnPhase.IDLE
+            state.stall_watch_active = False
         await query.answer(t(user.id, "toast.esc_sent"))
+        await refresh_panel(context.bot, user.id, immediate=True, refresh_keyboard=True)
         return True
 
     if data == CB_FT_KILL:
@@ -233,7 +247,11 @@ async def handle(
         await query.answer(t(user.id, "toast.term_opened"))
         # Refresh the footer keyboard on the current message so the Term
         # button drops out (next render will see the attached client).
-        keyboard = build_footer_keyboard(user.id, screen="main", is_busy=False)
+        active = session_manager.get_active_session(user.id)
+        is_busy = False
+        if active is not None:
+            is_busy = _card_is_busy(get_card_state(user.id, active))
+        keyboard = build_footer_keyboard(user.id, screen="main", is_busy=is_busy)
         if keyboard is not None:
             try:
                 await query.edit_message_reply_markup(reply_markup=keyboard)

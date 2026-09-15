@@ -619,6 +619,73 @@ def test_codex_rollout_hides_harness_tool_call_and_its_result() -> None:
     assert all("internal instructions" not in item.text for item in parsed)
 
 
+def test_codex_rollout_keeps_structured_tool_output_text() -> None:
+    """Real Codex exec output blocks must survive into the card tool result."""
+    entries = [
+        {
+            **_line(
+                "response_item",
+                {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "exec-call",
+                    "input": "printf 'line 1\nline 2\n'",
+                },
+            ),
+            "ordinal": 1,
+        },
+        {
+            **_line(
+                "response_item",
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "exec-call",
+                    "output": [
+                        {"type": "input_text", "text": "Script completed\n"},
+                        {"type": "input_text", "text": "line 1\nline 2\n"},
+                    ],
+                },
+            ),
+            "ordinal": 2,
+        },
+    ]
+
+    parsed, pending = TranscriptParser.parse_entries(entries)
+
+    assert pending == {}
+    assert len(parsed) == 2
+    assert parsed[1].content_type == "tool_result"
+    assert "line 1\nline 2" in parsed[1].text
+
+    from ccbot.handlers.card_event_render import render_event
+    from ccbot.handlers.card_events import _apply_tool_result, _build_event
+    from ccbot.handlers.card_types import CardState
+    from ccbot.session_monitor import NewMessage
+
+    state = CardState()
+    for item in parsed:
+        event = _build_event(
+            NewMessage(
+                session_id="s1",
+                text=item.text,
+                is_complete=False,
+                content_type=item.content_type,
+                tool_use_id=item.tool_use_id,
+                role=item.role,
+                tool_name=item.tool_name,
+                timestamp=item.timestamp or "",
+            )
+        )
+        if item.content_type == "tool_result":
+            assert _apply_tool_result(state, event)
+        else:
+            state.events.append(event)
+
+    rendered = render_event(state.events[0], in_flight=False, now=1.0)
+    assert "\n- - -\n" in rendered
+    assert "line 1\nline 2" in rendered
+
+
 def test_codex_rollout_keeps_harness_tool_hidden_across_poll_batches() -> None:
     tool_call = {
         **_line(

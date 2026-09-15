@@ -296,15 +296,19 @@ async def _process_voice(
         )
     cancel_bash_capture(user.id, wid)
 
-    # A transcription is expensive and unrecoverable — unlike typed text the
-    # user can't just retype 90 seconds of speech. If the pane is showing an
-    # interactive prompt, the text would be consumed as menu keystrokes and
-    # silently lost, so tell the user to resend rather than swallowing it.
+    # A transcription is expensive and unrecoverable. The normal intake path
+    # owns a per-session FIFO entry, so an approval pauses that entry until the
+    # pane clears instead of consuming or dropping the recognized request.
     _voice_lost_notice = _append_dropped_queue_notice(
         user.id, t(user.id, "voice.not_delivered"), queue_barrier
     )
     if await _intercept_if_pending_ui(
-        context.bot, user.id, wid, update.message, _voice_lost_notice
+        context.bot,
+        user.id,
+        wid,
+        update.message,
+        _voice_lost_notice,
+        wait_until_clear=not surface_pending,
     ):
         return False
 

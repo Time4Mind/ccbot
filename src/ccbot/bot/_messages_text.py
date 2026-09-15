@@ -586,11 +586,15 @@ async def text_handler(
     # New message pushes pane content down — kill any in-flight bash capture.
     cancel_bash_capture(user.id, wid)
 
-    # Pending AskUserQuestion / ExitPlanMode / Permission on the pane
-    # would consume our keystrokes as menu navigation (digits select,
-    # Enter submits). Surface the prompt to the user and bail before
-    # send_to_window — the user must answer via the keyboard.
-    if await _intercept_if_pending_ui(context.bot, user.id, wid, update.message):
+    # A pending interactive prompt would consume our keystrokes as navigation.
+    # Pinned FIFO requests wait; only the non-queued fallback asks for a resend.
+    if await _intercept_if_pending_ui(
+        context.bot,
+        user.id,
+        wid,
+        update.message,
+        wait_until_clear=pinned_wid is not None,
+    ):
         return False
 
     return await _dispatch_text_to_active(update, context, user.id, wid, text)

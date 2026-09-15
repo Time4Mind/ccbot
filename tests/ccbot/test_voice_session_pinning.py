@@ -813,6 +813,82 @@ class TestVoicePendingCardMarker:
         )
 
     @pytest.mark.asyncio
+    async def test_ordered_voice_waits_for_pending_approval_then_dispatches(self):
+        """An approval must pause the FIFO entry, not consume the voice turn."""
+        update = _make_voice_update()
+        update.message.message_id = 78
+        context = _make_context()
+        approval_seen = asyncio.Event()
+        approval_cleared = asyncio.Event()
+        dispatched = asyncio.Event()
+
+        mock_sm = MagicMock()
+        pinned_sess = MagicMock()
+        pinned_sess.id = "sess1"
+        mock_sm.find_session_by_window.return_value = pinned_sess
+        mock_sm.get_active_session.return_value = pinned_sess
+        mock_tmux = MagicMock()
+        mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock(window_id="@5"))
+
+        from ccbot.handlers.card_model import CardState
+
+        state = CardState()
+
+        async def pending_gate(*_args, wait_until_clear=False, **_kwargs):
+            approval_seen.set()
+            if not wait_until_clear:
+                return True
+            await approval_cleared.wait()
+            return False
+
+        async def dispatch(*_args, **_kwargs):
+            dispatched.set()
+            return True
+
+        with (
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.session_manager", mock_sm),
+            patch("ccbot.bot._common.session_manager", mock_sm),
+            patch("ccbot.bot.messages.tmux_manager", mock_tmux),
+            patch("ccbot.bot.messages.resolve_voice_backend", return_value="whisper"),
+            patch(
+                "ccbot.bot.messages.transcribe_voice",
+                new=AsyncMock(return_value="recognized request"),
+            ),
+            patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
+            patch("ccbot.bot.messages.safe_reply", new=AsyncMock()),
+            patch("ccbot.bot.messages.get_card_state", return_value=state),
+            patch("ccbot.bot.messages.is_active_for_user", return_value=True),
+            patch("ccbot.bot.messages.resume_card_view", new=AsyncMock()),
+            patch("ccbot.bot.messages.refresh_panel", new=AsyncMock(return_value=True)),
+            patch(
+                "ccbot.bot.messages._intercept_if_pending_ui",
+                new=AsyncMock(side_effect=pending_gate),
+            ),
+            patch(
+                "ccbot.bot.messages._dispatch_text_to_active",
+                new=AsyncMock(side_effect=dispatch),
+            ),
+        ):
+            from ccbot.bot.messages import voice_handler
+
+            task = asyncio.create_task(
+                voice_handler(
+                    update,
+                    context,
+                    pinned_wid="@5",
+                    ordered=True,
+                    surface_pending=False,
+                )
+            )
+            await approval_seen.wait()
+            assert not dispatched.is_set()
+            approval_cleared.set()
+            assert await task is True
+
+        assert dispatched.is_set()
+
+    @pytest.mark.asyncio
     async def test_marker_cleared_on_transcription_failure(self):
         """A failed transcription must not leave the card stuck showing
         the pending marker forever."""

@@ -404,8 +404,11 @@ class SessionStateMixin:
         # with smart sentence / paragraph boundaries — see
         # ``_chunk_final_text`` for the exact preference order.
         "card_page_lines": 20,
-        # Visible rows in each half of a tool spoiler (command and result).
+        # Legacy shared spoiler limit retained only as a migration source.
         "spoiler_block_lines": 7,
+        # Independent visible rows for the command and result blocks.
+        "spoiler_command_lines": 7,
+        "spoiler_result_lines": 7,
         # Auto-rename new sessions via a cheap one-shot model call after the
         # first user message ≥20 chars. When ``False``, names stay as
         # the directory basename (``workdir``, ``workdir-2``, ...) for
@@ -431,6 +434,11 @@ class SessionStateMixin:
         # produces an edit for every event; migrate persisted zero to 2s.
         if merged.get("live_lag") == 0:
             merged["live_lag"] = 2
+        legacy_spoiler_lines = stored.get("spoiler_block_lines", 7)
+        if "spoiler_command_lines" not in stored:
+            merged["spoiler_command_lines"] = legacy_spoiler_lines
+        if "spoiler_result_lines" not in stored:
+            merged["spoiler_result_lines"] = legacy_spoiler_lines
         # Before option visibility had its own key, manual/auto meant that
         # the user expected a Terminal action. Preserve that expectation but
         # never revive the removed automatic-launch behavior.

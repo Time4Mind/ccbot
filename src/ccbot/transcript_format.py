@@ -174,7 +174,11 @@ def extract_tool_result_text(content: list[Any] | Any) -> str:
     if isinstance(content, list):
         parts: list[str] = []
         for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
+            if isinstance(item, dict) and item.get("type") in (
+                "text",
+                "input_text",
+                "output_text",
+            ):
                 t = item.get("text", "")
                 if t:
                     parts.append(t)

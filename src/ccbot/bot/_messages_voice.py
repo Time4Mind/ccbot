@@ -18,9 +18,11 @@ from ..handlers.message_sender import (
 from ..handlers.notifications import (
     get_card_state,
     is_active_for_user,
+    refresh_panel,
     repost_card,
     resume_card_view,
 )
+from ..handlers.card_types import PendingPrompt
 from ..handlers.typing import fire_typing
 from ..i18n import t
 from ..session_models import Session
@@ -259,7 +261,30 @@ async def _process_voice(
         return False
 
     if card_state is not None:
+        # Replace the recognition placeholder atomically with the recognized
+        # request before pane delivery starts. Delivery proof can take seconds;
+        # clearing ``voice_pending`` without a replacement made the card look
+        # empty during that interval. The real transcript event consumes this
+        # pending row through the normal marker-matching path.
+        request_id = str(update.message.message_id)
         card_state.voice_pending = False
+        card_state.pending_prompts = [
+            row for row in card_state.pending_prompts if row.request_id != request_id
+        ]
+        card_state.pending_prompts.append(
+            PendingPrompt(request_id=request_id, text=text, user_icon="👤")
+        )
+        card_state.current_page_idx = None
+        if sess is not None and is_active_for_user(user.id, sess):
+            try:
+                await refresh_panel(
+                    context.bot,
+                    user.id,
+                    immediate=True,
+                    refresh_pane=False,
+                )
+            except Exception as exc:
+                logger.debug("recognized voice receipt repaint failed: %s", exc)
 
     # Typing is a chat-level indicator, so it only makes sense while the
     # pinned session is still the one the user is looking at. If they

@@ -359,8 +359,10 @@ def build_footer_keyboard(
         rows.extend(_settings_cardhist_grid(user_id))
     elif screen == "settings_pagesize":
         rows.extend(_settings_pagesize_grid(user_id))
-    elif screen == "settings_spoiler_lines":
-        rows.extend(_settings_spoiler_lines_grid(user_id))
+    elif screen == "settings_spoiler_command_lines":
+        rows.extend(_settings_spoiler_lines_grid(user_id, "spoiler_command_lines"))
+    elif screen == "settings_spoiler_result_lines":
+        rows.extend(_settings_spoiler_lines_grid(user_id, "spoiler_result_lines"))
     elif screen == "settings_option_screenshot":
         rows.extend(_settings_option_grid(user_id, "option_button_screenshot"))
     elif screen == "settings_option_terminal":

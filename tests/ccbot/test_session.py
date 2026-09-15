@@ -168,6 +168,32 @@ class TestLiveLagSetting:
         assert mgr.get_user_settings(1)["live_lag"] == 2
 
 
+class TestSpoilerLineSettings:
+    def test_legacy_shared_limit_migrates_to_both_blocks(
+        self, mgr: SessionManager
+    ) -> None:
+        mgr.user_settings[1] = {"spoiler_block_lines": 20}
+
+        settings = mgr.get_user_settings(1)
+
+        assert settings["spoiler_command_lines"] == 20
+        assert settings["spoiler_result_lines"] == 20
+
+    def test_independent_limits_override_legacy_value(
+        self, mgr: SessionManager
+    ) -> None:
+        mgr.user_settings[1] = {
+            "spoiler_block_lines": 7,
+            "spoiler_command_lines": 3,
+            "spoiler_result_lines": 20,
+        }
+
+        settings = mgr.get_user_settings(1)
+
+        assert settings["spoiler_command_lines"] == 3
+        assert settings["spoiler_result_lines"] == 20
+
+
 class TestIdleArchiveSetting:
     def test_default_is_six_hours(self, mgr: SessionManager) -> None:
         assert mgr.get_user_settings(1).get("session_idle_hours") == 6

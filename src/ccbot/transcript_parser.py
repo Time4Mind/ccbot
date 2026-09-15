@@ -222,6 +222,7 @@ class TranscriptParser:
                         tool_id = block.get("id", "")
                         name = block.get("name", "unknown")
                         inp = block.get("input", {})
+                        hidden = bool(block.get("_ccbot_hidden"))
                         summary = transcript_format.format_tool_use_summary(name, inp)
 
                         # ExitPlanMode: emit plan content as text before tool_use entry
@@ -248,19 +249,21 @@ class TranscriptParser:
                                 summary=summary,
                                 tool_name=name,
                                 input_data=input_data,
+                                hidden=hidden,
                             )
                             # Also emit tool_use entry with tool_name for immediate handling
-                            result.append(
-                                ParsedEntry(
-                                    role="assistant",
-                                    text=summary,
-                                    content_type="tool_use",
-                                    tool_use_id=tool_id,
-                                    timestamp=entry_timestamp,
-                                    tool_name=name,
+                            if not hidden:
+                                result.append(
+                                    ParsedEntry(
+                                        role="assistant",
+                                        text=summary,
+                                        content_type="tool_use",
+                                        tool_use_id=tool_id,
+                                        timestamp=entry_timestamp,
+                                        tool_name=name,
+                                    )
                                 )
-                            )
-                        else:
+                        elif not hidden:
                             result.append(
                                 ParsedEntry(
                                     role="assistant",
@@ -333,6 +336,13 @@ class TranscriptParser:
                         is_interrupted = result_text == cls._INTERRUPTED_TEXT
                         tool_info = pending_tools.pop(tool_use_id, None)
                         _tuid = tool_use_id or None
+
+                        # Codex writes internal instruction/memory reads as normal
+                        # tool pairs. Their call is suppressed above; suppress the
+                        # matched output as well so no orphan harness content lands
+                        # in the card on the same or a later monitor poll.
+                        if tool_info is not None and tool_info.hidden:
+                            continue
 
                         # Extract tool info from PendingToolInfo object
                         if tool_info is None:

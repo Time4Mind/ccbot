@@ -82,7 +82,10 @@ _JOINER_LINES = 3
 
 
 def _split_page_by_budget(
-    page: list[Event], budget_lines: int, *, spoiler_max_lines: int = 7
+    page: list[Event],
+    budget_lines: int,
+    *,
+    spoiler_line_limits: tuple[int, int] = (7, 7),
 ) -> list[list[Event]]:
     """Split one logical page into budget-fitting sub-pages.
 
@@ -110,7 +113,7 @@ def _split_page_by_budget(
         return [page]
     now = time.time()
     cap = budget_lines + CARD_PAGE_LINES_OVERSHOOT
-    rendered = render_page(page, now=now, spoiler_max_lines=spoiler_max_lines)
+    rendered = render_page(page, now=now, spoiler_line_limits=spoiler_line_limits)
     if (
         _count_lines(rendered) <= cap
         and _estimate_md_v2_size(rendered) <= CARD_PAGE_BUDGET
@@ -126,7 +129,7 @@ def _split_page_by_budget(
     _JOINER_BYTES = len(_EVENT_JOINER.encode("utf-8"))
     for ev in page:
         rendered_ev = render_event(
-            ev, in_flight=False, now=now, spoiler_max_lines=spoiler_max_lines
+            ev, in_flight=False, now=now, spoiler_line_limits=spoiler_line_limits
         )
         ev_lines = _count_lines(rendered_ev)
         ev_bytes = _estimate_md_v2_size(rendered_ev)
@@ -160,7 +163,7 @@ def paginate_events_for_card(
     the same page list.
     """
     budget = _resolve_line_budget(user_id)
-    spoiler_lines = resolve_spoiler_line_budget(user_id)
+    spoiler_lines = resolve_spoiler_line_budgets(user_id)
     events = state.events
     if not events:
         return [[]]
@@ -192,7 +195,9 @@ def paginate_events_for_card(
         if latest_start:
             for page in paginate_events(events[:latest_start]):
                 prefix_pages.extend(
-                    _split_page_by_budget(page, budget, spoiler_max_lines=spoiler_lines)
+                    _split_page_by_budget(
+                        page, budget, spoiler_line_limits=spoiler_lines
+                    )
                 )
         state.pagination_prefix_len = latest_start
         state.pagination_prefix_first_id = prefix_first_id
@@ -202,7 +207,7 @@ def paginate_events_for_card(
         state.pagination_prefix_pages = prefix_pages
 
     latest_pages = _split_page_by_budget(
-        events[latest_start:], budget, spoiler_max_lines=spoiler_lines
+        events[latest_start:], budget, spoiler_line_limits=spoiler_lines
     )
     return [*prefix_pages, *latest_pages] or [[]]
 
@@ -216,7 +221,12 @@ def _resolved_page_idx(state: CardState, total_pages: int) -> int:
     return max(0, min(state.current_page_idx, total_pages - 1))
 
 
-def render_page(events: list[Event], now: float, *, spoiler_max_lines: int = 7) -> str:
+def render_page(
+    events: list[Event],
+    now: float,
+    *,
+    spoiler_line_limits: tuple[int, int] = (7, 7),
+) -> str:
     """Render the events of one page into a single body string.
 
     Events are joined by ``_EVENT_JOINER`` — a non-breaking-space
@@ -233,7 +243,7 @@ def render_page(events: list[Event], now: float, *, spoiler_max_lines: int = 7) 
                 ev,
                 in_flight=_is_in_flight(ev, events, i),
                 now=now,
-                spoiler_max_lines=spoiler_max_lines,
+                spoiler_line_limits=spoiler_line_limits,
             )
         )
     return _EVENT_JOINER.join(parts)
@@ -309,20 +319,26 @@ def _resolve_line_budget(user_id: int | None) -> int:
     return value
 
 
-def resolve_spoiler_line_budget(user_id: int | None) -> int:
+def resolve_spoiler_line_budgets(user_id: int | None) -> tuple[int, int]:
     if user_id is None:
-        return 7
-    try:
-        value = int(
-            session_manager.get_user_settings(user_id).get("spoiler_block_lines", 7)
-        )
-    except (TypeError, ValueError):
-        return 7
-    return value if value in (3, 7, 20) else 7
+        return (7, 7)
+    settings = session_manager.get_user_settings(user_id)
+
+    def _valid(key: str) -> int:
+        try:
+            value = int(settings.get(key, 7))
+        except (TypeError, ValueError):
+            return 7
+        return value if value in (3, 7, 20) else 7
+
+    return _valid("spoiler_command_lines"), _valid("spoiler_result_lines")
 
 
 def _trim_page_events(
-    events: list[Event], budget_lines: int, *, spoiler_max_lines: int = 7
+    events: list[Event],
+    budget_lines: int,
+    *,
+    spoiler_line_limits: tuple[int, int] = (7, 7),
 ) -> list[Event]:
     """Drop middle events from ``events`` until rendered line-count
     ≤ ``budget_lines`` (with ``CARD_PAGE_LINES_OVERSHOOT`` slack).
@@ -339,7 +355,7 @@ def _trim_page_events(
         return events
     now = time.time()
     full_lines = _count_lines(
-        render_page(events, now=now, spoiler_max_lines=spoiler_max_lines)
+        render_page(events, now=now, spoiler_line_limits=spoiler_line_limits)
     )
     cap = budget_lines + CARD_PAGE_LINES_OVERSHOOT
     if full_lines <= cap:
@@ -350,7 +366,7 @@ def _trim_page_events(
             anchor,
             in_flight=False,
             now=now,
-            spoiler_max_lines=spoiler_max_lines,
+            spoiler_line_limits=spoiler_line_limits,
         )
     )
     remaining = max(0, budget_lines - anchor_lines)
@@ -362,7 +378,7 @@ def _trim_page_events(
             events[i],
             in_flight=False,
             now=now,
-            spoiler_max_lines=spoiler_max_lines,
+            spoiler_line_limits=spoiler_line_limits,
         )
         ev_lines = _count_lines(rendered)
         if kept_tail_rev and total + ev_lines > remaining:

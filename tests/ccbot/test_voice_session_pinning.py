@@ -746,6 +746,73 @@ class TestVoicePendingCardMarker:
         assert state.voice_pending is False
 
     @pytest.mark.asyncio
+    async def test_recognized_text_replaces_voice_marker_before_dispatch(self):
+        """There must be no empty-card gap between STT and pane delivery."""
+        update = _make_voice_update()
+        update.message.message_id = 77
+        context = _make_context()
+
+        mock_sm = MagicMock()
+        mock_sm.get_active_window.return_value = "@5"
+        pinned_sess = MagicMock()
+        pinned_sess.id = "sess1"
+        mock_sm.find_session_by_window.return_value = pinned_sess
+        mock_sm.get_active_session.return_value = pinned_sess
+
+        mock_tmux = MagicMock()
+        mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock(window_id="@5"))
+
+        from ccbot.handlers.card_model import CardState
+
+        state = CardState()
+        observed: list[tuple[bool, list[tuple[str, str]]]] = []
+
+        async def dispatch(*args, **kwargs):
+            observed.append(
+                (
+                    state.voice_pending,
+                    [(row.text, row.user_icon) for row in state.pending_prompts],
+                )
+            )
+            return True
+
+        repaint = AsyncMock(return_value=True)
+        with (
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.session_manager", mock_sm),
+            patch("ccbot.bot._common.session_manager", mock_sm),
+            patch("ccbot.bot.messages.tmux_manager", mock_tmux),
+            patch("ccbot.bot.messages.resolve_voice_backend", return_value="whisper"),
+            patch(
+                "ccbot.bot.messages.transcribe_voice",
+                new=AsyncMock(return_value="recognized request"),
+            ),
+            patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
+            patch("ccbot.bot.messages.safe_reply", new=AsyncMock()),
+            patch("ccbot.bot.messages.get_card_state", return_value=state),
+            patch("ccbot.bot.messages.is_active_for_user", return_value=True),
+            patch("ccbot.bot.messages.resume_card_view", new=AsyncMock()),
+            patch("ccbot.bot.messages.repost_card", new=AsyncMock()),
+            patch("ccbot.bot.messages.refresh_panel", new=repaint),
+            patch("ccbot.bot.messages._dispatch_text_to_active", new=dispatch),
+            patch(
+                "ccbot.bot.messages._intercept_if_pending_ui",
+                new=AsyncMock(return_value=False),
+            ),
+        ):
+            from ccbot.bot.messages import voice_handler
+
+            assert await voice_handler(update, context)
+
+        assert observed == [(False, [("recognized request", "👤")])]
+        repaint.assert_awaited_with(
+            context.bot,
+            update.effective_user.id,
+            immediate=True,
+            refresh_pane=False,
+        )
+
+    @pytest.mark.asyncio
     async def test_marker_cleared_on_transcription_failure(self):
         """A failed transcription must not leave the card stuck showing
         the pending marker forever."""

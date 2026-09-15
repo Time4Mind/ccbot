@@ -52,3 +52,4 @@ class PendingToolInfo:
     summary: str  # Formatted tool summary (e.g. "**Read**(file.py)")
     tool_name: str  # Tool name (e.g. "Read", "Edit")
     input_data: Any = None  # Tool input parameters (for Edit to generate diff)
+    hidden: bool = False  # Internal harness call; suppress its paired result too

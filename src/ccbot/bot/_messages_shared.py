@@ -422,13 +422,15 @@ async def _intercept_if_pending_ui(
     wid: str,
     reply_to: Any,
     wasnt_sent_notice: str | None = None,
+    *,
+    wait_until_clear: bool = False,
 ) -> bool:
     """If the pane has a pending interactive UI, surface it and intercept.
 
-    Returns True iff the caller MUST NOT call ``send_to_window``: the
-    AskUserQuestion / ExitPlanMode / Permission prompt on the pane would
-    otherwise consume the user's text as menu keystrokes (digits select
-    options, Enter submits). Caller should ``return`` on True.
+    The AskUserQuestion / ExitPlanMode / Permission prompt on the pane would
+    otherwise consume the user's text as menu keystrokes. A queued caller can
+    set ``wait_until_clear`` and keep ownership of its FIFO entry until the
+    prompt disappears; other callers receive the legacy notice and True.
 
     ``wasnt_sent_notice`` overrides the "your message wasn't sent" reply —
     the voice path passes a resend-oriented line since a transcription, unlike
@@ -441,25 +443,38 @@ async def _intercept_if_pending_ui(
       - Orphan window or bg session → legacy floating msg via
         ``handle_interactive_ui``.
     """
-    w = await tmux_manager.find_window_by_id(wid)
-    if not w:
-        return False
-    pane_text = await tmux_manager.capture_pane(w.window_id)
-    if not pane_text or not is_interactive_ui(pane_text):
-        return False
-    sess = session_manager.find_session_by_window(wid)
-    active = session_manager.get_active_session(user_id)
-    is_active = sess is not None and active is not None and active.id == sess.id
     surfaced = False
-    if is_active and sess is not None:
-        content_obj = extract_interactive_content(pane_text)
-        if content_obj is not None:
-            await enter_kb_mode(
-                bot, user_id, sess, content_obj.content, content_obj.name
-            )
-            surfaced = True
-    if not surfaced:
-        await handle_interactive_ui(bot, user_id, wid)
+    while True:
+        w = await tmux_manager.find_window_by_id(wid)
+        if not w:
+            return False
+        pane_text = await tmux_manager.capture_pane(w.window_id)
+        if not pane_text or not is_interactive_ui(pane_text):
+            if surfaced and wait_until_clear:
+                logger.info(
+                    "pending_ui_cleared_resuming_inbound user=%d wid=%s",
+                    user_id,
+                    wid,
+                )
+            return False
+        if not surfaced:
+            sess = session_manager.find_session_by_window(wid)
+            active = session_manager.get_active_session(user_id)
+            is_active = sess is not None and active is not None and active.id == sess.id
+            if is_active and sess is not None:
+                content_obj = extract_interactive_content(pane_text)
+                if content_obj is not None:
+                    await enter_kb_mode(
+                        bot, user_id, sess, content_obj.content, content_obj.name
+                    )
+                    surfaced = True
+            if not surfaced:
+                await handle_interactive_ui(bot, user_id, wid)
+                surfaced = True
+        if wait_until_clear:
+            await asyncio.sleep(0.25)
+            continue
+        break
     logger.info(
         "intercepted_user_msg_pending_ui user=%d wid=%s",
         user_id,
@@ -522,7 +537,13 @@ async def forward_command_handler(
         "Forwarding command %s to window %s (user=%d)", cc_slash, display, user.id
     )
     await fire_typing(context.bot, user.id, "forward_command", window_id=wid)
-    if await _intercept_if_pending_ui(context.bot, user.id, wid, update.message):
+    if await _intercept_if_pending_ui(
+        context.bot,
+        user.id,
+        wid,
+        update.message,
+        wait_until_clear=pinned_wid is not None,
+    ):
         return False
     sess = session_manager.find_session_by_window(wid)
     async with _card_repost_bracket(context.bot, user.id, sess) as repost:

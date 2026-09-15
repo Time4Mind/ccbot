@@ -290,7 +290,13 @@ async def unsupported_content_handler(
         text_to_send = "\n".join(body_parts)
 
         await fire_typing(context.bot, user.id, "caption_forward", window_id=wid)
-        if await _intercept_if_pending_ui(context.bot, user.id, wid, msg):
+        if await _intercept_if_pending_ui(
+            context.bot,
+            user.id,
+            wid,
+            msg,
+            wait_until_clear=pinned_wid is not None,
+        ):
             return False
         async with _card_repost_bracket(context.bot, user.id, sess) as repost:
             success, message = await _send_with_delivery_proof(wid, text_to_send, sess)
@@ -418,7 +424,13 @@ async def photo_handler(
         else PreparedDispatch(text="")
     )
     caption = prepared_dispatch.text
-    if await _intercept_if_pending_ui(context.bot, user.id, wid, update.message):
+    if await _intercept_if_pending_ui(
+        context.bot,
+        user.id,
+        wid,
+        update.message,
+        wait_until_clear=pinned_wid is not None,
+    ):
         return False
     async with _card_repost_bracket(context.bot, user.id, sess) as repost:
         success, message = await _forward_inbox_file(
@@ -501,7 +513,13 @@ async def document_handler(
         else PreparedDispatch(text="")
     )
     caption = prepared_dispatch.text
-    if await _intercept_if_pending_ui(context.bot, user.id, wid, update.message):
+    if await _intercept_if_pending_ui(
+        context.bot,
+        user.id,
+        wid,
+        update.message,
+        wait_until_clear=pinned_wid is not None,
+    ):
         return False
     async with _card_repost_bracket(context.bot, user.id, sess) as repost:
         success, message = await _forward_inbox_file(

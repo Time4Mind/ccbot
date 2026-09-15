@@ -42,6 +42,16 @@ async def create_and_activate_session(
     assert isinstance(user, User)
 
     previous_active = session_manager.get_active_session(user.id)
+    selected_backend = (
+        context.user_data.pop("_new_session_backend", None)
+        if context.user_data is not None
+        else None
+    )
+    backend = (
+        selected_backend
+        if selected_backend in ("claude", "codex")
+        else session_manager.agent_backend
+    )
 
     # Acknowledge the callback up-front so Telegram's 15-second
     # ``answer_callback_query`` deadline doesn't expire under slow
@@ -52,10 +62,10 @@ async def create_and_activate_session(
     except Exception as e:
         logger.debug("Early query.answer failed: %s", e)
 
-    if session_manager.agent_backend == "codex":
+    if backend == "codex":
         from .commands.auth import ensure_codex_authenticated
 
-        if not await ensure_codex_authenticated(context.bot, user.id):
+        if not await ensure_codex_authenticated(context.bot, user.id, backend=backend):
             await safe_edit(
                 query,
                 t(user.id, "auth.codex.required"),
@@ -65,7 +75,7 @@ async def create_and_activate_session(
     success, message, created_wname, created_wid = await tmux_manager.create_window(
         selected_path,
         resume_session_id=resume_session_id,
-        backend=session_manager.agent_backend,
+        backend=backend,
     )
     if not success:
         await safe_edit(query, f"❌ {message}")
@@ -85,7 +95,7 @@ async def create_and_activate_session(
     # with one ordering-preserving gate.
     session_manager.mark_window_starting(
         created_wid,
-        backend=session_manager.agent_backend,
+        backend=backend,
         resume=resume_session_id is not None,
         bot=context.bot,
         user_id=user.id,
@@ -99,7 +109,7 @@ async def create_and_activate_session(
         ws.session_id = resume_session_id
         ws.cwd = str(selected_path)
         ws.window_name = created_wname
-        ws.backend = session_manager.agent_backend
+        ws.backend = backend
         session_manager.save_state()
 
     # Register Session record and make it active. Honor /new <name> if any.
@@ -110,6 +120,7 @@ async def create_and_activate_session(
         name=pending_name or created_wname or "",
         window_id=created_wid,
         workdir=selected_path,
+        backend=backend,
     )
     ws = session_manager.get_window_state(created_wid)
     if ws.session_id:
@@ -159,7 +170,7 @@ async def create_and_activate_session(
                     live_ws.session_id = resume_session_id
                     live_ws.cwd = str(selected_path)
                     live_ws.window_name = created_wname
-                    live_ws.backend = session_manager.agent_backend
+                    live_ws.backend = backend
                     session_manager.save_state()
             elif live_ws.session_id and not sess.claude_session_id:
                 session_manager.set_session_claude_id(sess.id, live_ws.session_id)

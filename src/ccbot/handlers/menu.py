@@ -35,6 +35,8 @@ from .menu_settings import (
     _highlight,
     _parent_cat_cb,
     _settings_agent_grid,
+    _settings_default_session_grid,
+    _settings_default_directory_grid,
     _settings_archive_ai_grid,
     _settings_approve_grid,
     _settings_bg_notify_grid,
@@ -93,6 +95,8 @@ __all__ = [
     "_settings_voice_grid",
     "_settings_language_grid",
     "_settings_agent_grid",
+    "_settings_default_session_grid",
+    "_settings_default_directory_grid",
     "_settings_archive_ai_grid",
     "_settings_approve_grid",
     "_settings_idle_archive_grid",
@@ -347,6 +351,10 @@ def build_footer_keyboard(
         rows.extend(_settings_language_grid(user_id))
     elif screen == "settings_agent":
         rows.extend(_settings_agent_grid(user_id))
+    elif screen == "settings_default_session":
+        rows.extend(_settings_default_session_grid(user_id))
+    elif screen == "settings_default_directory":
+        rows.extend(_settings_default_directory_grid(user_id))
     elif screen == "settings_weeklyday":
         rows.extend(_settings_weeklyday_grid(user_id))
     elif screen == "settings_approve":
@@ -383,6 +391,7 @@ def build_footer_keyboard(
         "settings_cat_options",
         "settings_cat_behavior",
         "settings_cat_preprocessing",
+        "settings_cat_sessions",
     ):
         rows.extend(_settings_category_grid(user_id, screen))
     elif screen == "settings_bg_notify_finished":

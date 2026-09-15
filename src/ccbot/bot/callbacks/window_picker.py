@@ -8,7 +8,6 @@ where windows persist but Session records vanished.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
 from telegram import CallbackQuery
@@ -16,13 +15,7 @@ from telegram.ext import ContextTypes
 
 from ...handlers.callback_data import CB_WIN_BIND, CB_WIN_CANCEL, CB_WIN_NEW
 from ...handlers.directory_browser import (
-    BROWSE_DIRS_KEY,
-    BROWSE_PAGE_KEY,
-    BROWSE_PATH_KEY,
-    STATE_BROWSING_DIRECTORY,
-    STATE_KEY,
     UNBOUND_WINDOWS_KEY,
-    build_directory_browser,
     clear_window_picker_state,
 )
 from ...handlers.message_sender import safe_edit
@@ -87,17 +80,10 @@ async def handle(
         from ...startup_queue import begin_startup_queue
 
         begin_startup_queue(user.id)
+        from .dir_browser import open_new_session_flow
+
         clear_window_picker_state(context.user_data)
-        start_path = str(Path.home())
-        msg_text, keyboard, subdirs = await build_directory_browser(
-            start_path, user_id=user.id
-        )
-        if context.user_data is not None:
-            context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
-            context.user_data[BROWSE_PATH_KEY] = start_path
-            context.user_data[BROWSE_PAGE_KEY] = 0
-            context.user_data[BROWSE_DIRS_KEY] = subdirs
-        await safe_edit(query, msg_text, reply_markup=keyboard)
+        await open_new_session_flow(query, context, user.id, origin="main")
         await query.answer()
         return True
 

@@ -109,6 +109,16 @@ ZH: dict[str, str] = {
         "_点击分组进行更改。_"
     ),
     "settings.group.agent": "代理",
+    "settings.group.default_session": "预热会话",
+    "settings.group.default_directory": "预热目录",
+    "settings.cat.sessions": "会话和后端",
+    "settings.cat.sessions.body": "*会话和后端*",
+    "settings.default_session.body": "*预热会话*\n\n在所选目录中保持一个空会话。首个请求后立即补充新的预热会话。",
+    "settings.default_directory.body": "*预热会话目录*",
+    "settings.default_directory.choose": "📁 选择目录",
+    "settings.default_directory.invalid": "⚠ 目录不可用 - 预热会话未运行。",
+    "toast.default_directory_required": "请先选择预热会话目录。",
+    "toast.last_backend": "无法禁用最后一个已启用的后端。",
     "settings.group.language": "语言",
     "settings.group.live_lag": "卡片延迟",
     "settings.group.voice": "语音",
@@ -129,8 +139,7 @@ ZH: dict[str, str] = {
     ),
     "settings.agent.body": (
         "*代理*\n\n"
-        "整个机器人的全局后端。所有新会话统一使用 *Claude* 或 *Codex*。\n\n"
-        "当前后端仍有活动会话时不能切换；请先结束或归档这些会话。"
+        "✅ 表示启用后端。第二行选择预热会话的默认后端；两者都启用时，新建会话会先询问后端。"
     ),
     "settings.lang.body": "*语言*\n\n界面语言。切换除 Claude 自身输出外的一切文本。",
     "list.empty": "没有活动会话。点 🆕 新建以创建。",
@@ -147,6 +156,7 @@ ZH: dict[str, str] = {
     "conf.done_ok": "🎉 `{name}` 已标记完成。",
     "conf.deleted": "🗑 归档记录已删除。",
     "dir.title": "*选择工作目录*",
+    "backend.choose": "*选择后端*",
     "dir.current": "当前: `{path}`",
     "dir.empty": "_(无子目录)_",
     "dir.hint": "点文件夹进入,或选择当前目录",
@@ -295,7 +305,7 @@ ZH: dict[str, str] = {
     "settings.cat.terminal": "🖥 本地终端",
     "settings.cat.options": "⋯ 选项按钮",
     "settings.cat.preprocessing": "💻 预处理",
-    "settings.cat.behavior": "⚙ 代理、行为和语言",
+    "settings.cat.behavior": "⚙ 行为和语言",
     "settings.cat.card.body": "*卡片 / 视图*\n\n实时会话卡片的布局、密度和刷新。",
     "settings.cat.notifications.body": (
         "*通知*\n\nBg 会话推送(完成 / 错误 / 需要操作)和\nweekly quota 提醒的重置日。"

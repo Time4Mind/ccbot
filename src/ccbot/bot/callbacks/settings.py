@@ -14,6 +14,8 @@ from ...handlers.callback_data import (
     CB_ST_APPROVE,
     CB_ST_ARCHIVE_AI,
     CB_ST_AGENT,
+    CB_ST_DEFAULT_DIR,
+    CB_ST_DEFAULT_SESSION,
     CB_ST_BACK,
     CB_ST_BGNOTIFY,
     CB_ST_CAT,
@@ -201,6 +203,8 @@ async def _run_voice_install(query: CallbackQuery, user_id: int) -> None:
 
 _GROUP_TO_SCREEN: dict[str, Screen] = {
     "agent_backend": "settings_agent",
+    "default_session_enabled": "settings_default_session",
+    "default_session_directory": "settings_default_directory",
     "language": "settings_language",
     "live_lag": "settings_lag",
     "voice": "settings_voice",
@@ -305,6 +309,8 @@ async def handle(
 
     setter_prefixes = (
         CB_ST_AGENT,
+        CB_ST_DEFAULT_DIR,
+        CB_ST_DEFAULT_SESSION,
         CB_ST_LAG,
         CB_ST_VOICE,
         CB_ST_LANG,
@@ -331,13 +337,53 @@ async def handle(
     screen_name: Screen = "settings"
     if data.startswith(CB_ST_AGENT):
         value = data[len(CB_ST_AGENT) :]
-        if value in ("claude", "codex"):
-            try:
-                session_manager.set_agent_backend(value)
-            except RuntimeError:
-                await query.answer(t(user.id, "toast.agent_live"), show_alert=True)
-                return True
+        from .agent_settings import handle_agent_value
+
+        if await handle_agent_value(query, context, user, value):
+            return True
         screen_name = "settings_agent"
+    elif data.startswith(CB_ST_DEFAULT_SESSION):
+        value = data[len(CB_ST_DEFAULT_SESSION) :]
+        if value == "on":
+            directory = str(
+                session_manager.get_user_settings(user.id).get(
+                    "default_session_directory", ""
+                )
+                or ""
+            )
+            from pathlib import Path
+
+            if not directory or not Path(directory).is_dir():
+                await query.answer(
+                    t(user.id, "toast.default_directory_required"),
+                    show_alert=True,
+                )
+                return True
+            session_manager.update_user_setting(
+                user.id, "default_session_enabled", True
+            )
+        elif value == "off":
+            session_manager.update_user_setting(
+                user.id, "default_session_enabled", False
+            )
+        from ...default_session import ensure_default_session
+
+        import asyncio as _asyncio
+
+        _asyncio.create_task(ensure_default_session(context.bot, user.id))
+        screen_name = "settings_default_session"
+    elif data.startswith(CB_ST_DEFAULT_DIR):
+        if data[len(CB_ST_DEFAULT_DIR) :] != "pick":
+            return False
+        from ...handlers.directory_browser import clear_browse_state
+        from .dir_browser import open_directory_browser
+
+        if context.user_data is not None:
+            clear_browse_state(context.user_data)
+            context.user_data["_directory_selection_target"] = "default_session"
+        await open_directory_browser(query, context, user.id)
+        await query.answer()
+        return True
     elif data.startswith(CB_ST_LAG):
         try:
             lag = int(data[len(CB_ST_LAG) :])

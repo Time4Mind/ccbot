@@ -18,6 +18,7 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from ..config import config
 from ..i18n import get_user_lang, t
 from ..rich import RICH_TABLE_NORMAL_FONT
+from ..session_models import reserve_owner
 from ..session import (
     DEFAULT_IDLE_ARCHIVE_HOURS,
     IDLE_ARCHIVE_HOUR_CHOICES,
@@ -233,6 +234,11 @@ async def archive_or_delete_session(sess: Session, *, completed: bool) -> bool:
     was removed. Missing transcripts are preserved because absence of local
     evidence is not proof that the provider session is empty.
     """
+    if reserve_owner(sess):
+        deleted = session_manager.delete_session(sess.id)
+        if deleted:
+            logger.info("Deleted unused default reserve: %s", sess.id)
+        return False
     has_context = await _archive_context_status(sess)
     if has_context is False:
         deleted = session_manager.delete_session(sess.id)
@@ -412,7 +418,12 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
         return False, "No workdir on session record — cannot restore"
 
     source_backend = sess.backend
-    target_backend = session_manager.agent_backend
+    enabled_backends = session_manager.get_enabled_backends(user_id)
+    target_backend = (
+        source_backend
+        if source_backend in enabled_backends
+        else session_manager.get_default_backend(user_id)
+    )
     cross_backend = source_backend != target_backend
     resume_session_id = sess.claude_session_id or None
     initial_prompt: str | None = None

@@ -28,11 +28,14 @@ Screen = Literal[
     "settings_cat_options",
     "settings_cat_behavior",
     "settings_cat_preprocessing",
+    "settings_cat_sessions",
     # Individual setting sub-screens.
     "settings_lag",
     "settings_voice",
     "settings_language",
     "settings_agent",
+    "settings_default_session",
+    "settings_default_directory",
     "settings_weeklyday",
     "settings_approve",
     "settings_local",
@@ -57,6 +60,18 @@ Screen = Literal[
 
 _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
     ("agent_backend", "settings.group.agent", "settings_agent", "agent_backend"),
+    (
+        "default_session_enabled",
+        "settings.group.default_session",
+        "settings_default_session",
+        "default_session_enabled",
+    ),
+    (
+        "default_session_directory",
+        "settings.group.default_directory",
+        "settings_default_directory",
+        "default_session_directory",
+    ),
     ("language", "settings.group.language", "settings_language", "language"),
     ("live_lag", "settings.group.live_lag", "settings_lag", "live_lag"),
     ("voice", "settings.group.voice", "settings_voice", "voice"),
@@ -179,6 +194,15 @@ _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
 
 SETTINGS_CATEGORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
+        "settings.cat.sessions",
+        "settings_cat_sessions",
+        (
+            "agent_backend",
+            "default_session_enabled",
+            "default_session_directory",
+        ),
+    ),
+    (
         "settings.cat.card",
         "settings_cat_card",
         (
@@ -225,7 +249,6 @@ SETTINGS_CATEGORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         "settings.cat.behavior",
         "settings_cat_behavior",
         (
-            "agent_backend",
             "auto_approve",
             "session_idle_hours",
             "haiku_naming",
@@ -241,6 +264,8 @@ WEEKDAYS: tuple[str, ...] = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 _GROUP_TEXT_KEYS: dict[str, str] = {
     "settings_agent": "settings.agent.body",
+    "settings_default_session": "settings.default_session.body",
+    "settings_default_directory": "settings.default_directory.body",
     "settings_lag": "settings.lag.body",
     "settings_voice": "settings.voice.body",
     "settings_language": "settings.lang.body",
@@ -270,4 +295,5 @@ _GROUP_TEXT_KEYS: dict[str, str] = {
     "settings_preprocessing_mode": "settings.preprocessing_mode.body",
     "settings_preprocessing_instruction": "settings.preprocessing_instruction.body",
     "settings_cat_preprocessing": "settings.cat.preprocessing.body",
+    "settings_cat_sessions": "settings.cat.sessions.body",
 }

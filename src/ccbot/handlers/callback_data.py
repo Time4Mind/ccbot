@@ -26,6 +26,7 @@ CB_DIR_CONFIRM = "db:confirm"
 CB_DIR_CANCEL = "db:cancel"
 CB_DIR_PAGE = "db:page:"
 CB_DIR_CREATE = "db:create"
+CB_NEW_BACKEND = "nb:"  # nb:<claude|codex> before the directory browser
 
 # Window picker (bind existing unbound window)
 CB_WIN_BIND = "wb:sel:"  # wb:sel:<index>
@@ -113,6 +114,8 @@ CB_ST_IDLE = "st:idle:"  # st:idle:<6|12|24>  idle hours before auto-archive
 CB_ST_PREPROCESS = "st:prep:"  # st:prep:<off|voice|all>
 CB_ST_PREPROCESS_INSTRUCTION = "st:prepi:"  # edit | reset
 CB_ST_AGENT = "st:agent:"  # st:agent:<claude|codex> bot-wide agent backend
+CB_ST_DEFAULT_SESSION = "st:def:"  # st:def:<on|off>
+CB_ST_DEFAULT_DIR = "st:defdir:"  # st:defdir:pick
 CB_ST_VOICE_INSTALL_GO = "st:vi:go"  # confirm whisper.cpp auto-install
 CB_ST_VOICE_INSTALL_NO = "st:vi:no"  # dismiss whisper.cpp install prompt
 CB_ST_BACK = "st:back"  # back to Menu

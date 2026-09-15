@@ -18,6 +18,8 @@ import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from ..session_models import reserve_owner
+
 from ..config import config
 from ..session import Session, session_manager
 from .callback_data import CB_ARC_RESTORE, CB_SW_NEW, CB_SW_USE
@@ -44,6 +46,8 @@ _SESSION_EMOJI: tuple[str, ...] = (
 
 def session_emoji(sess: Session) -> str:
     """Stable color marker for a session, hashed from its id."""
+    if reserve_owner(sess):
+        return "⚪"
     h = sum(ord(c) for c in sess.id) if sess.id else 0
     return _SESSION_EMOJI[h % len(_SESSION_EMOJI)]
 

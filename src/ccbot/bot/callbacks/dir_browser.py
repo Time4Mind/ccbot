@@ -15,6 +15,7 @@ from ...handlers.callback_data import (
     CB_DIR_PAGE,
     CB_DIR_SELECT,
     CB_DIR_UP,
+    CB_NEW_BACKEND,
     CB_SESSION_BACK,
     CB_SESSION_CANCEL,
     CB_SESSION_NEW,
@@ -34,6 +35,7 @@ from ...handlers.directory_browser import (
     build_session_picker,
     clear_browse_state,
     clear_session_picker_state,
+    clear_window_picker_state,
 )
 from ...handlers.message_sender import safe_edit
 from ...handlers.notifications import resume_card_view
@@ -41,6 +43,64 @@ from ...i18n import t
 from ...session import session_manager
 from .._common import open_more_in_place
 from ..messages import create_and_activate_session
+
+
+async def open_new_session_flow(
+    query: CallbackQuery,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    *,
+    origin: str,
+) -> None:
+    """Choose a backend when needed, then open the directory browser."""
+    enabled = session_manager.get_enabled_backends(user_id)
+    if context.user_data is not None:
+        context.user_data["menu_origin"] = origin
+    only_backend = next(iter(enabled), None)
+    if only_backend is None:
+        raise RuntimeError("No enabled backend")
+    if len(enabled) > 1:
+        keyboard = build_backend_picker(user_id)
+        await safe_edit(query, t(user_id, "backend.choose"), reply_markup=keyboard)
+        return
+    if context.user_data is not None:
+        context.user_data["_new_session_backend"] = only_backend
+    await open_directory_browser(query, context, user_id)
+
+
+def build_backend_picker(user_id: int) -> InlineKeyboardMarkup:
+    enabled = session_manager.get_enabled_backends(user_id)
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    name.capitalize(), callback_data=f"{CB_NEW_BACKEND}{name}"
+                )
+                for name in enabled
+            ],
+            [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_DIR_CANCEL)],
+        ]
+    )
+
+
+async def open_directory_browser(
+    query: CallbackQuery,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+) -> None:
+    clear_browse_state(context.user_data)
+    clear_session_picker_state(context.user_data)
+    clear_window_picker_state(context.user_data)
+    start_path = str(Path.home())
+    msg_text, keyboard, subdirs = await build_directory_browser(
+        start_path, user_id=user_id
+    )
+    if context.user_data is not None:
+        context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
+        context.user_data[BROWSE_PATH_KEY] = start_path
+        context.user_data[BROWSE_PAGE_KEY] = 0
+        context.user_data[BROWSE_DIRS_KEY] = subdirs
+    await safe_edit(query, msg_text, reply_markup=keyboard)
 
 
 async def resolve_session_summaries(
@@ -90,6 +150,17 @@ async def handle(
     query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
 ) -> bool:
     data = query.data or ""
+
+    if data.startswith(CB_NEW_BACKEND):
+        backend = data[len(CB_NEW_BACKEND) :]
+        if backend not in session_manager.get_enabled_backends(user.id):
+            await query.answer("Backend is no longer enabled", show_alert=True)
+            return True
+        if context.user_data is not None:
+            context.user_data["_new_session_backend"] = backend
+        await open_directory_browser(query, context, user.id)
+        await query.answer()
+        return True
 
     if data.startswith(CB_DIR_SELECT):
         try:
@@ -206,6 +277,34 @@ async def handle(
             await safe_edit(query, msg_text, reply_markup=keyboard)
             return True
 
+        if (
+            context.user_data is not None
+            and context.user_data.get("_directory_selection_target")
+            == "default_session"
+        ):
+            context.user_data.pop("_directory_selection_target", None)
+            clear_browse_state(context.user_data)
+            session_manager.update_user_setting(
+                user.id, "default_session_directory", selected_path
+            )
+            from ...default_session import ensure_default_session
+            from ...handlers.menu import (
+                build_footer_keyboard,
+                render_settings_group_text,
+            )
+            import asyncio
+
+            await query.answer(t(user.id, "toast.saved"))
+            await safe_edit(
+                query,
+                render_settings_group_text(user.id, "settings_default_directory"),
+                reply_markup=build_footer_keyboard(
+                    user.id, screen="settings_default_directory"
+                ),
+            )
+            asyncio.create_task(ensure_default_session(context.bot, user.id))
+            return True
+
         clear_browse_state(context.user_data)
         await create_and_activate_session(query, context, user, selected_path)
         return True
@@ -242,10 +341,33 @@ async def handle(
         return True
 
     if data == CB_DIR_CANCEL:
+        if (
+            context.user_data is not None
+            and context.user_data.get("_directory_selection_target")
+            == "default_session"
+        ):
+            context.user_data.pop("_directory_selection_target", None)
+            clear_browse_state(context.user_data)
+            from ...handlers.menu import (
+                build_footer_keyboard,
+                render_settings_group_text,
+            )
+
+            await safe_edit(
+                query,
+                render_settings_group_text(user.id, "settings_default_directory"),
+                reply_markup=build_footer_keyboard(
+                    user.id, screen="settings_default_directory"
+                ),
+            )
+            await query.answer()
+            return True
         from ...startup_queue import cancel_startup_queue
 
         unsent = cancel_startup_queue(user.id)
         clear_browse_state(context.user_data)
+        if context.user_data is not None:
+            context.user_data.pop("_new_session_backend", None)
         await _close_modal(query, user.id, context)
         await query.answer(
             f"Cancelled; {unsent} queued item(s) were not sent" if unsent else None,

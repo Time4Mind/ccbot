@@ -13,7 +13,7 @@ from typing import Any, ClassVar
 
 from .config import config
 from .session_defaults import DEFAULT_IDLE_ARCHIVE_HOURS
-from .session_models import Session, SessionState
+from .session_models import reserve_owner, Session, SessionState
 
 logger = logging.getLogger("ccbot.session")
 
@@ -128,6 +128,7 @@ class SessionStateMixin:
         workdir: str = "",
         goal: str = "",
         backend: str | None = None,
+        default_reserve_user_id: int = 0,
     ) -> "Session":
         """Register a new Session record. Caller is responsible for the tmux window."""
         now = time.time()
@@ -147,6 +148,7 @@ class SessionStateMixin:
             created_at=now,
             last_event_at=now,
             backend=backend or self.agent_backend,
+            default_reserve_user_id=default_reserve_user_id,
         )
         self.sessions[sid] = sess
         self.save_state()
@@ -285,6 +287,8 @@ class SessionStateMixin:
         for s in self.sessions.values():
             if s.state not in ("active", "idle"):
                 continue
+            if reserve_owner(s):
+                continue
             anchor = s.last_event_at or s.created_at
             if anchor and (now - anchor) >= idle_seconds:
                 out.append(s)
@@ -418,6 +422,12 @@ class SessionStateMixin:
         # Summarise the first two user requests in Archive with the same
         # isolated cheap model used for session naming. Off shows both prompts.
         "archive_ai_description": False,
+        # Keep one empty agent session prewarmed for the selected directory.
+        "default_session_enabled": False,
+        "default_session_directory": "",
+        "default_session_backend": "",
+        # Empty means the historical bot-wide backend only (read migration).
+        "enabled_backends": [],
     }
 
     def get_user_settings(self, user_id: int) -> dict[str, Any]:
@@ -462,6 +472,53 @@ class SessionStateMixin:
             raise ValueError(f"Unknown setting key: {key}")
         bucket = self.user_settings.setdefault(user_id, {})
         bucket[key] = value
+        self.save_state()
+
+    def get_enabled_backends(self, user_id: int) -> tuple[str, ...]:
+        """Return enabled backends, migrating old global selection on read."""
+        raw = self.user_settings.get(user_id, {}).get("enabled_backends")
+        values: list[str] = []
+        if isinstance(raw, list):
+            for value in raw:
+                if value in ("claude", "codex") and value not in values:
+                    values.append(value)
+        if not values:
+            values.append(self.agent_backend)
+        return tuple(values)
+
+    def get_default_backend(self, user_id: int) -> str:
+        """Backend for the reserve and the one-backend new-session shortcut."""
+        enabled = self.get_enabled_backends(user_id)
+        selected = self.user_settings.get(user_id, {}).get("default_session_backend")
+        return str(selected) if selected in enabled else enabled[0]
+
+    def set_backend_enabled(self, user_id: int, backend: str, enabled: bool) -> None:
+        """Enable/disable a backend without mutating already-created sessions."""
+        if backend not in ("claude", "codex"):
+            raise ValueError(f"Unknown agent backend: {backend}")
+        values = list(self.get_enabled_backends(user_id))
+        if enabled:
+            if backend not in values:
+                values.append(backend)
+        elif backend in values:
+            if len(values) == 1:
+                raise RuntimeError("last backend cannot be disabled")
+            values.remove(backend)
+        bucket = self.user_settings.setdefault(user_id, {})
+        bucket["enabled_backends"] = values
+        if bucket.get("default_session_backend") not in values:
+            bucket["default_session_backend"] = values[0]
+        self.agent_backend = self.get_default_backend(user_id)
+        config.agent_backend = self.agent_backend
+        self.save_state()
+
+    def set_default_backend(self, user_id: int, backend: str) -> None:
+        """Choose which enabled backend owns the one prewarmed reserve."""
+        if backend not in self.get_enabled_backends(user_id):
+            raise ValueError("default backend must be enabled")
+        self.user_settings.setdefault(user_id, {})["default_session_backend"] = backend
+        self.agent_backend = backend
+        config.agent_backend = backend
         self.save_state()
 
     def set_agent_backend(self, backend: str) -> None:

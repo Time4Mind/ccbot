@@ -20,6 +20,23 @@ from typing import Any, Literal
 
 
 SessionState = Literal["active", "idle", "archived", "completed", "lost"]
+DEFAULT_RESERVE_SENTINEL_PREFIX = "__ccbot_default_reserve__:"
+
+
+def reserve_owner(session: object) -> int:
+    """Read the reserve owner from current or rollback-compatible state."""
+    current = getattr(session, "default_reserve_user_id", 0)
+    if isinstance(current, int) and current:
+        return current
+    for value in getattr(session, "preprocessed_prompt_hashes", ()):
+        if not isinstance(value, str) or not value.startswith(
+            DEFAULT_RESERVE_SENTINEL_PREFIX
+        ):
+            continue
+        raw_user_id = value.removeprefix(DEFAULT_RESERVE_SENTINEL_PREFIX)
+        if raw_user_id.isdigit():
+            return int(raw_user_id)
+    return 0
 
 
 @dataclass
@@ -122,6 +139,9 @@ class Session:
     screenshot_profile: str = ""
     preprocessed_prompt_hashes: list[str] = field(default_factory=list)
     pending_preprocessing: list[dict[str, Any]] = field(default_factory=list)
+    # Non-zero only while this is the single empty prewarmed session reserved
+    # for the given Telegram user. Cleared synchronously on the first request.
+    default_reserve_user_id: int = 0
 
     @staticmethod
     def new_id() -> str:
@@ -155,7 +175,31 @@ class Session:
         digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
         return digest in self.preprocessed_prompt_hashes
 
+    @property
+    def default_reserve_owner(self) -> int:
+        """Return the reserve owner, including rollback-compatible state."""
+        return reserve_owner(self)
+
+    def mark_default_reserve(self, user_id: int) -> None:
+        self.clear_default_reserve()
+        self.default_reserve_user_id = user_id
+        self.preprocessed_prompt_hashes.append(
+            f"{DEFAULT_RESERVE_SENTINEL_PREFIX}{user_id}"
+        )
+
+    def clear_default_reserve(self) -> None:
+        self.default_reserve_user_id = 0
+        self.preprocessed_prompt_hashes = [
+            value
+            for value in self.preprocessed_prompt_hashes
+            if not value.startswith(DEFAULT_RESERVE_SENTINEL_PREFIX)
+        ]
+
     def to_dict(self) -> dict[str, Any]:
+        prompt_hashes = list(self.preprocessed_prompt_hashes)
+        sentinel = f"{DEFAULT_RESERVE_SENTINEL_PREFIX}{self.default_reserve_user_id}"
+        if self.default_reserve_user_id and sentinel not in prompt_hashes:
+            prompt_hashes.append(sentinel)
         return {
             "id": self.id,
             "name": self.name,
@@ -178,8 +222,9 @@ class Session:
             "screenshot_user_id": self.screenshot_user_id,
             "screenshot_capture_kib": self.screenshot_capture_kib,
             "screenshot_profile": self.screenshot_profile,
-            "preprocessed_prompt_hashes": self.preprocessed_prompt_hashes,
+            "preprocessed_prompt_hashes": prompt_hashes,
             "pending_preprocessing": self.pending_preprocessing,
+            "default_reserve_user_id": self.default_reserve_user_id,
         }
 
     @classmethod
@@ -221,4 +266,5 @@ class Session:
                 and isinstance(value.get("request_id"), str)
                 and isinstance(value.get("original"), str)
             ][-128:],
+            default_reserve_user_id=int(data.get("default_reserve_user_id", 0)),
         )

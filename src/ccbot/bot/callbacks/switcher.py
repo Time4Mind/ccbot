@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import time
-from pathlib import Path
 from typing import Any
 
 from telegram import CallbackQuery
@@ -15,17 +14,6 @@ from ...handlers import bg_status
 from ...handlers.card_binding import bind_carrier
 from ...handlers.callback_data import CB_SW_NEW, CB_SW_NOOP, CB_SW_USE
 from ...handlers.card_types import CarrierKind
-from ...handlers.directory_browser import (
-    BROWSE_DIRS_KEY,
-    BROWSE_PAGE_KEY,
-    BROWSE_PATH_KEY,
-    STATE_BROWSING_DIRECTORY,
-    STATE_KEY,
-    build_directory_browser,
-    clear_browse_state,
-    clear_session_picker_state,
-    clear_window_picker_state,
-)
 from ...handlers.message_sender import safe_edit, safe_send
 from ...handlers.notifications import (
     activate_card_on_carrier,
@@ -39,7 +27,7 @@ from ...handlers.card_carrier import SCREENSHOT_CACHE_FRESH_SECONDS
 from ...session import session_manager
 from ...terminal_parser import extract_interactive_content, is_interactive_ui
 from ...tmux_manager import tmux_manager
-from .._common import render_session_preview, set_view
+from .._common import render_session_preview
 
 logger = logging.getLogger(__name__)
 
@@ -300,23 +288,13 @@ async def handle(
         active = session_manager.get_active_session(user.id)
         if active is not None:
             pause_card_view(user.id, active.id)
-        clear_browse_state(context.user_data)
-        clear_window_picker_state(context.user_data)
-        clear_session_picker_state(context.user_data)
-        start_path = str(Path.home())
-        msg_text, keyboard, subdirs = await build_directory_browser(
-            start_path, user_id=user.id
-        )
-        if context.user_data is not None:
-            context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
-            context.user_data[BROWSE_PATH_KEY] = start_path
-            context.user_data[BROWSE_PAGE_KEY] = 0
-            context.user_data[BROWSE_DIRS_KEY] = subdirs
-            context.user_data["menu_origin"] = "main"
+        from .dir_browser import open_new_session_flow
+
         try:
-            await set_view(query, context.bot, user.id, msg_text, keyboard)
+            await open_new_session_flow(query, context, user.id, origin="main")
         except Exception:
-            await safe_send(context.bot, user.id, msg_text, reply_markup=keyboard)
+            logger.exception("Could not open new-session flow")
+            await safe_send(context.bot, user.id, "Could not open new-session flow")
         await query.answer()
         return True
 

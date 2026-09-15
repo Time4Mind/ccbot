@@ -6,6 +6,8 @@ continue to be re-exported by that compatibility facade.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from telegram import InlineKeyboardButton
 
 from ..i18n import LANGUAGES, t
@@ -15,6 +17,8 @@ from .callback_data import (
     CB_ST_APPROVE,
     CB_ST_ARCHIVE_AI,
     CB_ST_AGENT,
+    CB_ST_DEFAULT_DIR,
+    CB_ST_DEFAULT_SESSION,
     CB_ST_BACK,
     CB_ST_BGNOTIFY,
     CB_ST_CAT,
@@ -49,6 +53,8 @@ __all__ = [
     "_settings_voice_grid",
     "_settings_language_grid",
     "_settings_agent_grid",
+    "_settings_default_session_grid",
+    "_settings_default_directory_grid",
     "_settings_approve_grid",
     "_settings_idle_archive_grid",
     "_settings_local_grid",
@@ -125,7 +131,14 @@ def _format_setting_value(user_id: int, value_key: str, cur: object) -> str:
             else "preprocessing.instruction.builtin",
         )
     if value_key == "agent_backend":
-        return str(cur).capitalize()
+        enabled = ", ".join(
+            name.capitalize() for name in session_manager.get_enabled_backends(user_id)
+        )
+        return f"{enabled}; default: {session_manager.get_default_backend(user_id).capitalize()}"
+    if value_key == "default_session_enabled":
+        return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
+    if value_key == "default_session_directory":
+        return str(cur).replace(str(Path.home()), "~") or "-"
     return str(cur) if cur is not None else "?"
 
 
@@ -242,19 +255,72 @@ def _settings_language_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
 
 
 def _settings_agent_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
-    cur = session_manager.agent_backend
+    enabled = session_manager.get_enabled_backends(user_id)
+    default = session_manager.get_default_backend(user_id)
     return [
         [
             InlineKeyboardButton(
-                _highlight(name.capitalize(), cur == name),
-                callback_data=f"{CB_ST_AGENT}{name}",
+                ("✅ " if name in enabled else "") + name.capitalize(),
+                callback_data=f"{CB_ST_AGENT}toggle:{name}",
             )
             for name in ("claude", "codex")
         ],
         [
             InlineKeyboardButton(
+                _highlight(f"default {name.capitalize()}", default == name),
+                callback_data=f"{CB_ST_AGENT}default:{name}",
+            )
+            for name in enabled
+        ],
+        [
+            InlineKeyboardButton(
                 t(user_id, "btn.back"),
                 callback_data=_parent_cat_cb("agent_backend"),
+            )
+        ],
+    ]
+
+
+def _settings_default_session_grid(
+    user_id: int,
+) -> list[list[InlineKeyboardButton]]:
+    cur = bool(
+        session_manager.get_user_settings(user_id).get("default_session_enabled", False)
+    )
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(t(user_id, "screens.on"), cur),
+                callback_data=f"{CB_ST_DEFAULT_SESSION}on",
+            ),
+            InlineKeyboardButton(
+                _highlight(t(user_id, "screens.off"), not cur),
+                callback_data=f"{CB_ST_DEFAULT_SESSION}off",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("default_session_enabled"),
+            )
+        ],
+    ]
+
+
+def _settings_default_directory_grid(
+    user_id: int,
+) -> list[list[InlineKeyboardButton]]:
+    return [
+        [
+            InlineKeyboardButton(
+                t(user_id, "settings.default_directory.choose"),
+                callback_data=f"{CB_ST_DEFAULT_DIR}pick",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("default_session_directory"),
             )
         ],
     ]

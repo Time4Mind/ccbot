@@ -13,6 +13,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from ..codex_auth import get_flow
+from ..default_session import claim_default_session
 from ..handlers.notifications import (
     get_card_state,
     lookup_session_for_message,
@@ -80,6 +81,12 @@ def _enqueue(
     wid = target_window_id or active_window(user.id)
     if wid is None:
         return False
+    sess = session_manager.find_session_by_window(wid)
+    if sess is not None:
+        # Promotion is deliberately synchronous and happens before the FIFO
+        # owns the update. A session switch immediately after this point can
+        # never redirect the request or make a second message claim it.
+        claim_default_session(context.bot, user.id, sess)
     enqueue_inbound(
         user.id,
         wid,
@@ -88,7 +95,6 @@ def _enqueue(
         kind=kind,
         processor=processor,
     )
-    sess = session_manager.find_session_by_window(wid)
     if sess is not None:
         # A new Telegram request owns the move to the latest page. Do it now,
         # before async queue work: a later pagination tap must stay authoritative

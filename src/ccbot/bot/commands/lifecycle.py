@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from ...handlers.callback_data import (
     CB_CONF_KILL_YES,
 )
 from ...handlers.cleanup import teardown_session_runtime
+from ...session_models import reserve_owner
 from ...handlers.directory_browser import (
     BROWSE_DIRS_KEY,
     BROWSE_PAGE_KEY,
@@ -117,6 +119,24 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # No path → directory browser.
     if name_arg and context.user_data is not None:
         context.user_data["_pending_session_name"] = name_arg
+    enabled_backends = session_manager.get_enabled_backends(user.id)
+    only_backend = next(iter(enabled_backends), None)
+    if only_backend is None:
+        await safe_reply(update.message, "❌ No enabled backend")
+        return
+    if len(enabled_backends) > 1:
+        from ..callbacks.dir_browser import build_backend_picker
+
+        if context.user_data is not None:
+            context.user_data["menu_origin"] = "main"
+        await safe_reply(
+            update.message,
+            t(user.id, "backend.choose"),
+            reply_markup=build_backend_picker(user.id),
+        )
+        return
+    if context.user_data is not None:
+        context.user_data["_new_session_backend"] = only_backend
     clear_browse_state(context.user_data)
     start_path = str(Path.home())
     msg_text, keyboard, subdirs = await build_directory_browser(
@@ -142,8 +162,13 @@ async def archive_session(
     Used by both the /kill confirmation and the /done confirmation, plus
     the matching CB_CONF_*_YES callback paths.
     """
+    was_default_reserve = reserve_owner(sess) == user_id
     await teardown_session_runtime(user_id, sess, bot)
     await archive_or_delete_session(sess, completed=completed)
+    if was_default_reserve:
+        from ...default_session import ensure_default_session
+
+        asyncio.create_task(ensure_default_session(bot, user_id))
 
 
 async def kill_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

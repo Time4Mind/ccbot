@@ -23,8 +23,11 @@ proot-distro login debian
 
 ```bash
 apt update
-apt install -y git curl tmux procps util-linux ca-certificates
+apt install -y git curl tmux procps util-linux lsof ca-certificates
 curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.profile
+uv --version
 ```
 
 Установите актуальный Codex CLI официальным standalone installer для Linux,
@@ -48,6 +51,7 @@ cd ccbot
 uv sync
 mkdir -p ~/.ccbot
 cp .env.example ~/.ccbot/.env
+chmod 600 ~/.ccbot/.env
 ```
 
 Минимальные значения в `~/.ccbot/.env`:
@@ -69,15 +73,26 @@ uv run ccbot hook --install --backend codex
 uv run ccbot
 ```
 
+Это foreground smoke-test. Проверьте бота в Telegram, затем остановите его
+через `Ctrl-C` до запуска supervisor - два экземпляра одновременно запускать
+нельзя.
+
 Первое сообщение в Telegram откроет выбор каталога. После выбора ccbot
 создаст tmux-окно, Codex `SessionStart` hook свяжет его с thread id, а
 следующие сообщения будут идти в ту же интерактивную сессию. Архив и
 restore используют `codex resume <thread-id>`.
 
-После первого запуска backend переключается глобально в
-`Меню → Настройки → Агент, поведение и язык → Агент`. Значение сохраняется
-в state бота; env задаёт только первоначальный default. Перед сменой агента
-нужно завершить или архивировать все живые сессии текущего backend.
+После первого запуска backend настраиваются в
+`Меню → Настройки → Сессии и бэкенды → Агент`. Claude и Codex можно включить
+одновременно; последний активный backend выключить нельзя. При двух включённых
+вариантах flow новой сессии сначала спрашивает backend, затем директорию.
+Выбранный default используется для резервной сессии и shortcut при единственном
+backend; env задаёт только первоначальное значение нового state.
+
+Если нужна моментальная готовность первого запроса, в том же разделе выберите
+директорию и backend резерва, затем включите `Резервная сессия`. ccbot держит
+ровно один пустой процесс `default`; после первого запроса он становится
+обычной сессией, а замена запускается сразу в фоне.
 
 ## 4. Фоновый запуск
 
@@ -107,6 +122,11 @@ find ~/.codex/sessions -name 'rollout-*.jsonl' | tail
 разные namespace, `$HOME` и tmux sockets не позволят ccbot управлять
 процессом.
 
-`Меню → Status` получает лимиты напрямую из Codex app-server и хранит
+Если в логах появляется `client is read-only`, сначала проверьте именно это:
+бот, supervisor, tmux и Codex должны работать внутри одного chroot/proot и
+видеть один tmux socket. Linux control client ccbot сам запускает без
+read-only режима; отдельный внешний tmux-клиент не должен подменять его socket.
+
+Таблица лимитов в `Меню` получает данные напрямую из Codex app-server и хранит
 дневную точку недельной квоты в
 `~/.ccbot/codex_quota_day.json`. Включите этот файл в backup состояния.

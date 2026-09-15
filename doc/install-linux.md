@@ -63,6 +63,9 @@ sudo apt install -y \
     git \
     curl \
     ca-certificates \
+    procps \
+    util-linux \
+    lsof \
     build-essential \
     ffmpeg
 ```
@@ -163,18 +166,24 @@ CODEX_FLAGS=--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook
 CODEX_NAMING_MODEL=gpt-5.6-luna
 ```
 
-И установи hook выбранного backend:
+Установи hook каждого backend, который планируешь включить:
 
 ```bash
 cd /opt/ccbot
 uv run ccbot hook --install --backend codex
 ```
 
+В Telegram backend включаются независимо через
+`Меню → Настройки → Сессии и бэкенды → Агент`. Если активны оба, новая
+сессия сначала предлагает Claude/Codex, затем браузер директорий. Последний
+backend выключить нельзя. Для предзапущенной сессии в том же разделе выбери
+директорию и default backend, затем включи `Резервная сессия`.
+
 При запуске через systemd unit должен разрешать запись не только в
 `~/.ccbot`, но и в `~/.codex`: там Codex хранит авторизацию, hooks и rollout
 JSONL. Шаблон `scripts/ccbot.service` уже содержит этот путь.
 
-В `Меню → Status` Codex читается через
+Таблица лимитов в `Меню` для Codex читается через
 `account/rateLimits/read`. Недельный остаток в начале каждой локальной
 календарной даты делится поровну между оставшимися датами до сброса
 включительно; расход текущего дня вычитается из зафиксированного дневного
@@ -239,8 +248,10 @@ WHISPER_MODEL_PATH=/home/USER/.ccbot/models/ggml-medium-q8_0.bin
 
 ## 7. Голосовой бэкенд (опционально)
 
-Пропусти этот раздел, если пользователь сказал «без голоса». Тогда в
-`.env` поставь `VOICE_BACKEND=off`.
+Пропусти этот раздел, если пользователь сказал «без голоса». Тогда обязательно
+поставь в `.env` `VOICE_BACKEND=off`: значение `auto` по умолчанию выбирает
+Parakeet и требует установленный `nemo-speech` и модель из
+`PARAKEET_MODEL_PATH`.
 
 Иначе — поставь whisper.cpp и скачай модель:
 
@@ -256,24 +267,27 @@ sudo install -m 0755 build/bin/whisper-cli /usr/local/bin/whisper-cli
 whisper-cli --help | head -5
 ```
 
-Скачай модель через скрипт репозитория (medium ~1.5 GB, multilingual
-+ русский):
+Скачай fp16-модель через shell-скрипт репозитория (medium ~1.5 GB,
+multilingual + русский):
 
 ```bash
 cd /opt/ccbot
 MODEL=medium ./scripts/install_whisper_model.sh
 ```
 
-Скрипт сам положит файлы в `~/.ccbot/models/ggml-medium-q8_0.bin`
-(+ `ggml-tiny.bin` для определения языка) и
-напечатает строки для `.env`. Если у пользователя медленный канал —
-предложи `MODEL=small` (~488 MB).
+Скрипт положит `ggml-medium.bin` в `~/.ccbot/models/` и напечатает точный
+`WHISPER_MODEL_PATH`. Он не устанавливает q8-модель и `ggml-tiny.bin`.
+Если нужен оптимизированный q8-вариант и отдельное определение языка, выбери
+Whisper в Telegram-настройках и подтверди предложенную установку - встроенный
+инсталлятор скачает `ggml-medium-q8_0.bin` и best-effort `ggml-tiny.bin`.
+Если у пользователя медленный канал, для shell-скрипта можно выбрать
+`MODEL=small` (~488 MB).
 
 В `.env` добавь:
 
 ```ini
 VOICE_BACKEND=whisper
-WHISPER_MODEL_PATH=/home/USER/.ccbot/models/ggml-medium-q8_0.bin
+WHISPER_MODEL_PATH=/home/USER/.ccbot/models/ggml-medium.bin
 ```
 
 ---
@@ -328,13 +342,21 @@ tmux kill-session -t ccbot
 
 ## 10. systemd-юнит (постоянная работа)
 
-Шаблон лежит в `scripts/ccbot.service`. Подставь имя пользователя и
-скопируй:
+Шаблон лежит в `scripts/ccbot.service`. Сначала скопируй его, затем проверь
+`command -v uv`. Если `uv` лежит не в системном PATH, замени
+`/usr/bin/env uv` в `/etc/systemd/system/ccbot@.service` на найденный
+абсолютный путь. В `/etc/ccbot/ccbot.env` также задай абсолютные
+`CLAUDE_COMMAND`/`CODEX_COMMAND` либо добавь каталоги CLI
+(`~/.claude/local`, `~/.local/bin`) в `Environment=PATH=...` юнита.
 
 ```bash
 sudo install -d -m 0755 /etc/systemd/system
 sudo install -m 0644 /opt/ccbot/scripts/ccbot.service \
     /etc/systemd/system/ccbot@.service
+
+command -v uv
+# При необходимости отредактируй ExecStart и Environment=PATH:
+sudoedit /etc/systemd/system/ccbot@.service
 
 # Опционально: общий env-файл (альтернатива ~/.ccbot/.env)
 sudo install -d -m 0750 /etc/ccbot
@@ -361,6 +383,12 @@ journalctl -u "ccbot@$USER.service" -n 50 --no-pager
 `doc/deploy.md` → «Без systemd» — там описан platform-agnostic
 supervisor с авто-рестартом и ожиданием сети.
 
+Все команды `tmux` из shell на systemd-хосте запускай с тем же socket root,
+что и unit: `TMUX_TMPDIR=/run/ccbot tmux ...`. Иначе shell не увидит сессию
+бота. В chroot/Kali бот, supervisor, tmux и backend должны работать в одном
+namespace; ошибка `client is read-only` обычно означает смешение клиентов или
+socket-ов.
+
 ---
 
 ## 11. Проверка end-to-end
@@ -368,14 +396,15 @@ supervisor с авто-рестартом и ожиданием сети.
 В Telegram (под аккаунтом из `ALLOWED_USERS`):
 
 1. `/start` → бот отвечает приветствием.
-2. Любой текст → открывается directory-browser, выбираешь каталог.
-3. После выбора создаётся tmux-окно с выбранным агентом, в чат приходит
-   первое сообщение от модели.
+2. Любой текст → при двух активных backend появляется их выбор, затем
+   directory-browser; при одном backend сразу выбираешь каталог.
+3. После выбора создаётся tmux-окно с выбранным агентом. Запрос остаётся
+   закреплённым за ним и ждёт, пока terminal input будет готов.
 4. `/menu` → открывается инлайн-меню с таблицей лимитов и
    кнопками Sessions / Archive / New / Settings.
    В Sessions карточка активной сессии со свитчером.
-5. (если ставил голос) Отправь PTT — бот транскрибирует и пересылает
-   текст в активную сессию.
+5. (если ставил голос) Отправь PTT — бот показывает распознавание в карточке,
+   затем заменяет его текстом и пересылает в закреплённую сессию.
 6. (если ставил медиа) Отправь фото — оно ложится в
    `<workdir>/.ccbot-inbox/<timestamp>-<file>` и claude получает
    синтетическое сообщение.
@@ -434,7 +463,8 @@ current-window, иначе открытие терминала под новую
 |---------|-------------------|------------|
 | `ModuleNotFoundError` при `uv run ccbot` | `uv sync` не выполнялся в `/opt/ccbot` | `cd /opt/ccbot && uv sync` |
 | Бот молчит на сообщения | Юзер не в `ALLOWED_USERS` либо токен не тот | проверь `~/.ccbot/.env` и логи |
-| `tmux: command not found` под systemd | `PATH` в юните не содержит `/usr/bin` | оставь `ExecStart=/usr/bin/env uv run python -m ccbot` как в шаблоне |
+| `uv`/agent CLI не найден под systemd | урезанный `PATH` не содержит пользовательские `~/.local/bin` / `~/.claude/local` | укажи абсолютный `ExecStart` и абсолютные `CLAUDE_COMMAND` / `CODEX_COMMAND` либо явный `Environment=PATH=...` |
+| `client is read-only` или tmux-сессия не видна | bot/backend запущены в разных chroot/socket namespace либо shell не использует `TMUX_TMPDIR` юнита | запусти всё в одном namespace; для systemd используй `TMUX_TMPDIR=/run/ccbot` |
 | Хук не срабатывает | `ccbot` не в PATH у claude-процесса | `which ccbot` под нужным юзером; либо подставь абсолютный путь в `~/.claude/settings.json` |
 | Голос не распознаётся | `whisper-cli` не в PATH или модель битая | прогон `whisper-cli -m <path> -f sample.wav` руками |
 | 401/403 от Telegram API | Токен отозван или сеть блокирует api.telegram.org | новый токен через BotFather или `TG_PROXY_URL` |

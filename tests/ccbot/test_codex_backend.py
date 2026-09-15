@@ -559,6 +559,99 @@ def test_codex_rollout_skips_subagent_notification_harness_message() -> None:
     assert [(item.role, item.text) for item in parsed] == [("user", "Real prompt")]
 
 
+def test_codex_rollout_hides_harness_tool_call_and_its_result() -> None:
+    entries = [
+        {
+            **_line(
+                "response_item",
+                {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "harness-call",
+                    "input": (
+                        "sed -n '1,260p' /Users/artem/.agents/skills/tdd/SKILL.md"
+                    ),
+                },
+            ),
+            "ordinal": 1,
+        },
+        {
+            **_line(
+                "response_item",
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "harness-call",
+                    "output": "internal instructions",
+                },
+            ),
+            "ordinal": 2,
+        },
+        {
+            **_line(
+                "response_item",
+                {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "project-call",
+                    "input": "pytest -q tests/test_card.py",
+                },
+            ),
+            "ordinal": 3,
+        },
+        {
+            **_line(
+                "response_item",
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "project-call",
+                    "output": "1 passed",
+                },
+            ),
+            "ordinal": 4,
+        },
+    ]
+
+    parsed, pending = TranscriptParser.parse_entries(entries)
+
+    assert pending == {}
+    assert len(parsed) == 2
+    assert [item.tool_use_id for item in parsed] == ["project-call", "project-call"]
+    assert all("internal instructions" not in item.text for item in parsed)
+
+
+def test_codex_rollout_keeps_harness_tool_hidden_across_poll_batches() -> None:
+    tool_call = {
+        **_line(
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": "memory-call",
+                "input": "rg ccbot /Users/artem/.codex/memories/MEMORY.md",
+            },
+        ),
+        "ordinal": 1,
+    }
+    tool_result = {
+        **_line(
+            "response_item",
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "memory-call",
+                "output": "private harness context",
+            },
+        ),
+        "ordinal": 2,
+    }
+
+    first, pending = TranscriptParser.parse_entries([tool_call], {})
+    second, pending = TranscriptParser.parse_entries([tool_result], pending)
+
+    assert first == []
+    assert second == []
+    assert pending == {}
+
+
 def test_shared_parser_boundary_skips_injected_user_text() -> None:
     entries = [
         {

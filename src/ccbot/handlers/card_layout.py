@@ -263,16 +263,16 @@ def _render_card(
     # _trim_page_events keeps anchor + tail; the dropped events become
     # genuinely inaccessible (no prior sub-page covers them), so the
     # marker phrasing acknowledges that.
-    from .card_pagination import resolve_spoiler_line_budget
+    from .card_pagination import resolve_spoiler_line_budgets
 
-    spoiler_lines = resolve_spoiler_line_budget(user_id)
+    spoiler_lines = resolve_spoiler_line_budgets(user_id)
     page_events = _trim_page_events(
-        pages[idx], line_budget, spoiler_max_lines=spoiler_lines
+        pages[idx], line_budget, spoiler_line_limits=spoiler_lines
     )
     body = render_page(
         page_events,
         now=time.time(),
-        spoiler_max_lines=spoiler_lines,
+        spoiler_line_limits=spoiler_lines,
     )
     if len(page_events) < len(pages[idx]):
         dropped = len(pages[idx]) - len(page_events)
@@ -289,12 +289,13 @@ def _render_card(
         )
         body = _EVENT_JOINER.join(part for part in (body, pending_row) if part)
     for prompt in state.pending_prompts:
+        pending_icon = prompt.user_icon or ("👤💻" if prompt.preprocessed else "💻")
         prompt_row = render_event(
             Event(
                 type="user_msg",
                 text=prompt.text,
                 started_at=time.time(),
-                user_icon="👤💻" if prompt.preprocessed else "💻",
+                user_icon=pending_icon,
             ),
             in_flight=False,
             now=time.time(),

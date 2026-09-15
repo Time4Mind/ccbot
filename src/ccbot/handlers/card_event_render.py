@@ -120,18 +120,19 @@ def _build_tool_spoiler_body(
     args: str,
     content: str,
     *,
-    max_lines: int = 7,
+    command_max_lines: int = 7,
+    result_max_lines: int = 7,
 ) -> str:
     """Assemble the spoiler body for a tool event — args first
     (highlighted), then content (highlighted when it's code)."""
     parts: list[str] = []
-    bounded_args = _bounded_tool_block(args, max_lines)
-    bounded_content = _bounded_tool_block(content, max_lines)
+    bounded_args = _bounded_tool_block(args, command_max_lines)
+    bounded_content = _bounded_tool_block(content, result_max_lines)
     if bounded_args:
         parts.append(_format_tool_args(tool_name, bounded_args))
     if bounded_content:
         parts.append(_format_tool_content(tool_name, args, bounded_content))
-    return "\n- - -\n".join(parts)
+    return "\n\n".join(parts)
 
 
 def _spoiler_body(body: str) -> str:
@@ -164,7 +165,11 @@ def _headed_block(head: str, body: str, *, trim_body: bool = True) -> str:
 
 
 def render_event(
-    event: Event, *, in_flight: bool, now: float, spoiler_max_lines: int = 7
+    event: Event,
+    *,
+    in_flight: bool,
+    now: float,
+    spoiler_line_limits: tuple[int, int] = (7, 7),
 ) -> str:
     """Render one Event as a plain-text block for the card."""
     # Build the trailing time-or-elapsed marker
@@ -193,7 +198,8 @@ def render_event(
                 event.tool_name or event.text,
                 event.tool_args,
                 event.tool_content,
-                max_lines=spoiler_max_lines,
+                command_max_lines=spoiler_line_limits[0],
+                result_max_lines=spoiler_line_limits[1],
             )
             return _headed_block(f"{glyph} {event.text}{marker}", body, trim_body=False)
         return _headed_block(f"{glyph} {event.text}{marker}", event.body)
@@ -206,7 +212,8 @@ def render_event(
                 event.tool_name or event.text,
                 event.tool_args,
                 event.tool_content,
-                max_lines=spoiler_max_lines,
+                command_max_lines=spoiler_line_limits[0],
+                result_max_lines=spoiler_line_limits[1],
             )
             return _headed_block(f"✓ {event.text}{marker}", body, trim_body=False)
         return _headed_block(f"✓ {event.text}{marker}", event.body)

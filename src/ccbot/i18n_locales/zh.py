@@ -264,11 +264,13 @@ ZH: dict[str, str] = {
         "更小 = 手机视图更紧凑。更大 = 单页更多上下文,\n"
         "但 edit 消息更重。"
     ),
-    "settings.group.spoiler_block_lines": "命令/结果行数",
-    "settings.spoiler_lines.body": (
-        "*命令和结果行数*\n\n"
-        "每个工具折叠块中可见的最大行数。命令和结果分别应用所选限制；"
-        "每行最多 70 个字符。"
+    "settings.group.spoiler_command_lines": "命令行数",
+    "settings.spoiler_command_lines.body": (
+        "*命令行数*\n\n工具折叠块中可见的最大命令行数。每行最多 70 个字符。"
+    ),
+    "settings.group.spoiler_result_lines": "结果行数",
+    "settings.spoiler_result_lines.body": (
+        "*结果行数*\n\n工具折叠块中可见的最大结果行数。每行最多 70 个字符。"
     ),
     "screens.on": "开",
     "screens.off": "关",

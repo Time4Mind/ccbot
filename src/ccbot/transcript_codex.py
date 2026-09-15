@@ -17,11 +17,28 @@ _INJECTED_USER_PREFIXES = (
     "<subagent_notification>",
 )
 
+_HARNESS_TOOL_MARKERS = (
+    "/agents.md",
+    ".agents/skills/",
+    ".codex/memories/",
+    "/doc/local/project-memory.md",
+    ".claude/claude.md",
+)
+
 
 def is_injected_user_text(text: str) -> bool:
     """Return whether Codex labelled harness context as a user message."""
     stripped = text.lstrip()
     return any(stripped.startswith(prefix) for prefix in _INJECTED_USER_PREFIXES)
+
+
+def is_harness_tool_input(value: Any) -> bool:
+    """Identify Codex tool inputs used only to load agent-side instructions."""
+    try:
+        serialized = json.dumps(value, ensure_ascii=False, default=str).casefold()
+    except (TypeError, ValueError):
+        serialized = str(value).casefold()
+    return any(marker in serialized for marker in _HARNESS_TOOL_MARKERS)
 
 
 def normalize_codex_entry(data: dict[str, Any]) -> dict[str, Any] | None:
@@ -116,6 +133,7 @@ def normalize_codex_entry(data: dict[str, Any]) -> dict[str, Any] | None:
                 arguments = {"input": arguments}
         if not isinstance(arguments, dict):
             arguments = {"input": arguments}
+        hidden = is_harness_tool_input(arguments)
         return {
             "type": "assistant",
             "timestamp": timestamp,
@@ -126,6 +144,7 @@ def normalize_codex_entry(data: dict[str, Any]) -> dict[str, Any] | None:
                         "id": str(payload.get("call_id") or payload.get("id") or ""),
                         "name": str(payload.get("name") or "tool"),
                         "input": arguments,
+                        "_ccbot_hidden": hidden,
                     }
                 ],
                 "stop_reason": "tool_use",

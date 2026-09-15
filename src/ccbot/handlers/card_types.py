@@ -99,6 +99,7 @@ class PendingPrompt:
     request_id: str
     text: str
     preprocessed: bool = False
+    user_icon: str = ""
 
 
 class TurnPhase(str, Enum):
@@ -128,7 +129,7 @@ class CardState:
     pagination_prefix_first_id: int = 0
     pagination_prefix_last_id: int = 0
     pagination_budget: int = 0
-    pagination_spoiler_lines: int = 0
+    pagination_spoiler_lines: tuple[int, int] = (0, 0)
     pagination_prefix_pages: list[list[Event]] = field(default_factory=list)
     # Page the user is currently looking at. ``None`` = default focus
     # (page with the latest answer-anchor). Set by pagination callbacks.

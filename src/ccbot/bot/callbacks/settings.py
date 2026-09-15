@@ -210,7 +210,8 @@ _GROUP_TO_SCREEN: dict[str, Screen] = {
     "local_terminal": "settings_local",
     "card_history": "settings_cardhist",
     "card_page_lines": "settings_pagesize",
-    "spoiler_block_lines": "settings_spoiler_lines",
+    "spoiler_command_lines": "settings_spoiler_command_lines",
+    "spoiler_result_lines": "settings_spoiler_result_lines",
     "screenshot_capture_kib": "settings_capture",
     "screenshot_profile": "settings_profile",
     "option_button_screenshot": "settings_option_screenshot",
@@ -454,13 +455,23 @@ async def handle(
             session_manager.update_user_setting(user.id, "card_page_lines", v)
         screen_name = "settings_pagesize"
     elif data.startswith(CB_ST_SPOILER_LINES):
+        payload = data[len(CB_ST_SPOILER_LINES) :]
+        kind, separator, raw_value = payload.partition(":")
         try:
-            v = int(data[len(CB_ST_SPOILER_LINES) :])
+            v = int(raw_value)
         except ValueError:
             v = 7
-        if v in (3, 7, 20):
-            session_manager.update_user_setting(user.id, "spoiler_block_lines", v)
-        screen_name = "settings_spoiler_lines"
+        setting_key = {
+            "command": "spoiler_command_lines",
+            "result": "spoiler_result_lines",
+        }.get(kind)
+        if separator and setting_key is not None and v in (3, 7, 20):
+            session_manager.update_user_setting(user.id, setting_key, v)
+        screen_name = (
+            "settings_spoiler_command_lines"
+            if kind == "command"
+            else "settings_spoiler_result_lines"
+        )
     elif data.startswith(CB_ST_CAPTURE):
         try:
             value = int(data[len(CB_ST_CAPTURE) :])

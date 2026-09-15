@@ -99,14 +99,24 @@ class TestSyntaxHighlightedToolBody:
 
         command = "x" * 90
         result = "\n".join(f"result-{i}" for i in range(6))
-        out = _build_tool_spoiler_body("Bash", command, result, max_lines=3)
+        out = _build_tool_spoiler_body(
+            "Bash",
+            command,
+            result,
+            command_max_lines=3,
+            result_max_lines=7,
+        )
 
-        command_block, result_block = out.split("\n- - -\n")
+        assert "- - -" not in out
+        command_block, result_block = out.split("\n\n", 1)
         assert command_block == f"```bash\n{'x' * 69}…\n```"
         assert result_block.splitlines() == [
             "result-0",
             "result-1",
-            "… (+4 more lines)",
+            "result-2",
+            "result-3",
+            "result-4",
+            "result-5",
         ]
 
     def test_read_content_picks_language_from_path_extension(self) -> None:

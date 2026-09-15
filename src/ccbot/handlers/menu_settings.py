@@ -103,7 +103,7 @@ def _format_setting_value(user_id: int, value_key: str, cur: object) -> str:
         return f"{int(cur)} turns" if cur else "?"  # type: ignore[arg-type]
     if value_key == "card_page_lines":
         return f"{int(cur)} lines" if cur else "?"  # type: ignore[arg-type]
-    if value_key == "spoiler_block_lines":
+    if value_key in ("spoiler_command_lines", "spoiler_result_lines"):
         return f"{int(cur)} lines" if cur else "?"  # type: ignore[arg-type]
     if value_key in ("option_button_screenshot", "option_button_terminal"):
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
@@ -601,8 +601,10 @@ def _settings_pagesize_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     ]
 
 
-def _settings_spoiler_lines_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
-    raw = session_manager.get_user_settings(user_id).get("spoiler_block_lines", 7)
+def _settings_spoiler_lines_grid(
+    user_id: int, setting_key: str
+) -> list[list[InlineKeyboardButton]]:
+    raw = session_manager.get_user_settings(user_id).get(setting_key, 7)
     try:
         cur = int(raw)
     except (TypeError, ValueError):
@@ -611,14 +613,17 @@ def _settings_spoiler_lines_grid(user_id: int) -> list[list[InlineKeyboardButton
         [
             InlineKeyboardButton(
                 _highlight(str(v), cur == v),
-                callback_data=f"{CB_ST_SPOILER_LINES}{v}",
+                callback_data=(
+                    f"{CB_ST_SPOILER_LINES}"
+                    f"{'command' if setting_key == 'spoiler_command_lines' else 'result'}:{v}"
+                ),
             )
             for v in (3, 7, 20)
         ],
         [
             InlineKeyboardButton(
                 t(user_id, "btn.back"),
-                callback_data=_parent_cat_cb("spoiler_block_lines"),
+                callback_data=_parent_cat_cb(setting_key),
             )
         ],
     ]

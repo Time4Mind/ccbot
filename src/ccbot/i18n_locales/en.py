@@ -308,12 +308,15 @@ EN: dict[str, str] = {
         "Smaller = compact phone view. Larger = more context per page "
         "but heavier message edits."
     ),
-    "settings.group.spoiler_block_lines": "Command/result lines",
-    "settings.spoiler_lines.body": (
-        "*Command/result lines*\n\n"
-        "Maximum visible lines in each tool spoiler block. The command and "
-        "result each receive the selected limit independently; every line is "
-        "limited to 70 characters."
+    "settings.group.spoiler_command_lines": "Command lines",
+    "settings.spoiler_command_lines.body": (
+        "*Command lines*\n\nMaximum visible command lines in a tool spoiler. "
+        "Every line is limited to 70 characters."
+    ),
+    "settings.group.spoiler_result_lines": "Result lines",
+    "settings.spoiler_result_lines.body": (
+        "*Result lines*\n\nMaximum visible result lines in a tool spoiler. "
+        "Every line is limited to 70 characters."
     ),
     "screens.on": "on",
     "screens.off": "off",

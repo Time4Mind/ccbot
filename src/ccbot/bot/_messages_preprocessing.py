@@ -78,12 +78,28 @@ async def prepare_request_for_dispatch(
         }
         pinned_session.pending_preprocessing.append(record)
         session_manager.save_state()
-        pending_prompt = PendingPrompt(
-            request_id=str(update.message.message_id),
-            text=text,
-        )
         pending_state = get_card_state(user_id, pinned_session)
-        pending_state.pending_prompts.append(pending_prompt)
+        pending_prompt = next(
+            (
+                row
+                for row in pending_state.pending_prompts
+                if row.request_id == str(update.message.message_id)
+            ),
+            None,
+        )
+        if pending_prompt is None:
+            pending_prompt = PendingPrompt(
+                request_id=str(update.message.message_id),
+                text=text,
+            )
+            pending_state.pending_prompts.append(pending_prompt)
+        else:
+            # Voice recognition may already have replaced its temporary 🎙 row
+            # with the recognized request. Reuse that exact row instead of
+            # briefly duplicating it when preprocessing begins.
+            pending_prompt.text = text
+            pending_prompt.preprocessed = False
+            pending_prompt.user_icon = "💻"
         pending_state.current_page_idx = None
         if is_active_for_user(user_id, pinned_session):
             try:
@@ -117,6 +133,7 @@ async def prepare_request_for_dispatch(
             if pending_prompt is not None:
                 pending_prompt.text = text
                 pending_prompt.preprocessed = True
+                pending_prompt.user_icon = "👤💻"
             if record is not None:
                 record["prepared"] = text
                 record["state"] = "dispatching"

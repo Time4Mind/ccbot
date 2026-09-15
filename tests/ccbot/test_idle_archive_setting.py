@@ -65,8 +65,17 @@ async def test_idle_archive_callback_persists_selected_hours() -> None:
 
 
 @pytest.mark.asyncio
-async def test_spoiler_line_callback_persists_selected_limit() -> None:
-    query = MagicMock(data="st:spl:20", message=None)
+@pytest.mark.parametrize(
+    ("callback", "setting"),
+    [
+        ("st:spl:command:20", "spoiler_command_lines"),
+        ("st:spl:result:20", "spoiler_result_lines"),
+    ],
+)
+async def test_spoiler_line_callback_persists_selected_limit(
+    callback: str, setting: str
+) -> None:
+    query = MagicMock(data=callback, message=None)
     query.answer = AsyncMock()
     context = MagicMock()
     user = SimpleNamespace(id=42)
@@ -86,7 +95,7 @@ async def test_spoiler_line_callback_persists_selected_limit() -> None:
         handled = await settings_callback.handle(query, context, user)
 
     assert handled is True
-    update.assert_called_once_with(42, "spoiler_block_lines", 20)
+    update.assert_called_once_with(42, setting, 20)
 
 
 @pytest.mark.asyncio

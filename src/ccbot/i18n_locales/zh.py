@@ -308,8 +308,8 @@ ZH: dict[str, str] = {
     "settings.screenshot_capture.body": "*截图捕获大小*\n\n用于图像的最新终端文本上限。",
     "settings.group.screenshot_profile": "截图质量",
     "settings.screenshot_profile.body": "*截图质量*\n\n图像缩放和颜色配置。",
-    "screenshot.profile.full8": "100%，8色",
-    "screenshot.profile.compact8": "75%，8色",
+    "screenshot.profile.full8": "100%，优化",
+    "screenshot.profile.compact8": "75%，优化",
     "screenshot.profile.fullcolor": "100%，全色",
     "settings.group.archive_ai_description": "AI 描述",
     "settings.archive_ai_description.body": (

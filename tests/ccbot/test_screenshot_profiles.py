@@ -10,7 +10,7 @@ from ccbot.screenshot import text_to_image
 
 @pytest.mark.asyncio
 async def test_screenshot_profiles_have_deterministic_scale_and_palette() -> None:
-    text = "\x1b[31mred\x1b[0m \x1b[32mgreen\x1b[0m \x1b[34mblue\x1b[0m"
+    text = "\x1b[31mred\x1b[0m \x1b[32mgreen\x1b[0m \x1b[34mblue\x1b[0m plain text"
 
     full8 = Image.open(io.BytesIO(await text_to_image(text, profile="full8")))
     compact8 = Image.open(io.BytesIO(await text_to_image(text, profile="compact8")))
@@ -18,30 +18,22 @@ async def test_screenshot_profiles_have_deterministic_scale_and_palette() -> Non
 
     assert compact8.width == round(full8.width * 0.75)
     assert compact8.height == round(full8.height * 0.75)
-    assert len(full8.convert("RGB").getcolors(maxcolors=256) or []) <= 8
-    assert len(compact8.convert("RGB").getcolors(maxcolors=256) or []) <= 8
+    assert len(full8.convert("RGB").getcolors(maxcolors=256) or []) <= 32
+    assert len(compact8.convert("RGB").getcolors(maxcolors=256) or []) <= 32
     assert full8.mode == "P"
     assert compact8.mode == "P"
     assert fullcolor.size == full8.size
 
 
 @pytest.mark.asyncio
-async def test_eight_color_profile_uses_stable_terminal_palette() -> None:
-    text = "\x1b[31mred\x1b[0m \x1b[32mgreen\x1b[0m \x1b[34mblue\x1b[0m"
+async def test_optimized_profile_preserves_text_antialiasing_grays() -> None:
+    text = "\x1b[31mred\x1b[0m \x1b[32mgreen\x1b[0m \x1b[34mblue\x1b[0m plain text"
     rendered = Image.open(io.BytesIO(await text_to_image(text, profile="full8")))
     colors = {rgb for _count, rgb in rendered.convert("RGB").getcolors(256) or []}
 
-    expected = {
-        (30, 30, 30),
-        (212, 212, 212),
-        (205, 49, 49),
-        (13, 188, 121),
-        (229, 229, 16),
-        (36, 114, 200),
-        (188, 63, 188),
-        (17, 168, 205),
-    }
-    assert colors <= expected
+    neutral_shades = {rgb for rgb in colors if rgb[0] == rgb[1] == rgb[2]}
+    assert len(colors) <= 32
+    assert len(neutral_shades) >= 3
 
 
 @pytest.mark.asyncio

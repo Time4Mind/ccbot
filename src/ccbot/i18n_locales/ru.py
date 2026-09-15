@@ -368,8 +368,8 @@ RU: dict[str, str] = {
     "settings.screenshot_capture.body": "*Объём скрина*\n\nМаксимальный объём свежего хвоста терминального текста для изображения.",
     "settings.group.screenshot_profile": "Качество скрина",
     "settings.screenshot_profile.body": "*Качество скрина*\n\nМасштаб и цветовой профиль изображения.",
-    "screenshot.profile.full8": "100%, 8 цветов",
-    "screenshot.profile.compact8": "75%, 8 цветов",
+    "screenshot.profile.full8": "100%, оптимизировано",
+    "screenshot.profile.compact8": "75%, оптимизировано",
     "screenshot.profile.fullcolor": "100%, полная палитра",
     "settings.cat.behavior.body": (
         "*Поведение и язык*\n\n"

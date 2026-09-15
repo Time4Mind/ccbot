@@ -32,6 +32,15 @@ _EXEC_COMMAND_RE = re.compile(
 _COMPLETED_OUTPUT_RE = re.compile(
     r"\AScript completed\nWall time ([0-9.]+) seconds\nOutput:\n?([\s\S]*)\Z"
 )
+_MEMORY_CITATION_RE = re.compile(
+    r"\n*<oai-mem-citation\b[^>]*>[\s\S]*?(?:</oai-mem-citation>|\Z)",
+    re.IGNORECASE,
+)
+
+
+def _strip_internal_assistant_metadata(text: str) -> str:
+    """Remove Codex-only provenance envelopes from user-visible answers."""
+    return _MEMORY_CITATION_RE.sub("", text).rstrip()
 
 
 def _extract_exec_command(source: str) -> str | None:
@@ -122,7 +131,9 @@ def normalize_codex_entry(data: dict[str, Any]) -> dict[str, Any] | None:
                 "message": {"content": [{"type": "text", "text": text}]},
             }
         if event_type == "agent_message":
-            text = str(payload.get("message") or "")
+            text = _strip_internal_assistant_metadata(str(payload.get("message") or ""))
+            if not text:
+                return None
             phase = str(payload.get("phase") or "")
             return {
                 "type": "assistant",
@@ -157,6 +168,8 @@ def normalize_codex_entry(data: dict[str, Any]) -> dict[str, Any] | None:
                 if block_type not in ("input_text", "output_text", "text"):
                     continue
                 text = str(block.get("text") or "")
+                if role == "assistant":
+                    text = _strip_internal_assistant_metadata(text)
                 if text:
                     content.append({"type": "text", "text": text})
         elif isinstance(raw_content, str) and raw_content:

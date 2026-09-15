@@ -9,8 +9,7 @@ from telegram.ext import ContextTypes
 
 from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
-from ... import agent_install, voice_install
-from ...claude_auth import credentials_state
+from ... import voice_install
 from ...handlers.callback_data import (
     CB_ST_APPROVE,
     CB_ST_ARCHIVE_AI,
@@ -157,44 +156,6 @@ async def _maybe_offer_voice_install(
 # two concurrent installs (each would race apt/cmake and corrupt the
 # tree). One install at a time per user.
 _install_inflight: set[int] = set()
-_agent_install_inflight: set[tuple[int, str]] = set()
-
-
-async def _ensure_backend_auth(bot: Any, user_id: int, backend: str) -> None:
-    from ..commands.auth import ensure_codex_authenticated, start_login
-
-    if backend == "codex":
-        await ensure_codex_authenticated(bot, user_id, backend="codex")
-    elif not credentials_state().present:
-        await start_login(bot, user_id, backend="claude")
-
-
-async def _install_and_activate_backend(
-    query: CallbackQuery, user_id: int, backend: str
-) -> None:
-    key = (user_id, backend)
-    if key in _agent_install_inflight:
-        return
-    _agent_install_inflight.add(key)
-    bot = query.get_bot()
-
-    async def progress(message: str) -> None:
-        await safe_send(bot, user_id, message)
-
-    try:
-        if not await agent_install.install(backend, progress):
-            return
-        session_manager.set_backend_enabled(user_id, backend, True)
-        await safe_send(bot, user_id, f"✅ {backend.capitalize()} enabled.")
-        await _ensure_backend_auth(bot, user_id, backend)
-    except Exception as exc:
-        logger.exception("Agent install/activation failed backend=%s: %s", backend, exc)
-        try:
-            await safe_send(bot, user_id, f"❌ {backend} activation failed: `{exc}`")
-        except Exception:
-            pass
-    finally:
-        _agent_install_inflight.discard(key)
 
 
 async def _run_voice_install(query: CallbackQuery, user_id: int) -> None:
@@ -376,55 +337,10 @@ async def handle(
     screen_name: Screen = "settings"
     if data.startswith(CB_ST_AGENT):
         value = data[len(CB_ST_AGENT) :]
-        if value.startswith("toggle:"):
-            backend = value.removeprefix("toggle:")
-            if backend not in ("claude", "codex"):
-                await query.answer("Unknown backend", show_alert=True)
-                return True
-            enabled = backend not in session_manager.get_enabled_backends(user.id)
-            if enabled and not agent_install.is_available(backend):
-                import asyncio as _asyncio
+        from .agent_settings import handle_agent_value
 
-                _asyncio.create_task(
-                    _install_and_activate_backend(query, user.id, backend),
-                    name=f"install-agent:{backend}:{user.id}",
-                )
-                await query.answer("Installing…")
-                await safe_edit(
-                    query,
-                    render_settings_group_text(user.id, "settings_agent"),
-                    reply_markup=build_footer_keyboard(
-                        user.id, screen="settings_agent"
-                    ),
-                )
-                return True
-            try:
-                session_manager.set_backend_enabled(user.id, backend, enabled)
-            except RuntimeError:
-                await query.answer(t(user.id, "toast.last_backend"), show_alert=True)
-                return True
-            from ...default_session import ensure_default_session
-
-            import asyncio as _asyncio
-
-            _asyncio.create_task(ensure_default_session(context.bot, user.id))
-            if enabled:
-                _asyncio.create_task(
-                    _ensure_backend_auth(context.bot, user.id, backend),
-                    name=f"auth-agent:{backend}:{user.id}",
-                )
-        elif value.startswith("default:"):
-            backend = value.removeprefix("default:")
-            try:
-                session_manager.set_default_backend(user.id, backend)
-            except ValueError:
-                await query.answer("Backend is disabled", show_alert=True)
-                return True
-            from ...default_session import ensure_default_session
-
-            import asyncio as _asyncio
-
-            _asyncio.create_task(ensure_default_session(context.bot, user.id))
+        if await handle_agent_value(query, context, user, value):
+            return True
         screen_name = "settings_agent"
     elif data.startswith(CB_ST_DEFAULT_SESSION):
         value = data[len(CB_ST_DEFAULT_SESSION) :]

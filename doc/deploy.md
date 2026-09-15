@@ -6,7 +6,7 @@ single source of truth. macOS works as an interactive client via `ssh -t
 
 ## Prerequisites
 
-- Python 3.11+ (3.14 confirmed working)
+- Python 3.12+ (3.14 confirmed working)
 - [`uv`](https://docs.astral.sh/uv/) for dependency management
 - `tmux` (≥3.0)
 - `claude` CLI authenticated against `claude.ai` (Max x20 subscription) —
@@ -23,6 +23,10 @@ sudo chown $USER:$USER /opt/ccbot
 git clone https://github.com/Time4Mind/ccbot.git /opt/ccbot
 cd /opt/ccbot
 uv sync --all-extras
+
+# Install a lifecycle hook for every backend that will be enabled.
+uv run ccbot hook --install --backend claude
+# uv run ccbot hook --install --backend codex
 
 # Provision the env file.
 sudo install -d -m 750 /etc/ccbot
@@ -61,8 +65,10 @@ On `systemctl restart ccbot@…`:
 2. `reconcile_sessions_with_tmux()` flips any Session whose window
    vanished into the `lost` state and clears the user's
    `active_sessions` pointer if it pointed at a lost record. Lost
-   sessions are surfaced via `/archive` with a Restore button
-   that runs `claude --resume <session-id>` in the original workdir.
+   sessions are surfaced via `/archive` with a Restore button. Restoration
+   uses the session's enabled backend (`claude --resume` or `codex resume`);
+   cross-agent restore creates a handoff prompt instead of reusing an
+   incompatible native id.
 3. Idle and archive sweeps resume from `last_event_at`/`archived_at`
    timestamps in `state.json`.
 
@@ -113,7 +119,7 @@ curl -s --max-time 8 -x "$TG_PROXY_URL" \
 ## State and disk usage
 
 - `~/.ccbot/state.json` — sessions, active pointers, switcher trace.
-- `~/.ccbot/session_map.json` — written by claude's `SessionStart` hook.
+- `~/.ccbot/session_map.json` — written by the selected backend's lifecycle hook.
 - `~/.ccbot/monitor_state.json` — JSONL byte offsets.
 - `~/.ccbot/codex_quota_day.json` — Codex daily quota baseline and allocation.
 - `~/.codex/` — Codex credentials, hooks, and rollout JSONL when Codex is used.
@@ -135,8 +141,9 @@ curl -s --max-time 8 -x "$TG_PROXY_URL" \
    `CCBOT_NET_PROBE_URL`), отстреливая VPN-flap'ы по
    `CCBOT_NET_RETRY_SEC` секунд между попытками;
 2. запускает `uv run ccbot`;
-3. на любом выходе (TimedOut, KeyboardInterrupt, crash) — спит
-   `CCBOT_RESTART_BACKOFF` секунд и возвращается к шагу 1.
+3. после аварийного выхода ждёт `CCBOT_RESTART_BACKOFF` секунд и возвращается
+   к шагу 1; после чистого `rc=0` сразу повторяет process/network gates, где
+   живой владелец lock получает экспоненциальный backoff.
 
 Скрипт — обычный bash, не привязан к OS. Подойдёт для любого хоста
 без systemd: chroot, докер-без-tini, ручной запуск из tmux на macOS,
@@ -196,14 +203,16 @@ launchctl unload ~/Library/LaunchAgents/com.ccbot.plist
 Whisper.cpp model installer:
 
 ```bash
-# Default downloads ggml-medium-q8_0.bin (~785MB) + ggml-tiny.bin (~75MB)
-# into ~/.ccbot/models/.
+# Default downloads ggml-medium.bin (~1.5GB) into ~/.ccbot/models/.
 ./scripts/install_whisper_model.sh
 # Or pick a smaller model:
 MODEL=small ./scripts/install_whisper_model.sh
 ```
 
 After the model is in place, set `VOICE_BACKEND=whisper` in `.env`.
+The shell installer does not download q8 or the language-detection tiny model.
+The confirmed Telegram settings installer does: it installs
+`ggml-medium-q8_0.bin` and best-effort `ggml-tiny.bin`.
 
 ## Mac as a client
 

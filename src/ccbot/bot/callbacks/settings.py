@@ -460,12 +460,12 @@ async def handle(
         try:
             v = int(raw_value)
         except ValueError:
-            v = 7
+            v = 10
         setting_key = {
             "command": "spoiler_command_lines",
             "result": "spoiler_result_lines",
         }.get(kind)
-        if separator and setting_key is not None and v in (3, 7, 20):
+        if separator and setting_key is not None and v in (10, 20, 40):
             session_manager.update_user_setting(user.id, setting_key, v)
         screen_name = (
             "settings_spoiler_command_lines"

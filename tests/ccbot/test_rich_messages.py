@@ -5,6 +5,7 @@ code spans), expandable-quote → <details> conversion, and the
 rich-first / MarkdownV2-fallback behaviour of safe_send and safe_edit.
 """
 
+import importlib
 import re
 from pathlib import Path
 from typing import Any
@@ -140,9 +141,62 @@ class TestToRichMarkdown:
         assert str(path) not in out
         assert "financial.report " in out
         assert ">xlsx</tg-button>" in out
+        assert 'style="link"' not in out
         match = re.search(r'data="file:([0-9a-f]+)"', out)
         assert match is not None
         assert resolve_file_button(match.group(1)) == path.resolve()
+
+    def test_session_inbox_relative_path_becomes_file_button(
+        self, tmp_path: Path
+    ) -> None:
+        inbox = tmp_path / ".ccbot-inbox"
+        inbox.mkdir()
+        path = inbox / "1789464842-AQADUyFrG6q2SUl9.jpg"
+        path.write_bytes(b"image")
+
+        out = rich.to_rich_markdown(
+            f"Готово: `{path.relative_to(tmp_path)}`",
+            file_base_dir=tmp_path,
+        )
+
+        assert ".ccbot-inbox" not in out
+        assert "1789464842-AQADUyFrG6q2SUl9 " in out
+        assert ">jpg</tg-button>" in out
+        assert 'style="link"' not in out
+        match = re.search(r'data="file:([0-9a-f]+)"', out)
+        assert match is not None
+        assert resolve_file_button(match.group(1)) == path.resolve()
+
+    def test_home_relative_path_becomes_file_button(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        folder = tmp_path / "exports"
+        folder.mkdir()
+        path = folder / "monthly.report.pdf"
+        path.write_bytes(b"%PDF")
+
+        out = rich.to_rich_markdown("Готово: ~/exports/monthly.report.pdf")
+
+        assert "~/exports" not in out
+        assert "monthly.report " in out
+        assert ">pdf</tg-button>" in out
+        match = re.search(r'data="file:([0-9a-f]+)"', out)
+        assert match is not None
+        assert resolve_file_button(match.group(1)) == path.resolve()
+
+    def test_file_button_survives_runtime_registry_reset(self, tmp_path: Path) -> None:
+        import ccbot.file_actions as file_actions
+
+        path = tmp_path / "restart-safe.txt"
+        path.write_text("payload", encoding="utf-8")
+        out = rich.to_rich_markdown(str(path))
+        match = re.search(r'data="file:([0-9a-f]+)"', out)
+        assert match is not None
+
+        restarted = importlib.reload(file_actions)
+
+        assert restarted.resolve_file_button(match.group(1)) == path.resolve()
 
     def test_file_path_with_spaces_is_supported_inside_inline_code(
         self, tmp_path: Path
@@ -153,8 +207,10 @@ class TestToRichMarkdown:
         out = rich.to_rich_markdown(f"`{path}`")
 
         assert str(path) not in out
-        assert out.startswith("weekly report <tg-button")
+        assert out.startswith("weekly report ")
+        assert '<tg-button type="callback_data"' in out
         assert out.endswith(">csv</tg-button>")
+        assert 'style="link"' not in out
 
     def test_local_markdown_link_becomes_file_button(self, tmp_path: Path) -> None:
         path = tmp_path / "artifact.pdf"
@@ -163,8 +219,10 @@ class TestToRichMarkdown:
         out = rich.to_rich_markdown(f"[download]({path})")
 
         assert str(path) not in out
-        assert out.startswith("artifact <tg-button")
+        assert out.startswith("artifact ")
+        assert '<tg-button type="callback_data"' in out
         assert out.endswith(">pdf</tg-button>")
+        assert 'style="link"' not in out
 
     def test_file_path_inside_fenced_code_is_not_rewritten(
         self, tmp_path: Path

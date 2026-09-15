@@ -1,6 +1,7 @@
 """Normalization of Codex rollout rows into Claude-shaped message blocks."""
 
 import json
+import re
 from typing import Any
 
 
@@ -24,6 +25,57 @@ _HARNESS_TOOL_MARKERS = (
     "/doc/local/project-memory.md",
     ".claude/claude.md",
 )
+
+_EXEC_COMMAND_RE = re.compile(r"\btools\.exec_command\s*\(\s*\{[\s\S]*?\bcmd\s*:\s*")
+_COMPLETED_OUTPUT_RE = re.compile(
+    r"\AScript completed\nWall time ([0-9.]+) seconds\nOutput:\n?([\s\S]*)\Z"
+)
+
+
+def _extract_exec_command(source: str) -> str | None:
+    """Extract the actual shell command from a Codex JS exec wrapper."""
+    match = _EXEC_COMMAND_RE.search(source)
+    if match is None:
+        return None
+    encoded = source[match.end() :].lstrip()
+    if not encoded.startswith('"'):
+        return None
+    try:
+        command, _end = json.JSONDecoder().raw_decode(encoded)
+    except json.JSONDecodeError:
+        return None
+    return command if isinstance(command, str) else None
+
+
+def _structure_tool_output(value: Any) -> Any:
+    """Turn the stable Codex execution envelope into readable fields."""
+    if not isinstance(value, list):
+        return value
+    text_parts = [
+        str(item.get("text") or "")
+        for item in value
+        if isinstance(item, dict)
+        and item.get("type") in ("text", "input_text", "output_text")
+    ]
+    if not text_parts:
+        return value
+    raw = "".join(text_parts)
+    match = _COMPLETED_OUTPUT_RE.match(raw)
+    if match is None:
+        return value
+    duration, output = match.groups()
+    lines = ["status: completed", f"duration: {duration} s"]
+    if output.strip():
+        lines.extend(("output:", output.rstrip()))
+    non_text = [
+        item
+        for item in value
+        if not (
+            isinstance(item, dict)
+            and item.get("type") in ("text", "input_text", "output_text")
+        )
+    ]
+    return [{"type": "text", "text": "\n".join(lines)}, *non_text]
 
 
 def is_injected_user_text(text: str) -> bool:
@@ -126,6 +178,7 @@ def normalize_codex_entry(data: dict[str, Any]) -> dict[str, Any] | None:
         arguments = payload.get("arguments")
         if arguments is None:
             arguments = payload.get("input")
+        raw_arguments = arguments
         if isinstance(arguments, str):
             try:
                 arguments = json.loads(arguments)
@@ -133,7 +186,13 @@ def normalize_codex_entry(data: dict[str, Any]) -> dict[str, Any] | None:
                 arguments = {"input": arguments}
         if not isinstance(arguments, dict):
             arguments = {"input": arguments}
-        hidden = is_harness_tool_input(arguments)
+        hidden = is_harness_tool_input(raw_arguments)
+        name = str(payload.get("name") or "tool")
+        if name == "exec" and isinstance(raw_arguments, str):
+            command = _extract_exec_command(raw_arguments)
+            if command is not None:
+                name = "Bash"
+                arguments = {"command": command}
         return {
             "type": "assistant",
             "timestamp": timestamp,
@@ -142,7 +201,7 @@ def normalize_codex_entry(data: dict[str, Any]) -> dict[str, Any] | None:
                     {
                         "type": "tool_use",
                         "id": str(payload.get("call_id") or payload.get("id") or ""),
-                        "name": str(payload.get("name") or "tool"),
+                        "name": name,
                         "input": arguments,
                         "_ccbot_hidden": hidden,
                     }
@@ -161,7 +220,7 @@ def normalize_codex_entry(data: dict[str, Any]) -> dict[str, Any] | None:
                         "tool_use_id": str(
                             payload.get("call_id") or payload.get("id") or ""
                         ),
-                        "content": payload.get("output") or "",
+                        "content": _structure_tool_output(payload.get("output") or ""),
                     }
                 ]
             },

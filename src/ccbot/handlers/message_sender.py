@@ -18,6 +18,7 @@ RetryAfter exceptions are re-raised so callers (queue worker) can handle them.
 
 import io
 import logging
+from pathlib import Path
 from typing import Any
 
 from telegram import Bot, InputMediaPhoto, LinkPreviewOptions, Message
@@ -54,7 +55,12 @@ NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
 async def _try_rich_send(
-    bot: Bot, chat_id: int, text: str, kwargs: dict[str, Any]
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    kwargs: dict[str, Any],
+    *,
+    file_base_dir: Path | None = None,
 ) -> Message | None:
     """Attempt a Bot API 10.1 rich send; None means fall back to MarkdownV2.
 
@@ -67,7 +73,7 @@ async def _try_rich_send(
         return await rich.send_rich_message(
             bot,  # type: ignore[arg-type]
             chat_id,
-            rich.to_rich_markdown(text),
+            rich.to_rich_markdown(text, file_base_dir=file_base_dir),
             reply_markup=kwargs.get("reply_markup"),
         )
     except RetryAfter:
@@ -84,6 +90,7 @@ async def try_rich_edit(
     text: str,
     *,
     reply_markup: Any = None,
+    file_base_dir: Path | None = None,
 ) -> bool:
     """Attempt a Bot API 10.1 rich edit by explicit chat/message ids.
 
@@ -99,7 +106,7 @@ async def try_rich_edit(
             bot,
             chat_id,
             message_id,
-            rich.to_rich_markdown(text),
+            rich.to_rich_markdown(text, file_base_dir=file_base_dir),
             reply_markup=reply_markup,
         )
         return True
@@ -134,6 +141,7 @@ async def send_with_fallback(
     bot: Bot,
     chat_id: int,
     text: str,
+    file_base_dir: Path | None = None,
     **kwargs: Any,
 ) -> Message | None:
     """Send message with MarkdownV2, falling back to plain text on failure.
@@ -141,7 +149,9 @@ async def send_with_fallback(
     Returns the sent Message on success, None on failure.
     RetryAfter is re-raised for caller handling.
     """
-    rich_msg = await _try_rich_send(bot, chat_id, text, kwargs)
+    rich_msg = await _try_rich_send(
+        bot, chat_id, text, kwargs, file_base_dir=file_base_dir
+    )
     if rich_msg is not None:
         return rich_msg
     kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)

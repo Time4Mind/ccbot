@@ -60,12 +60,20 @@ def _apply_preprocessing_marker(
     if event.type != "user_msg":
         return
     normalized = raw_text.strip()
-    for index, pending in enumerate(state.pending_prompts):
-        if pending.text.strip() != normalized:
-            continue
+    if state.pending_prompts:
+        # Telegram dispatch and Codex transcript append are FIFO for one
+        # pinned session. Consume the oldest live placeholder on the next
+        # user transcript row even if Codex normalised whitespace/markup on
+        # ingestion; otherwise the placeholder remains glued to the card.
+        pending = state.pending_prompts.pop(0)
         if pending.preprocessed:
             event.user_icon = "👤💻"
-        state.pending_prompts.pop(index)
+        if pending.text.strip() != normalized:
+            logger.debug(
+                "pending prompt matched by fifo sess=%s request=%s",
+                sess.id,
+                pending.request_id,
+            )
         return
     if sess.was_preprocessed_prompt(normalized):
         event.user_icon = "👤💻"

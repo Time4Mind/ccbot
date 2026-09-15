@@ -629,7 +629,13 @@ def test_codex_rollout_keeps_structured_tool_output_text() -> None:
                     "type": "custom_tool_call",
                     "name": "exec",
                     "call_id": "exec-call",
-                    "input": "printf 'line 1\nline 2\n'",
+                    "input": (
+                        "const r = await tools.exec_command({"
+                        + "cmd:"
+                        + json.dumps("echo line 1\necho line 2")
+                        + ","
+                        + 'workdir:"/tmp"}); text(r.output);'
+                    ),
                 },
             ),
             "ordinal": 1,
@@ -641,7 +647,12 @@ def test_codex_rollout_keeps_structured_tool_output_text() -> None:
                     "type": "custom_tool_call_output",
                     "call_id": "exec-call",
                     "output": [
-                        {"type": "input_text", "text": "Script completed\n"},
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "Script completed\nWall time 0.1 seconds\nOutput:\n"
+                            ),
+                        },
                         {"type": "input_text", "text": "line 1\nline 2\n"},
                     ],
                 },
@@ -654,7 +665,16 @@ def test_codex_rollout_keeps_structured_tool_output_text() -> None:
 
     assert pending == {}
     assert len(parsed) == 2
+    assert parsed[0].tool_name == "Bash"
+    assert "tools.exec_command" not in parsed[0].text
+    assert "\\n" not in parsed[0].text
+    assert "echo line 1\necho line 2" in parsed[0].text
     assert parsed[1].content_type == "tool_result"
+    assert "Script completed" not in parsed[1].text
+    assert "Wall time" not in parsed[1].text
+    assert "status: completed" in parsed[1].text
+    assert "duration: 0.1 s" in parsed[1].text
+    assert "output:\nline 1\nline 2" in parsed[1].text
     assert "line 1\nline 2" in parsed[1].text
 
     from ccbot.handlers.card_event_render import render_event
@@ -684,6 +704,14 @@ def test_codex_rollout_keeps_structured_tool_output_text() -> None:
     rendered = render_event(state.events[0], in_flight=False, now=1.0)
     assert "\n- - -\n" in rendered
     assert "line 1\nline 2" in rendered
+
+    from ccbot.rich import to_rich_markdown
+
+    rich = to_rich_markdown(rendered)
+    assert "<details>" in rich
+    assert "tools.exec_command" not in rich
+    assert "\\n" not in rich
+    assert "\n- - -\n" in rich
 
 
 def test_codex_rollout_keeps_harness_tool_hidden_across_poll_batches() -> None:

@@ -22,6 +22,7 @@ Key functions: to_rich_markdown, send_rich_message, edit_rich_message.
 
 import html
 import re
+from pathlib import Path
 from typing import Any, cast
 
 from telegram import InlineKeyboardMarkup, InputFile, InputMediaPhoto, Message
@@ -299,9 +300,9 @@ def _render_details_headed(m: re.Match[str]) -> str:
     return f"\n<details><summary>{head}</summary>\n\n{body}\n\n</details>\n"
 
 
-def to_rich_markdown(text: str) -> str:
+def to_rich_markdown(text: str, *, file_base_dir: Path | None = None) -> str:
     """Convert internal markdown to Rich Markdown for ``sendRichMessage``."""
-    text = add_file_buttons(text)
+    text = add_file_buttons(text, file_base_dir)
     text = _inline_single_line_fences(text)
     text = _ensure_blank_before_tables(text)
     text = _escape_outside_code(text)

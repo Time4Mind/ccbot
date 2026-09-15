@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any
 
@@ -106,6 +107,7 @@ async def send_rich_media_card(
     pane_png: bytes,
     *,
     reply_markup: InlineKeyboardMarkup | None,
+    file_base_dir: Path | None = None,
 ) -> RichCardSend | None:
     """Send a rich card containing ``pane_png``; None requests text fallback."""
     if not config.rich_messages:
@@ -114,7 +116,7 @@ async def send_rich_media_card(
         message = await rich.send_rich_message(
             bot,
             user_id,
-            _rich_card_markdown(text, state),
+            _rich_card_markdown(text, state, file_base_dir=file_base_dir),
             reply_markup=reply_markup,
             photo=pane_png,
             disable_notification=True,
@@ -146,6 +148,8 @@ async def edit_rich_media_card(
 
     sess_id = lookup_session_for_message(user_id, state.msg_id)
     sess = session_manager.get_session(sess_id) if sess_id else None
+    workdir = getattr(sess, "workdir", "")
+    file_base_dir = Path(workdir) if workdir else None
     window_id = sess.window_id if sess is not None else ""
     elapsed = time.monotonic() - state.last_photo_edit_ts
 
@@ -192,7 +196,11 @@ async def edit_rich_media_card(
             bot,
             user_id,
             state.msg_id,
-            _rich_card_markdown(text, state),
+            _rich_card_markdown(
+                text,
+                state,
+                file_base_dir=file_base_dir,
+            ),
             reply_markup=reply_markup,
             photo=photo,
         )
@@ -225,7 +233,11 @@ async def edit_rich_media_card(
                         bot,
                         user_id,
                         state.msg_id,
-                        _rich_card_markdown(text, state),
+                        _rich_card_markdown(
+                            text,
+                            state,
+                            file_base_dir=file_base_dir,
+                        ),
                         reply_markup=reply_markup,
                         photo=png,
                     )
@@ -303,13 +315,17 @@ async def edit_rich_media_card(
     return True
 
 
-def _rich_card_markdown(text: str, state: CardState) -> str:
+def _rich_card_markdown(
+    text: str, state: CardState, *, file_base_dir: Path | None = None
+) -> str:
     """Insert the spaced photo before context/background service metadata."""
     offset = state.media_anchor_offset
     if offset <= 0 or offset > len(text):
-        return rich.to_rich_markdown(text)
-    body = rich.to_rich_markdown(text[:offset]).rstrip()
-    service_tail = rich.to_rich_markdown(text[offset:].lstrip()).lstrip()
+        return rich.to_rich_markdown(text, file_base_dir=file_base_dir)
+    body = rich.to_rich_markdown(text[:offset], file_base_dir=file_base_dir).rstrip()
+    service_tail = rich.to_rich_markdown(
+        text[offset:].lstrip(), file_base_dir=file_base_dir
+    ).lstrip()
     parts = [body, _MEDIA_SPACER, rich.RICH_PHOTO_ANCHOR, _MEDIA_SPACER]
     if service_tail:
         parts.append(service_tail)

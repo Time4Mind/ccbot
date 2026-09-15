@@ -169,6 +169,12 @@ class TestLiveLagSetting:
 
 
 class TestSpoilerLineSettings:
+    def test_defaults_are_ten_lines_per_block(self, mgr: SessionManager) -> None:
+        settings = mgr.get_user_settings(1)
+
+        assert settings["spoiler_command_lines"] == 10
+        assert settings["spoiler_result_lines"] == 10
+
     def test_legacy_shared_limit_migrates_to_both_blocks(
         self, mgr: SessionManager
     ) -> None:
@@ -179,7 +185,7 @@ class TestSpoilerLineSettings:
         assert settings["spoiler_command_lines"] == 20
         assert settings["spoiler_result_lines"] == 20
 
-    def test_independent_limits_override_legacy_value(
+    def test_removed_independent_limits_migrate_to_ten(
         self, mgr: SessionManager
     ) -> None:
         mgr.user_settings[1] = {
@@ -190,7 +196,7 @@ class TestSpoilerLineSettings:
 
         settings = mgr.get_user_settings(1)
 
-        assert settings["spoiler_command_lines"] == 3
+        assert settings["spoiler_command_lines"] == 10
         assert settings["spoiler_result_lines"] == 20
 
 

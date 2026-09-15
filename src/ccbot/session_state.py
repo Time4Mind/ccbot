@@ -405,10 +405,10 @@ class SessionStateMixin:
         # ``_chunk_final_text`` for the exact preference order.
         "card_page_lines": 20,
         # Legacy shared spoiler limit retained only as a migration source.
-        "spoiler_block_lines": 7,
+        "spoiler_block_lines": 10,
         # Independent visible rows for the command and result blocks.
-        "spoiler_command_lines": 7,
-        "spoiler_result_lines": 7,
+        "spoiler_command_lines": 10,
+        "spoiler_result_lines": 10,
         # Auto-rename new sessions via a cheap one-shot model call after the
         # first user message ≥20 chars. When ``False``, names stay as
         # the directory basename (``workdir``, ``workdir-2``, ...) for
@@ -434,11 +434,17 @@ class SessionStateMixin:
         # produces an edit for every event; migrate persisted zero to 2s.
         if merged.get("live_lag") == 0:
             merged["live_lag"] = 2
-        legacy_spoiler_lines = stored.get("spoiler_block_lines", 7)
+        legacy_spoiler_lines = stored.get("spoiler_block_lines", 10)
         if "spoiler_command_lines" not in stored:
             merged["spoiler_command_lines"] = legacy_spoiler_lines
         if "spoiler_result_lines" not in stored:
             merged["spoiler_result_lines"] = legacy_spoiler_lines
+        for key in ("spoiler_command_lines", "spoiler_result_lines"):
+            try:
+                spoiler_lines = int(merged.get(key, 10))
+            except (TypeError, ValueError):
+                spoiler_lines = 10
+            merged[key] = spoiler_lines if spoiler_lines in (10, 20, 40) else 10
         # Before option visibility had its own key, manual/auto meant that
         # the user expected a Terminal action. Preserve that expectation but
         # never revive the removed automatic-launch behavior.

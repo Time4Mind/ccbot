@@ -99,7 +99,7 @@ async def test_inflight_old_edit_finishes_before_target_owns_carrier(monkeypatch
     rendered: list[str] = []
 
     async def controlled_rich_edit(
-        bot, chat_id, message_id, text, *, reply_markup=None
+        bot, chat_id, message_id, text, *, reply_markup=None, file_base_dir=None
     ):
         rendered.append(text)
         if text == "old-session late update":

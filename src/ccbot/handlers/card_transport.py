@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 
 from telegram import Bot, InlineKeyboardMarkup
 from telegram.error import BadRequest, RetryAfter
@@ -31,6 +32,7 @@ from .card_registry import (
     _register_msg,
     _inline_screens_enabled,
     _legacy,
+    lookup_session_for_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,6 +119,9 @@ async def _send_card_locked(
                 text,
                 png,
                 reply_markup=keyboard,
+                file_base_dir=Path(sess.workdir)
+                if getattr(sess, "workdir", "")
+                else None,
             )
             if rich_sent is not None:
                 sent = rich_sent.message
@@ -134,6 +139,9 @@ async def _send_card_locked(
                 bot,
                 user_id,
                 text,
+                file_base_dir=Path(sess.workdir)
+                if getattr(sess, "workdir", "")
+                else None,
                 reply_markup=keyboard,
                 disable_notification=True,
             )
@@ -204,6 +212,10 @@ async def _edit_card_unlocked(
     """
     if state.msg_id is None:
         return False
+    sess_id = lookup_session_for_message(user_id, state.msg_id)
+    sess = session_manager.get_session(sess_id) if sess_id else None
+    workdir = getattr(sess, "workdir", "")
+    file_base_dir = Path(workdir) if workdir else None
     # User is currently looking at a Menu / sub-screen on this card's
     # message. Don't repaint — would clobber whatever they're navigating.
     # State.lines keeps accumulating; resume_card_view will catch up.
@@ -237,6 +249,7 @@ async def _edit_card_unlocked(
                 state.msg_id,
                 text,
                 reply_markup=reply_markup,
+                file_base_dir=file_base_dir,
             )
             if removed:
                 bind_carrier(state, state.msg_id, CarrierKind.TEXT)
@@ -297,7 +310,14 @@ async def _edit_card_unlocked(
     # to MarkdownV2. On failure (rich off, API error, lost carrier) fall
     # through to the MarkdownV2 pipeline below, which also owns the
     # lost-carrier detection.
-    if await try_rich_edit(bot, user_id, state.msg_id, text, reply_markup=reply_markup):
+    if await try_rich_edit(
+        bot,
+        user_id,
+        state.msg_id,
+        text,
+        reply_markup=reply_markup,
+        file_base_dir=file_base_dir,
+    ):
         if removing_rich_pane or rich_media_failed:
             bind_carrier(state, state.msg_id, CarrierKind.TEXT)
         return True

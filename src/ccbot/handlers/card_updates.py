@@ -492,9 +492,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
                 user_id, screen="main", is_busy=False
             )
             text = (
-                _render_with_final_proof(
-                    sess, state, user_id, final_events[0]
-                )
+                _render_with_final_proof(sess, state, user_id, final_events[0])
                 if final_events
                 else _legacy("_render_card")(sess, state, user_id=user_id)
             )

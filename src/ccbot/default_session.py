@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from .session_models import Session
+from .session_models import reserve_owner, Session
 from .tmux_manager import tmux_manager
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ def get_default_reserve(user_id: int) -> Session | None:
     candidates = [
         sess
         for sess in session_manager.sessions.values()
-        if sess.default_reserve_user_id == user_id
+        if reserve_owner(sess) == user_id
         and sess.state in ("active", "idle")
         and sess.window_id
     ]
@@ -79,7 +79,7 @@ async def ensure_default_session(bot: Any, user_id: int) -> Session | None:
         reserves = [
             sess
             for sess in session_manager.sessions.values()
-            if sess.default_reserve_user_id == user_id
+            if reserve_owner(sess) == user_id
         ]
         keep = next(
             (
@@ -106,6 +106,15 @@ async def ensure_default_session(bot: Any, user_id: int) -> Session | None:
                     )
             session_manager.delete_session(stale.id)
         if keep is not None:
+            if keep.default_reserve_user_id != user_id:
+                keep.mark_default_reserve(user_id)
+                session_manager.save_state()
+                logger.info(
+                    "Recovered rollback-compatible default reserve user=%d session=%s",
+                    user_id,
+                    keep.id,
+                )
+            await _remove_empty_default_orphans(user_id, directory, backend, keep)
             return keep
         if not enabled:
             return None
@@ -117,6 +126,24 @@ async def ensure_default_session(bot: Any, user_id: int) -> Session | None:
                 backend,
             )
             return None
+
+        orphan = next(
+            (
+                sess
+                for sess in session_manager.sessions.values()
+                if _is_empty_default_orphan(sess, directory, backend)
+            ),
+            None,
+        )
+        if orphan is not None:
+            orphan.mark_default_reserve(user_id)
+            session_manager.save_state()
+            logger.info(
+                "Adopted empty orphan as default reserve user=%d session=%s",
+                user_id,
+                orphan.id,
+            )
+            return orphan
 
         success, message, _window_name, window_id = await tmux_manager.create_window(
             directory,
@@ -179,9 +206,9 @@ def claim_default_session(bot: Any, user_id: int, sess: Session) -> bool:
     """Atomically turn a reserve into an ordinary session before queueing input."""
     from .session import session_manager
 
-    if getattr(sess, "default_reserve_user_id", 0) != user_id:
+    if reserve_owner(sess) != user_id:
         return False
-    sess.default_reserve_user_id = 0
+    sess.clear_default_reserve()
     sess.name = _claimed_name(sess.workdir, sess.id)
     session_manager.save_state()
     task = asyncio.create_task(
@@ -196,6 +223,45 @@ def claim_default_session(bot: Any, user_id: int, sess: Session) -> bool:
         sess.id,
     )
     return True
+
+
+def _is_empty_default_orphan(
+    sess: Session, directory: str, backend: str | None
+) -> bool:
+    return (
+        reserve_owner(sess) == 0
+        and sess.name == "default"
+        and sess.state in ("active", "idle")
+        and bool(sess.window_id)
+        and sess.workdir == directory
+        and sess.backend == backend
+        and sess.message_count == 0
+        and not sess.claude_session_id
+        and not sess.pending_preprocessing
+        and not sess.preprocessed_prompt_hashes
+    )
+
+
+async def _remove_empty_default_orphans(
+    user_id: int, directory: str, backend: str | None, keep: Session
+) -> None:
+    """Remove empty duplicates left by a rollback to a marker-unaware version."""
+    from .session import session_manager
+
+    for sess in list(session_manager.sessions.values()):
+        if sess is keep or not _is_empty_default_orphan(sess, directory, backend):
+            continue
+        session_manager.cancel_window_startup(sess.window_id)
+        try:
+            await tmux_manager.kill_window(sess.window_id)
+        except Exception as exc:
+            logger.warning("Could not stop orphan default reserve %s: %s", sess.id, exc)
+        session_manager.delete_session(sess.id)
+        logger.info(
+            "Removed empty orphan default reserve user=%d session=%s",
+            user_id,
+            sess.id,
+        )
 
 
 def reset_default_session_tasks_for_test() -> None:

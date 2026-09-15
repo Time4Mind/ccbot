@@ -23,6 +23,7 @@ from ..handlers.notifications import card_timer_loop, shutdown_card_surface_task
 from ..handlers.status_polling import status_poll_loop
 from ..metrics import metrics_flush_loop
 from ..session import session_manager
+from ..session_models import reserve_owner
 from ..session_monitor import NewMessage, SessionMonitor
 from ._common import CC_COMMANDS
 from .commands.auth import (
@@ -276,7 +277,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
             for sess in list(session_manager.sessions.values()):
                 if sess.state not in ("active", "idle"):
                     continue
-                if sess.default_reserve_user_id:
+                if reserve_owner(sess):
                     continue
                 if sess.id == active_id:
                     continue

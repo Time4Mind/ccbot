@@ -13,7 +13,7 @@ from typing import Any, ClassVar
 
 from .config import config
 from .session_defaults import DEFAULT_IDLE_ARCHIVE_HOURS
-from .session_models import Session, SessionState
+from .session_models import reserve_owner, Session, SessionState
 
 logger = logging.getLogger("ccbot.session")
 
@@ -287,7 +287,7 @@ class SessionStateMixin:
         for s in self.sessions.values():
             if s.state not in ("active", "idle"):
                 continue
-            if s.default_reserve_user_id:
+            if reserve_owner(s):
                 continue
             anchor = s.last_event_at or s.created_at
             if anchor and (now - anchor) >= idle_seconds:

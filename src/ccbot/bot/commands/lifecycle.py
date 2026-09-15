@@ -25,6 +25,7 @@ from ...handlers.callback_data import (
     CB_CONF_KILL_YES,
 )
 from ...handlers.cleanup import teardown_session_runtime
+from ...session_models import reserve_owner
 from ...handlers.directory_browser import (
     BROWSE_DIRS_KEY,
     BROWSE_PAGE_KEY,
@@ -161,7 +162,7 @@ async def archive_session(
     Used by both the /kill confirmation and the /done confirmation, plus
     the matching CB_CONF_*_YES callback paths.
     """
-    was_default_reserve = sess.default_reserve_user_id == user_id
+    was_default_reserve = reserve_owner(sess) == user_id
     await teardown_session_runtime(user_id, sess, bot)
     await archive_or_delete_session(sess, completed=completed)
     if was_default_reserve:

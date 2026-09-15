@@ -165,6 +165,107 @@ def test_reserve_marker_survives_state_round_trip_and_uses_unique_emoji():
     assert session_emoji(restored) == "⚪"
 
 
+@pytest.mark.asyncio
+async def test_reserve_survives_legacy_round_trip_without_creating_duplicate(
+    monkeypatch, tmp_path
+):
+    user_id = 42
+    project = tmp_path / "project"
+    project.mkdir()
+    session_manager.user_settings[user_id] = {
+        "default_session_enabled": True,
+        "default_session_directory": str(project),
+        "default_session_backend": "codex",
+        "enabled_backends": ["codex"],
+    }
+    original = Session(
+        id="reserve",
+        name="default",
+        window_id="@9",
+        workdir=str(project),
+        backend="codex",
+        default_reserve_user_id=user_id,
+    )
+    legacy_payload = original.to_dict()
+    legacy_payload.pop("default_reserve_user_id")
+    restored = Session.from_dict(legacy_payload)
+    session_manager.sessions[restored.id] = restored
+    create_window = AsyncMock()
+    monkeypatch.setattr(default_session.tmux_manager, "create_window", create_window)
+    monkeypatch.setattr(session_manager, "save_state", lambda: None)
+
+    reserve = await default_session.ensure_default_session(SimpleNamespace(), user_id)
+
+    assert reserve is restored
+    assert restored.default_reserve_user_id == user_id
+    assert session_emoji(restored) == "⚪"
+    create_window.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_removes_empty_unmarked_default_duplicate(
+    monkeypatch, tmp_path
+):
+    user_id = 42
+    project = tmp_path / "project"
+    project.mkdir()
+    session_manager.user_settings[user_id] = {
+        "default_session_enabled": True,
+        "default_session_directory": str(project),
+        "default_session_backend": "codex",
+        "enabled_backends": ["codex"],
+    }
+    monkeypatch.setattr(session_manager, "save_state", lambda: None)
+    monkeypatch.setattr(session_manager, "cancel_window_startup", lambda _wid: None)
+    kill_window = AsyncMock(return_value=True)
+    create_window = AsyncMock()
+    monkeypatch.setattr(default_session.tmux_manager, "kill_window", kill_window)
+    monkeypatch.setattr(default_session.tmux_manager, "create_window", create_window)
+    orphan = session_manager.create_session(
+        name="default", window_id="@old", workdir=str(project), backend="codex"
+    )
+    reserve = session_manager.create_session(
+        name="default",
+        window_id="@new",
+        workdir=str(project),
+        backend="codex",
+        default_reserve_user_id=user_id,
+    )
+
+    kept = await default_session.ensure_default_session(SimpleNamespace(), user_id)
+
+    assert kept is reserve
+    assert session_manager.get_session(orphan.id) is None
+    assert session_manager.get_session(reserve.id) is reserve
+    kill_window.assert_awaited_once_with("@old")
+    create_window.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_adopts_only_empty_unmarked_default(monkeypatch, tmp_path):
+    user_id = 42
+    project = tmp_path / "project"
+    project.mkdir()
+    session_manager.user_settings[user_id] = {
+        "default_session_enabled": True,
+        "default_session_directory": str(project),
+        "default_session_backend": "codex",
+        "enabled_backends": ["codex"],
+    }
+    monkeypatch.setattr(session_manager, "save_state", lambda: None)
+    create_window = AsyncMock()
+    monkeypatch.setattr(default_session.tmux_manager, "create_window", create_window)
+    orphan = session_manager.create_session(
+        name="default", window_id="@old", workdir=str(project), backend="codex"
+    )
+
+    reserve = await default_session.ensure_default_session(SimpleNamespace(), user_id)
+
+    assert reserve is orphan
+    assert orphan.default_reserve_owner == user_id
+    create_window.assert_not_awaited()
+
+
 def test_empty_reserve_is_excluded_from_idle_archive(monkeypatch):
     monkeypatch.setattr(session_manager, "save_state", lambda: None)
     sess = session_manager.create_session(window_id="@R")

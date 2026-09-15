@@ -31,6 +31,8 @@ from .callback_data import (
     CB_ST_CAPTURE,
     CB_ST_OPTION,
     CB_ST_PROFILE,
+    CB_ST_PREPROCESS,
+    CB_ST_PREPROCESS_INSTRUCTION,
     CB_ST_VOICE,
     CB_ST_WDAY,
 )
@@ -60,6 +62,8 @@ __all__ = [
     "_settings_pagesize_grid",
     "_settings_spoiler_lines_grid",
     "_settings_weeklyday_grid",
+    "_settings_preprocessing_mode_grid",
+    "_settings_preprocessing_instruction_grid",
 ]
 
 
@@ -111,6 +115,15 @@ def _format_setting_value(user_id: int, value_key: str, cur: object) -> str:
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
     if value_key in ("haiku_naming", "archive_ai_description"):
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
+    if value_key == "preprocessing_mode":
+        return t(user_id, f"preprocessing.mode.{cur or 'off'}")
+    if value_key == "preprocessing_instruction":
+        return t(
+            user_id,
+            "preprocessing.instruction.custom"
+            if str(cur or "").strip()
+            else "preprocessing.instruction.builtin",
+        )
     if value_key == "agent_backend":
         return str(cur).capitalize()
     return str(cur) if cur is not None else "?"
@@ -260,6 +273,54 @@ def _settings_approve_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
         [
             InlineKeyboardButton(
                 t(user_id, "btn.back"), callback_data=_parent_cat_cb("auto_approve")
+            )
+        ],
+    ]
+
+
+def _settings_preprocessing_mode_grid(
+    user_id: int,
+) -> list[list[InlineKeyboardButton]]:
+    cur = str(
+        session_manager.get_user_settings(user_id).get("preprocessing_mode", "off")
+    )
+    return [
+        [
+            InlineKeyboardButton(
+                _highlight(t(user_id, f"preprocessing.mode.{value}"), cur == value),
+                callback_data=f"{CB_ST_PREPROCESS}{value}",
+            )
+            for value in ("off", "voice", "all")
+        ],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("preprocessing_mode"),
+            )
+        ],
+    ]
+
+
+def _settings_preprocessing_instruction_grid(
+    user_id: int,
+) -> list[list[InlineKeyboardButton]]:
+    return [
+        [
+            InlineKeyboardButton(
+                t(user_id, "preprocessing.instruction.edit"),
+                callback_data=f"{CB_ST_PREPROCESS_INSTRUCTION}edit",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                t(user_id, "preprocessing.instruction.reset"),
+                callback_data=f"{CB_ST_PREPROCESS_INSTRUCTION}reset",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                t(user_id, "btn.back"),
+                callback_data=_parent_cat_cb("preprocessing_instruction"),
             )
         ],
     ]

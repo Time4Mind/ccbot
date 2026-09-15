@@ -27,6 +27,7 @@ Screen = Literal[
     "settings_cat_terminal",
     "settings_cat_options",
     "settings_cat_behavior",
+    "settings_cat_preprocessing",
     # Individual setting sub-screens.
     "settings_lag",
     "settings_voice",
@@ -48,6 +49,8 @@ Screen = Literal[
     "settings_haiku",
     "settings_archive_ai_description",
     "settings_idle_archive",
+    "settings_preprocessing_mode",
+    "settings_preprocessing_instruction",
 ]
 
 
@@ -152,6 +155,18 @@ _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
         "settings_archive_ai_description",
         "archive_ai_description",
     ),
+    (
+        "preprocessing_mode",
+        "settings.group.preprocessing_mode",
+        "settings_preprocessing_mode",
+        "preprocessing_mode",
+    ),
+    (
+        "preprocessing_instruction",
+        "settings.group.preprocessing_instruction",
+        "settings_preprocessing_instruction",
+        "preprocessing_instruction",
+    ),
 )
 
 
@@ -192,6 +207,11 @@ SETTINGS_CATEGORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         "settings.cat.options",
         "settings_cat_options",
         ("option_button_screenshot", "option_button_terminal"),
+    ),
+    (
+        "settings.cat.preprocessing",
+        "settings_cat_preprocessing",
+        ("preprocessing_mode", "preprocessing_instruction"),
     ),
     (
         "settings.cat.behavior",
@@ -238,4 +258,7 @@ _GROUP_TEXT_KEYS: dict[str, str] = {
     "settings_haiku": "settings.haiku.body",
     "settings_archive_ai_description": "settings.archive_ai_description.body",
     "settings_idle_archive": "settings.idle_archive.body",
+    "settings_preprocessing_mode": "settings.preprocessing_mode.body",
+    "settings_preprocessing_instruction": "settings.preprocessing_instruction.body",
+    "settings_cat_preprocessing": "settings.cat.preprocessing.body",
 }

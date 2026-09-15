@@ -16,6 +16,7 @@ __all__ = [
     "CARD_PAGE_LINES_OVERSHOOT",
     "CARD_SEED_TURNS",
     "Event",
+    "PendingPrompt",
     "CardState",
     "CarrierKind",
     "TurnPhase",
@@ -88,6 +89,16 @@ class Event:
     is_page_break: bool = False  # this event starts a new page
     is_error: bool = False
     image_data: list[tuple[str, bytes]] | None = None  # tool_result images
+    user_icon: str = "👤"
+
+
+@dataclass
+class PendingPrompt:
+    """A request visible in the card while preprocessing/delivery is pending."""
+
+    request_id: str
+    text: str
+    preprocessed: bool = False
 
 
 class TurnPhase(str, Enum):
@@ -108,6 +119,7 @@ class CarrierKind(str, Enum):
 class CardState:
     msg_id: int | None = None
     events: list[Event] = field(default_factory=list)
+    pending_prompts: list[PendingPrompt] = field(default_factory=list)
     # Completed logical pages are immutable while the current turn streams.
     # ``paginate_events_for_card`` caches their budget-split Event references
     # here and recomputes only the latest logical page on each update. This is

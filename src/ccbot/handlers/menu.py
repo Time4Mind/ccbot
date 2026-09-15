@@ -51,6 +51,8 @@ from .menu_settings import (
     _settings_capture_grid,
     _settings_option_grid,
     _settings_profile_grid,
+    _settings_preprocessing_mode_grid,
+    _settings_preprocessing_instruction_grid,
     _settings_voice_grid,
     _settings_weeklyday_grid,
 )
@@ -367,6 +369,10 @@ def build_footer_keyboard(
         rows.extend(_settings_capture_grid(user_id))
     elif screen == "settings_profile":
         rows.extend(_settings_profile_grid(user_id))
+    elif screen == "settings_preprocessing_mode":
+        rows.extend(_settings_preprocessing_mode_grid(user_id))
+    elif screen == "settings_preprocessing_instruction":
+        rows.extend(_settings_preprocessing_instruction_grid(user_id))
     elif screen in (
         "settings_cat_card",
         "settings_cat_notifications",
@@ -374,6 +380,7 @@ def build_footer_keyboard(
         "settings_cat_terminal",
         "settings_cat_options",
         "settings_cat_behavior",
+        "settings_cat_preprocessing",
     ):
         rows.extend(_settings_category_grid(user_id, screen))
     elif screen == "settings_bg_notify_finished":

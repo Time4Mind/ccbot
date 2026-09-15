@@ -63,7 +63,6 @@ class TestBackgroundDispatchKeepsQuiet:
         mock_sm.send_to_window = AsyncMock(return_value=(True, "ok"))
 
         repost = AsyncMock()
-        resume = AsyncMock()
         refresh = AsyncMock()
 
         with (
@@ -71,7 +70,6 @@ class TestBackgroundDispatchKeepsQuiet:
             # A is NOT the active session any more.
             patch("ccbot.bot.messages.is_active_for_user", return_value=False),
             patch("ccbot.bot.messages.repost_card", new=repost),
-            patch("ccbot.bot.messages.resume_card_view", new=resume),
             patch("ccbot.bot.messages.refresh_panel", new=refresh),
             patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
             patch("ccbot.bot.messages.get_interactive_window", return_value=None),
@@ -87,7 +85,6 @@ class TestBackgroundDispatchKeepsQuiet:
         mock_sm.send_to_window.assert_awaited_once_with("@5", "hi there")
         # ...but nothing was posted or repainted in chat for it.
         repost.assert_not_awaited()
-        resume.assert_not_awaited()
         # Only the bg-status panel of the *active* card moved.
         bg_update.assert_called_once_with(1, "sessA", "working")
         refresh.assert_awaited_once()
@@ -146,7 +143,6 @@ class TestBackgroundDispatchKeepsQuiet:
         mock_sm.send_to_window = AsyncMock(side_effect=_send_and_switch)
 
         repost = AsyncMock()
-        resume = AsyncMock()
         refresh = AsyncMock()
 
         with (
@@ -156,7 +152,6 @@ class TestBackgroundDispatchKeepsQuiet:
                 side_effect=lambda user_id, sess: active,
             ),
             patch("ccbot.bot.messages.repost_card", new=repost),
-            patch("ccbot.bot.messages.resume_card_view", new=resume),
             patch("ccbot.bot.messages.refresh_panel", new=refresh),
             patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
             patch("ccbot.bot.messages.get_interactive_window", return_value=None),
@@ -172,9 +167,8 @@ class TestBackgroundDispatchKeepsQuiet:
 
             await _dispatch_text_to_active(update, context, 1, "@5", "hi there")
 
-        # Entry wakes the then-active card once. After the switch no second
-        # resume/repost is allowed; only the new active card's bg panel moves.
-        assert resume.await_count == 1
+        # Dispatch never clears a navigation pause. After the switch only the
+        # new active card's bg panel moves.
         repost.assert_not_awaited()
         bg_update.assert_called_once_with(1, "sessA", "working")
         refresh.assert_awaited_once()
@@ -259,14 +253,14 @@ class TestActiveDispatchPutsCardInFront:
         mock_sm.send_to_window = AsyncMock(return_value=(True, "ok"))
 
         repost = AsyncMock()
-        resume = AsyncMock()
+        refresh = AsyncMock()
 
         with (
             patch("ccbot.bot.messages.session_manager", mock_sm),
             patch("ccbot.bot.messages.is_active_for_user", return_value=True),
             patch("ccbot.bot.messages.card_is_below", return_value=True),
             patch("ccbot.bot.messages.repost_card", new=repost),
-            patch("ccbot.bot.messages.resume_card_view", new=resume),
+            patch("ccbot.bot.messages.refresh_panel", new=refresh),
             patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
             patch("ccbot.bot.messages.get_interactive_window", return_value=None),
         ):
@@ -275,8 +269,7 @@ class TestActiveDispatchPutsCardInFront:
             await _dispatch_text_to_active(update, context, 1, "@5", "hi there")
 
         repost.assert_not_awaited()
-        # Once to un-pause before the send, once to drop the 🎙 marker.
-        assert resume.await_count == 2
+        refresh.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_new_flow_opened_during_delivery_is_not_replaced_by_card(self):
@@ -293,7 +286,7 @@ class TestActiveDispatchPutsCardInFront:
         mock_sm = MagicMock()
         mock_sm.find_session_by_window.return_value = active
         mock_sm.send_to_window = AsyncMock(side_effect=send_then_open_new)
-        resume = AsyncMock()
+        refresh = AsyncMock()
         repost = AsyncMock()
 
         with (
@@ -302,7 +295,7 @@ class TestActiveDispatchPutsCardInFront:
             patch("ccbot.bot.messages.card_is_below", return_value=True),
             patch("ccbot.bot.messages.get_card_state", return_value=card_state),
             patch("ccbot.bot.messages.repost_card", new=repost),
-            patch("ccbot.bot.messages.resume_card_view", new=resume),
+            patch("ccbot.bot.messages.refresh_panel", new=refresh),
             patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
             patch("ccbot.bot.messages.get_interactive_window", return_value=None),
             patch(
@@ -316,9 +309,8 @@ class TestActiveDispatchPutsCardInFront:
                 update, context, 1, "@5", "a long request"
             )
 
-        # One initial resume belongs to the message receipt. The navigation
-        # that happened during delivery must suppress the late second repaint.
-        assert resume.await_count == 1
+        # Navigation that happened during delivery suppresses every repaint.
+        refresh.assert_not_awaited()
         repost.assert_not_awaited()
 
 

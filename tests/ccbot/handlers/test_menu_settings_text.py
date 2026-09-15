@@ -73,8 +73,12 @@ def test_terminal_setting_screens_keep_existing_locale_text(
             continue
         rendered = render_settings_group_text(42, screen)  # type: ignore[arg-type]
         expected = TRANSLATIONS[language].get(key) or TRANSLATIONS["en"][key]
-        assert rendered.replace("  \n", "\n") == expected
-        _assert_hard_single_breaks(rendered)
+        normalized = rendered.replace("  \n", "\n")
+        if screen == "settings_preprocessing_instruction":
+            assert normalized.startswith(expected + "\n\n```text\n")
+        else:
+            assert normalized == expected
+            _assert_hard_single_breaks(rendered)
 
 
 def test_multi_setting_category_moves_values_from_buttons_to_table(

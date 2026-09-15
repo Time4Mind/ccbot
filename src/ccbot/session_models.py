@@ -14,7 +14,8 @@ Public API:
 from __future__ import annotations
 
 import secrets
-from dataclasses import dataclass
+import hashlib
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
@@ -119,6 +120,8 @@ class Session:
     screenshot_user_id: int = 0
     screenshot_capture_kib: int = 0
     screenshot_profile: str = ""
+    preprocessed_prompt_hashes: list[str] = field(default_factory=list)
+    pending_preprocessing: list[dict[str, Any]] = field(default_factory=list)
 
     @staticmethod
     def new_id() -> str:
@@ -135,6 +138,22 @@ class Session:
         """
         name = self.workdir.rstrip("/").rsplit("/", 1)[-1] if self.workdir else ""
         return name[:7] + "…" if len(name) > 7 else name
+
+    def remember_preprocessed_prompt(self, text: str) -> None:
+        normalized = text.strip()
+        if not normalized:
+            return
+        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        if digest not in self.preprocessed_prompt_hashes:
+            self.preprocessed_prompt_hashes.append(digest)
+            del self.preprocessed_prompt_hashes[:-256]
+
+    def was_preprocessed_prompt(self, text: str) -> bool:
+        normalized = text.strip()
+        if not normalized:
+            return False
+        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        return digest in self.preprocessed_prompt_hashes
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -159,6 +178,8 @@ class Session:
             "screenshot_user_id": self.screenshot_user_id,
             "screenshot_capture_kib": self.screenshot_capture_kib,
             "screenshot_profile": self.screenshot_profile,
+            "preprocessed_prompt_hashes": self.preprocessed_prompt_hashes,
+            "pending_preprocessing": self.pending_preprocessing,
         }
 
     @classmethod
@@ -188,4 +209,16 @@ class Session:
             screenshot_user_id=int(data.get("screenshot_user_id", 0)),
             screenshot_capture_kib=int(data.get("screenshot_capture_kib", 0)),
             screenshot_profile=data.get("screenshot_profile", ""),
+            preprocessed_prompt_hashes=[
+                str(value)
+                for value in data.get("preprocessed_prompt_hashes", [])
+                if isinstance(value, str)
+            ][-256:],
+            pending_preprocessing=[
+                dict(value)
+                for value in data.get("pending_preprocessing", [])
+                if isinstance(value, dict)
+                and isinstance(value.get("request_id"), str)
+                and isinstance(value.get("original"), str)
+            ][-128:],
         )

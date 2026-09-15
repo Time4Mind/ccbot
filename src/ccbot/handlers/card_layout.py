@@ -288,6 +288,18 @@ def _render_card(
             now=time.time(),
         )
         body = _EVENT_JOINER.join(part for part in (body, pending_row) if part)
+    for prompt in state.pending_prompts:
+        prompt_row = render_event(
+            Event(
+                type="user_msg",
+                text=prompt.text,
+                started_at=time.time(),
+                user_icon="👤💻" if prompt.preprocessed else "💻",
+            ),
+            in_flight=False,
+            now=time.time(),
+        )
+        body = _EVENT_JOINER.join(part for part in (body, prompt_row) if part)
     if state.pane_status:
         working_row = f"• {state.pane_status}"
         body = _EVENT_JOINER.join(part for part in (body, working_row) if part)

@@ -23,6 +23,8 @@ from ...handlers.callback_data import (
     CB_ST_PAGESIZE,
     CB_ST_SPOILER_LINES,
     CB_ST_PROFILE,
+    CB_ST_PREPROCESS,
+    CB_ST_PREPROCESS_INSTRUCTION,
     CB_ST_GRP,
     CB_ST_HAIKU,
     CB_ST_IDLE,
@@ -214,6 +216,8 @@ _GROUP_TO_SCREEN: dict[str, Screen] = {
     "option_button_screenshot": "settings_option_screenshot",
     "option_button_terminal": "settings_option_terminal",
     "archive_ai_description": "settings_archive_ai_description",
+    "preprocessing_mode": "settings_preprocessing_mode",
+    "preprocessing_instruction": "settings_preprocessing_instruction",
 }
 
 
@@ -248,6 +252,16 @@ async def handle(
         return True
 
     if data.startswith(CB_ST_CAT):
+        from ...handlers.directory_browser import (
+            STATE_KEY,
+            STATE_PREPROCESSING_INSTRUCTION,
+        )
+
+        if (
+            context.user_data is not None
+            and context.user_data.get(STATE_KEY) == STATE_PREPROCESSING_INSTRUCTION
+        ):
+            context.user_data.pop(STATE_KEY, None)
         cat_screen = cast(Screen, data[len(CB_ST_CAT) :])
         if cat_screen == "settings":
             text = render_settings_text(user.id)
@@ -307,6 +321,8 @@ async def handle(
         CB_ST_HAIKU,
         CB_ST_ARCHIVE_AI,
         CB_ST_IDLE,
+        CB_ST_PREPROCESS,
+        CB_ST_PREPROCESS_INSTRUCTION,
     )
     if not any(data.startswith(p) for p in setter_prefixes):
         return False
@@ -366,6 +382,48 @@ async def handle(
         if value in IDLE_ARCHIVE_HOUR_CHOICES:
             session_manager.update_user_setting(user.id, "session_idle_hours", value)
         screen_name = "settings_idle_archive"
+    elif data.startswith(CB_ST_PREPROCESS):
+        value = data[len(CB_ST_PREPROCESS) :]
+        if value in ("off", "voice", "all"):
+            session_manager.update_user_setting(user.id, "preprocessing_mode", value)
+            from ...request_preprocessing import prompt_preprocessor
+
+            if value == "off":
+                await prompt_preprocessor.close()
+            else:
+                try:
+                    await prompt_preprocessor.prewarm()
+                except Exception as exc:
+                    logger.warning(
+                        "Request preprocessing enable pre-warm failed user=%d: %s",
+                        user.id,
+                        exc,
+                    )
+        screen_name = "settings_preprocessing_mode"
+    elif data.startswith(CB_ST_PREPROCESS_INSTRUCTION):
+        action = data[len(CB_ST_PREPROCESS_INSTRUCTION) :]
+        if action == "reset":
+            session_manager.update_user_setting(
+                user.id, "preprocessing_instruction", ""
+            )
+        elif action == "edit":
+            from ...handlers.directory_browser import (
+                STATE_KEY,
+                STATE_PREPROCESSING_INSTRUCTION,
+            )
+
+            if context.user_data is not None:
+                context.user_data[STATE_KEY] = STATE_PREPROCESSING_INSTRUCTION
+            await safe_edit(
+                query,
+                t(user.id, "preprocessing.instruction.send"),
+                reply_markup=build_footer_keyboard(
+                    user.id, screen="settings_preprocessing_instruction"
+                ),
+            )
+            await query.answer()
+            return True
+        screen_name = "settings_preprocessing_instruction"
     elif data.startswith(CB_ST_LOCAL):
         # Retired callback: consume stale Telegram keyboards without reviving
         # the removed off/manual/auto terminal mode.

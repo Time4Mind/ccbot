@@ -161,12 +161,13 @@ class TestDetectOrphanWindows:
 
     @pytest.mark.asyncio
     async def test_reserved_windows_ignored(self) -> None:
-        # __main__ and ccbot-usage are bot-owned utility windows; they
+        # Supervisor and usage windows are bot-owned utilities; they
         # must never trigger the orphan warning even with no Session.
         mgr = SimpleNamespace(sessions={}, window_states={})
         windows = [
             _window("@0", "__main__"),
             _window("@5", "ccbot-usage"),
+            _window("@6", "ccbot-codex-usage"),
         ]
         n = await detect_orphan_windows(mgr, windows=windows)  # type: ignore[arg-type]
         assert n == 0

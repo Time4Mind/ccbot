@@ -157,9 +157,11 @@ async def resolve_stale_window_ids(mgr: "SessionManager") -> None:
 
 # Reserved utility windows that aren't tracked as Sessions and must not
 # be reported as orphans. ``__main__`` hosts the bot supervisor; the
-# ``ccbot-usage`` window is owned by ``_usage_window.py`` for /usage
-# modal scraping. Both are intentionally outside the Session model.
-_RESERVED_WINDOW_NAMES: frozenset[str] = frozenset({"__main__", "ccbot-usage"})
+# usage windows are owned by ``_usage_window.py`` for isolated /usage and
+# /status scraping. All three are intentionally outside the Session model.
+_RESERVED_WINDOW_NAMES: frozenset[str] = frozenset(
+    {"__main__", "ccbot-usage", "ccbot-codex-usage"}
+)
 
 
 async def detect_orphan_windows(

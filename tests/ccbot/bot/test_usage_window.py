@@ -165,6 +165,25 @@ async def test_codex_status_never_advances_sign_in_screen(
 
 
 @pytest.mark.asyncio
+async def test_codex_usage_window_is_reused_across_bot_starts(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A parked usage process survives restarts instead of accumulating windows."""
+    existing = type("Window", (), {"window_id": "@6"})()
+
+    async def _find(_name: str):
+        return existing
+
+    async def _unexpected_create(*_args: object, **_kwargs: object):
+        raise AssertionError("existing Codex usage window must be reused")
+
+    monkeypatch.setattr(_usage_window.tmux_manager, "find_window_by_name", _find)
+    monkeypatch.setattr(_usage_window.tmux_manager, "create_window", _unexpected_create)
+
+    assert await _usage_window._ensure_codex_usage_window() == "@6"
+
+
+@pytest.mark.asyncio
 async def test_codex_status_retries_after_refresh_request(
     monkeypatch: pytest.MonkeyPatch,
 ):

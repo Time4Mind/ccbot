@@ -107,8 +107,7 @@ class TestSyntaxHighlightedToolBody:
             result_max_lines=7,
         )
 
-        assert "- - -" not in out
-        command_block, result_block = out.split("\n\n", 1)
+        command_block, result_block = out.split("\n- - -\n", 1)
         assert command_block == f"```bash\n{'x' * 69}…\n```"
         assert result_block.splitlines() == [
             "result-0",

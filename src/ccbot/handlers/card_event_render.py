@@ -132,7 +132,7 @@ def _build_tool_spoiler_body(
         parts.append(_format_tool_args(tool_name, bounded_args))
     if bounded_content:
         parts.append(_format_tool_content(tool_name, args, bounded_content))
-    return "\n\n".join(parts)
+    return "\n- - -\n".join(parts)
 
 
 def _spoiler_body(body: str) -> str:

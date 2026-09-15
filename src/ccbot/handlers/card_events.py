@@ -92,9 +92,10 @@ def _build_event(msg: NewMessage) -> Event:
     if msg.role == "user":
         return Event(
             type="user_msg",
-            text=_trim(text, 200),
+            text=text,
             body=raw_body,
             started_at=started,
+            is_page_break=True,
         )
     is_final = msg.stop_reason in ("end_turn", "stop_sequence", "max_tokens")
     # Narrative text events (mid-stream chunks and final answers) render
@@ -108,7 +109,7 @@ def _build_event(msg: NewMessage) -> Event:
         body=raw_body,
         started_at=started,
         completed_at=started if is_final else None,
-        is_page_break=is_final,
+        is_page_break=False,
     )
 
 

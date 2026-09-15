@@ -63,10 +63,10 @@ class TestBuildEvent:
         assert ev.tool_name == "Read"
         assert ev.completed_at is None
 
-    def test_final_text_marks_page_break(self) -> None:
+    def test_final_text_stays_with_the_request_page(self) -> None:
         ev = _build_event(_msg("text", "Done!", stop_reason="end_turn"))
         assert ev.type == "final_text"
-        assert ev.is_page_break is True
+        assert ev.is_page_break is False
         assert ev.completed_at is not None
 
     def test_midstream_text_is_not_final(self) -> None:
@@ -77,6 +77,12 @@ class TestBuildEvent:
     def test_user_message(self) -> None:
         ev = _build_event(_msg("text", "fix login", role="user"))
         assert ev.type == "user_msg"
+        assert ev.is_page_break is True
+
+    def test_user_message_preserves_multiline_text_without_clipping(self) -> None:
+        text = "first line\n" + ("x" * 240) + "\nlast line"
+        ev = _build_event(_msg("text", text, role="user"))
+        assert ev.text == text
 
     def test_parses_iso_timestamp(self) -> None:
         ev = _build_event(_msg("thinking", "x", timestamp="2026-05-15T14:31:23Z"))
@@ -124,16 +130,21 @@ class TestPaginateEvents:
         ]
         assert paginate_events(events) == [events]
 
-    def test_break_starts_new_page(self) -> None:
-        e1 = Event(type="user_msg", text="👤 q", started_at=1.0)
+    def test_each_request_anchors_its_complete_turn(self) -> None:
+        e1 = Event(
+            type="user_msg", text="👤 q", started_at=1.0, is_page_break=True
+        )
         e2 = Event(type="tool_use", text="▷ t", started_at=2.0)
-        e3 = Event(type="final_text", text="Done", started_at=3.0, is_page_break=True)
-        e4 = Event(type="user_msg", text="👤 q2", started_at=4.0)
+        e3 = Event(type="final_text", text="Done", started_at=3.0)
+        e4 = Event(
+            type="user_msg", text="👤 q2", started_at=4.0, is_page_break=True
+        )
         e5 = Event(type="tool_use", text="▷ t2", started_at=5.0)
-        pages = paginate_events([e1, e2, e3, e4, e5])
+        e6 = Event(type="final_text", text="Done 2", started_at=6.0)
+        pages = paginate_events([e1, e2, e3, e4, e5, e6])
         assert len(pages) == 2
-        assert pages[0] == [e1, e2]
-        assert pages[1] == [e3, e4, e5]
+        assert pages[0] == [e1, e2, e3]
+        assert pages[1] == [e4, e5, e6]
 
     def test_consecutive_breaks(self) -> None:
         e1 = Event(type="final_text", text="A1", started_at=1.0, is_page_break=True)

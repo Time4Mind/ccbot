@@ -63,14 +63,14 @@ class Event:
 
     ``type`` discriminates render behaviour:
 
-      - ``user_msg``   — user's typed text echoed via ``👤``
+      - ``user_msg``   — user's typed text echoed via ``👤``; starts a turn page
       - ``thinking``   — claude thinking block (``∴``)
       - ``tool_use``   — tool invocation (``▷``); on tool_result the
         same Event's ``completed_at`` flips and ``body`` becomes the
         result text.  ``tool_use_id`` matches assistant→user pairing.
       - ``text``       — mid-stream assistant text (stop_reason=tool_use)
-      - ``final_text`` — end-of-turn assistant answer; ``is_page_break``
-      - ``error``      — error-only event; ``is_page_break``
+      - ``final_text`` — end-of-turn assistant answer
+      - ``error``      — error-only event
       - ``interactive``— AskUserQuestion / ExitPlanMode / Permission;
         rendered as a separate Telegram message, NOT in card body, but
         recorded here for page-break anchoring.

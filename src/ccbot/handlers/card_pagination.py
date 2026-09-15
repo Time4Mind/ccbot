@@ -44,11 +44,11 @@ __all__ = [
 def paginate_events(events: list[Event]) -> list[list[Event]]:
     """Split ``events`` into pages by ``is_page_break``.
 
-    Page break: each Event with ``is_page_break=True`` becomes the TOP
-    of a new page (everything before it lives on the previous page).
+    Page break: each user request has ``is_page_break=True`` and becomes
+    the TOP of a new page. Its work events and final answer stay after it.
     Empty input → ``[[]]`` so callers can address page 0.
 
-    NOTE: this is the "logical" pagination — by answer boundary only.
+    NOTE: this is the "logical" pagination — by request boundary only.
     Live cards must use :func:`paginate_events_for_card` to also split
     over-budget logical pages into navigable sub-pages, so the ◀/▶
     counter matches what's actually rendered.
@@ -246,8 +246,8 @@ def _rechunk_oversized_finals_inplace(state: CardState, budget_lines: int) -> No
     MarkdownV2-rendered byte budget (``CARD_PAGE_BUDGET``) is left
     untouched. An oversized Event is replaced (in place, preserving
     order) by N ``final_text`` Events produced by ``_chunk_final_text``,
-    each marked ``is_page_break=True`` so pagination treats every chunk
-    as a separate page.
+    kept in order after the request anchor. Budget pagination places chunks
+    on consecutive sub-pages as needed.
 
     The byte gate matters: a wide single-paragraph answer can fit in
     ``cap`` visual lines and STILL produce a >4096-byte payload after
@@ -281,7 +281,7 @@ def _rechunk_oversized_finals_inplace(state: CardState, budget_lines: int) -> No
                 body=chunk,
                 started_at=ev.started_at,
                 completed_at=ev.completed_at,
-                is_page_break=True,
+                is_page_break=False,
             )
             for chunk in chunks
         ]
@@ -328,8 +328,7 @@ def _trim_page_events(
     ≤ ``budget_lines`` (with ``CARD_PAGE_LINES_OVERSHOOT`` slack).
 
     Always preserves:
-    * The FIRST event (page anchor — usually the ``is_page_break``
-      final_text answer; user needs the answer at the top of the page).
+    * The FIRST event (normally the user request anchoring the turn).
     * The TAIL events that fit in remaining budget (latest signal —
       in-flight tool, last narration).
 

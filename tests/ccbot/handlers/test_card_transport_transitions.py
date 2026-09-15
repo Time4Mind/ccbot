@@ -166,7 +166,7 @@ async def test_finalize_waits_for_in_flight_deferred_edit(
         "_legacy",
         lambda name: {
             "_ensure_seeded": ensure_seeded,
-            "_render_card": lambda *_args, **_kwargs: "rendered final",
+            "_render_card": lambda *_args, **_kwargs: "rendered final answer",
             "build_footer_keyboard": lambda *_args, **_kwargs: None,
             "_send_card": final_send,
             "_edit_card": AsyncMock(return_value=True),
@@ -216,7 +216,7 @@ async def test_active_final_answer_spawns_new_card_and_freezes_open_page(
         lambda name: {
             "_ensure_seeded": AsyncMock(return_value=None),
             "_render_card": lambda _sess, target, **_kwargs: (
-                "✅ active session"
+                "✅ active session\nfinal answer"
                 if target.completion_marker_pending
                 else "active session"
             ),
@@ -235,9 +235,56 @@ async def test_active_final_answer_spawns_new_card_and_freezes_open_page(
         reply_markup=None,
     )
     bot.delete_message.assert_not_awaited()
-    assert sent == ["✅ active session"]
+    assert sent == ["✅ active session\nfinal answer"]
     assert state.msg_id == 10
     assert state.completion_marker_pending is False
+
+
+@pytest.mark.asyncio
+async def test_final_card_is_not_sent_until_render_contains_the_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale page render must never be accepted as final delivery."""
+    state = CardState(
+        msg_id=9,
+        current_page_idx=0,
+        events=[
+            Event(
+                type="user_msg",
+                text="request",
+                started_at=1.0,
+                is_page_break=True,
+            )
+        ],
+    )
+    bot = SimpleNamespace(edit_message_reply_markup=AsyncMock(return_value=True))
+    renders = iter(["stale working page", "request\nfinal answer"])
+    sent: list[str] = []
+
+    async def send_card(_bot, _uid, _sess, target, *, text, reply_markup=None):
+        sent.append(text)
+        target.msg_id = 10
+        return True
+
+    monkeypatch.setattr(card_updates, "get_card_state", lambda _uid, _sess: state)
+    monkeypatch.setattr(card_updates, "_should_buffer", lambda *_args: False)
+    monkeypatch.setattr(
+        card_updates,
+        "_legacy",
+        lambda name: {
+            "_ensure_seeded": AsyncMock(return_value=None),
+            "_render_card": lambda *_args, **_kwargs: next(renders),
+            "build_footer_keyboard": lambda *_args, **_kwargs: SimpleNamespace(),
+            "_send_card": send_card,
+            "_edit_card": AsyncMock(return_value=True),
+        }[name],
+    )
+    session = SimpleNamespace(id="s1", window_id="")
+
+    await card_updates.finalize_task(bot, 42, session, "final answer")
+
+    assert sent == ["request\nfinal answer"]
+    assert state.msg_id == 10
 
 
 def test_carrier_rebinding_clears_previous_media_kind(

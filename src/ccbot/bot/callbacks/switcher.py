@@ -39,7 +39,7 @@ from ...handlers.card_carrier import SCREENSHOT_CACHE_FRESH_SECONDS
 from ...session import session_manager
 from ...terminal_parser import extract_interactive_content, is_interactive_ui
 from ...tmux_manager import tmux_manager
-from .._common import render_session_preview
+from .._common import render_session_preview, set_view
 
 logger = logging.getLogger(__name__)
 
@@ -314,7 +314,7 @@ async def handle(
             context.user_data[BROWSE_DIRS_KEY] = subdirs
             context.user_data["menu_origin"] = "main"
         try:
-            await safe_edit(query, msg_text, reply_markup=keyboard)
+            await set_view(query, context.bot, user.id, msg_text, keyboard)
         except Exception:
             await safe_send(context.bot, user.id, msg_text, reply_markup=keyboard)
         await query.answer()

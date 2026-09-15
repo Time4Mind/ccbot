@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from ccbot.handlers import message_sender, notifications
+from ccbot.bot import _common
 from ccbot.handlers.card_model import CardState
 from ccbot.session import session_manager
 from ccbot.session_models import Session
@@ -156,6 +158,53 @@ async def test_inflight_old_edit_finishes_before_target_owns_carrier(monkeypatch
     assert rendered[0] == "old-session late update"
     assert "target-session" in rendered[1]
     assert target_state.in_menu_view is False
+
+
+@pytest.mark.asyncio
+async def test_navigation_view_wins_over_inflight_card_edit(monkeypatch):
+    """A tap must be the last writer even when a live-card edit is in flight."""
+    user_id = 42
+    carrier_msg_id = 8000
+    sess = _session("session-a", "old-session", "@1")
+    session_manager.sessions[sess.id] = sess
+    session_manager.active_sessions[user_id] = sess.id
+    state = CardState(msg_id=carrier_msg_id)
+    notifications._cards[(user_id, sess.id)] = state
+
+    card_edit_started = asyncio.Event()
+    release_card_edit = asyncio.Event()
+    rendered: list[str] = []
+
+    async def controlled_rich_edit(
+        bot, chat_id, message_id, text, *, reply_markup=None, file_base_dir=None
+    ):
+        card_edit_started.set()
+        await release_card_edit.wait()
+        rendered.append(text)
+        return True
+
+    async def navigation_edit(query, text, *, reply_markup=None):
+        rendered.append(text)
+        return True
+
+    monkeypatch.setattr(message_sender, "try_rich_edit", controlled_rich_edit)
+    monkeypatch.setattr(_common, "safe_edit", navigation_edit)
+    query = SimpleNamespace(message=SimpleNamespace(message_id=carrier_msg_id))
+    bot = AsyncMock()
+
+    card_edit = asyncio.create_task(
+        notifications._edit_card(bot, user_id, state, text="late card")
+    )
+    await card_edit_started.wait()
+    navigation = asyncio.create_task(
+        _common.set_view(query, bot, user_id, "menu", reply_markup=None)
+    )
+    await asyncio.sleep(0)
+
+    assert not navigation.done()
+    release_card_edit.set()
+    await asyncio.gather(card_edit, navigation)
+    assert rendered == ["late card", "menu"]
 
 
 @pytest.mark.asyncio

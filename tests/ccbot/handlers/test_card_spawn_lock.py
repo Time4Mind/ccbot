@@ -83,8 +83,8 @@ def _make_user_msg(text: str) -> NewMessage:
 
 
 @pytest.mark.asyncio
-async def test_new_user_turn_moves_fixed_historical_page_to_latest(monkeypatch):
-    """A new prompt must make the live carrier follow the actual latest page."""
+async def test_late_user_event_does_not_undo_explicit_page_selection(monkeypatch):
+    """Intake owns latest-focus; a later monitor event must not undo a page tap."""
     sess = _make_sess()
     user_id = 42
     bot = AsyncMock()
@@ -127,13 +127,12 @@ async def test_new_user_turn_moves_fixed_historical_page_to_latest(monkeypatch):
     )
 
     assert rendered
-    assert "current request" in rendered[-1]
-    assert state.current_page_idx is None
+    assert state.current_page_idx == 0
 
 
 @pytest.mark.asyncio
-async def test_buffered_user_turn_also_releases_fixed_page(monkeypatch):
-    """The repost-intent buffer must not retain the previous final's page."""
+async def test_buffered_late_user_event_keeps_explicit_page_selection(monkeypatch):
+    """A buffered monitor event arriving after a tap must keep that page."""
     sess = _make_sess()
     user_id = 42
     state = _cards.setdefault((user_id, sess.id), CardState())
@@ -163,7 +162,7 @@ async def test_buffered_user_turn_also_releases_fixed_page(monkeypatch):
     finally:
         end_repost_intent(user_id, sess.id)
 
-    assert state.current_page_idx is None
+    assert state.current_page_idx == 0
     assert any(ev.text == "buffered request" for ev in state.events)
 
 

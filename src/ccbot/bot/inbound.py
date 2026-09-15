@@ -90,10 +90,13 @@ def _enqueue(
     )
     sess = session_manager.find_session_by_window(wid)
     if sess is not None:
+        # A new Telegram request owns the move to the latest page. Do it now,
+        # before async queue work: a later pagination tap must stay authoritative
+        # even if this request's transcript event arrives after that tap.
+        state = get_card_state(user.id, sess)
+        state.current_page_idx = None
         if kind == "voice":
-            state = get_card_state(user.id, sess)
             state.voice_pending = True
-            state.current_page_idx = None
         schedule_card_after_message(
             context.bot,
             user.id,

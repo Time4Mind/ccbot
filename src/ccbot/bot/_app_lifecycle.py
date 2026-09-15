@@ -52,6 +52,7 @@ _heartbeat_task: asyncio.Task[None] | None = None
 _auth_preflight_task: asyncio.Task[None] | None = None
 _usage_prewarm_task: asyncio.Task[None] | None = None
 _preprocessing_recovery_task: asyncio.Task[int] | None = None
+_default_session_task: asyncio.Task[None] | None = None
 
 
 async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") -> None:
@@ -66,6 +67,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
         _auth_preflight_task, \
         _usage_prewarm_task, \
         _preprocessing_recovery_task, \
+        _default_session_task, \
         _last_heartbeat, \
         _conflict_app
 
@@ -116,6 +118,14 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     # window vanished get state=lost and surface in the switcher with a
     # Restore button.
     await session_manager.reconcile_sessions_with_tmux()
+
+    from ..default_session import default_session_loop
+
+    _default_session_task = asyncio.create_task(
+        default_session_loop(application.bot, tuple(config.allowed_users)),
+        name="default-session-supervisor",
+    )
+    logger.info("Default-session supervisor started")
 
     # Requests are persisted against their immutable target session before
     # Luna starts. Resume those records after tmux reconciliation so a bot
@@ -266,6 +276,8 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
             for sess in list(session_manager.sessions.values()):
                 if sess.state not in ("active", "idle"):
                     continue
+                if sess.default_reserve_user_id:
+                    continue
                 if sess.id == active_id:
                     continue
                 try:
@@ -337,7 +349,8 @@ async def post_shutdown(
         _heartbeat_task, \
         _auth_preflight_task, \
         _usage_prewarm_task, \
-        _preprocessing_recovery_task
+        _preprocessing_recovery_task, \
+        _default_session_task
 
     if _usage_prewarm_task:
         if not _usage_prewarm_task.done():
@@ -355,6 +368,13 @@ async def post_shutdown(
             _preprocessing_recovery_task.cancel()
         await asyncio.gather(_preprocessing_recovery_task, return_exceptions=True)
         _preprocessing_recovery_task = None
+    if _default_session_task:
+        _default_session_task.cancel()
+        await asyncio.gather(_default_session_task, return_exceptions=True)
+        _default_session_task = None
+    from ..default_session import shutdown_default_session_tasks
+
+    await shutdown_default_session_tasks()
     await shutdown_auth_flows()
     await shutdown_inbound_queues()
     from ..request_preprocessing import prompt_preprocessor

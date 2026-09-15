@@ -277,6 +277,11 @@ async def _surface_new_interactive_ui(
 
     ``is_interactive_ui(pane_text)`` is assumed True by the caller.
     """
+    # A prewarmed reserve has no user turn yet. Startup/auth UI must stay
+    # invisible; claiming the reserve turns it into an ordinary session.
+    if sess is not None and sess.default_reserve_user_id:
+        return True
+
     # User-configurable auto-approve takes precedence — bypass both
     # the TG surface AND the bg-status badge when the user has
     # explicitly opted in to "Yes on everything". This must run
@@ -287,7 +292,11 @@ async def _surface_new_interactive_ui(
     if await _maybe_auto_approve(user_id, window_id, pane_text):
         return True
 
-    if is_bg_session and sess is not None:
+    if (
+        is_bg_session
+        and sess is not None
+        and not sess.default_reserve_user_id
+    ):
         # Background session: prompt didn't qualify for auto-approve
         # (e.g. no "Yes" option, or feature off). Never surface in
         # chat — stash the snapshot in bg_status and flip ❓ on the

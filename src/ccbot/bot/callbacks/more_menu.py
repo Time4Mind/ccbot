@@ -96,36 +96,13 @@ async def _emit_new_flow(
     from ...startup_queue import begin_startup_queue
 
     begin_startup_queue(user.id)
-    from ...handlers.directory_browser import (
-        BROWSE_DIRS_KEY,
-        BROWSE_PAGE_KEY,
-        BROWSE_PATH_KEY,
-        STATE_BROWSING_DIRECTORY,
-        STATE_KEY,
-        build_directory_browser,
-        clear_browse_state,
-        clear_session_picker_state,
-        clear_window_picker_state,
-    )
-    from pathlib import Path
+    from .dir_browser import open_new_session_flow
 
-    clear_browse_state(context.user_data)
-    clear_window_picker_state(context.user_data)
-    clear_session_picker_state(context.user_data)
-    start_path = str(Path.home())
-    msg_text, keyboard, subdirs = await build_directory_browser(
-        start_path, user_id=user.id
-    )
-    if context.user_data is not None:
-        context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
-        context.user_data[BROWSE_PATH_KEY] = start_path
-        context.user_data[BROWSE_PAGE_KEY] = 0
-        context.user_data[BROWSE_DIRS_KEY] = subdirs
-        context.user_data["menu_origin"] = "menu"
     try:
-        await safe_edit(query, msg_text, reply_markup=keyboard)
+        await open_new_session_flow(query, context, user.id, origin="menu")
     except Exception:
-        await safe_send(context.bot, user.id, msg_text, reply_markup=keyboard)
+        logger.exception("Could not open new-session flow")
+        await safe_send(context.bot, user.id, "Could not open new-session flow")
 
 
 async def handle(

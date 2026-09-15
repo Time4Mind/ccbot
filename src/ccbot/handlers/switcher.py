@@ -44,6 +44,8 @@ _SESSION_EMOJI: tuple[str, ...] = (
 
 def session_emoji(sess: Session) -> str:
     """Stable color marker for a session, hashed from its id."""
+    if getattr(sess, "default_reserve_user_id", 0):
+        return "⚪"
     h = sum(ord(c) for c in sess.id) if sess.id else 0
     return _SESSION_EMOJI[h % len(_SESSION_EMOJI)]
 

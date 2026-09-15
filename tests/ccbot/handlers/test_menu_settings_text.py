@@ -76,6 +76,8 @@ def test_terminal_setting_screens_keep_existing_locale_text(
         normalized = rendered.replace("  \n", "\n")
         if screen == "settings_preprocessing_instruction":
             assert normalized.startswith(expected + "\n\n```text\n")
+        elif screen == "settings_default_directory":
+            assert normalized == expected + "\n\n`-`"
         else:
             assert normalized == expected
             _assert_hard_single_breaks(rendered)

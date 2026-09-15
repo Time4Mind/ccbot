@@ -61,9 +61,10 @@ def _cancel_keyboard(user_id: int) -> InlineKeyboardMarkup:
     )
 
 
-async def start_login(bot: Bot, user_id: int) -> bool:
+async def start_login(bot: Bot, user_id: int, *, backend: str | None = None) -> bool:
     """Spawn the login exchange and post the URL. True when the URL went out."""
-    if session_manager.agent_backend == "codex":
+    selected_backend = backend or session_manager.agent_backend
+    if selected_backend == "codex":
         await safe_send(bot, user_id, t(user_id, "auth.login.starting"))
         flow = await codex_auth.start_flow(user_id, command=config.codex_command)
         if flow is None:
@@ -120,9 +121,11 @@ async def _watch_codex_login(
         )
 
 
-async def ensure_codex_authenticated(bot: Bot, user_id: int) -> bool:
+async def ensure_codex_authenticated(
+    bot: Bot, user_id: int, *, backend: str | None = None
+) -> bool:
     """Return True when Codex can run, otherwise ensure a login is underway."""
-    if session_manager.agent_backend != "codex":
+    if (backend or session_manager.agent_backend) != "codex":
         return True
     # Managed ChatGPT credentials are refreshable. A plain account/read can
     # report account=null as soon as the cached ID token expires even while a
@@ -152,7 +155,7 @@ async def ensure_codex_authenticated(bot: Bot, user_id: int) -> bool:
             await safe_send(bot, user_id, t(user_id, "auth.codex.storage_mismatch"))
         return False
     if codex_auth.get_flow(user_id) is None:
-        await start_login(bot, user_id)
+        await start_login(bot, user_id, backend="codex")
     else:
         await safe_send(bot, user_id, t(user_id, "auth.codex.waiting"))
     return False

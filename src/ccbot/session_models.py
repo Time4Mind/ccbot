@@ -122,6 +122,9 @@ class Session:
     screenshot_profile: str = ""
     preprocessed_prompt_hashes: list[str] = field(default_factory=list)
     pending_preprocessing: list[dict[str, Any]] = field(default_factory=list)
+    # Non-zero only while this is the single empty prewarmed session reserved
+    # for the given Telegram user. Cleared synchronously on the first request.
+    default_reserve_user_id: int = 0
 
     @staticmethod
     def new_id() -> str:
@@ -180,6 +183,7 @@ class Session:
             "screenshot_profile": self.screenshot_profile,
             "preprocessed_prompt_hashes": self.preprocessed_prompt_hashes,
             "pending_preprocessing": self.pending_preprocessing,
+            "default_reserve_user_id": self.default_reserve_user_id,
         }
 
     @classmethod
@@ -221,4 +225,5 @@ class Session:
                 and isinstance(value.get("request_id"), str)
                 and isinstance(value.get("original"), str)
             ][-128:],
+            default_reserve_user_id=int(data.get("default_reserve_user_id", 0)),
         )

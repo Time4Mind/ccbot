@@ -128,6 +128,19 @@ EN: dict[str, str] = {
     ),
     # Settings — group labels (in the main grid)
     "settings.group.agent": "Agent",
+    "settings.group.default_session": "Reserve session",
+    "settings.group.default_directory": "Reserve directory",
+    "settings.cat.sessions": "Sessions and backends",
+    "settings.cat.sessions.body": "*Sessions and backends*",
+    "settings.default_session.body": (
+        "*Reserve session*\n\nKeeps one empty session prewarmed in the selected "
+        "directory. Its first request immediately starts a replacement."
+    ),
+    "settings.default_directory.body": "*Reserve session directory*",
+    "settings.default_directory.choose": "📁 Choose directory",
+    "settings.default_directory.invalid": "⚠ Directory unavailable - reserve not running.",
+    "toast.default_directory_required": "Choose the reserve directory first.",
+    "toast.last_backend": "The last enabled backend cannot be disabled.",
     "settings.group.language": "Language",
     "settings.group.live_lag": "Live lag",
     "settings.group.voice": "Voice",
@@ -149,10 +162,8 @@ EN: dict[str, str] = {
     ),
     "settings.agent.body": (
         "*Agent*\n\n"
-        "Global backend for the entire bot. All new sessions use either "
-        "*Claude* or *Codex*.\n\n"
-        "Switching is blocked while sessions from the current backend are "
-        "still live. Archive or kill them first."
+        "✅ enables a backend. The second row selects the default backend for "
+        "the reserve. With both enabled, New asks for a backend first."
     ),
     "settings.lang.body": "*Language*\n\nUI language. Switches everything\nbut Claude's own output.",
     # Sessions list — only ``list.empty`` is still used (Menu → Sessions
@@ -177,6 +188,7 @@ EN: dict[str, str] = {
     "conf.deleted": "🗑 Archive entry deleted.",
     # Directory browser
     "dir.title": "*Select Working Directory*",
+    "backend.choose": "*Choose backend*",
     "dir.current": "Current: `{path}`",
     "dir.empty": "_(No subdirectories)_",
     "dir.hint": "Tap a folder to enter, or select current directory",
@@ -368,7 +380,7 @@ EN: dict[str, str] = {
     "settings.cat.terminal": "🖥 Local terminal",
     "settings.cat.options": "⋯ Option buttons",
     "settings.cat.preprocessing": "💻 Preprocessing",
-    "settings.cat.behavior": "⚙ Agent, behavior & language",
+    "settings.cat.behavior": "⚙ Behavior & language",
     "settings.cat.card.body": (
         "*Card / view*\n\nLayout, density and refresh of the live session card."
     ),

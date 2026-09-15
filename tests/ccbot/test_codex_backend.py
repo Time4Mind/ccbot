@@ -43,17 +43,17 @@ def test_agent_backend_is_exposed_in_settings(
         },
     )
 
-    text = render_settings_group_text(42, "settings_cat_behavior")
+    text = render_settings_group_text(42, "settings_cat_sessions")
     keyboard = build_footer_keyboard(42, screen="settings_agent")
 
-    assert "| Agent | Codex |" in text
+    assert "| Agent | Codex; default: Codex |" in text
     assert keyboard is not None
     choices = keyboard.inline_keyboard[0]
     assert [button.callback_data for button in choices] == [
-        "st:agent:claude",
-        "st:agent:codex",
+        "st:agent:toggle:claude",
+        "st:agent:toggle:codex",
     ]
-    assert choices[1].text.startswith("• ")
+    assert choices[1].text.startswith("✅ ")
 
 
 def test_codex_directory_trust_prompt_is_accepted(

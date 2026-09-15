@@ -149,6 +149,38 @@ async def test_text_intake_focuses_latest_before_delayed_monitor_event() -> None
 
 
 @pytest.mark.asyncio
+async def test_reserve_is_claimed_before_request_enters_fifo() -> None:
+    context = _context()
+    update = _update(13, text="first request")
+    sess = SimpleNamespace(id="reserve")
+    state = SimpleNamespace(voice_pending=False, current_page_idx=None)
+    order: list[str] = []
+
+    with (
+        patch("ccbot.bot.inbound.is_user_allowed", return_value=True),
+        patch("ccbot.bot.inbound.active_window", return_value="@R"),
+        patch(
+            "ccbot.bot.inbound.session_manager.find_session_by_window",
+            return_value=sess,
+        ),
+        patch("ccbot.bot.inbound.get_card_state", return_value=state),
+        patch("ccbot.bot.inbound.schedule_card_after_message"),
+        patch(
+            "ccbot.bot.inbound.claim_default_session",
+            side_effect=lambda *_args: order.append("claim"),
+            create=True,
+        ),
+        patch(
+            "ccbot.bot.inbound.enqueue_inbound",
+            side_effect=lambda *_args, **_kwargs: order.append("enqueue"),
+        ),
+    ):
+        assert await text_intake_handler(update, context)
+
+    assert order == ["claim", "enqueue"]
+
+
+@pytest.mark.asyncio
 async def test_failed_item_does_not_stall_tail() -> None:
     context = _context()
     events: list[str] = []

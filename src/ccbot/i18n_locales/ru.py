@@ -124,6 +124,19 @@ RU: dict[str, str] = {
         "_Тапни группу, чтобы изменить._"
     ),
     "settings.group.agent": "Агент",
+    "settings.group.default_session": "Резервная сессия",
+    "settings.group.default_directory": "Директория резерва",
+    "settings.cat.sessions": "Сессии и бэкенды",
+    "settings.cat.sessions.body": "*Сессии и бэкенды*",
+    "settings.default_session.body": (
+        "*Резервная сессия*\n\nВсегда держит одну пустую сессию готовой "
+        "в выбранной директории. После первого запроса сразу создаётся новая."
+    ),
+    "settings.default_directory.body": "*Директория резервной сессии*",
+    "settings.default_directory.choose": "📁 Выбрать директорию",
+    "settings.default_directory.invalid": "⚠ Директория недоступна - резерв не запущен.",
+    "toast.default_directory_required": "Сначала выбери директорию резерва.",
+    "toast.last_backend": "Последний активный бэкенд выключить нельзя.",
     "settings.group.language": "Язык",
     "settings.group.live_lag": "Лаг карточки",
     "settings.group.voice": "Голос",
@@ -144,10 +157,8 @@ RU: dict[str, str] = {
     ),
     "settings.agent.body": (
         "*Агент*\n\n"
-        "Глобальный backend для всего бота. Все новые сессии работают либо "
-        "через *Claude*, либо через *Codex*.\n\n"
-        "Переключение заблокировано, пока остаются живые сессии текущего "
-        "агента. Сначала заверши или архивируй их."
+        "✅ включает бэкенд. Второй ряд выбирает бэкенд по умолчанию для "
+        "резерва. Если включены оба, новая сессия сначала спросит бэкенд."
     ),
     "settings.lang.body": (
         "*Язык*\n\nЯзык интерфейса. Переключает всё,\nкроме самого вывода Claude."
@@ -169,6 +180,7 @@ RU: dict[str, str] = {
     "conf.done_ok": "🎉 `{name}` закрыта.",
     "conf.deleted": "🗑 Запись из архива удалена.",
     "dir.title": "*Выбор рабочей директории*",
+    "backend.choose": "*Выбери бэкенд*",
     "dir.current": "Текущая: `{path}`",
     "dir.empty": "_(Поддиректорий нет)_",
     "dir.hint": "Тапни папку, чтобы войти, или выбери текущую",
@@ -353,7 +365,7 @@ RU: dict[str, str] = {
     "settings.cat.terminal": "🖥 Локальный терминал",
     "settings.cat.options": "⋯ Кнопки опций",
     "settings.cat.preprocessing": "💻 Препроцессинг",
-    "settings.cat.behavior": "⚙ Агент, поведение и язык",
+    "settings.cat.behavior": "⚙ Поведение и язык",
     "settings.cat.card.body": (
         "*Карточка / вид*\n\nРаскладка, плотность и refresh живой карточки."
     ),

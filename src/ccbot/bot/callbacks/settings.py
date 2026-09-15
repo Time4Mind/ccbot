@@ -9,11 +9,14 @@ from telegram.ext import ContextTypes
 
 from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
-from ... import voice_install
+from ... import agent_install, voice_install
+from ...claude_auth import credentials_state
 from ...handlers.callback_data import (
     CB_ST_APPROVE,
     CB_ST_ARCHIVE_AI,
     CB_ST_AGENT,
+    CB_ST_DEFAULT_DIR,
+    CB_ST_DEFAULT_SESSION,
     CB_ST_BACK,
     CB_ST_BGNOTIFY,
     CB_ST_CAT,
@@ -154,6 +157,44 @@ async def _maybe_offer_voice_install(
 # two concurrent installs (each would race apt/cmake and corrupt the
 # tree). One install at a time per user.
 _install_inflight: set[int] = set()
+_agent_install_inflight: set[tuple[int, str]] = set()
+
+
+async def _ensure_backend_auth(bot: Any, user_id: int, backend: str) -> None:
+    from ..commands.auth import ensure_codex_authenticated, start_login
+
+    if backend == "codex":
+        await ensure_codex_authenticated(bot, user_id, backend="codex")
+    elif not credentials_state().present:
+        await start_login(bot, user_id, backend="claude")
+
+
+async def _install_and_activate_backend(
+    query: CallbackQuery, user_id: int, backend: str
+) -> None:
+    key = (user_id, backend)
+    if key in _agent_install_inflight:
+        return
+    _agent_install_inflight.add(key)
+    bot = query.get_bot()
+
+    async def progress(message: str) -> None:
+        await safe_send(bot, user_id, message)
+
+    try:
+        if not await agent_install.install(backend, progress):
+            return
+        session_manager.set_backend_enabled(user_id, backend, True)
+        await safe_send(bot, user_id, f"✅ {backend.capitalize()} enabled.")
+        await _ensure_backend_auth(bot, user_id, backend)
+    except Exception as exc:
+        logger.exception("Agent install/activation failed backend=%s: %s", backend, exc)
+        try:
+            await safe_send(bot, user_id, f"❌ {backend} activation failed: `{exc}`")
+        except Exception:
+            pass
+    finally:
+        _agent_install_inflight.discard(key)
 
 
 async def _run_voice_install(query: CallbackQuery, user_id: int) -> None:
@@ -201,6 +242,8 @@ async def _run_voice_install(query: CallbackQuery, user_id: int) -> None:
 
 _GROUP_TO_SCREEN: dict[str, Screen] = {
     "agent_backend": "settings_agent",
+    "default_session_enabled": "settings_default_session",
+    "default_session_directory": "settings_default_directory",
     "language": "settings_language",
     "live_lag": "settings_lag",
     "voice": "settings_voice",
@@ -305,6 +348,8 @@ async def handle(
 
     setter_prefixes = (
         CB_ST_AGENT,
+        CB_ST_DEFAULT_DIR,
+        CB_ST_DEFAULT_SESSION,
         CB_ST_LAG,
         CB_ST_VOICE,
         CB_ST_LANG,
@@ -331,13 +376,100 @@ async def handle(
     screen_name: Screen = "settings"
     if data.startswith(CB_ST_AGENT):
         value = data[len(CB_ST_AGENT) :]
-        if value in ("claude", "codex"):
-            try:
-                session_manager.set_agent_backend(value)
-            except RuntimeError:
-                await query.answer(t(user.id, "toast.agent_live"), show_alert=True)
+        if value.startswith("toggle:"):
+            backend = value.removeprefix("toggle:")
+            if backend not in ("claude", "codex"):
+                await query.answer("Unknown backend", show_alert=True)
                 return True
+            enabled = backend not in session_manager.get_enabled_backends(user.id)
+            if enabled and not agent_install.is_available(backend):
+                import asyncio as _asyncio
+
+                _asyncio.create_task(
+                    _install_and_activate_backend(query, user.id, backend),
+                    name=f"install-agent:{backend}:{user.id}",
+                )
+                await query.answer("Installing…")
+                await safe_edit(
+                    query,
+                    render_settings_group_text(user.id, "settings_agent"),
+                    reply_markup=build_footer_keyboard(
+                        user.id, screen="settings_agent"
+                    ),
+                )
+                return True
+            try:
+                session_manager.set_backend_enabled(user.id, backend, enabled)
+            except RuntimeError:
+                await query.answer(
+                    t(user.id, "toast.last_backend"), show_alert=True
+                )
+                return True
+            from ...default_session import ensure_default_session
+
+            import asyncio as _asyncio
+
+            _asyncio.create_task(ensure_default_session(context.bot, user.id))
+            if enabled:
+                _asyncio.create_task(
+                    _ensure_backend_auth(context.bot, user.id, backend),
+                    name=f"auth-agent:{backend}:{user.id}",
+                )
+        elif value.startswith("default:"):
+            backend = value.removeprefix("default:")
+            try:
+                session_manager.set_default_backend(user.id, backend)
+            except ValueError:
+                await query.answer("Backend is disabled", show_alert=True)
+                return True
+            from ...default_session import ensure_default_session
+
+            import asyncio as _asyncio
+
+            _asyncio.create_task(ensure_default_session(context.bot, user.id))
         screen_name = "settings_agent"
+    elif data.startswith(CB_ST_DEFAULT_SESSION):
+        value = data[len(CB_ST_DEFAULT_SESSION) :]
+        if value == "on":
+            directory = str(
+                session_manager.get_user_settings(user.id).get(
+                    "default_session_directory", ""
+                )
+                or ""
+            )
+            from pathlib import Path
+
+            if not directory or not Path(directory).is_dir():
+                await query.answer(
+                    t(user.id, "toast.default_directory_required"),
+                    show_alert=True,
+                )
+                return True
+            session_manager.update_user_setting(
+                user.id, "default_session_enabled", True
+            )
+        elif value == "off":
+            session_manager.update_user_setting(
+                user.id, "default_session_enabled", False
+            )
+        from ...default_session import ensure_default_session
+
+        import asyncio as _asyncio
+
+        _asyncio.create_task(ensure_default_session(context.bot, user.id))
+        screen_name = "settings_default_session"
+    elif data.startswith(CB_ST_DEFAULT_DIR):
+        if data[len(CB_ST_DEFAULT_DIR) :] != "pick":
+            return False
+        from ...handlers.directory_browser import clear_browse_state
+        from .dir_browser import open_directory_browser
+
+        if context.user_data is not None:
+            clear_browse_state(context.user_data)
+            context.user_data["_directory_selection_target"] = "default_session"
+        await open_directory_browser(query, context, user.id)
+        await query.answer()
+        return True
     elif data.startswith(CB_ST_LAG):
         try:
             lag = int(data[len(CB_ST_LAG) :])

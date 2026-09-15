@@ -111,6 +111,16 @@ def render_settings_group_text(user_id: int, screen: Screen) -> str:
         ).strip()
         instruction = configured or DEFAULT_PREPROCESSING_INSTRUCTION
         return f"{body}\n\n```text\n{instruction}\n```"
+    if screen == "settings_default_directory":
+        from pathlib import Path
+
+        directory = str(
+            session_manager.get_user_settings(user_id).get(
+                "default_session_directory", ""
+            )
+            or "-"
+        ).replace(str(Path.home()), "~")
+        return f"{body}\n\n`{directory}`"
     category = _category(screen)
     if category is None or len(category[1]) <= 1:
         return body
@@ -134,7 +144,7 @@ def render_settings_group_text(user_id: int, screen: Screen) -> str:
                 _format_setting_value(user_id, value_key, value),
             )
         )
-    return "\n\n".join(
+    rendered = "\n\n".join(
         (
             body,
             _table(
@@ -150,6 +160,15 @@ def render_settings_group_text(user_id: int, screen: Screen) -> str:
             ),
         )
     )
+    if screen == "settings_cat_sessions":
+        from pathlib import Path
+
+        directory = str(current.get("default_session_directory") or "")
+        if current.get("default_session_enabled") and (
+            not directory or not Path(directory).is_dir()
+        ):
+            rendered += f"\n\n{t(user_id, 'settings.default_directory.invalid')}"
+    return rendered
 
 
 def render_more_text(user_id: int) -> str:

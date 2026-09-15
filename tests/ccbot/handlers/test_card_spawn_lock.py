@@ -20,6 +20,7 @@ import pytest
 from ccbot.handlers import notifications
 from ccbot.handlers.notifications import (
     CardState,
+    Event,
     _card_locks,
     _cards,
     _repost_intent,
@@ -68,6 +69,102 @@ def _make_msg(text: str = "hi") -> NewMessage:
         role="assistant",
         stop_reason="end_turn",
     )
+
+
+def _make_user_msg(text: str) -> NewMessage:
+    return NewMessage(
+        session_id="uuid-s1",
+        text=text,
+        is_complete=True,
+        content_type="text",
+        role="user",
+        stop_reason=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_new_user_turn_moves_fixed_historical_page_to_latest(monkeypatch):
+    """A new prompt must make the live carrier follow the actual latest page."""
+    sess = _make_sess()
+    user_id = 42
+    bot = AsyncMock()
+    rendered: list[str] = []
+
+    state = _cards.setdefault((user_id, sess.id), CardState())
+    state.msg_id = 99
+    state.current_page_idx = 0
+    state.events.extend(
+        [
+            Event(
+                type="user_msg",
+                text="previous request",
+                started_at=1.0,
+                is_page_break=True,
+            ),
+            Event(type="final_text", text="previous answer", started_at=2.0),
+        ]
+    )
+
+    async def fake_edit_card(b, uid, st, *, text, reply_markup=None):
+        rendered.append(text)
+        return True
+
+    monkeypatch.setattr(notifications, "_edit_card", fake_edit_card)
+    monkeypatch.setattr(notifications, "_ensure_seeded", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        notifications.session_manager,
+        "get_active_session",
+        lambda uid: sess,
+    )
+    monkeypatch.setattr(
+        notifications.session_manager,
+        "get_user_settings",
+        lambda uid: {"live_lag": 0, "card_page_lines": 20},
+    )
+
+    await notifications.update_session_card(
+        bot, user_id, sess, _make_user_msg("current request")
+    )
+
+    assert rendered
+    assert "current request" in rendered[-1]
+    assert state.current_page_idx is None
+
+
+@pytest.mark.asyncio
+async def test_buffered_user_turn_also_releases_fixed_page(monkeypatch):
+    """The repost-intent buffer must not retain the previous final's page."""
+    sess = _make_sess()
+    user_id = 42
+    state = _cards.setdefault((user_id, sess.id), CardState())
+    state.msg_id = None
+    state.current_page_idx = 0
+    state.events.append(
+        Event(
+            type="user_msg",
+            text="previous request",
+            started_at=1.0,
+            is_page_break=True,
+        )
+    )
+
+    monkeypatch.setattr(notifications, "_ensure_seeded", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        notifications.session_manager,
+        "get_active_session",
+        lambda uid: sess,
+    )
+
+    begin_repost_intent(user_id, sess.id)
+    try:
+        await notifications.update_session_card(
+            AsyncMock(), user_id, sess, _make_user_msg("buffered request")
+        )
+    finally:
+        end_repost_intent(user_id, sess.id)
+
+    assert state.current_page_idx is None
+    assert any(ev.text == "buffered request" for ev in state.events)
 
 
 @pytest.mark.asyncio

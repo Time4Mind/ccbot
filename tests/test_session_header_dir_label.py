@@ -124,9 +124,9 @@ def test_media_anchor_precedes_context_and_background_panel(
     assert "answer" in body
     assert "context:" not in body
     assert "─── фон ───" not in body
-    assert "background terminal running" not in body
+    assert body.rstrip().endswith("• Working · 1 background terminal running")
     assert service_tail.index("context: 42%") < service_tail.index("─── фон ───")
-    assert service_tail.index("─── фон ───") < service_tail.index("• Working")
+    assert "background terminal running" not in service_tail
 
 
 class TestSwitcherPreviewDirLabel:

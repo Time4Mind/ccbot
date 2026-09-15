@@ -114,6 +114,14 @@ async def update_session_card(
 
     new_event = _build_event(msg)
     _apply_preprocessing_marker(sess, state, new_event, msg.text or "")
+    # A user prompt starts a new live turn.  Final delivery intentionally
+    # leaves ``current_page_idx`` pinned to the page that contains the final;
+    # without resetting it here, the following prompt can be appended to a new
+    # page while the carrier keeps rendering the previous one.  Use the
+    # sentinel for "follow latest" before either the buffered or live path so
+    # the repost-intent race cannot preserve a stale page selection.
+    if new_event.type == "user_msg":
+        state.current_page_idx = None
     # tool_result: fold into the matching tool_use Event in place.
     # If no match (race / restart), append the placeholder as a row.
     replaced = False
@@ -190,10 +198,6 @@ async def _update_session_card_locked(
         # JSONL, don't append it a second time — otherwise the user's own
         # message renders twice in the card body.
         state.events.append(new_event)
-        # User-action-anchor: when on the latest page, every new event
-        # keeps the user there. Done as None (=stick-to-latest) so the
-        # render layer picks the latest page automatically.
-        # Page idx is recalibrated by paginate-aware callbacks.
 
     # Cap event log to avoid unbounded memory; FIFO evicts oldest.
     if len(state.events) > CARD_MAX_EVENTS:

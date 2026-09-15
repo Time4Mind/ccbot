@@ -306,6 +306,13 @@ def _render_card(
     if footer:
         parts.append("─────")
         parts.append(footer)
+    # The changing terminal state belongs to the live textual content. Keep it
+    # only on the actual latest page, detached from the last request, and place
+    # it before the rich-media anchor so a screenshot is inserted immediately
+    # below it.  status_polling clears it when the background terminal exits.
+    if state.pane_status and idx == len(pages) - 1:
+        parts.append("\u00a0")
+        parts.append(f"• {state.pane_status}")
     # Everything appended after this point is service metadata. Record the
     # exact raw-text boundary so rich-media transport can place the terminal
     # screenshot before ``context`` and the background-session panel without
@@ -329,12 +336,6 @@ def _render_card(
         # body line). Same nbsp-paragraph trick to widen the gap.
         parts.append("\u00a0")
         parts.append(panel)
-    # Pane status is live service state, not a conversation event. Keep it off
-    # historical pages and visually detached from the user's request. It is
-    # cleared by status_polling when the background terminal disappears.
-    if state.pane_status and idx == len(pages) - 1:
-        parts.append("\u00a0")
-        parts.append(f"• {state.pane_status}")
     # Paragraph-break join (``\n\n``) — single ``\n`` is a CommonMark
     # soft break that the rich parser collapses to a space, glueing
     # ``header ───── body ───── footer`` onto one row instead of each

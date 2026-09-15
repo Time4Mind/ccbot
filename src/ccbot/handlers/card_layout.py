@@ -300,10 +300,6 @@ def _render_card(
             now=time.time(),
         )
         body = _EVENT_JOINER.join(part for part in (body, prompt_row) if part)
-    if state.pane_status:
-        working_row = f"• {state.pane_status}"
-        body = _EVENT_JOINER.join(part for part in (body, working_row) if part)
-
     parts = [header, "─────"]
     if body:
         parts.append(body)
@@ -333,6 +329,12 @@ def _render_card(
         # body line). Same nbsp-paragraph trick to widen the gap.
         parts.append("\u00a0")
         parts.append(panel)
+    # Pane status is live service state, not a conversation event. Keep it off
+    # historical pages and visually detached from the user's request. It is
+    # cleared by status_polling when the background terminal disappears.
+    if state.pane_status and idx == len(pages) - 1:
+        parts.append("\u00a0")
+        parts.append(f"• {state.pane_status}")
     # Paragraph-break join (``\n\n``) — single ``\n`` is a CommonMark
     # soft break that the rich parser collapses to a space, glueing
     # ``header ───── body ───── footer`` onto one row instead of each

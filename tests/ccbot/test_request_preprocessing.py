@@ -121,6 +121,31 @@ async def test_preprocessor_can_be_warmed_before_first_request() -> None:
 
 
 @pytest.mark.asyncio
+async def test_preprocessor_default_timeout_is_fifteen_seconds(monkeypatch) -> None:
+    observed: list[float] = []
+
+    class FakeSession:
+        async def close(self) -> None:
+            return None
+
+    async def factory():
+        return FakeSession()
+
+    real_wait_for = asyncio.wait_for
+
+    async def capture_timeout(awaitable, *, timeout):
+        observed.append(timeout)
+        return await real_wait_for(awaitable, timeout=timeout)
+
+    monkeypatch.setattr(asyncio, "wait_for", capture_timeout)
+    processor = PromptPreprocessor(session_factory=factory)
+
+    await processor.prewarm()
+
+    assert observed == [15.0]
+
+
+@pytest.mark.asyncio
 async def test_finishing_preprocessing_does_not_close_open_menu() -> None:
     user_id = 42
     update = MagicMock()

@@ -260,7 +260,7 @@ class PromptPreprocessor:
         self,
         *,
         session_factory: SessionFactory = _default_session_factory,
-        timeout: float = 10.0,
+        timeout: float = 15.0,
     ) -> None:
         self._session_factory = session_factory
         self._timeout = timeout

@@ -12,8 +12,9 @@ Functions:
   - safe_edit: Edit message with formatting, fallback to plain text
   - safe_send: Send message with formatting, fallback to plain text
 
-Rate limiting is handled globally by AIORateLimiter on the Application.
-RetryAfter exceptions are re-raised so callers (queue worker) can handle them.
+Rate limiting uses PTB's normal throughput buckets plus persistent,
+operation-scoped RetryAfter cooldowns. Exceptions are re-raised so callers
+(queue worker) can handle them.
 """
 
 import io
@@ -184,7 +185,7 @@ async def send_photo(
 ) -> None:
     """Send photo(s) to chat. Sends as media group if multiple images.
 
-    Rate limiting is handled globally by AIORateLimiter on the Application.
+    Rate limiting is handled by the Application's scoped rate limiter.
 
     Args:
         bot: Telegram Bot instance

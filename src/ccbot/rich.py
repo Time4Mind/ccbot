@@ -3,7 +3,7 @@
 PTB 22.x wraps Bot API 10.0, so rich messages go through the raw
 ``Bot._post`` escape hatch until PTB ships native support; ``ExtBot``
 overrides ``_do_post``, so these calls still pass through the
-application-level ``AIORateLimiter``.
+application-level persistent scoped rate limiter.
 
 Core responsibilities:
   - to_rich_markdown: adapt our internal markdown for the Rich Markdown

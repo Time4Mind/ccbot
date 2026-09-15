@@ -27,7 +27,7 @@ ccbot hook --install                  # Auto-install Claude Code SessionStart ho
 - **Hook-based session tracking** — `SessionStart` + `UserPromptSubmit` hooks write `session_map.json`; monitor polls it to detect session changes. UserPromptSubmit self-heals stale entries on every prompt (recovers from missed SessionStart firings, e.g. `/resume`, `/clear`, bot-restart races).
 - **Single-instance lock** — `main.py` holds an exclusive `fcntl.flock` on `$CCBOT_DIR/ccbot.lock` for the process lifetime. A second start refuses with `sys.exit(1)` — guards against silent `Conflict: terminated by other getUpdates request` cross-fire when two bots end up running side by side (e.g. supervisor + manual launch).
 - **Message queue per user** — FIFO ordering, message merging (3800 char limit), tool_use/tool_result pairing.
-- **Rate limiting** — `AIORateLimiter(max_retries=5)` on the Application (30/s global). On restart, the global bucket is pre-filled to avoid burst against Telegram's server-side counter.
+- **Rate limiting** — PTB throughput buckets plus persistent cooldowns scoped to the offending token/endpoint/chat/message. Background operations honor a stored `RetryAfter`; foreground taps may probe immediately, so one flooded card edit does not freeze the whole bot. On restart, the global bucket is pre-filled to avoid a burst against Telegram's server-side counter.
 
 ## Code Conventions
 

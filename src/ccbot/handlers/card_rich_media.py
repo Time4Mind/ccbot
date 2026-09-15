@@ -183,6 +183,9 @@ async def edit_rich_media_card(
             # A real capture confirmed that the existing Telegram image is
             # still current. Advance both throttles without uploading it.
             pane_hash = captured_hash
+            if captured_hash == state.last_pane_hash and text == state.last_rendered:
+                state.last_photo_edit_ts = time.monotonic()
+                return True
             reused_cached_pane = True
 
     if photo is None:
@@ -221,6 +224,18 @@ async def edit_rich_media_card(
         if _is_lost_carrier(error):
             logger.info(
                 "rich-media card lost carrier msg=%s err=%s", state.msg_id, error
+            )
+            clear_carrier(state)
+            return False
+        if "rich_message_photo_no_media_found" in error.lower():
+            # Telegram says this concrete message no longer owns the embedded
+            # photo that rich editing expects. Retrying the same carrier can
+            # never heal it and previously triggered rich -> rich-text ->
+            # Markdown fallback storms every few seconds. Release it once;
+            # the next normal card update will create a fresh rich carrier.
+            logger.warning(
+                "rich-media card missing photo; releasing carrier msg=%s",
+                state.msg_id,
             )
             clear_carrier(state)
             return False

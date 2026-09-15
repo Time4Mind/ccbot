@@ -24,6 +24,8 @@ from typing import Any
 from telegram import Bot
 from telegram.constants import ChatAction
 
+from ..telegram_rate_limit import background_telegram_request
+
 logger = logging.getLogger(__name__)
 
 # Telegram refreshes the indicator on every chat-action; one call
@@ -57,7 +59,8 @@ async def fire_typing(
     if now - last < TYPING_REFRESH_INTERVAL:
         return False
     try:
-        await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+        with background_telegram_request():
+            await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
     except Exception as e:
         logger.debug("send_chat_action TYPING failed: %s", e)
         return False

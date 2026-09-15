@@ -6,6 +6,7 @@ Public entry points remain in :mod:`ccbot.bot.app`.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 from typing import Any, TYPE_CHECKING, cast
@@ -39,7 +40,8 @@ if TYPE_CHECKING:
     LIVENESS_MAX_STALE_SECONDS = cast(Any, None)
     _heartbeat_loop = cast(Any, None)
     _liveness_watchdog_loop = cast(Any, None)
-    logger = cast(Any, None)
+
+logger = logging.getLogger(__name__)
 
 session_monitor: SessionMonitor | None = None
 # Set in ``post_init`` so ``_error_handler`` can reach the Application even
@@ -54,6 +56,26 @@ _auth_preflight_task: asyncio.Task[None] | None = None
 _usage_prewarm_task: asyncio.Task[None] | None = None
 _preprocessing_recovery_task: asyncio.Task[int] | None = None
 _default_session_task: asyncio.Task[None] | None = None
+
+
+async def _sync_bot_commands(bot: Any, commands: list[BotCommand]) -> bool:
+    """Publish the configured Telegram command list only when it changed."""
+    try:
+        current = await bot.get_my_commands()
+    except Exception as exc:
+        # Command discovery is optional startup housekeeping. A Telegram
+        # cooldown or transient network failure must not keep the bot offline.
+        logger.warning("Telegram command sync skipped: %s", exc)
+        return False
+    if list(current) == commands:
+        logger.debug("Telegram command list unchanged; skipping write")
+        return False
+    try:
+        await bot.set_my_commands(commands)
+    except Exception as exc:
+        logger.warning("Telegram command update skipped: %s", exc)
+        return False
+    return True
 
 
 async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") -> None:
@@ -93,8 +115,6 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     except Exception as e:
         logger.debug("Could not resolve bot.username: %s", e)
 
-    await application.bot.delete_my_commands()
-
     # Trimmed /-menu surface. New/Status/Shot/Settings/Archive all live
     # behind the inline ≡ Menu; Stop/Kill/Clear in the live-card footer.
     # ``/history`` is published — it's the canonical entry to the FULL
@@ -111,7 +131,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
         if cmd_name in CC_COMMANDS:
             bot_commands.append(BotCommand(cmd_name, CC_COMMANDS[cmd_name]))
 
-    await application.bot.set_my_commands(bot_commands)
+    await _sync_bot_commands(application.bot, bot_commands)
 
     # Re-resolve stale window IDs from persisted state against live tmux windows.
     await session_manager.resolve_stale_ids()

@@ -9,6 +9,7 @@ import time
 from telegram import Bot
 
 from ..session import Session, session_manager
+from ..telegram_rate_limit import background_telegram_request
 from .card_binding import clear_carrier, restore_carrier, snapshot_carrier
 from .card_model import (
     _latest_inflight_idx,
@@ -271,9 +272,10 @@ async def card_timer_loop(bot: Bot) -> None:
                     text = _legacy("_render_card")(sess, state, user_id=uid)
                     if text == state.last_rendered:
                         continue
-                    if await _legacy("_edit_card")(bot, uid, state, text=text):
-                        state.last_rendered = text
-                        state.last_edit_ts = time.monotonic()
+                    with background_telegram_request():
+                        if await _legacy("_edit_card")(bot, uid, state, text=text):
+                            state.last_rendered = text
+                            state.last_edit_ts = time.monotonic()
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:

@@ -25,6 +25,7 @@ from telegram import Bot
 from ..config import config
 from ..session import session_manager
 from ..session_models import reserve_owner
+from ..telegram_rate_limit import background_telegram_request
 
 if TYPE_CHECKING:
     from ..session_models import Session
@@ -701,13 +702,14 @@ async def status_poll_loop(bot: Bot) -> None:
                         ):
                             continue
                     last_status_check[wid] = now
-                    await update_status_message(
-                        bot,
-                        user_id,
-                        wid,
-                        window=w,
-                        pane_text=cached_pane,
-                    )
+                    with background_telegram_request():
+                        await update_status_message(
+                            bot,
+                            user_id,
+                            wid,
+                            window=w,
+                            pane_text=cached_pane,
+                        )
                 except Exception as e:
                     logger.debug(
                         "Status update error for user %d window %s: %s",

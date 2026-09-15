@@ -195,10 +195,10 @@ async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> 
       flock + supervisor converge on exactly one live bot.
     * Transient network errors (``NetworkError`` / ``TimedOut``) come
       from long-poll connection drops on flaky upstreams. The supervisor
-      already loops on these and the AIORateLimiter retries Bot API
-      calls. Log a one-liner at INFO; no stack trace noise.
+      already loops on these. Log a one-liner at INFO; no stack trace noise.
     * ``RetryAfter`` is a Telegram-side rate-limit signal that
-      AIORateLimiter handles already. INFO-level one-liner.
+      the scoped limiter persists for the offending background operation.
+      INFO-level one-liner.
     * Everything else is a real bug. Log at ERROR with the full
       traceback AND whatever update / chat context we can extract.
     """

@@ -402,6 +402,66 @@ async def test_lost_rich_carrier_is_released(
 
 
 @pytest.mark.asyncio
+async def test_missing_rich_photo_releases_carrier_without_fallback_storm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire_session(monkeypatch)
+    edit = AsyncMock(side_effect=BadRequest("Rich_message_photo_no_media_found"))
+    monkeypatch.setattr(card_rich_media.rich, "edit_rich_message", edit)
+    state = CardState(
+        msg_id=9,
+        is_rich_media_msg=True,
+        rich_media_file_id="missing-pane",
+        last_pane_hash="pane-hash",
+        last_photo_edit_ts=1.0,
+    )
+
+    assert not await card_rich_media.edit_rich_media_card(
+        SimpleNamespace(),
+        42,
+        state,
+        text="next",
+        reply_markup=None,
+        min_photo_interval=2.5,
+        refresh_pane=False,
+    )
+    assert edit.await_count == 1
+    assert state.msg_id is None
+
+
+@pytest.mark.asyncio
+async def test_unchanged_pane_and_text_skip_telegram_edit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire_session(monkeypatch)
+    edit = AsyncMock(return_value=None)
+    capture = AsyncMock(return_value=(b"same", "pane-hash"))
+    monkeypatch.setattr(card_rich_media.rich, "edit_rich_message", edit)
+    monkeypatch.setattr(card_rich_media, "_capture_pane_png", capture)
+    monkeypatch.setattr(card_rich_media.time, "monotonic", lambda: 10.0)
+    state = CardState(
+        msg_id=9,
+        is_rich_media_msg=True,
+        rich_media_file_id="cached-pane",
+        last_pane_hash="pane-hash",
+        last_photo_edit_ts=1.0,
+        last_rendered="same text",
+    )
+
+    assert await card_rich_media.edit_rich_media_card(
+        SimpleNamespace(),
+        42,
+        state,
+        text="same text",
+        reply_markup=None,
+        min_photo_interval=2.5,
+    )
+    capture.assert_awaited_once()
+    edit.assert_not_awaited()
+    assert state.last_photo_edit_ts == 10.0
+
+
+@pytest.mark.asyncio
 async def test_transient_rich_edit_failure_keeps_screenshot_carrier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

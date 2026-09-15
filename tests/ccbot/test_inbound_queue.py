@@ -280,8 +280,10 @@ async def test_different_session_lane_is_not_blocked_by_voice() -> None:
 
 def test_application_registers_fast_blocking_intake_handlers() -> None:
     from ccbot.bot.app import create_bot
+    from ccbot.telegram_rate_limit import PersistentEndpointRateLimiter
 
     app = create_bot()
+    assert isinstance(app.bot.rate_limiter, PersistentEndpointRateLimiter)
     handlers = {
         handler.callback.__name__: handler.block
         for group in app.handlers.values()

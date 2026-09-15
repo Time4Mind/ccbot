@@ -8,7 +8,6 @@ from __future__ import annotations
 from typing import Any, TYPE_CHECKING, cast
 
 from telegram.ext import (
-    AIORateLimiter,
     Application,
     CallbackQueryHandler,
     CommandHandler,
@@ -17,6 +16,7 @@ from telegram.ext import (
 )
 
 from ..startup_queue import capture_startup_message
+from ..telegram_rate_limit import PersistentEndpointRateLimiter
 
 from ..config import config
 from .callbacks import callback_handler
@@ -61,7 +61,12 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     builder = (
         Application.builder()
         .token(config.telegram_bot_token)
-        .rate_limiter(AIORateLimiter(max_retries=5))
+        .rate_limiter(
+            PersistentEndpointRateLimiter(
+                token=config.telegram_bot_token,
+                cooldown_path=config.config_dir / "telegram-rate-limits.json",
+            )
+        )
         .post_init(post_init)
         .post_shutdown(post_shutdown)
     )

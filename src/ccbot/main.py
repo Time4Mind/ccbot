@@ -135,7 +135,7 @@ def main() -> None:
         sys.exit(EXIT_CLEAN)
 
     logging.getLogger("ccbot").setLevel(logging.DEBUG)
-    # AIORateLimiter (max_retries=5) handles retries itself; keep INFO for visibility
+    # PTB bucket diagnostics remain useful alongside ccbot's scoped cooldown log.
     logging.getLogger("telegram.ext.AIORateLimiter").setLevel(logging.INFO)
     logger = logging.getLogger(__name__)
 

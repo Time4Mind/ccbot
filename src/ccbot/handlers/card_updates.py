@@ -114,6 +114,14 @@ async def update_session_card(
 
     new_event = _build_event(msg)
     _apply_preprocessing_marker(sess, state, new_event, msg.text or "")
+    # A user prompt starts a new live turn.  Final delivery intentionally
+    # leaves ``current_page_idx`` pinned to the page that contains the final;
+    # without resetting it here, the following prompt can be appended to a new
+    # page while the carrier keeps rendering the previous one.  Use the
+    # sentinel for "follow latest" before either the buffered or live path so
+    # the repost-intent race cannot preserve a stale page selection.
+    if new_event.type == "user_msg":
+        state.current_page_idx = None
     # tool_result: fold into the matching tool_use Event in place.
     # If no match (race / restart), append the placeholder as a row.
     replaced = False
@@ -190,10 +198,6 @@ async def _update_session_card_locked(
         # JSONL, don't append it a second time — otherwise the user's own
         # message renders twice in the card body.
         state.events.append(new_event)
-        # User-action-anchor: when on the latest page, every new event
-        # keeps the user there. Done as None (=stick-to-latest) so the
-        # render layer picks the latest page automatically.
-        # Page idx is recalibrated by paginate-aware callbacks.
 
     # Cap event log to avoid unbounded memory; FIFO evicts oldest.
     if len(state.events) > CARD_MAX_EVENTS:
@@ -292,6 +296,43 @@ async def _drain_pending_edit(state: CardState) -> None:
     state.pending_edit = None
 
 
+def _render_with_final_proof(
+    sess: Session,
+    state: CardState,
+    user_id: int,
+    final_event: Event,
+) -> str | None:
+    """Render the page containing ``final_event`` and verify it is visible."""
+    # Resolve by event identity first. Text matching alone is unsafe for short
+    # answers such as "Ок": the same text may exist on an older page.
+    pages = paginate_events_for_card(state, user_id)
+    for index, page in enumerate(pages):
+        if any(event is final_event for event in page):
+            state.current_page_idx = index
+            break
+    text = _legacy("_render_card")(sess, state, user_id=user_id)
+    if final_event.text in text:
+        return text
+
+    # Recalculate and repaint once: rendering may rechunk an oversized final
+    # and invalidate the page list that was calculated immediately before it.
+    pages = paginate_events_for_card(state, user_id)
+    for index, page in enumerate(pages):
+        if any(event is final_event for event in page):
+            state.current_page_idx = index
+            break
+    text = _legacy("_render_card")(sess, state, user_id=user_id)
+    if final_event.text in text:
+        return text
+    logger.error(
+        "final card render omitted answer sess=%s page=%s pages=%s",
+        sess.id,
+        state.current_page_idx,
+        len(pages),
+    )
+    return None
+
+
 async def _retry_final_render(
     bot: Bot, user_id: int, sess: Session, state: CardState
 ) -> None:
@@ -305,7 +346,16 @@ async def _retry_final_render(
             async with _card_lock(user_id, sess.id):
                 if state.turn_phase is not TurnPhase.IDLE:
                     return
-                text = _legacy("_render_card")(sess, state, user_id=user_id)
+                final_event = None
+                for event in reversed(state.events):
+                    if event.type != "final_text":
+                        break
+                    final_event = event
+                if final_event is None:
+                    return
+                text = _render_with_final_proof(sess, state, user_id, final_event)
+                if text is None:
+                    continue
                 keyboard = _legacy("build_footer_keyboard")(
                     user_id, screen="main", is_busy=False
                 )
@@ -338,6 +388,13 @@ async def _retry_final_render(
                     state.last_rendered = text
                     state.last_edit_ts = time.monotonic()
                     state.completion_marker_pending = False
+                    logger.info(
+                        "final card retry delivered sess=%s msg_id=%s page=%s chars=%s",
+                        sess.id,
+                        state.msg_id,
+                        state.current_page_idx,
+                        len(final_event.text),
+                    )
                     return
     finally:
         if state.pending_edit is current:
@@ -347,12 +404,9 @@ async def _retry_final_render(
 async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) -> None:
     """Append the final assistant answer to the current live card.
 
-    Appends a ``final_text`` Event with ``is_page_break=True`` so the
-    new answer anchors the top of the latest page; everything before
-    it (tool log, thinking, mid-stream text) lives on the previous page.
-    The user lands on the new latest page by default. Long answers
-    that exceed Telegram's 4096-char limit are sub-paginated by
-    ``paginate_events``.
+    Appends the answer to the page anchored by the user's request, so one
+    conversational turn stays in chronological order. Long answers that
+    exceed Telegram's limits are sub-paginated by the card budget.
     """
     state = get_card_state(user_id, sess)
     cleaned = (final_text or "").strip()
@@ -373,7 +427,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
                 body=chunk,
                 started_at=now,
                 completed_at=now,
-                is_page_break=True,
+                is_page_break=False,
             )
             for chunk in chunks
         ]
@@ -409,11 +463,19 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
             if len(state.events) > CARD_MAX_EVENTS:
                 del state.events[: len(state.events) - CARD_MAX_EVENTS]
             state.last_event_ts = final_events[0].started_at
-            if len(final_events) > 1:
-                pages_after = paginate_events_for_card(state, user_id)
-                state.current_page_idx = max(0, len(pages_after) - len(final_events))
-            else:
-                state.current_page_idx = None
+            # Focus the first answer chunk. Budget pagination may produce a
+            # different number of sub-pages than chunks, so arithmetic based
+            # on ``len(final_events)`` is not a valid page lookup.
+            pages_after = paginate_events_for_card(state, user_id)
+            first_final = final_events[0]
+            state.current_page_idx = next(
+                (
+                    index
+                    for index, page in enumerate(pages_after)
+                    if any(event is first_final for event in page)
+                ),
+                None,
+            )
             if not buffered:
                 state.completion_marker_pending = True
 
@@ -429,36 +491,55 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
             done_kb = _legacy("build_footer_keyboard")(
                 user_id, screen="main", is_busy=False
             )
-            text = _legacy("_render_card")(sess, state, user_id=user_id)
-            state.pending_edit_in_flight = True
-            try:
-                if final_events or state.msg_id is None:
-                    sent = await _legacy("_send_card")(
-                        bot,
-                        user_id,
-                        sess,
-                        state,
-                        text=text,
-                        reply_markup=done_kb,
-                    )
-                    delivered = sent is not False and state.msg_id is not None
-                else:
-                    delivered = await _legacy("_edit_card")(
-                        bot,
-                        user_id,
-                        state,
-                        text=text,
-                        reply_markup=done_kb,
-                    )
-            except Exception as exc:
-                logger.warning("final card delivery failed sess=%s: %s", sess.id, exc)
+            text = (
+                _render_with_final_proof(sess, state, user_id, final_events[0])
+                if final_events
+                else _legacy("_render_card")(sess, state, user_id=user_id)
+            )
+            if text is None:
                 delivered = False
-            finally:
-                state.pending_edit_in_flight = False
-            if delivered:
-                state.last_rendered = text
-                state.last_edit_ts = time.monotonic()
-                state.completion_marker_pending = False
+                # Leave the committed event in state; the retry path below
+                # will render it again instead of sending a stale page.
+                logger.error("final card delivery deferred sess=%s", sess.id)
+            else:
+                state.pending_edit_in_flight = True
+                try:
+                    if final_events or state.msg_id is None:
+                        sent = await _legacy("_send_card")(
+                            bot,
+                            user_id,
+                            sess,
+                            state,
+                            text=text,
+                            reply_markup=done_kb,
+                        )
+                        delivered = sent is not False and state.msg_id is not None
+                    else:
+                        delivered = await _legacy("_edit_card")(
+                            bot,
+                            user_id,
+                            state,
+                            text=text,
+                            reply_markup=done_kb,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "final card delivery failed sess=%s: %s", sess.id, exc
+                    )
+                    delivered = False
+                finally:
+                    state.pending_edit_in_flight = False
+                if delivered:
+                    state.last_rendered = text
+                    state.last_edit_ts = time.monotonic()
+                    state.completion_marker_pending = False
+                    logger.info(
+                        "final card delivered sess=%s msg_id=%s page=%s chars=%s",
+                        sess.id,
+                        state.msg_id,
+                        state.current_page_idx,
+                        len(final_events[0].text) if final_events else 0,
+                    )
 
     if attachments:
         await _legacy("_send_attachments")(bot, user_id, attachments)

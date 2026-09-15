@@ -19,6 +19,7 @@ from ccbot.handlers.notifications import (
     _estimate_md_v2_size,
     _rechunk_oversized_finals_inplace,
     _split_page_by_budget,
+    paginate_events_for_card,
     render_page,
 )
 
@@ -167,9 +168,11 @@ class TestRechunkOversizedFinalsInplace:
             assert _estimate_md_v2_size(split_ev.text) <= CARD_PAGE_BUDGET, (
                 "post-rechunk chunk still exceeds Telegram-safe byte budget"
             )
-            # Every chunk is a fresh page so the user can paginate through.
-            assert split_ev.is_page_break is True
+            # Chunks stay in chronological order within the request turn;
+            # budget pagination still makes them independently navigable.
+            assert split_ev.is_page_break is False
             assert split_ev.type == "final_text"
+        assert len(paginate_events_for_card(state, None)) >= 2
 
     def test_fits_both_budgets_is_idempotent(self) -> None:
         body = "Короткий ответ в одну строку."

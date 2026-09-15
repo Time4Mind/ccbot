@@ -300,16 +300,19 @@ def _render_card(
             now=time.time(),
         )
         body = _EVENT_JOINER.join(part for part in (body, prompt_row) if part)
-    if state.pane_status:
-        working_row = f"• {state.pane_status}"
-        body = _EVENT_JOINER.join(part for part in (body, working_row) if part)
-
     parts = [header, "─────"]
     if body:
         parts.append(body)
     if footer:
         parts.append("─────")
         parts.append(footer)
+    # The changing terminal state belongs to the live textual content. Keep it
+    # only on the actual latest page, detached from the last request, and place
+    # it before the rich-media anchor so a screenshot is inserted immediately
+    # below it.  status_polling clears it when the background terminal exits.
+    if state.pane_status and idx == len(pages) - 1:
+        parts.append("\u00a0")
+        parts.append(f"• {state.pane_status}")
     # Everything appended after this point is service metadata. Record the
     # exact raw-text boundary so rich-media transport can place the terminal
     # screenshot before ``context`` and the background-session panel without

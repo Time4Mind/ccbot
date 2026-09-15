@@ -70,6 +70,39 @@ class TestVoicePendingMarker:
         assert "🎙" not in text
 
 
+class TestPaneStatusPlacement:
+    def test_working_status_only_appears_at_bottom_of_latest_page(self) -> None:
+        state = CardState(pane_status="Working · 1 background terminal running")
+        state.events.extend(
+            [
+                Event(
+                    type="user_msg",
+                    text="first request",
+                    started_at=1.0,
+                    is_page_break=True,
+                ),
+                Event(type="final_text", text="first answer", started_at=2.0),
+                Event(
+                    type="user_msg",
+                    text="second request",
+                    started_at=3.0,
+                    is_page_break=True,
+                ),
+            ]
+        )
+
+        state.current_page_idx = 0
+        old_page = _render_card(_session(), state)
+        assert "background terminal running" not in old_page
+
+        state.current_page_idx = 1
+        latest_page = _render_card(_session(), state)
+        assert latest_page.rstrip().endswith(
+            "• Working · 1 background terminal running"
+        )
+        assert latest_page.index("second request") < latest_page.index("• Working")
+
+
 def test_media_anchor_precedes_context_and_background_panel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -78,7 +111,10 @@ def test_media_anchor_precedes_context_and_background_panel(
         "render_panel",
         lambda *_args, **_kwargs: "─── фон ───\nbackground-session",
     )
-    state = CardState(context_pct=42)
+    state = CardState(
+        context_pct=42,
+        pane_status="Working · 1 background terminal running",
+    )
     state.events.append(Event(type="final_text", text="answer", started_at=1.0))
 
     text = _render_card(_session(), state, user_id=1)
@@ -88,7 +124,9 @@ def test_media_anchor_precedes_context_and_background_panel(
     assert "answer" in body
     assert "context:" not in body
     assert "─── фон ───" not in body
+    assert body.rstrip().endswith("• Working · 1 background terminal running")
     assert service_tail.index("context: 42%") < service_tail.index("─── фон ───")
+    assert "background terminal running" not in service_tail
 
 
 class TestSwitcherPreviewDirLabel:

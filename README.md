@@ -345,7 +345,7 @@ Card knobs live under *Settings → 🃏 Card / view*:
 | `Card history` | `20` | end-of-turn boundaries seeded into a fresh card from the JSONL (survives bot restarts) |
 | `Page size` | `20` lines | max lines per card page; longer bodies chunk across pages on paragraph/sentence boundaries |
 | `Screenshot capture` | `48 KiB` | maximum newest terminal-text suffix used for the image |
-| `Screenshot quality` | `100%, 8 colors` | image scale and colour profile |
+| `Screenshot quality` | `100%, optimized` | image scale and colour profile |
 | `Live lag` | `4s` | coalescing window for preview updates |
 
 Screenshot and Terminal button visibility lives under *Settings → Options

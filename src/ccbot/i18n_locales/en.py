@@ -389,8 +389,8 @@ EN: dict[str, str] = {
     "settings.screenshot_capture.body": "*Screenshot capture size*\n\nMaximum newest terminal-text suffix used for the image.",
     "settings.group.screenshot_profile": "Screenshot quality",
     "settings.screenshot_profile.body": "*Screenshot quality*\n\nImage scale and color profile.",
-    "screenshot.profile.full8": "100%, 8 colors",
-    "screenshot.profile.compact8": "75%, 8 colors",
+    "screenshot.profile.full8": "100%, optimized",
+    "screenshot.profile.compact8": "75%, optimized",
     "screenshot.profile.fullcolor": "100%, full palette",
     "settings.cat.behavior.body": (
         "*Behavior & language*\n\n"

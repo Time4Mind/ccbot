@@ -104,7 +104,7 @@ with two image parameters:
 | Setting | Values | Default |
 |---|---|---|
 | Screenshot capture size | `48 KiB`, `64 KiB`, `86 KiB` | `48 KiB` |
-| Screenshot quality | `100%, 8 colors`; `75%, 8 colors`; `100%, full palette` | `100%, 8 colors` |
+| Screenshot quality | `100%, optimized`; `75%, optimized`; `100%, full palette` | `100%, optimized` |
 
 Capture size is a bound on the newest terminal-text suffix, not an image
 resolution setting. Profile order is cyclic in the order shown above.
@@ -159,7 +159,7 @@ Add the bounded behavior proven in Bria:
   fits;
 - implement deterministic full-color, full-size eight-color, and 75%
   eight-color profiles.
-- Quantize eight-colour profiles against a fixed terminal palette. Do not use
+- Quantize optimized profiles against a fixed 32-colour terminal palette. Do not use
   a content-adaptive palette that can tint a pane brown/sepia when warm colours
   dominate a frame.
 
@@ -247,7 +247,7 @@ Automated acceptance must cover at least:
   4-second bound and never creates a screenshot-only message;
 - a finalized parent with a running Codex background terminal remains visibly
   unfinished until that terminal status disappears;
-- eight-colour output uses a stable terminal palette and cannot drift to sepia;
+- optimized output uses a stable terminal palette with neutral text ramps and cannot drift to sepia;
 - screenshot persists after RUNNING -> IDLE;
 - no repaint while menu/settings/archive/new-session surfaces are visible;
 - image placement before context/background blocks;

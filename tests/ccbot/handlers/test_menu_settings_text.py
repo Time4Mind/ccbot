@@ -104,7 +104,7 @@ def test_multi_setting_category_moves_values_from_buttons_to_table(
     assert "| Размер страницы | 20 lines |" in rendered
     assert "| Строк в команде/результате | 7 lines |" in rendered
     assert "| Объём скрина | 48 KiB |" in rendered
-    assert "| Качество скрина | 100%, 8 цветов |" in rendered
+    assert "| Качество скрина | 100%, оптимизировано |" in rendered
     assert [row[0].text for row in keyboard.inline_keyboard[:-1]] == [
         "Лаг карточки",
         "История в карточке",

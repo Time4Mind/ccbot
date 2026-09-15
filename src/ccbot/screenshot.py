@@ -73,25 +73,34 @@ _ANSI_COLORS: dict[int, tuple[int, int, int]] = {
 _DEFAULT_FG = (212, 212, 212)  # Light gray
 _DEFAULT_BG = (30, 30, 30)  # Dark gray
 
-# A content-adaptive eight-colour palette made the whole terminal image drift
-# toward brown/sepia whenever one warm ANSI colour dominated the current pane.
-# Keep the compact P-mode/PNG resource profile, but quantize against a stable
-# terminal palette so identical ANSI colours never change with surrounding text.
-_SCREENSHOT_8_COLORS: tuple[tuple[int, int, int], ...] = (
+# Eight adaptive colours caused sepia shifts, while eight fixed colours left no
+# room for font antialiasing and made terminal text visibly jagged.  A stable
+# 32-colour terminal palette keeps P-mode PNGs small and quantization cheap, but
+# reserves enough neutral ramps and muted backgrounds for readable glyphs.
+_SCREENSHOT_OPTIMIZED_COLORS: tuple[tuple[int, int, int], ...] = (
+    *_ANSI_COLORS.values(),
     _DEFAULT_BG,
+    (45, 45, 45),
+    (60, 60, 60),
+    (78, 78, 78),
+    (96, 96, 96),
+    (116, 116, 116),
+    (138, 138, 138),
+    (162, 162, 162),
+    (186, 186, 186),
     _DEFAULT_FG,
-    _ANSI_COLORS[1],
-    _ANSI_COLORS[2],
-    _ANSI_COLORS[3],
-    _ANSI_COLORS[4],
-    _ANSI_COLORS[5],
-    _ANSI_COLORS[6],
+    (235, 235, 235),
+    (22, 66, 45),
+    (32, 68, 78),
+    (55, 68, 105),
+    (82, 58, 92),
+    (92, 76, 52),
 )
 
 
 def _screenshot_palette() -> Image.Image:
     palette = Image.new("P", (1, 1))
-    flat = [channel for color in _SCREENSHOT_8_COLORS for channel in color]
+    flat = [channel for color in _SCREENSHOT_OPTIMIZED_COLORS for channel in color]
     palette.putpalette(flat + [0] * (768 - len(flat)))
     return palette
 
@@ -351,8 +360,8 @@ async def text_to_image(
         text: The text to render (may contain ANSI color codes)
         font_size: Font size in pixels
         with_ansi: If True, parse and render ANSI color codes
-        profile: ``full8`` (100%, eight colors), ``compact8`` (75%,
-            eight colors), or ``fullcolor`` (100%, full palette)
+        profile: ``full8`` (100%, optimized palette), ``compact8`` (75%,
+            optimized palette), or ``fullcolor`` (100%, full palette)
 
     Returns:
         PNG image bytes

@@ -266,11 +266,11 @@ ZH: dict[str, str] = {
     ),
     "settings.group.spoiler_command_lines": "命令行数",
     "settings.spoiler_command_lines.body": (
-        "*命令行数*\n\n工具折叠块中可见的最大命令行数。每行最多 70 个字符。"
+        "*命令行数*\n\n工具折叠块中可见的最大命令行数。每行最多 100 个字符。"
     ),
     "settings.group.spoiler_result_lines": "结果行数",
     "settings.spoiler_result_lines.body": (
-        "*结果行数*\n\n工具折叠块中可见的最大结果行数。每行最多 70 个字符。"
+        "*结果行数*\n\n工具折叠块中可见的最大结果行数。每行最多 100 个字符。"
     ),
     "screens.on": "开",
     "screens.off": "关",

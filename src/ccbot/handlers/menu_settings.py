@@ -609,7 +609,7 @@ def _settings_spoiler_lines_grid(
         cur = int(raw)
     except (TypeError, ValueError):
         cur = 10
-    if cur not in (10, 20, 40):
+    if cur not in (5, 10, 30, 60):
         cur = 10
     return [
         [
@@ -620,7 +620,7 @@ def _settings_spoiler_lines_grid(
                     f"{'command' if setting_key == 'spoiler_command_lines' else 'result'}:{v}"
                 ),
             )
-            for v in (10, 20, 40)
+            for v in (5, 10, 30, 60)
         ],
         [
             InlineKeyboardButton(

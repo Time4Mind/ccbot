@@ -26,7 +26,9 @@ _HARNESS_TOOL_MARKERS = (
     ".claude/claude.md",
 )
 
-_EXEC_COMMAND_RE = re.compile(r"\btools\.exec_command\s*\(\s*\{[\s\S]*?\bcmd\s*:\s*")
+_EXEC_COMMAND_RE = re.compile(
+    r"\btools\.exec_command\s*\(\s*\{[\s\S]*?[\"']?\bcmd\b[\"']?\s*:\s*"
+)
 _COMPLETED_OUTPUT_RE = re.compile(
     r"\AScript completed\nWall time ([0-9.]+) seconds\nOutput:\n?([\s\S]*)\Z"
 )
@@ -67,6 +69,8 @@ def _structure_tool_output(value: Any) -> Any:
     lines = ["status: completed", f"duration: {duration} s"]
     if output.strip():
         lines.extend(("output:", output.rstrip()))
+    else:
+        lines.append("output: no output")
     non_text = [
         item
         for item in value

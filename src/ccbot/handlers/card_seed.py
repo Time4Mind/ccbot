@@ -18,6 +18,7 @@ from .card_model import (
     Event,
     _apply_tool_result,
     _build_event,
+    _strip_for_card,
 )
 from .card_seed_io import load_recent_parsed_entries
 
@@ -26,6 +27,54 @@ from .card_registry import _cards
 logger = logging.getLogger(__name__)
 
 SeedLoader = Callable[..., Awaitable[list[Event]]]
+
+
+def _prompt_key(text: str) -> str:
+    """Normalize only presentation differences when matching a JSONL echo."""
+    return " ".join(_strip_for_card(text).split())
+
+
+def _reconcile_seeded_pending(state: CardState, seeded: list[Event]) -> None:
+    """Bind pending receipts to their already-seeded user events in place.
+
+    The seed loader can observe the user's JSONL row and the first assistant
+    row in one read.  In that case the pending receipt must be consumed here;
+    leaving it in ``pending_prompts`` renders the same request again as a
+    synthetic tail after the assistant work that it initiated.
+    """
+    if not state.pending_prompts:
+        return
+
+    matched_pending_ids: set[int] = set()
+    search_before = len(seeded)
+    for pending in reversed(state.pending_prompts):
+        needle = _prompt_key(pending.text)
+        if not needle:
+            continue
+        for index in range(search_before - 1, -1, -1):
+            event = seeded[index]
+            if event.type != "user_msg" or _prompt_key(event.text) != needle:
+                continue
+            if event.started_at + 30.0 < pending.created_at:
+                # The same words in older history are not proof that the new
+                # request reached the transcript. Keep its live receipt.
+                continue
+            # Match pending prompts from newest to oldest, preserving FIFO
+            # order even when the same text was submitted more than once.
+            if pending.preprocessed:
+                event.user_icon = "👤💻"
+            elif pending.user_icon:
+                event.user_icon = pending.user_icon
+            matched_pending_ids.add(id(pending))
+            search_before = index
+            break
+
+    if matched_pending_ids:
+        state.pending_prompts = [
+            pending
+            for pending in state.pending_prompts
+            if id(pending) not in matched_pending_ids
+        ]
 
 
 __all__ = [
@@ -207,6 +256,7 @@ async def _ensure_seeded(user_id: int, sess: Session, state: CardState) -> None:
         max_turns = CARD_SEED_TURNS
     seeded = await _legacy_seed_loader()(sess, max_turns=max_turns)
     if seeded:
+        _reconcile_seeded_pending(state, seeded)
         state.events = seeded
         state.seed_attempted = True
         logger.info(

@@ -465,7 +465,7 @@ async def handle(
             "command": "spoiler_command_lines",
             "result": "spoiler_result_lines",
         }.get(kind)
-        if separator and setting_key is not None and v in (10, 20, 40):
+        if separator and setting_key is not None and v in (5, 10, 30, 60):
             session_manager.update_user_setting(user.id, setting_key, v)
         screen_name = (
             "settings_spoiler_command_lines"

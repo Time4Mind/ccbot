@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -100,6 +101,7 @@ class PendingPrompt:
     text: str
     preprocessed: bool = False
     user_icon: str = ""
+    created_at: float = field(default_factory=time.time)
 
 
 class TurnPhase(str, Enum):

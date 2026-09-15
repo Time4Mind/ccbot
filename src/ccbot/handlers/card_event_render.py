@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import csv
+import io
+import json
+import re
+from typing import Any
+
 from .card_budget import _format_elapsed, _format_hhmm, _trimmed_body
 from .card_types import Event
 
@@ -100,7 +106,7 @@ def _format_tool_content(tool_name: str, args: str, content: str) -> str:
     return content
 
 
-def _bounded_tool_block(text: str, max_lines: int, max_chars: int = 70) -> str:
+def _bounded_tool_block(text: str, max_lines: int, max_chars: int = 100) -> str:
     """Keep one command/result block within the phone-readable budget."""
     if not text:
         return ""
@@ -115,6 +121,156 @@ def _bounded_tool_block(text: str, max_lines: int, max_chars: int = 70) -> str:
     return "\n".join(bounded)
 
 
+def _scalar_text(value: Any) -> str:
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if value is None:
+        return "null"
+    return str(value)
+
+
+def _structured_value_lines(value: Any, indent: int = 0) -> list[str]:
+    """Render parsed JSON as a compact, readable key/value hierarchy."""
+    prefix = " " * indent
+    if isinstance(value, dict):
+        lines: list[str] = []
+        for key, child in value.items():
+            label = str(key)
+            if isinstance(child, (dict, list)):
+                lines.append(f"{prefix}{label}:")
+                lines.extend(_structured_value_lines(child, indent + 2))
+            else:
+                scalar = _scalar_text(child)
+                if "\n" in scalar:
+                    lines.append(f"{prefix}{label}:")
+                    lines.extend(
+                        f"{' ' * (indent + 2)}{row}" for row in scalar.splitlines()
+                    )
+                else:
+                    lines.append(f"{prefix}{label}: {scalar}")
+        return lines
+    if isinstance(value, list):
+        lines = []
+        for child in value:
+            if isinstance(child, (dict, list)):
+                lines.append(f"{prefix}-")
+                lines.extend(_structured_value_lines(child, indent + 2))
+            else:
+                scalar = _scalar_text(child)
+                child_lines = scalar.splitlines() or [""]
+                lines.append(f"{prefix}- {child_lines[0]}")
+                lines.extend(f"{' ' * (indent + 2)}{row}" for row in child_lines[1:])
+        return lines
+    return [f"{prefix}{_scalar_text(value)}"]
+
+
+_KEY_VALUE_RE = re.compile(r"^([A-Za-z_][\w ./-]{0,79})=(.*)$")
+
+
+def _structure_key_values(text: str) -> str | None:
+    rows = text.splitlines()
+    if not rows:
+        return None
+    parsed: list[tuple[str, str]] = []
+    for row in rows:
+        match = _KEY_VALUE_RE.fullmatch(row.strip())
+        if match is None:
+            return None
+        parsed.append((match.group(1).strip(), match.group(2).strip()))
+    return "\n".join(f"{key}: {value}" for key, value in parsed)
+
+
+def _structure_table(text: str) -> str | None:
+    """Expand an unambiguous delimited table into labelled records."""
+    lines = [row for row in text.splitlines() if row.strip()]
+    if len(lines) < 2:
+        return None
+    delimiter = next(
+        (
+            candidate
+            for candidate in ("\t", "|", ",")
+            if all(candidate in row for row in lines)
+        ),
+        None,
+    )
+    if delimiter is None:
+        return None
+    try:
+        rows = list(csv.reader(io.StringIO("\n".join(lines)), delimiter=delimiter))
+    except csv.Error:
+        return None
+    width = len(rows[0])
+    if width < 2 or any(len(row) != width for row in rows):
+        return None
+    headers = [cell.strip() for cell in rows[0]]
+    if any(not header for header in headers) or len(set(headers)) != width:
+        return None
+    output: list[str] = []
+    data_rows = rows[1:]
+    for number, row in enumerate(data_rows, 1):
+        if len(data_rows) > 1:
+            output.append(f"record {number}:")
+            pad = "  "
+        else:
+            pad = ""
+        output.extend(
+            f"{pad}{header}: {value.strip()}"
+            for header, value in zip(headers, row, strict=True)
+        )
+    return "\n".join(output)
+
+
+def _structure_tool_result(text: str) -> str:
+    """Conservatively structure known result shapes before truncation."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not normalized:
+        return ""
+
+    try:
+        parsed = json.loads(normalized)
+    except (json.JSONDecodeError, TypeError):
+        parsed = None
+    else:
+        if isinstance(parsed, str):
+            return parsed
+        return "\n".join(_structured_value_lines(parsed))
+
+    json_rows: list[Any] = []
+    raw_rows = normalized.splitlines()
+    if len(raw_rows) > 1:
+        try:
+            json_rows = [json.loads(row) for row in raw_rows]
+        except (json.JSONDecodeError, TypeError):
+            json_rows = []
+    if json_rows and all(isinstance(row, (dict, list)) for row in json_rows):
+        lines: list[str] = []
+        for number, row in enumerate(json_rows, 1):
+            lines.append(f"record {number}:")
+            lines.extend(_structured_value_lines(row, 2))
+        return "\n".join(lines)
+
+    # Codex exec results carry stable metadata followed by an ``output:``
+    # block. Structure the payload independently while retaining that useful
+    # metadata and its explicit boundary.
+    prefix, marker, payload = normalized.partition("\noutput:\n")
+    if marker:
+        structured_payload = _structure_tool_result(payload)
+        if structured_payload:
+            indented = "\n".join(f"  {row}" for row in structured_payload.splitlines())
+            return f"{prefix}\noutput:\n{indented}"
+        return f"{prefix}\noutput: no output"
+
+    key_values = _structure_key_values(normalized)
+    if key_values is not None:
+        return key_values
+    table = _structure_table(normalized)
+    if table is not None:
+        return table
+    return normalized
+
+
 def _build_tool_spoiler_body(
     tool_name: str,
     args: str,
@@ -127,7 +283,12 @@ def _build_tool_spoiler_body(
     (highlighted), then content (highlighted when it's code)."""
     parts: list[str] = []
     bounded_args = _bounded_tool_block(args, command_max_lines)
-    bounded_content = _bounded_tool_block(content, result_max_lines)
+    structured_content = (
+        content
+        if tool_name in ("Read", "Write", "Edit", "NotebookEdit")
+        else _structure_tool_result(content)
+    )
+    bounded_content = _bounded_tool_block(structured_content, result_max_lines)
     if bounded_args:
         parts.append(_format_tool_args(tool_name, bounded_args))
     if bounded_content:

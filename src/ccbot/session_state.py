@@ -444,7 +444,7 @@ class SessionStateMixin:
                 spoiler_lines = int(merged.get(key, 10))
             except (TypeError, ValueError):
                 spoiler_lines = 10
-            merged[key] = spoiler_lines if spoiler_lines in (10, 20, 40) else 10
+            merged[key] = spoiler_lines if spoiler_lines in (5, 10, 30, 60) else 10
         # Before option visibility had its own key, manual/auto meant that
         # the user expected a Terminal action. Preserve that expectation but
         # never revive the removed automatic-launch behavior.

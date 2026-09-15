@@ -93,7 +93,7 @@ def test_multi_setting_category_moves_values_from_buttons_to_table(
             "card_history": 10,
             "card_page_lines": 20,
             "spoiler_command_lines": 10,
-            "spoiler_result_lines": 40,
+            "spoiler_result_lines": 60,
             "screenshot_capture_kib": 48,
             "screenshot_profile": "full8",
         },
@@ -108,7 +108,7 @@ def test_multi_setting_category_moves_values_from_buttons_to_table(
     assert "| История в карточке | 10 turns |" in rendered
     assert "| Размер страницы | 20 lines |" in rendered
     assert "| Строк команды | 10 lines |" in rendered
-    assert "| Строк результата | 40 lines |" in rendered
+    assert "| Строк результата | 60 lines |" in rendered
     assert "| Объём скрина | 48 KiB |" in rendered
     assert "| Качество скрина | 100%, оптимизировано |" in rendered
     assert [row[0].text for row in keyboard.inline_keyboard[:-1]] == [

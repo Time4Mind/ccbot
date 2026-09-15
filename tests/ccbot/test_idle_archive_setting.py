@@ -68,10 +68,10 @@ async def test_idle_archive_callback_persists_selected_hours() -> None:
 @pytest.mark.parametrize(
     ("callback", "setting"),
     [
-        ("st:spl:command:20", "spoiler_command_lines"),
-        ("st:spl:result:20", "spoiler_result_lines"),
-        ("st:spl:command:40", "spoiler_command_lines"),
-        ("st:spl:result:40", "spoiler_result_lines"),
+        ("st:spl:command:5", "spoiler_command_lines"),
+        ("st:spl:result:10", "spoiler_result_lines"),
+        ("st:spl:command:30", "spoiler_command_lines"),
+        ("st:spl:result:60", "spoiler_result_lines"),
     ],
 )
 async def test_spoiler_line_callback_persists_selected_limit(
@@ -100,7 +100,7 @@ async def test_spoiler_line_callback_persists_selected_limit(
     update.assert_called_once_with(42, setting, int(callback.rsplit(":", 1)[1]))
 
 
-def test_spoiler_line_settings_offer_ten_twenty_and_forty(
+def test_spoiler_line_settings_offer_five_ten_thirty_and_sixty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -109,7 +109,7 @@ def test_spoiler_line_settings_offer_ten_twenty_and_forty(
         lambda _user_id: {
             "language": "ru",
             "spoiler_command_lines": 10,
-            "spoiler_result_lines": 40,
+            "spoiler_result_lines": 60,
         },
     )
 
@@ -119,14 +119,16 @@ def test_spoiler_line_settings_offer_ten_twenty_and_forty(
     assert command is not None
     assert result is not None
     assert [button.callback_data for button in command.inline_keyboard[0]] == [
+        "st:spl:command:5",
         "st:spl:command:10",
-        "st:spl:command:20",
-        "st:spl:command:40",
+        "st:spl:command:30",
+        "st:spl:command:60",
     ]
     assert [button.callback_data for button in result.inline_keyboard[0]] == [
+        "st:spl:result:5",
         "st:spl:result:10",
-        "st:spl:result:20",
-        "st:spl:result:40",
+        "st:spl:result:30",
+        "st:spl:result:60",
     ]
 
 

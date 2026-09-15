@@ -329,7 +329,7 @@ def resolve_spoiler_line_budgets(user_id: int | None) -> tuple[int, int]:
             value = int(settings.get(key, 10))
         except (TypeError, ValueError):
             return 10
-        return value if value in (10, 20, 40) else 10
+        return value if value in (5, 10, 30, 60) else 10
 
     return _valid("spoiler_command_lines"), _valid("spoiler_result_lines")
 

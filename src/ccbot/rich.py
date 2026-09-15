@@ -284,6 +284,30 @@ def _render_details(m: re.Match[str]) -> str:
     return f"\n<details><summary>{first}</summary>\n\n{inner}\n\n</details>\n"
 
 
+def _preserve_tool_body_line_breaks(body: str) -> str:
+    """Make plain tool-result rows hard breaks without touching code blocks."""
+    lines = body.split("\n")
+    out: list[str] = []
+    in_fence = False
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if in_fence or not stripped or index + 1 >= len(lines):
+            out.append(line)
+            continue
+        next_stripped = lines[index + 1].strip()
+        is_rule_boundary = stripped == "- - -" or next_stripped == "- - -"
+        is_table_boundary = stripped.startswith("|") or next_stripped.startswith("|")
+        if next_stripped and not is_rule_boundary and not is_table_boundary:
+            out.append(f"{line}<br>")
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
 def _render_details_headed(m: re.Match[str]) -> str:
     """Render the ``EXPANDABLE_HEADED`` sentinel as a ``<details>`` block
     with the explicit head as ``<summary>`` and the body WITHOUT a
@@ -297,6 +321,8 @@ def _render_details_headed(m: re.Match[str]) -> str:
     body = body.strip()
     if not body:
         return head
+    if head.startswith(("✓ ", "▷ ", "✗ ")):
+        body = _preserve_tool_body_line_breaks(body)
     return f"\n<details><summary>{head}</summary>\n\n{body}\n\n</details>\n"
 
 

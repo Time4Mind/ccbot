@@ -15,6 +15,7 @@ from typing import Any
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from ..config import config
+from ..handlers.card_registry import _carrier_edit_lock
 from ..handlers.menu import build_footer_keyboard
 from ..handlers.message_sender import safe_edit, safe_send
 from ..handlers.switcher import build_session_preview
@@ -140,24 +141,28 @@ async def set_view(
     Keeps `last_switcher_msg_id` pointing at whatever message ends up
     carrying the inline keyboard.
     """
-    if is_media_message(query.message):
-        try:
-            await query.message.delete()
-        except Exception as e:
-            logger.debug("set_view: delete media carrier failed: %s", e)
-        sent = await safe_send(bot, user_id, text, reply_markup=reply_markup)
-        if sent and reply_markup is not None:
-            session_manager.set_last_switcher_msg(user_id, sent.message_id)
-        return sent
-    # safe_edit routes through ``_do_edit`` which calls Bot.edit_message_text
-    # directly — bypassing the CallbackQuery shortcut chain that forwards
-    # ``business_connection_id`` and would otherwise let Telegram Business-
-    # enabled DMs silently drop the edit. It also applies MarkdownV2
-    # rendering so ``*bold*`` / `` `code` `` actually format.
-    await safe_edit(query, text, reply_markup=reply_markup)
-    if query.message and reply_markup is not None:
-        session_manager.set_last_switcher_msg(user_id, query.message.message_id)
-    return query
+    # Navigation and live-card paints share one Telegram message. Serialize
+    # them through the same barrier so a card edit that started before the tap
+    # must finish first and can never overwrite the user's newer view.
+    async with _carrier_edit_lock(user_id):
+        if is_media_message(query.message):
+            try:
+                await query.message.delete()
+            except Exception as e:
+                logger.debug("set_view: delete media carrier failed: %s", e)
+            sent = await safe_send(bot, user_id, text, reply_markup=reply_markup)
+            if sent and reply_markup is not None:
+                session_manager.set_last_switcher_msg(user_id, sent.message_id)
+            return sent
+        # safe_edit routes through ``_do_edit`` which calls Bot.edit_message_text
+        # directly — bypassing the CallbackQuery shortcut chain that forwards
+        # ``business_connection_id`` and would otherwise let Telegram Business-
+        # enabled DMs silently drop the edit. It also applies MarkdownV2
+        # rendering so ``*bold*`` / `` `code` `` actually format.
+        await safe_edit(query, text, reply_markup=reply_markup)
+        if query.message and reply_markup is not None:
+            session_manager.set_last_switcher_msg(user_id, query.message.message_id)
+        return query
 
 
 async def open_more_in_place(query: Any, user_id: int) -> None:

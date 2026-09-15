@@ -122,14 +122,9 @@ async def update_session_card(
 
     new_event = _build_event(msg)
     _apply_preprocessing_marker(sess, state, new_event, msg.text or "")
-    # A user prompt starts a new live turn.  Final delivery intentionally
-    # leaves ``current_page_idx`` pinned to the page that contains the final;
-    # without resetting it here, the following prompt can be appended to a new
-    # page while the carrier keeps rendering the previous one.  Use the
-    # sentinel for "follow latest" before either the buffered or live path so
-    # the repost-intent race cannot preserve a stale page selection.
-    if new_event.type == "user_msg":
-        state.current_page_idx = None
+    # Intake already moves a Telegram request to latest synchronously. Do not
+    # repeat that here: this monitor event may arrive after a deliberate page
+    # tap and must not undo the newer navigation.
     # tool_result: fold into the matching tool_use Event in place.
     # If no match (race / restart), append the placeholder as a row.
     replaced = False

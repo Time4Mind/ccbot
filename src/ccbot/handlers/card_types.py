@@ -176,6 +176,13 @@ class CardState:
     # final, clear, and buffered completion paths leave the card IDLE until a
     # new inbound turn or non-final event explicitly starts work again.
     turn_phase: TurnPhase = TurnPhase.RUNNING
+    # Live pane activity bridges silent gaps between transcript events. It is
+    # state-only: unlike ``pane_status`` it is not rendered in the card body.
+    pane_busy: bool = False
+    # A user Stop is authoritative until the next inbound request. The pane
+    # may keep showing a stale Working spinner after Escape; polling must not
+    # resurrect Stop or prevent the session from being closed/archived.
+    user_stopped: bool = False
     # A newly spawned final-answer card gets one visible completion marker.
     # The flag is cleared after creation; the next ordinary update rerenders
     # the header without it.

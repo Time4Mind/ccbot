@@ -12,6 +12,7 @@ from ..session import Session, session_manager
 from ..telegram_rate_limit import background_telegram_request
 from .card_binding import clear_carrier, restore_carrier, snapshot_carrier
 from .card_model import (
+    TurnPhase,
     _latest_inflight_idx,
     _resolved_page_idx,
     paginate_events_for_card,
@@ -53,6 +54,13 @@ async def surface_card_after_message(
     one burst converge on one newest card instead of spawning one per task.
     """
     state = get_card_state(user_id, sess)
+    # Intake, rather than a later transcript event, is the boundary that
+    # releases an explicit Stop latch. This makes a new request visibly
+    # working at once while late output from the interrupted turn cannot
+    # resurrect the Stop button by itself.
+    state.user_stopped = False
+    state.pane_busy = False
+    state.turn_phase = TurnPhase.RUNNING
     await _legacy("_ensure_seeded")(user_id, sess, state)
     old_msg_id: int | None = None
     new_msg_id: int | None = None

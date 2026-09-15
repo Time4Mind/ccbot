@@ -24,6 +24,7 @@ from ..session import session_manager
 from ..tmux_manager import tmux_manager
 from ..utils import ccbot_dir
 from ._common import active_window, is_user_allowed
+from ._messages_preprocessing import PreparedDispatch, prepare_request_for_dispatch
 
 
 __all__ = [
@@ -84,6 +85,60 @@ def _incoming_rich_text(msg: Any) -> str:
         return out
 
     return "\n".join(flatten(payload.get("blocks"))).strip()
+
+
+def _rich_photo_refs(msg: Any) -> list[tuple[str, str]]:
+    """Return one largest downloadable PhotoSize per Rich Message photo block."""
+    api_kwargs = getattr(msg, "api_kwargs", None)
+    payload = (
+        api_kwargs.get("rich_message") if isinstance(api_kwargs, Mapping) else None
+    )
+    if not isinstance(payload, Mapping):
+        return []
+
+    refs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+            return
+        if not isinstance(node, Mapping):
+            return
+        if node.get("type") == "photo" and isinstance(node.get("photo"), list):
+            sizes = [item for item in node["photo"] if isinstance(item, Mapping)]
+            if sizes:
+                largest = max(
+                    sizes,
+                    key=lambda item: (
+                        int(item.get("width") or 0) * int(item.get("height") or 0),
+                        int(item.get("file_size") or 0),
+                    ),
+                )
+                file_id = str(largest.get("file_id") or "")
+                unique_id = str(largest.get("file_unique_id") or file_id)
+                if file_id and file_id not in seen:
+                    seen.add(file_id)
+                    refs.append((file_id, unique_id))
+        for value in node.values():
+            if isinstance(value, (Mapping, list)):
+                walk(value)
+
+    walk(payload.get("blocks"))
+    return refs
+
+
+async def _save_rich_photos(msg: Any, bot: Bot, workdir: str) -> list[Path]:
+    saved: list[Path] = []
+    for file_id, unique_id in _rich_photo_refs(msg):
+        tg_file = await bot.get_file(file_id)
+
+        async def fetch(target: Path, source: Any = tg_file) -> None:
+            await source.download_to_drive(target)
+
+        saved.append(await save_inbox_file(workdir, f"{unique_id}.jpg", fetch))
+    return saved
 
 
 def _forward_attribution(msg: Any) -> str:
@@ -159,11 +214,9 @@ async def unsupported_content_handler(
 ) -> bool:
     """Catch-all for messages without a dedicated handler.
 
-    When the message carries a caption (typical for forwarded channel
-    posts that bundle a video + body text), extract the caption + any
-    hidden ``text_link`` URLs and forward the resulting text to the
-    active session — the media itself is dropped on the floor since
-    Claude can't consume it directly, but the body keeps the context.
+    When the message carries text or downloadable Rich Message photos,
+    preserve both in one request to the active session. Other unsupported
+    media still contributes its caption and hidden ``text_link`` URLs.
 
     Falls back to the legacy "unsupported" reply when there's no
     caption to salvage.
@@ -182,7 +235,8 @@ async def unsupported_content_handler(
     caption = (msg.caption or "").strip()
     if not caption:
         caption = _incoming_rich_text(msg)
-    if caption:
+    rich_photo_refs = _rich_photo_refs(msg)
+    if caption or rich_photo_refs:
         wid = pinned_wid or active_window(user.id)
         if wid is None:
             await safe_reply(
@@ -200,18 +254,44 @@ async def unsupported_content_handler(
             )
             return False
 
+        prepared_dispatch = (
+            await prepare_request_for_dispatch(
+                update,
+                context,
+                user.id,
+                wid,
+                caption,
+                input_kind="text",
+            )
+            if caption
+            else PreparedDispatch(text="")
+        )
+        caption = prepared_dispatch.text
         prefix = _forward_attribution(msg)
         hidden_urls = _hidden_link_urls(msg)
-        body_parts = [prefix + caption] if prefix else [caption]
+        body_parts = [prefix + caption] if prefix else ([caption] if caption else [])
         if hidden_urls:
             body_parts.append("Links:")
             body_parts.extend(hidden_urls)
+        sess = session_manager.find_session_by_window(wid)
+        session_workdir = str(getattr(sess, "workdir", "") or "")
+        workdir = session_workdir or str(ccbot_dir() / "images")
+        try:
+            saved_photos = await _save_rich_photos(msg, context.bot, workdir)
+        except BadRequest as exc:
+            if _is_file_too_big(exc):
+                await safe_reply(msg, _FILE_TOO_BIG_MSG)
+                return False
+            raise
+        for file_path in saved_photos:
+            body_parts.append(
+                f".ccbot-inbox/{file_path.name}" if session_workdir else str(file_path)
+            )
         text_to_send = "\n".join(body_parts)
 
         await fire_typing(context.bot, user.id, "caption_forward", window_id=wid)
         if await _intercept_if_pending_ui(context.bot, user.id, wid, msg):
             return False
-        sess = session_manager.find_session_by_window(wid)
         async with _card_repost_bracket(context.bot, user.id, sess) as repost:
             success, message = await _send_with_delivery_proof(wid, text_to_send, sess)
             if not success:
@@ -219,6 +299,7 @@ async def unsupported_content_handler(
                 return False
             if sess is not None:
                 session_manager.touch_session(sess.id)
+            prepared_dispatch.confirm_delivery()
             repost.commit()
         # No success reply — the user just sent the message; they know
         # they sent it. Errors above still surface.
@@ -324,6 +405,19 @@ async def photo_handler(
     file_path = await save_inbox_file(workdir, filename, _fetch)
 
     caption = update.message.caption or ""
+    prepared_dispatch = (
+        await prepare_request_for_dispatch(
+            update,
+            context,
+            user.id,
+            wid,
+            caption,
+            input_kind="text",
+        )
+        if caption.strip()
+        else PreparedDispatch(text="")
+    )
+    caption = prepared_dispatch.text
     if await _intercept_if_pending_ui(context.bot, user.id, wid, update.message):
         return False
     async with _card_repost_bracket(context.bot, user.id, sess) as repost:
@@ -333,6 +427,7 @@ async def photo_handler(
         if not success:
             await safe_reply(update.message, f"❌ {message}")
             return False
+        prepared_dispatch.confirm_delivery()
         repost.commit()
     return True
 
@@ -393,6 +488,19 @@ async def document_handler(
     file_path = await save_inbox_file(workdir, filename, _fetch)
 
     caption = update.message.caption or ""
+    prepared_dispatch = (
+        await prepare_request_for_dispatch(
+            update,
+            context,
+            user.id,
+            wid,
+            caption,
+            input_kind="text",
+        )
+        if caption.strip()
+        else PreparedDispatch(text="")
+    )
+    caption = prepared_dispatch.text
     if await _intercept_if_pending_ui(context.bot, user.id, wid, update.message):
         return False
     async with _card_repost_bracket(context.bot, user.id, sess) as repost:
@@ -402,5 +510,6 @@ async def document_handler(
         if not success:
             await safe_reply(update.message, f"❌ {message}")
             return False
+        prepared_dispatch.confirm_delivery()
         repost.commit()
     return True

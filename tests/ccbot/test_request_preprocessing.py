@@ -200,6 +200,147 @@ async def test_finishing_preprocessing_does_not_close_open_menu() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        SimpleNamespace(
+            message_id=17,
+            forward_origin=SimpleNamespace(
+                sender_user=SimpleNamespace(id=99), sender_user_name=None
+            ),
+            via_bot=None,
+        ),
+        SimpleNamespace(
+            message_id=17,
+            forward_origin=SimpleNamespace(
+                sender_user=None, sender_user_name="Hidden sender"
+            ),
+            via_bot=None,
+        ),
+        SimpleNamespace(
+            message_id=17,
+            forward_origin=None,
+            via_bot=SimpleNamespace(id=99),
+        ),
+        SimpleNamespace(
+            message_id=17,
+            forward_origin=None,
+            forward_from=SimpleNamespace(id=99),
+            forward_from_chat=None,
+            via_bot=None,
+        ),
+        SimpleNamespace(
+            message_id=17,
+            forward_origin=None,
+            forward_from=None,
+            forward_from_chat=SimpleNamespace(id=-10099),
+            via_bot=None,
+        ),
+    ],
+)
+async def test_external_or_via_bot_text_bypasses_preprocessing(message) -> None:
+    manager = MagicMock()
+    manager.get_user_settings.return_value = {
+        "preprocessing_mode": "all",
+        "preprocessing_instruction": "",
+    }
+    processor = AsyncMock(return_value="changed")
+
+    with (
+        patch("ccbot.bot._messages_preprocessing.session_manager", manager),
+        patch(
+            "ccbot.bot._messages_preprocessing.prompt_preprocessor.process",
+            processor,
+        ),
+    ):
+        result = await prepare_request_for_dispatch(
+            SimpleNamespace(message=message),
+            SimpleNamespace(bot=object()),
+            42,
+            "@A",
+            "external text",
+            input_kind="text",
+        )
+
+    assert result.text == "external text"
+    processor.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_self_forwarded_text_is_preprocessed() -> None:
+    manager = MagicMock()
+    manager.get_user_settings.return_value = {
+        "preprocessing_mode": "all",
+        "preprocessing_instruction": "",
+    }
+    manager.find_session_by_window.return_value = None
+    processor = AsyncMock(return_value="prepared self text")
+    message = SimpleNamespace(
+        message_id=17,
+        forward_origin=SimpleNamespace(
+            sender_user=SimpleNamespace(id=42), sender_user_name=None
+        ),
+        via_bot=None,
+    )
+
+    with (
+        patch("ccbot.bot._messages_preprocessing.session_manager", manager),
+        patch(
+            "ccbot.bot._messages_preprocessing.prompt_preprocessor.process",
+            processor,
+        ),
+    ):
+        result = await prepare_request_for_dispatch(
+            SimpleNamespace(message=message),
+            SimpleNamespace(bot=object()),
+            42,
+            "@A",
+            "my forwarded text",
+            input_kind="text",
+        )
+
+    assert result.text == "prepared self text"
+    processor.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_legacy_self_forwarded_text_is_preprocessed() -> None:
+    manager = MagicMock()
+    manager.get_user_settings.return_value = {
+        "preprocessing_mode": "all",
+        "preprocessing_instruction": "",
+    }
+    manager.find_session_by_window.return_value = None
+    processor = AsyncMock(return_value="prepared self text")
+    message = SimpleNamespace(
+        message_id=17,
+        forward_origin=None,
+        forward_from=SimpleNamespace(id=42),
+        forward_from_chat=None,
+        via_bot=None,
+    )
+
+    with (
+        patch("ccbot.bot._messages_preprocessing.session_manager", manager),
+        patch(
+            "ccbot.bot._messages_preprocessing.prompt_preprocessor.process",
+            processor,
+        ),
+    ):
+        result = await prepare_request_for_dispatch(
+            SimpleNamespace(message=message),
+            SimpleNamespace(bot=object()),
+            42,
+            "@A",
+            "my forwarded text",
+            input_kind="text",
+        )
+
+    assert result.text == "prepared self text"
+    processor.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_dispatch_does_not_resume_card_after_user_opened_menu() -> None:
     update = MagicMock()
     update.message = SimpleNamespace(message_id=17)

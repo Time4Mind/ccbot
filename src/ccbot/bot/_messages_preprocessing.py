@@ -21,6 +21,22 @@ from ..session import session_manager
 logger = logging.getLogger(__name__)
 
 
+def _is_user_authored_message(message: Any, user_id: int) -> bool:
+    """Return whether Telegram proves that the content belongs to the user."""
+    if getattr(message, "via_bot", None) is not None:
+        return False
+    origin = getattr(message, "forward_origin", None)
+    if origin is not None:
+        sender = getattr(origin, "sender_user", None)
+        return getattr(sender, "id", None) == user_id
+    if getattr(message, "forward_from_chat", None) is not None:
+        return False
+    legacy_sender = getattr(message, "forward_from", None)
+    if legacy_sender is not None:
+        return getattr(legacy_sender, "id", None) == user_id
+    return True
+
+
 @dataclass
 class PreparedDispatch:
     text: str
@@ -53,7 +69,7 @@ async def prepare_request_for_dispatch(
     settings = session_manager.get_user_settings(user_id)
     if not should_preprocess(
         str(settings.get("preprocessing_mode", "off")), input_kind
-    ):
+    ) or not _is_user_authored_message(update.message, user_id):
         return PreparedDispatch(text=text)
 
     pinned_session = session_manager.find_session_by_window(wid)

@@ -120,8 +120,8 @@ def _build_tool_spoiler_body(
     args: str,
     content: str,
     *,
-    command_max_lines: int = 7,
-    result_max_lines: int = 7,
+    command_max_lines: int = 10,
+    result_max_lines: int = 10,
 ) -> str:
     """Assemble the spoiler body for a tool event — args first
     (highlighted), then content (highlighted when it's code)."""
@@ -169,7 +169,7 @@ def render_event(
     *,
     in_flight: bool,
     now: float,
-    spoiler_line_limits: tuple[int, int] = (7, 7),
+    spoiler_line_limits: tuple[int, int] = (10, 10),
 ) -> str:
     """Render one Event as a plain-text block for the card."""
     # Build the trailing time-or-elapsed marker

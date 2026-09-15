@@ -310,6 +310,46 @@ def test_transcript_event_replaces_pending_row_without_duplication() -> None:
     assert rendered.count("Готовый запрос") == 1
 
 
+def test_pending_prompt_is_rendered_only_on_latest_page() -> None:
+    old_event = Event(type="user_msg", text="Старый запрос", started_at=1)
+    latest_event = Event(type="final_text", text="Последний ответ", started_at=2)
+    state = CardState(
+        events=[old_event, latest_event],
+        pending_prompts=[PendingPrompt(request_id="18", text="Новый запрос")],
+        current_page_idx=0,
+    )
+    sess = Session(id="abc12345", name="demo")
+
+    with patch(
+        "ccbot.handlers.card_layout.paginate_events_for_card",
+        return_value=[[old_event], [latest_event]],
+    ):
+        old_page = _render_card(sess, state, user_id=42)
+        state.current_page_idx = 1
+        latest_page = _render_card(sess, state, user_id=42)
+
+    assert "Новый запрос" not in old_page
+    assert "Новый запрос" in latest_page
+
+
+def test_transcript_event_clears_oldest_pending_prompt_when_text_differs() -> None:
+    state = CardState(
+        pending_prompts=[
+            PendingPrompt(
+                request_id="19", text="Исправленный запрос", preprocessed=True
+            ),
+            PendingPrompt(request_id="20", text="Следующий запрос"),
+        ]
+    )
+    sess = Session(id="abc12345", name="demo")
+    event = Event(type="user_msg", text="Исправленный  запрос", started_at=1)
+
+    _apply_preprocessing_marker(sess, state, event, "Исправленный  запрос")
+
+    assert [row.request_id for row in state.pending_prompts] == ["20"]
+    assert event.user_icon == "👤💻"
+
+
 def test_preprocessed_marker_survives_session_state_roundtrip() -> None:
     sess = Session(id="abc12345", name="demo")
     sess.remember_preprocessed_prompt("Готовый запрос")

@@ -277,7 +277,8 @@ def _render_card(
     if len(page_events) < len(pages[idx]):
         dropped = len(pages[idx]) - len(page_events)
         body = f"… (+{dropped} events trimmed to fit)\n{body}"
-    if state.voice_pending:
+    is_latest_page = idx == len(pages) - 1
+    if state.voice_pending and is_latest_page:
         pending_row = render_event(
             Event(
                 type="user_msg",
@@ -288,7 +289,10 @@ def _render_card(
             now=time.time(),
         )
         body = _EVENT_JOINER.join(part for part in (body, pending_row) if part)
-    for prompt in state.pending_prompts:
+    # Pending input is a live tail, not part of historical page contents.
+    # Showing it on an older page makes the same request appear after every
+    # completed turn and visually corrupts transcript order.
+    for prompt in state.pending_prompts if is_latest_page else ():
         pending_icon = prompt.user_icon or ("👤💻" if prompt.preprocessed else "💻")
         prompt_row = render_event(
             Event(
@@ -311,7 +315,7 @@ def _render_card(
     # only on the actual latest page, detached from the last request, and place
     # it before the rich-media anchor so a screenshot is inserted immediately
     # below it.  status_polling clears it when the background terminal exits.
-    if state.pane_status and idx == len(pages) - 1:
+    if state.pane_status and is_latest_page:
         parts.append("\u00a0")
         parts.append(f"• {state.pane_status}")
     # Everything appended after this point is service metadata. Record the

@@ -604,11 +604,13 @@ def _settings_pagesize_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
 def _settings_spoiler_lines_grid(
     user_id: int, setting_key: str
 ) -> list[list[InlineKeyboardButton]]:
-    raw = session_manager.get_user_settings(user_id).get(setting_key, 7)
+    raw = session_manager.get_user_settings(user_id).get(setting_key, 10)
     try:
         cur = int(raw)
     except (TypeError, ValueError):
-        cur = 7
+        cur = 10
+    if cur not in (10, 20, 40):
+        cur = 10
     return [
         [
             InlineKeyboardButton(
@@ -618,7 +620,7 @@ def _settings_spoiler_lines_grid(
                     f"{'command' if setting_key == 'spoiler_command_lines' else 'result'}:{v}"
                 ),
             )
-            for v in (3, 7, 20)
+            for v in (10, 20, 40)
         ],
         [
             InlineKeyboardButton(

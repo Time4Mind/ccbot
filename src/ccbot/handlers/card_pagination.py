@@ -85,7 +85,7 @@ def _split_page_by_budget(
     page: list[Event],
     budget_lines: int,
     *,
-    spoiler_line_limits: tuple[int, int] = (7, 7),
+    spoiler_line_limits: tuple[int, int] = (10, 10),
 ) -> list[list[Event]]:
     """Split one logical page into budget-fitting sub-pages.
 
@@ -225,7 +225,7 @@ def render_page(
     events: list[Event],
     now: float,
     *,
-    spoiler_line_limits: tuple[int, int] = (7, 7),
+    spoiler_line_limits: tuple[int, int] = (10, 10),
 ) -> str:
     """Render the events of one page into a single body string.
 
@@ -321,15 +321,15 @@ def _resolve_line_budget(user_id: int | None) -> int:
 
 def resolve_spoiler_line_budgets(user_id: int | None) -> tuple[int, int]:
     if user_id is None:
-        return (7, 7)
+        return (10, 10)
     settings = session_manager.get_user_settings(user_id)
 
     def _valid(key: str) -> int:
         try:
-            value = int(settings.get(key, 7))
+            value = int(settings.get(key, 10))
         except (TypeError, ValueError):
-            return 7
-        return value if value in (3, 7, 20) else 7
+            return 10
+        return value if value in (10, 20, 40) else 10
 
     return _valid("spoiler_command_lines"), _valid("spoiler_result_lines")
 
@@ -338,7 +338,7 @@ def _trim_page_events(
     events: list[Event],
     budget_lines: int,
     *,
-    spoiler_line_limits: tuple[int, int] = (7, 7),
+    spoiler_line_limits: tuple[int, int] = (10, 10),
 ) -> list[Event]:
     """Drop middle events from ``events`` until rendered line-count
     ≤ ``budget_lines`` (with ``CARD_PAGE_LINES_OVERSHOOT`` slack).

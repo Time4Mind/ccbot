@@ -70,6 +70,8 @@ async def test_idle_archive_callback_persists_selected_hours() -> None:
     [
         ("st:spl:command:20", "spoiler_command_lines"),
         ("st:spl:result:20", "spoiler_result_lines"),
+        ("st:spl:command:40", "spoiler_command_lines"),
+        ("st:spl:result:40", "spoiler_result_lines"),
     ],
 )
 async def test_spoiler_line_callback_persists_selected_limit(
@@ -95,7 +97,37 @@ async def test_spoiler_line_callback_persists_selected_limit(
         handled = await settings_callback.handle(query, context, user)
 
     assert handled is True
-    update.assert_called_once_with(42, setting, 20)
+    update.assert_called_once_with(42, setting, int(callback.rsplit(":", 1)[1]))
+
+
+def test_spoiler_line_settings_offer_ten_twenty_and_forty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        session_manager,
+        "get_user_settings",
+        lambda _user_id: {
+            "language": "ru",
+            "spoiler_command_lines": 10,
+            "spoiler_result_lines": 40,
+        },
+    )
+
+    command = build_footer_keyboard(42, screen="settings_spoiler_command_lines")
+    result = build_footer_keyboard(42, screen="settings_spoiler_result_lines")
+
+    assert command is not None
+    assert result is not None
+    assert [button.callback_data for button in command.inline_keyboard[0]] == [
+        "st:spl:command:10",
+        "st:spl:command:20",
+        "st:spl:command:40",
+    ]
+    assert [button.callback_data for button in result.inline_keyboard[0]] == [
+        "st:spl:result:10",
+        "st:spl:result:20",
+        "st:spl:result:40",
+    ]
 
 
 @pytest.mark.asyncio

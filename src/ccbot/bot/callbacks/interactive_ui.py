@@ -19,6 +19,7 @@ from ...handlers.callback_data import (
     CB_ASK_ENTER,
     CB_ASK_ESC,
     CB_ASK_LEFT,
+    CB_ASK_PICK,
     CB_ASK_REFRESH,
     CB_ASK_RIGHT,
     CB_ASK_SPACE,
@@ -26,6 +27,7 @@ from ...handlers.callback_data import (
     CB_ASK_UP,
 )
 from ...handlers.interactive_ui import clear_interactive_msg, handle_interactive_ui
+from ...handlers.kb_mode import parse_picker_menu
 from ...handlers.notifications import enter_kb_mode, exit_kb_mode, has_pending_kb
 from ...session import session_manager
 from ...terminal_parser import (
@@ -52,6 +54,37 @@ async def handle(
     query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
 ) -> bool:
     data = query.data or ""
+
+    if data.startswith(CB_ASK_PICK):
+        payload = data[len(CB_ASK_PICK) :]
+        target_raw, separator, window_id = payload.partition(":")
+        if not separator or not target_raw.isdigit() or not window_id:
+            await query.answer()
+            return True
+        target = int(target_raw)
+        w = await tmux_manager.find_window_by_id(window_id)
+        if w is not None:
+            pane = await tmux_manager.capture_pane(w.window_id)
+            content = extract_interactive_content(pane or "")
+            picker = (
+                parse_picker_menu(content.content, content.name)
+                if content is not None
+                else None
+            )
+            if picker is not None and 0 <= target < len(picker.options):
+                delta = target - picker.cursor_index
+                key = "Down" if delta > 0 else "Up"
+                for _ in range(abs(delta)):
+                    await tmux_manager.send_keys(
+                        w.window_id, key, enter=False, literal=False
+                    )
+                await tmux_manager.send_keys(
+                    w.window_id, "Enter", enter=False, literal=False
+                )
+                await asyncio.sleep(0.5)
+                await _refresh_after_key(context.bot, user.id, window_id)
+        await query.answer()
+        return True
 
     for prefix, tmux_key, toast in _NAV:
         if data.startswith(prefix):

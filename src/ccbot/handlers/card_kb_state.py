@@ -64,9 +64,10 @@ async def enter_kb_mode(
     """Flip the active session's card msg into kb-mode view.
 
     Edits the existing card msg (or creates one if missing) so its body
-    shows the prompt content and its keyboard is the kb-mode 3×3 grid +
-    [Back][+ new][≡ Menu]. State is marked ``in_kb_mode=True`` and
-    ``kb_prompt`` snapshot so subsequent paints stay consistent.
+    shows the prompt content and its keyboard is either direct model/effort
+    option buttons or the generic kb-mode navigation grid. State is marked
+    ``in_kb_mode=True`` and ``kb_prompt`` snapshot so subsequent paints stay
+    consistent.
 
     No-op if state is already in kb-mode with the same prompt — avoids
     pointless edits when status_polling re-detects the prompt each poll.
@@ -97,7 +98,12 @@ async def enter_kb_mode(
     if not sess.window_id:
         return
     text = _legacy("_render_card")(sess, state, user_id=user_id)
-    kb = build_kb_mode_keyboard(user_id, sess.window_id, ui_name=ui_name)
+    kb = build_kb_mode_keyboard(
+        user_id,
+        sess.window_id,
+        ui_name=ui_name,
+        prompt_content=prompt_content,
+    )
     # Spawn-serialization (Task #50): a parallel ``update_session_card``
     # could otherwise observe ``msg_id is None`` during ``_send_card``
     # and spawn its own card too.

@@ -124,7 +124,7 @@
 | **BotCommand + set_my_commands** | ✅ | Commands are registered from the current bot command list |
 | **sendDocument** | ✅ | Used for user-requested file delivery; terminal screenshots stay inside rich cards |
 | **ReplyKeyboardRemove** | ✅ | Used when switching away from reply keyboard |
-| **Claude Code command forwarding** | ✅ | /clear, /compact, /cost, /help, /memory forwarded to tmux |
+| **Agent command forwarding** | ✅ | Supported unhandled commands such as /clear and /cost are forwarded to tmux |
 | **Message rate limiting** | ✅ | 1.1s minimum interval per user to avoid flood control |
 | **Per-user message queues** | ✅ | FIFO ordering, content/status task separation, message merging |
 | **Status message deduplication** | ✅ | Skip edit if status text unchanged |
@@ -146,19 +146,18 @@
 
 ---
 
-## 3. Claude Code Slash Commands
+## 3. Agent Slash Commands
 
-### Currently Forwarded by ccbot
+### Published pickers
 
-These 5 commands are registered in the Telegram bot menu and forwarded to Claude Code via tmux:
+These commands are registered in Telegram's quick-command menu and forwarded to the active backend:
 
 | Command | Bot Menu Description | Function |
 |---------|---------------------|----------|
-| `/clear` | ↗ Clear conversation history | Wipes conversation, starts fresh. ccbot also clears session association |
-| `/compact` | ↗ Compact conversation context | Summarize/compress context to free token budget. Supports optional instructions |
-| `/cost` | ↗ Show token/cost usage | Display token counts and API cost for current session |
-| `/help` | ↗ Show Claude Code help | List available commands and usage help |
-| `/memory` | ↗ Edit CLAUDE.md | Open CLAUDE.md for editing project instructions |
+| `/model` | ↗ Switch AI model | Opens the model picker, followed by reasoning effort when the backend asks for it |
+
+Other supported agent commands, including `/clear` and `/cost`, remain available
+when typed manually.
 
 ### Other Claude Code Commands (Full Reference)
 

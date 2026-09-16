@@ -333,7 +333,7 @@ async def build_archive_page(
             "|---|---|",
         ]
         for idx, sess in enumerate(chunk, start=start + 1):
-            # ✓ marks /done-completed sessions; plain archives need no badge.
+            # Preserve the historical completed-state badge for old records.
             label = "✓ " if sess.state == "completed" else ""
             ts = sess.archived_at or sess.last_event_at
             age = _format_age(user_id, ts) if ts else "?"

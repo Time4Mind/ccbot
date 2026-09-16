@@ -93,7 +93,7 @@ def test_multi_setting_category_moves_values_from_buttons_to_table(
             "language": "ru",
             "live_lag": 4,
             "card_history": 10,
-            "card_page_lines": 20,
+            "card_page_lines": 30,
             "spoiler_command_lines": 10,
             "spoiler_result_lines": 60,
             "screenshot_capture_kib": 48,
@@ -108,7 +108,7 @@ def test_multi_setting_category_moves_values_from_buttons_to_table(
     assert "| Настройка | Текущее значение |" in rendered
     assert "| Лаг карточки | 4s |" in rendered
     assert "| История в карточке | 10 turns |" in rendered
-    assert "| Размер страницы | 20 lines |" in rendered
+    assert "| Размер страницы | 30 lines |" in rendered
     assert "| Строк команды | 10 lines |" in rendered
     assert "| Строк результата | 60 lines |" in rendered
     assert "| Объём скрина | 48 KiB |" in rendered

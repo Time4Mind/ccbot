@@ -24,7 +24,7 @@ Visibility:
   - ``clear_for_user_session`` drops one user's entry — called when
     the user taps the session in the switcher (= switch into).
   - ``clear_for_session`` drops the entry across all users — called
-    from archive/kill/done paths.
+    from archive/kill paths.
 
 Persistence: ``serialize_per_user`` / ``load_per_user`` round-trip the
 status map into ``state.json`` via SessionManager. ``pending_interactive_ui``

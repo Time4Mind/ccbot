@@ -1,8 +1,4 @@
-"""Session lifecycle slash commands: /new, /kill, /done, /stop, /menu,
-/archive.
-
-``archive_session`` is shared between /kill and /done.
-"""
+"""Session lifecycle slash commands: /new, /kill, /stop, /menu, /archive."""
 
 from __future__ import annotations
 
@@ -19,8 +15,6 @@ from ...handlers.archive import (
     build_archive_page,
 )
 from ...handlers.callback_data import (
-    CB_CONF_DONE_NO,
-    CB_CONF_DONE_YES,
     CB_CONF_KILL_NO,
     CB_CONF_KILL_YES,
 )
@@ -151,20 +145,14 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await safe_reply(update.message, msg_text, reply_markup=keyboard)
 
 
-# --- /kill, /done — share archive_session ---
+# --- /kill ---
 
 
-async def archive_session(
-    user_id: int, bot: Bot, sess: Session, *, completed: bool
-) -> None:
-    """Kill tmux window if alive and mark the Session archived/completed.
-
-    Used by both the /kill confirmation and the /done confirmation, plus
-    the matching CB_CONF_*_YES callback paths.
-    """
+async def archive_session(user_id: int, bot: Bot, sess: Session) -> None:
+    """Kill the tmux window if alive and archive the session."""
     was_default_reserve = reserve_owner(sess) == user_id
     await teardown_session_runtime(user_id, sess, bot)
-    await archive_or_delete_session(sess, completed=completed)
+    await archive_or_delete_session(sess, completed=False)
     if was_default_reserve:
         from ...default_session import ensure_default_session
 
@@ -205,43 +193,6 @@ async def kill_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
     await safe_reply(
         update.message, t(user.id, "conf.kill", name=sess.name), reply_markup=kb
-    )
-
-
-async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """`/done [<name-or-id>]` — mark goal achieved and archive after confirm.
-
-    Without an argument, applies to the user's active session.
-    """
-    user = update.effective_user
-    if not user or not is_user_allowed(user.id):
-        return
-    if not update.message:
-        return
-
-    args = (update.message.text or "").split(maxsplit=1)
-    if len(args) >= 2:
-        sess = resolve_ident(args[1].strip())
-    else:
-        sess = session_manager.get_active_session(user.id)
-    if sess is None or sess.state not in ("active", "idle"):
-        await safe_reply(update.message, "❌ Session not found or not live.")
-        return
-    kb = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    t(user.id, "btn.confirm"),
-                    callback_data=f"{CB_CONF_DONE_YES}{sess.id}"[:64],
-                ),
-                InlineKeyboardButton(
-                    t(user.id, "btn.no"), callback_data=CB_CONF_DONE_NO
-                ),
-            ]
-        ]
-    )
-    await safe_reply(
-        update.message, t(user.id, "conf.done", name=sess.name), reply_markup=kb
     )
 
 

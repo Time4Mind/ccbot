@@ -201,13 +201,10 @@ plus an inline `≡ Menu` button on the most recent bot message:
 | ---------- | ------ |
 | `/menu`    | Open the inline ≡ Menu screen |
 | `/help`    | Inline mini-doc with section buttons |
-| `/history` | Full transcript of the active session (paginated) |
-| `/done`    | Mark active session as done and archive it |
+| `/model`   | Open the active backend's model picker |
 
-Claude Code's own pickers (`/model`, `/effort`, `/compact`, `/memory`)
-are forwarded into the active session and published alongside them.
 A few more commands work when typed but stay out of the `/`-menu:
-`/new`, `/kill`, `/stop`, `/archive`, `/usage`,
+`/new`, `/kill`, `/stop`, `/archive`, `/usage`, `/clear`, `/cost`,
 `/health`, `/login`.
 
 **`/login` — re-authenticating Claude from the phone.** When the OAuth

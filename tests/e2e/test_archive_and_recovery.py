@@ -41,7 +41,7 @@ async def test_archive_session_kills_window_and_orphans(fake_tmux, fake_bot):
     session_manager._resuming_windows.add(WINDOW_ID)
     session_manager._pending_sends[WINDOW_ID] = ["queued startup prompt"]
 
-    await archive_session(USER_ID, fake_bot, sess, completed=False)
+    await archive_session(USER_ID, fake_bot, sess)
 
     # tmux window killed, then orphan provider resume processes mopped up.
     assert WINDOW_ID in fake_tmux.killed
@@ -57,25 +57,6 @@ async def test_archive_session_kills_window_and_orphans(fake_tmux, fake_bot):
 
 
 @pytest.mark.asyncio
-async def test_archive_completed_tags_done(fake_tmux, fake_bot):
-    fake_tmux.add_window(WINDOW_ID, name="proj", cwd=WORKDIR)
-    sess = seed_session(
-        session_manager,
-        sid="ffff8888",
-        name="proj",
-        window_id=WINDOW_ID,
-        workdir=WORKDIR,
-        claude_session_id=CLAUDE_SID,
-        active_for=USER_ID,
-    )
-
-    await archive_session(USER_ID, fake_bot, sess, completed=True)
-
-    assert session_manager.sessions["ffff8888"].state == "completed"
-    assert WINDOW_ID in fake_tmux.killed
-
-
-@pytest.mark.asyncio
 async def test_archive_deletes_session_without_provider_context(fake_tmux, fake_bot):
     fake_tmux.add_window(WINDOW_ID, name="empty", cwd=WORKDIR)
     sess = seed_session(
@@ -88,7 +69,7 @@ async def test_archive_deletes_session_without_provider_context(fake_tmux, fake_
         active_for=USER_ID,
     )
 
-    await archive_session(USER_ID, fake_bot, sess, completed=False)
+    await archive_session(USER_ID, fake_bot, sess)
 
     assert WINDOW_ID in fake_tmux.killed
     assert "empty000" not in session_manager.sessions

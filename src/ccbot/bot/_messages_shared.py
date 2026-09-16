@@ -501,6 +501,8 @@ async def _intercept_if_pending_ui(
 
 # --- forward_command — any /command that has no dedicated handler goes here ---
 
+_REMOVED_COMMANDS = frozenset({"history", "done", "memory", "compact", "effort"})
+
 
 async def forward_command_handler(
     update: Update,
@@ -517,6 +519,10 @@ async def forward_command_handler(
 
     cmd_text = update.message.text or ""
     cc_slash = cmd_text.split("@")[0]  # strip bot mention
+    command_name = cc_slash.split(maxsplit=1)[0].removeprefix("/").casefold()
+    if command_name in _REMOVED_COMMANDS:
+        await safe_reply(update.message, "❌ This command is no longer supported.")
+        return False
     wid = pinned_wid or active_window(user.id)
     if not wid:
         await safe_reply(

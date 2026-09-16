@@ -93,10 +93,6 @@ A session is defined by its goal, not by its working directory. The user can `cd
   20d, then purged
 - **purged**: state removed from `state.json`; transcripts on disk are kept for audit
 
-### Goal closure (P1)
-
-Only the user marks a goal as done via `/done <session>`. The bot never auto-closes a goal. `claude` can suggest closure in chat, but cannot execute it.
-
 ### Identification (H6)
 
 - Each session has a stable short id (e.g. `a3f1`) and a human-readable name.
@@ -175,10 +171,7 @@ Published:
 |---|---|
 | `/menu` | Open the inline Menu surface with its quota table and four actions: Sessions / Archive / New / Settings. |
 | `/help` | Inline mini-doc with section buttons. |
-| `/history` | Paginated transcript of the active session from the JSONL. |
-| `/done [name]` | Mark goal achieved. Archives with a "completed" tag. |
-
-Forwarded Claude Code pickers (`/model` `/effort` `/compact` `/memory`) are also published when present in `CC_COMMANDS`.
+| `/model` | Open the active backend's native model picker. |
 
 Hidden (typed only):
 
@@ -563,7 +556,7 @@ The fork ships when all of the following are true on a fresh Linux arm64 VPS ins
 7. Voice message is transcribed locally via whisper.cpp; no OpenAI key configured.
 8. Photo / document upload lands in `.ccbot-inbox` and the active session receives the relative path (optionally prefixed by the user's caption).
 9. Menu embeds Claude's live `/usage` limits (5h / weekly / Sonnet), refreshes them on entry, and exposes only Sessions / Archive / New / Settings. Per-session ``context: N%`` is rendered on the card (JSONL approximation, ±10 % from `/context`).
-10. `/done <name>` archives the session and `/archive` reflects it.
+10. Closing a session from its card archives it and `/archive` reflects it.
 11. After VPS reboot, `systemctl restart ccbot` recovers all sessions whose tmux windows still exist; lost ones are listed with `Restore`.
 12. No `--dangerously-load-development-channels`, no Anthropic API key, no OpenAI API key required for any of the above.
 

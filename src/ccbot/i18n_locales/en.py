@@ -83,7 +83,6 @@ EN: dict[str, str] = {
         'not read it. Set `cli_auth_credentials_store = "file"`; the bot '
         "will not replace the existing authorization."
     ),
-    "btn.confirm": "✓ Confirm",
     "btn.no": "× No",
     "btn.yes_kill": "⚠ Yes, kill",
     "btn.yes_delete": "⚠ Yes, delete",
@@ -175,7 +174,6 @@ EN: dict[str, str] = {
         "Kill *{name}*?\nTmux window dies, claude session id stored.\n"
         "Restore via the archive list."
     ),
-    "conf.done": "Mark *{name}* as done?\nGoal closed, session archived.",
     "conf.delete": (
         "Delete *{name}* from archive?\nState record gone. JSONL kept on disk."
     ),
@@ -184,7 +182,6 @@ EN: dict[str, str] = {
         "cannot be undone (unlike Kill → Restore)."
     ),
     "conf.killed": "💀 Killed `{name}`",
-    "conf.done_ok": "🎉 Marked `{name}` as done.",
     "conf.deleted": "🗑 Archive entry deleted.",
     # Directory browser
     "dir.title": "*Select Working Directory*",
@@ -210,7 +207,6 @@ EN: dict[str, str] = {
     "toast.esc_sent": "⎋ Esc sent",
     "toast.cleared": "🧹 Context cleared",
     "toast.killed": "Killed",
-    "toast.done": "Done",
     "toast.deleted": "Deleted",
     "toast.saved": "Saved",
     "toast.agent_live": (
@@ -306,8 +302,7 @@ EN: dict[str, str] = {
         "*Card history*\n\n"
         "How many recent end-of-turn boundaries to load into the live "
         "card on first access (after a bot restart, switcher tap, or "
-        "Menu → Sessions). Deep history beyond this stays accessible "
-        "via /history regardless of the chosen value.\n\n"
+        "Menu → Sessions).\n\n"
         "Higher = more scrollback in the card, more memory per session."
     ),
     "settings.group.card_page_lines": "Page size",
@@ -481,7 +476,7 @@ EN: dict[str, str] = {
         "the latest bot message.\n"
         "• *Reply-quote.* Reply to a non-active session's bot message — "
         "your text is routed there for that one message only.\n"
-        "• *Done.* `/done [name]` archives a session as completed.\n"
+        "• *Close.* The Close button below the card archives the session.\n"
         "• *Idle TTL.* Sessions auto-archive after the selected 6/12/24h without activity.\n"
         "• *Restore.* ≡ Menu → 📦 Archive → tap *Restore*."
     ),
@@ -501,10 +496,9 @@ EN: dict[str, str] = {
         "Bot-side:\n"
         "• `/menu` — open the inline menu\n"
         "• `/help` — this help\n"
-        "• `/done [name]` — archive a session\n"
         "• `/health` — uptime, queues, latency, counters\n\n"
         "Claude Code passthrough — any other `/cmd` is forwarded:\n"
-        "• `/model` `/effort` `/clear` `/compact` `/cost` `/memory` …\n\n"
+        "• `/model` `/clear` `/cost` …\n\n"
         "Type a leading `!` to capture local shell output and forward."
     ),
     "help.body.voice": (

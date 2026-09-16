@@ -232,7 +232,7 @@ async def test_replay_pins_every_handler_to_bound_window() -> None:
     ("update", "handler"),
     [
         (_update(1, text="hello"), "text_handler"),
-        (_update(2, text="/compact"), "forward_command_handler"),
+        (_update(2, text="/model"), "forward_command_handler"),
         (_update(3, voice=True), "voice_handler"),
         (_update(4, photo=True), "photo_handler"),
         (_update(5, document=True), "document_handler"),

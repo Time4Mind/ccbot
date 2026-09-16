@@ -51,12 +51,10 @@ from .commands.auth import (
 from .commands.info import (
     health_command,
     help_command,
-    history_command,
     usage_command,
 )
 from .commands.lifecycle import (
     archive_command,
-    done_command,
     kill_command,
     menu_command,
     new_command,

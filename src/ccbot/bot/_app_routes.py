@@ -27,12 +27,10 @@ from .commands.auth import (
 from .commands.info import (
     health_command,
     help_command,
-    history_command,
     usage_command,
 )
 from .commands.lifecycle import (
     archive_command,
-    done_command,
     kill_command,
     menu_command,
     new_command,
@@ -103,12 +101,10 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     )
 
     # Visible menu commands.
-    application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler("new", new_command))
     application.add_handler(CommandHandler("kill", kill_command))
-    application.add_handler(CommandHandler("done", done_command))
     application.add_handler(CommandHandler("stop", stop_command))
     application.add_handler(CommandHandler("archive", archive_command))
     application.add_handler(CommandHandler("health", health_command))

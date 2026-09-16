@@ -24,15 +24,11 @@ from ..session import Session, session_manager
 logger = logging.getLogger(__name__)
 
 
-# Claude Code commands shown in bot menu (forwarded via tmux). Order
-# preserved in setMyCommands. Dropped: /cost (duplicate of /status), /help
-# (meta, produces no useful TG output).
+# Agent commands eligible for Telegram's quick-command menu. Other supported
+# slash commands can still pass through the generic terminal route.
 CC_COMMANDS: dict[str, str] = {
     "model": "↗ Switch AI model",
-    "effort": "↗ Set thinking effort",
     "clear": "↗ Clear conversation history",
-    "compact": "↗ Compact conversation context",
-    "memory": "↗ Edit CLAUDE.md",
 }
 
 

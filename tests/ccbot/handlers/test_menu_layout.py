@@ -46,6 +46,24 @@ def test_main_menu_has_four_buttons_and_no_status_button(monkeypatch) -> None:
     assert CB_MM_STATUS not in {value for row in callbacks for value in row}
 
 
+def test_page_size_choices_are_line_limits_30_50_70_100(monkeypatch) -> None:
+    monkeypatch.setattr(
+        session_manager,
+        "get_user_settings",
+        lambda _uid: {"language": "ru", "card_page_lines": 50},
+    )
+
+    keyboard = menu.build_footer_keyboard(42, screen="settings_pagesize")
+
+    assert keyboard is not None
+    assert [button.text for button in keyboard.inline_keyboard[0]] == [
+        "30",
+        "• 50",
+        "70",
+        "100",
+    ]
+
+
 def _patch_active(monkeypatch: pytest.MonkeyPatch, *, terminal: bool) -> None:
     monkeypatch.setattr(menu, "_has_active_session", lambda _uid: True)
     monkeypatch.setattr(menu, "_has_pending_kb_action", lambda _uid: False)

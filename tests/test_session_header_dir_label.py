@@ -95,7 +95,7 @@ class TestPaneStatusPlacement:
         old_page = _render_card(_session(), state)
         assert "background terminal running" not in old_page
 
-        state.current_page_idx = 1
+        state.current_page_idx = 2
         latest_page = _render_card(_session(), state)
         assert latest_page.rstrip().endswith(
             "• Working · 1 background terminal running"

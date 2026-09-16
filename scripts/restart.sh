@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# restart.sh — the EXPLICIT, DELIBERATE restart path: cleanly stop the
-# running ccbot and launch a fresh one in the same tmux pane.
+# restart.sh — the EXPLICIT, DELIBERATE restart path. A launchd-managed
+# instance is restarted by launchd itself; other installations are cleanly
+# stopped and launched afresh in the same tmux pane.
 #
 # This is NOT the routine path. The routine, idempotent path is
 # ``scripts/ccbot-supervisor.sh``, which NEVER preempts a healthy
 # instance — it only (re)starts when the bot lock is free. restart.sh is
 # the one and only path allowed to STOP a running instance, and only
 # because the operator explicitly asked for a restart. It still does so
-# GRACEFULLY: SIGTERM first, SIGKILL only as a last resort after a
-# timeout, and it ABORTS rather than launching over a still-held lock.
+# GRACEFULLY: launchctl kickstart for launchd, otherwise SIGTERM first,
+# SIGKILL only as a last resort after a timeout. It ABORTS rather than
+# launching over a still-held lock.
 #
 # Bug A2d: an unclean restart used to fire the new ``uv run ccbot``
 # before the old process had fully exited. The old one kept polling
@@ -25,20 +27,11 @@ TMUX_WINDOW="__main__"
 TARGET="${TMUX_SESSION}:${TMUX_WINDOW}"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 MAX_WAIT=20  # seconds to wait for the old process to fully exit + release lock
+LAUNCHD_LABEL="${CCBOT_LAUNCHD_LABEL:-com.ccbot}"
+LAUNCHD_TARGET="gui/$(id -u)/${LAUNCHD_LABEL}"
 
 ccbot_dir="${CCBOT_DIR:-$HOME/.ccbot}"
 bot_lock="${ccbot_dir}/ccbot.lock"
-
-# Check if tmux session and window exist
-if ! tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
-    echo "Error: tmux session '$TMUX_SESSION' does not exist"
-    exit 1
-fi
-
-if ! tmux list-windows -t "$TMUX_SESSION" -F '#{window_name}' 2>/dev/null | grep -qx "$TMUX_WINDOW"; then
-    echo "Error: window '$TMUX_WINDOW' not found in session '$TMUX_SESSION'"
-    exit 1
-fi
 
 # Detect a running ccbot process, SCOPED to this CCBOT_DIR's singleton
 # lock holder. A bare `pgrep -f 'uv run ccbot'` also matches an unrelated
@@ -64,6 +57,65 @@ ccbot_pids() {
         pgrep -f 'uv run ccbot|\.venv/bin/ccbot' 2>/dev/null
     fi
 }
+
+# Stable, comparable representation of the current lock holders. Multiple
+# holders are not expected, but sorting keeps diagnostics deterministic.
+ccbot_pid_list() {
+    ccbot_pids 2>/dev/null | sort -n | paste -sd, - || true
+}
+
+launchd_managed() {
+    command -v launchctl > /dev/null 2>&1 \
+        && launchctl print "$LAUNCHD_TARGET" > /dev/null 2>&1
+}
+
+launchd_running() {
+    launchctl print "$LAUNCHD_TARGET" 2>/dev/null \
+        | grep -q 'state = running'
+}
+
+# KeepAlive launchd jobs must be restarted by launchd. Manually terminating
+# their lock holder races the replacement spawned by KeepAlive: the old
+# implementation mistook that replacement for the old process, waited for the
+# full timeout, then SIGKILLed the healthy replacement. A successful restart
+# therefore means both a changed lock-holder PID and a running launchd job.
+if launchd_managed; then
+    old_pids="$(ccbot_pid_list)"
+    old_display="${old_pids:-none}"
+    echo "Restarting launchd service ${LAUNCHD_TARGET} (PID ${old_display})..."
+
+    if ! launchctl kickstart -k "$LAUNCHD_TARGET"; then
+        echo "Error: launchd failed to restart ${LAUNCHD_TARGET}"
+        exit 1
+    fi
+
+    waited=0
+    while [ "$waited" -lt "$MAX_WAIT" ]; do
+        new_pids="$(ccbot_pid_list)"
+        if [ -n "$new_pids" ] \
+            && [ "$new_pids" != "$old_pids" ] \
+            && launchd_running; then
+            echo "ccbot restarted by launchd: ${old_display} -> ${new_pids}"
+            exit 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    echo "Error: launchd restart did not produce a healthy replacement within ${MAX_WAIT}s"
+    exit 1
+fi
+
+# Non-launchd installations retain the existing tmux restart path.
+if ! tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+    echo "Error: tmux session '$TMUX_SESSION' does not exist"
+    exit 1
+fi
+
+if ! tmux list-windows -t "$TMUX_SESSION" -F '#{window_name}' 2>/dev/null | grep -qx "$TMUX_WINDOW"; then
+    echo "Error: window '$TMUX_WINDOW' not found in session '$TMUX_SESSION'"
+    exit 1
+fi
 
 is_ccbot_running() {
     [ -n "$(ccbot_pids)" ]

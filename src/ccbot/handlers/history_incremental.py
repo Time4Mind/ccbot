@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..transcript_parser import TranscriptParser
 from ..transcript_types import PendingToolInfo
@@ -109,3 +109,52 @@ def read_history_delta(
 
     consume(final=True)
     return parsed_messages, pending, safe_offset
+
+
+def read_history_delta_stream(
+    file_path: Path,
+    start_offset: int,
+    pending_tools: dict[str, PendingToolInfo],
+    consume_messages: Callable[[list[dict[str, Any]]], None],
+) -> tuple[dict[str, PendingToolInfo], int]:
+    """Parse an append range in bounded batches and emit each batch immediately.
+
+    This is the initial-index path for very large transcripts: unlike
+    :func:`read_history_delta`, it never retains the complete normalized
+    message population before page rendering/compression.
+    """
+
+    pending = dict(pending_tools)
+    raw_batch: list[dict[str, Any]] = []
+    safe_offset = start_offset
+
+    def consume(*, final: bool) -> None:
+        nonlocal pending, raw_batch
+        take = len(raw_batch) if final else max(0, len(raw_batch) - 1)
+        if take == 0:
+            return
+        parsed, pending = TranscriptParser.parse_entries(
+            raw_batch[:take], pending_tools=pending
+        )
+        messages = [_message_dict(entry) for entry in parsed]
+        if messages:
+            consume_messages(messages)
+        raw_batch = raw_batch[take:]
+
+    with file_path.open("rb") as transcript:
+        transcript.seek(start_offset)
+        while True:
+            line = transcript.readline()
+            if not line:
+                break
+            if not line.endswith(b"\n"):
+                break
+            safe_offset = transcript.tell()
+            data = TranscriptParser.parse_line(line.decode("utf-8", errors="replace"))
+            if data is not None:
+                raw_batch.append(data)
+            if len(raw_batch) >= HISTORY_PARSE_BATCH + 1:
+                consume(final=False)
+
+    consume(final=True)
+    return pending, safe_offset

@@ -12,6 +12,7 @@ import pytest
 
 from ccbot.handlers import history
 from ccbot.handlers import history_incremental
+from ccbot.handlers.history_page_store import HistoryPageStore
 
 
 def _assistant(text: str) -> bytes:
@@ -320,6 +321,58 @@ async def test_append_reflows_only_the_previous_last_page(
     assert history._incremental_history["@1"].rendered_total == 41
 
 
+@pytest.mark.asyncio
+async def test_prewarm_keeps_exact_total_with_bounded_ready_page_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_bytes(
+        b"".join(
+            _assistant(f"page-source-{index}-" + "x" * 3500) for index in range(40)
+        )
+    )
+    _point_window_at(monkeypatch, transcript)
+
+    await history.prewarm_pages_cache("@1")
+
+    pages = history._pages_cache["@1"][2]
+    assert isinstance(pages, HistoryPageStore)
+    assert len(pages) > 30
+    assert pages.ready_indices == frozenset(
+        {*range(0, 5), *range(len(pages) - 5, len(pages))}
+    )
+
+    middle = len(pages) // 2
+    assert pages[middle]
+    assert len(pages.ready_indices) == 31
+
+
+@pytest.mark.asyncio
+async def test_large_initial_prewarm_streams_directly_into_bounded_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transcript = tmp_path / "large-session.jsonl"
+    transcript.write_bytes(
+        b"".join(_assistant(f"streamed-{index}-" + "x" * 700) for index in range(50))
+    )
+    _point_window_at(monkeypatch, transcript)
+    monkeypatch.setattr(history, "HISTORY_STREAM_THRESHOLD_BYTES", 1)
+
+    def full_population_reader_must_not_run(*_args, **_kwargs):
+        raise AssertionError("large initial history retained its full message list")
+
+    monkeypatch.setattr(
+        history, "read_history_delta", full_population_reader_must_not_run
+    )
+
+    assert await history.prewarm_pages_cache("@1") is True
+    pages = history._pages_cache["@1"][2]
+    assert isinstance(pages, HistoryPageStore)
+    assert len(pages) > 5
+    assert "streamed-0-" in pages.read(0, focus=False)
+    assert "streamed-49-" in pages.read(-1, focus=False)
+
+
 def test_append_helper_keeps_every_page_within_telegram_limit(monkeypatch) -> None:
     monkeypatch.setattr(
         history.session_manager, "get_display_name", lambda _wid: "incremental"
@@ -346,3 +399,26 @@ def test_append_helper_keeps_every_page_within_telegram_limit(monkeypatch) -> No
     assert total == 100
     for index in range(100):
         assert f"message-{index}-" in rendered
+
+
+def test_stream_reader_delivers_bounded_batches_without_retaining_all_messages(
+    tmp_path: Path,
+) -> None:
+    transcript = tmp_path / "large-session.jsonl"
+    transcript.write_bytes(
+        b"".join(_assistant(f"answer-{index}") for index in range(700))
+    )
+    batches: list[list[dict[str, object]]] = []
+
+    pending, offset = history_incremental.read_history_delta_stream(
+        transcript,
+        0,
+        {},
+        lambda messages: batches.append(messages),
+    )
+
+    assert pending == {}
+    assert offset == transcript.stat().st_size
+    assert sum(len(batch) for batch in batches) == 700
+    assert len(batches) >= 3
+    assert max(map(len, batches)) <= history_incremental.HISTORY_PARSE_BATCH

@@ -27,6 +27,14 @@ from .history_incremental import (
     IncrementalHistoryState,
     read_boundary_marker,
     read_history_delta,
+    read_history_delta_stream,
+)
+from .history_page_store import HistoryPageStore
+from .history_page_render import (
+    history_header as _history_header,
+    history_message_blocks as _history_message_blocks,
+    render_cached_pages as _render_cached_pages,
+    visible_history_messages as _visible_history_messages,
 )
 from .history_archive import (
     render_archived_card_pages_impl,
@@ -35,6 +43,12 @@ from .history_archive import (
 from .message_sender import safe_edit, safe_reply, safe_send
 
 logger = logging.getLogger(__name__)
+
+
+# Initial parsing above this size streams normalized messages straight into
+# the compressed page store. This bounds restart-time allocations for old,
+# multi-hundred-MiB transcripts while keeping the small-file path simple.
+HISTORY_STREAM_THRESHOLD_BYTES = 8 * 1024 * 1024
 
 
 # In-memory cache for rendered history pages keyed by ``window_id``.
@@ -50,7 +64,7 @@ logger = logging.getLogger(__name__)
 # advances — i.e., on the next claude event for that session. The full
 # (un-byte-ranged) case is the only one cached; unread-range reads are
 # rare and parameterised, so they go through the slow path.
-_pages_cache: dict[str, tuple[float, int, list[str], int]] = {}
+_pages_cache: dict[str, tuple[float, int, HistoryPageStore, int]] = {}
 
 
 _incremental_history: dict[str, IncrementalHistoryState] = {}
@@ -205,74 +219,12 @@ async def cancel_pending_prewarm(timeout: float = 2.0) -> None:
         _prewarm_tasks.clear()
 
 
-def _visible_history_messages(
-    messages: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Apply the stable visibility policy used by the full-history view."""
-    visible = messages
-    if not config.show_user_messages:
-        visible = [message for message in visible if message["role"] == "assistant"]
-    return [message for message in visible if message.get("content_type") != "tool_use"]
-
-
-def _history_header(window_id: str, total: int) -> str:
-    display_name = session_manager.get_display_name(window_id)
-    return f"📋 [{display_name}] Messages ({total} total)"
-
-
-def _history_message_blocks(messages: list[dict[str, Any]]) -> list[str]:
-    """Format only message bodies; page/header assembly is handled separately."""
-    quote_start = TranscriptParser.EXPANDABLE_QUOTE_START
-    quote_end = TranscriptParser.EXPANDABLE_QUOTE_END
-    blocks: list[str] = []
-    for message in messages:
-        timestamp = message.get("timestamp")
-        hh_mm = ""
-        if timestamp:
-            try:
-                time_part = timestamp.split("T")[1] if "T" in timestamp else timestamp
-                hh_mm = time_part[:5]
-            except (IndexError, TypeError):
-                hh_mm = ""
-        separator = f"───── {hh_mm} ─────" if hh_mm else "─────────────"
-        text = message["text"].replace(quote_start, "").replace(quote_end, "")
-        fence_lines = sum(
-            1 for line in text.split("\n") if line.strip().startswith("```")
-        )
-        if fence_lines % 2 == 1:
-            text += "\n```"
-        role = message.get("role", "assistant")
-        content_type = message.get("content_type", "text")
-        if role == "user":
-            body = f"👤 {text}"
-        elif content_type == "thinking":
-            body = f"∴ Thinking…\n{text}"
-        else:
-            body = text
-        blocks.append(f"{separator}\n\n{body}")
-    return blocks
-
-
-def _render_cached_pages(
-    window_id: str, messages: list[dict[str, Any]]
-) -> tuple[list[str], int]:
-    """Render an initial/rebuilt transcript snapshot into Telegram pages."""
-    visible = _visible_history_messages(messages)
-    total = len(visible)
-    if total == 0:
-        return [], 0
-    text = "\n\n".join(
-        [_history_header(window_id, total), *_history_message_blocks(visible)]
-    )
-    return list(split_message(text, max_length=4096)), total
-
-
 def _append_cached_pages(
     window_id: str,
-    pages: list[str],
+    pages: list[str] | HistoryPageStore,
     prior_total: int,
     added_messages: list[dict[str, Any]],
-) -> tuple[list[str], int, int]:
+) -> tuple[list[str] | HistoryPageStore, int, int]:
     """Append new visible messages by reflowing only the previous last page.
 
     Earlier pages are immutable because JSONL transcripts are append-only. The
@@ -282,6 +234,8 @@ def _append_cached_pages(
     visible = _visible_history_messages(added_messages)
     added_total = len(visible)
     if added_total == 0:
+        if isinstance(pages, HistoryPageStore):
+            return pages, prior_total, 0
         return list(pages), prior_total, 0
 
     total = prior_total + added_total
@@ -289,16 +243,29 @@ def _append_cached_pages(
         rendered, rendered_total = _render_cached_pages(window_id, visible)
         return rendered, rendered_total, added_total
 
-    updated = list(pages)
     header = _history_header(window_id, total)
-    _old_header, separator, first_body = updated[0].partition("\n")
+    first_page = (
+        pages.read(0, focus=False) if isinstance(pages, HistoryPageStore) else pages[0]
+    )
+    _old_header, separator, first_body = first_page.partition("\n")
     first_page = header + (separator + first_body if separator else "")
     # A decimal-width transition can add one byte to a completely full first
     # page. Keep its previous count rather than publishing an invalid >4096
     # Telegram message; pagination metadata still carries the exact total.
-    if len(first_page) <= 4096:
-        updated[0] = first_page
+    replace_first = len(first_page) <= 4096
 
+    if isinstance(pages, HistoryPageStore):
+        if replace_first:
+            pages.set_page(0, first_page)
+        tail = "\n\n".join(
+            [pages.read(-1, focus=False), *_history_message_blocks(visible)]
+        )
+        pages.replace_tail(1, split_message(tail, max_length=4096))
+        return pages, total, added_total
+
+    updated = list(pages)
+    if replace_first:
+        updated[0] = first_page
     tail = "\n\n".join([updated[-1], *_history_message_blocks(visible)])
     updated[-1:] = split_message(tail, max_length=4096)
     return updated, total, added_total
@@ -374,10 +341,41 @@ async def prewarm_pages_cache(window_id: str) -> bool:
             start_offset = state.offset
             pending_tools = state.pending_tools
 
+        streamed_pages: HistoryPageStore | None = None
+        streamed_total = 0
+        streamed_added = 0
         try:
-            added, remaining_pending, safe_offset = await asyncio.to_thread(
-                read_history_delta, fp, start_offset, pending_tools
-            )
+            if reset and stat_before.st_size >= HISTORY_STREAM_THRESHOLD_BYTES:
+                streamed_pages = HistoryPageStore()
+
+                def consume_batch(batch: list[dict[str, Any]]) -> None:
+                    nonlocal streamed_pages, streamed_total, streamed_added
+                    streamed_added += len(batch)
+                    current_pages = streamed_pages
+                    assert current_pages is not None
+                    updated, streamed_total, _visible_added = _append_cached_pages(
+                        window_id,
+                        current_pages,
+                        streamed_total,
+                        batch,
+                    )
+                    if isinstance(updated, HistoryPageStore):
+                        streamed_pages = updated
+                    else:
+                        streamed_pages = HistoryPageStore(updated)
+
+                remaining_pending, safe_offset = await asyncio.to_thread(
+                    read_history_delta_stream,
+                    fp,
+                    start_offset,
+                    pending_tools,
+                    consume_batch,
+                )
+                added: list[dict[str, Any]] = []
+            else:
+                added, remaining_pending, safe_offset = await asyncio.to_thread(
+                    read_history_delta, fp, start_offset, pending_tools
+                )
             stat_after = fp.stat()
         except Exception as e:
             logger.debug("prewarm: incremental read failed for %s: %s", window_id, e)
@@ -419,8 +417,13 @@ async def prewarm_pages_cache(window_id: str) -> bool:
             cache_size = stat_after.st_size
 
         cached = None if reset else _pages_cache.get(window_id)
-        if cached is None:
+        if streamed_pages is not None:
+            pages = streamed_pages
+            total = streamed_total
+            visible_added = streamed_total
+        elif cached is None:
             pages, total = _render_cached_pages(window_id, added)
+            pages = HistoryPageStore(pages)
             visible_added = total
         else:
             assert state is not None
@@ -430,6 +433,8 @@ async def prewarm_pages_cache(window_id: str) -> bool:
                 state.rendered_total,
                 added,
             )
+        if not isinstance(pages, HistoryPageStore):
+            pages = HistoryPageStore(pages)
         new_state = IncrementalHistoryState(
             path=str(fp),
             device=stat_after.st_dev,
@@ -458,7 +463,7 @@ async def prewarm_pages_cache(window_id: str) -> bool:
             window_id,
             len(pages),
             total,
-            len(added),
+            streamed_added if streamed_pages is not None else len(added),
             visible_added,
             safe_offset,
             stat_after.st_size,
@@ -560,7 +565,7 @@ async def send_history(
     # the entire JSONL to refresh summary/token stats, which would
     # negate the cache's whole point.
     if not is_unread:
-        cached_pages: list[str] | None = None
+        cached_pages: HistoryPageStore | None = None
         cached_total = 0
         try:
             # Route every full-history miss through the same incremental,
@@ -752,7 +757,7 @@ async def send_history(
                     _pages_cache[window_id] = (
                         st.st_mtime,
                         st.st_size,
-                        list(pages),
+                        HistoryPageStore(pages),
                         total,
                     )
             except Exception as e:

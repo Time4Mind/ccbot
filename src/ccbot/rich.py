@@ -54,9 +54,14 @@ _RICH_PHOTO_FILENAME = "terminal_screenshot.png"
 # building a rich photo payload and never reaches Telegram as visible text.
 RICH_PHOTO_ANCHOR = "\x02RICH_PHOTO_ANCHOR\x02"
 
-# Fenced code blocks (tolerating an unterminated fence at EOF) and inline
-# code spans — `<` inside these is preserved verbatim by the rich parser.
-_CODE_SPAN_RE = re.compile(r"```[\s\S]*?(?:```|$)|`[^`\n]*`")
+# Fenced code blocks and inline code spans — ``<`` inside these is preserved
+# verbatim by the rich parser.  A fence may be longer than three backticks
+# when its body itself contains a triple-backtick literal.
+_CODE_SPAN_RE = re.compile(
+    r"(?ms)^[ \t]*(?P<escape_fence>`{3,})[^\n`]*\n.*?"
+    r"^[ \t]*(?P=escape_fence)[ \t]*$|"
+    r"^[ \t]*`{3,}[^\n`]*\n[\s\S]*\Z|`[^`\n]*`"
+)
 
 # A one-line fenced block carries no layout information that an inline code
 # span can't preserve. Telegram's current Rich Message clients expose Copy
@@ -64,7 +69,8 @@ _CODE_SPAN_RE = re.compile(r"```[\s\S]*?(?:```|$)|`[^`\n]*`")
 # case. Multi-line code, empty blocks, and commands containing a backtick
 # remain fenced.
 _SINGLE_LINE_FENCE_RE = re.compile(
-    r"(?m)^[ \t]*```([^\n`]*)\n([^\n`]+)\n[ \t]*```[ \t]*$"
+    r"(?m)^[ \t]*(?P<single_fence>`{3,})(?P<single_lang>[^\n`]*)\n"
+    r"(?P<single_body>[^\n]+)\n[ \t]*(?P=single_fence)[ \t]*$"
 )
 _COPYABLE_SHELL_LANGS = {
     "",
@@ -85,7 +91,8 @@ _COPYABLE_SHELL_LANGS = {
 # Rich ``<code>`` span, but not for a Rich fenced block.  Convert shell fences
 # only; non-shell fences retain their language highlighting and layout.
 _FENCED_BLOCK_RE = re.compile(
-    r"(?ms)^[ \t]*```([^\n`]*)\n(.*?)\n[ \t]*```[ \t]*(?=\n|$)"
+    r"(?ms)^[ \t]*(?P<block_fence>`{3,})(?P<block_lang>[^\n`]*)\n"
+    r"(?P<block_body>.*?)\n[ \t]*(?P=block_fence)[ \t]*(?=\n|$)"
 )
 
 # HTML tags the Rich Markdown parser supports (see "Rich HTML style" in the
@@ -149,10 +156,13 @@ def _inline_single_line_fences(text: str) -> str:
     """Turn a one-line shell fence into Telegram-copyable inline code."""
 
     def replace(match: re.Match[str]) -> str:
-        language = match.group(1).strip().lower()
+        language = match.group("single_lang").strip().lower()
         if language not in _COPYABLE_SHELL_LANGS:
             return match.group(0)
-        return f"`{match.group(2)}`"
+        body = match.group("single_body")
+        if "`" in body:
+            return f"<code>{html.escape(body, quote=False)}</code>"
+        return f"`{body}`"
 
     return _SINGLE_LINE_FENCE_RE.sub(replace, text)
 
@@ -161,8 +171,8 @@ def _multiline_shell_fences_to_code(text: str) -> str:
     """Render multi-line shell fences as copyable Rich ``code`` spans."""
 
     def replace(match: re.Match[str]) -> str:
-        language = match.group(1).strip().lower()
-        body = match.group(2)
+        language = match.group("block_lang").strip().lower()
+        body = match.group("block_body")
         if language not in _COPYABLE_SHELL_LANGS or "\n" not in body:
             return match.group(0)
         # An unlabelled fence can also carry a literal table or prose. Keep a
@@ -321,6 +331,10 @@ def _render_details_headed(m: re.Match[str]) -> str:
     body = body.strip()
     if not body:
         return head
+    # Headed tool blocks are still wrapped in sentinels when the first global
+    # fence pass runs. Normalize their one-line shell command only after the
+    # sentinel has been opened into a real details body.
+    body = _inline_single_line_fences(body)
     if head.startswith(("✓ ", "▷ ", "✗ ")):
         body = _preserve_tool_body_line_breaks(body)
     return f"\n<details><summary>{head}</summary>\n\n{body}\n\n</details>\n"

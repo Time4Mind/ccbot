@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import secrets
 import hashlib
+import os
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -156,7 +157,11 @@ class Session:
         "active" in the header of a session you're looking at right now
         is redundant; the directory name is the useful signal instead.
         """
-        name = self.workdir.rstrip("/").rsplit("/", 1)[-1] if self.workdir else ""
+        normalized = self.workdir.rstrip("/")
+        home = os.path.expanduser("~").rstrip("/")
+        if normalized and home not in ("", "~") and normalized == home:
+            return "~"
+        name = normalized.rsplit("/", 1)[-1] if normalized else ""
         return name[:7] + "…" if len(name) > 7 else name
 
     def remember_preprocessed_prompt(self, text: str) -> None:

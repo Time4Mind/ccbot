@@ -33,6 +33,14 @@ class TestParseCodexModelEffort:
 
         assert parse_codex_model_effort(pane) is None
 
+    def test_reads_footer_when_cwd_is_bare_home_with_extra_columns(self) -> None:
+        pane = (
+            "› Ask anything\n\n"
+            "  gpt-5.6-sol medium · ~ · Исправить дефект витрины платежей\n"
+        )
+
+        assert parse_codex_model_effort(pane) == ("gpt-5.6-sol", "medium")
+
 
 # ── parse_status_line ────────────────────────────────────────────────────
 

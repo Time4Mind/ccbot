@@ -22,7 +22,7 @@ from . import terminal_usage as _terminal_usage
 _CODEX_MODEL_EFFORT_FOOTER_RE = re.compile(
     r"^\s*(?P<model>\S+)\s+"
     r"(?P<effort>default|low|medium|high|xhigh|max|ultra)\s+·\s+"
-    r"(?:~(?:/|$)|/)",
+    r"(?:~(?=/|\s*(?:·|$))|/)",
     re.IGNORECASE,
 )
 

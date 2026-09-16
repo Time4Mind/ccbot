@@ -95,8 +95,8 @@ def _button_for_path(raw_path: str, file_base_dir: Path | None = None) -> str | 
     while candidate and candidate[-1] in _TRAILING_PROSE:
         trailing = candidate[-1] + trailing
         candidate = candidate[:-1]
-    candidate_path = Path(candidate).expanduser()
     try:
+        candidate_path = Path(candidate).expanduser()
         if candidate_path.is_absolute():
             path = candidate_path.resolve(strict=True)
         elif file_base_dir is not None and candidate_path.parts[:1] == (

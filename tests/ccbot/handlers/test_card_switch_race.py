@@ -8,9 +8,16 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ccbot.handlers import message_sender, notifications
+from ccbot.handlers import (
+    card_rich_media,
+    card_transport,
+    message_sender,
+    notifications,
+)
 from ccbot.bot import _common
+from ccbot.handlers.card_binding import bind_carrier
 from ccbot.handlers.card_model import CardState
+from ccbot.handlers.card_types import CarrierKind
 from ccbot.session import session_manager
 from ccbot.session_models import Session
 
@@ -229,3 +236,48 @@ async def test_late_resume_cannot_reclaim_background_carrier(monkeypatch):
     assert old_state.in_menu_view is True
     assert old_state.msg_id == carrier_msg_id
     rich_edit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_back_from_new_session_flow_repaints_rich_card(monkeypatch):
+    """Back must restore the card even when its cached text/pane are unchanged."""
+    user_id = 42
+    carrier_msg_id = 8001
+    active = _session("session-a", "active-session", "@1")
+    session_manager.sessions[active.id] = active
+    session_manager.active_sessions[user_id] = active.id
+
+    state = CardState(
+        in_menu_view=True,
+        last_rendered="restored card",
+    )
+    bind_carrier(
+        state,
+        carrier_msg_id,
+        CarrierKind.RICH_MEDIA,
+        rich_media_file_id="cached-pane",
+        pane_hash="same-pane",
+        photo_edit_ts=1.0,
+    )
+    notifications._cards[(user_id, active.id)] = state
+    notifications._register_msg(user_id, carrier_msg_id, active.id)
+
+    edit = AsyncMock(return_value=None)
+    capture = AsyncMock(return_value=(b"same", "same-pane"))
+    monkeypatch.setattr(
+        notifications, "_render_card", lambda *_args, **_kwargs: "restored card"
+    )
+    monkeypatch.setattr(
+        notifications,
+        "build_footer_keyboard",
+        lambda *_args, **_kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(card_rich_media.rich, "edit_rich_message", edit)
+    monkeypatch.setattr(card_rich_media, "_capture_pane_png", capture)
+    monkeypatch.setattr(card_rich_media.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(card_transport, "_inline_screens_enabled", lambda _uid: True)
+
+    await notifications.resume_card_view(AsyncMock(), user_id, active)
+
+    edit.assert_awaited_once()
+    assert edit.await_args.args[3] == "restored card"

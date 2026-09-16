@@ -3,8 +3,8 @@
 Stateless building blocks behind ``handlers.notifications`` kb-mode
 (Task #41) and the inline-screenshot card path (Task #48):
 
-* ``build_kb_mode_keyboard`` — the 3×3 navigation grid shown when the
-  card msg is flipped into kb-mode (an interactive prompt is waiting).
+* ``build_kb_mode_keyboard`` — direct option buttons for native model/effort
+  pickers, otherwise the 3×3 navigation grid shown for interactive prompts.
 * ``_capture_pane_png`` — render the tmux pane to PNG bytes + a content
   hash so callers can skip pointless ``editMessageMedia`` calls.
 
@@ -16,6 +16,8 @@ stays in ``handlers.notifications`` which re-exports both names here.
 from __future__ import annotations
 
 import logging
+import re
+from dataclasses import dataclass
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -27,7 +29,93 @@ logger = logging.getLogger(__name__)
 # ``handlers.notifications`` facade. Listing it in ``__all__`` marks it
 # as part of this module's intended interface so pyright's strict
 # ``reportPrivateUsage`` doesn't flag the re-export.
-__all__ = ["_capture_pane_png", "build_kb_mode_keyboard"]
+__all__ = [
+    "_capture_pane_png",
+    "PickerMenu",
+    "PickerOption",
+    "build_kb_mode_keyboard",
+    "parse_picker_menu",
+]
+
+
+@dataclass(frozen=True)
+class PickerOption:
+    label: str
+    selected: bool = False
+
+
+@dataclass(frozen=True)
+class PickerMenu:
+    options: tuple[PickerOption, ...]
+    cursor_index: int
+
+
+_PICKER_TITLE_RE = re.compile(
+    r"^\s*Select\s+(?:model\b|(?:reasoning\s+)?effort\b|reasoning\s+level\b)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_NUMBERED_OPTION_RE = re.compile(r"^\s*([❯›>])?\s*(\d+)\.\s+(.+?)\s*$")
+_BULLET_OPTION_RE = re.compile(r"^\s*([●○◉◯])\s+(.+?)\s*$")
+_OPTION_STATE_RE = re.compile(
+    r"\s*\((?:current|default|recommended)\)\s*", re.IGNORECASE
+)
+
+
+def _picker_label(raw: str) -> str:
+    # Native pickers align the description column with 2+ spaces. Keep only
+    # the selectable name, then remove state hints represented by the ✓ prefix.
+    label = re.split(r"\s{2,}", raw.strip(), maxsplit=1)[0]
+    return _OPTION_STATE_RE.sub(" ", label).strip()
+
+
+def parse_picker_menu(prompt_content: str, ui_name: str = "") -> PickerMenu | None:
+    """Parse native /model and /effort selectors into Telegram options.
+
+    Other interactive Settings pickers deliberately retain the generic
+    arrow-key grid. The active value comes from an explicit ``(current)`` or
+    selected bullet when available; otherwise the native cursor is the best
+    representation of the currently selected model/effort.
+    """
+    if ui_name != "Settings" or not _PICKER_TITLE_RE.search(prompt_content):
+        return None
+
+    parsed: list[tuple[str, bool, bool]] = []
+    for line in prompt_content.splitlines():
+        numbered = _NUMBERED_OPTION_RE.match(line)
+        if numbered:
+            cursor = bool(numbered.group(1))
+            raw = numbered.group(3)
+            parsed.append(
+                (_picker_label(raw), cursor, bool(re.search(r"\(current\)", raw, re.I)))
+            )
+            continue
+        bullet = _BULLET_OPTION_RE.match(line)
+        if bullet:
+            marker = bullet.group(1)
+            raw = bullet.group(2)
+            parsed.append(
+                (
+                    _picker_label(raw),
+                    marker in {"●", "◉"},
+                    marker in {"●", "◉"} or bool(re.search(r"\(current\)", raw, re.I)),
+                )
+            )
+
+    parsed = [item for item in parsed if item[0]]
+    if not parsed:
+        return None
+
+    cursor_index = next((i for i, (_, cursor, _) in enumerate(parsed) if cursor), 0)
+    selected_index = next(
+        (i for i, (_, _, explicit) in enumerate(parsed) if explicit), cursor_index
+    )
+    return PickerMenu(
+        options=tuple(
+            PickerOption(label=label, selected=i == selected_index)
+            for i, (label, _, _) in enumerate(parsed)
+        ),
+        cursor_index=cursor_index,
+    )
 
 
 def _utf8_complete_suffix(text: str, limit_bytes: int) -> str:
@@ -105,9 +193,16 @@ async def _capture_pane_png(
 
 
 def build_kb_mode_keyboard(
-    user_id: int, window_id: str, ui_name: str = ""
+    user_id: int,
+    window_id: str,
+    ui_name: str = "",
+    prompt_content: str = "",
 ) -> InlineKeyboardMarkup:
     """Build the kb-mode keyboard shown when the card msg is in kb-mode.
+
+    Native /model and /effort pickers become one Telegram button per option,
+    followed by Cancel/Escape. Other interactive UIs retain the navigation
+    grid below.
 
     Layout (matching the live prompt 3×3 grid):
         [␣ Space] [↑] [⇥ Tab]
@@ -123,6 +218,7 @@ def build_kb_mode_keyboard(
         CB_ASK_ENTER,
         CB_ASK_ESC,
         CB_ASK_LEFT,
+        CB_ASK_PICK,
         CB_ASK_RIGHT,
         CB_ASK_SPACE,
         CB_ASK_TAB,
@@ -134,6 +230,20 @@ def build_kb_mode_keyboard(
 
     def kb(label: str, prefix: str) -> InlineKeyboardButton:
         return InlineKeyboardButton(label, callback_data=f"{prefix}{window_id}"[:64])
+
+    picker = parse_picker_menu(prompt_content, ui_name)
+    if picker is not None:
+        rows = [
+            [
+                InlineKeyboardButton(
+                    f"{'✓ ' if option.selected else ''}{option.label}"[:64],
+                    callback_data=f"{CB_ASK_PICK}{index}:{window_id}"[:64],
+                )
+            ]
+            for index, option in enumerate(picker.options)
+        ]
+        rows.append([kb(t(user_id, "btn.cancel"), CB_ASK_ESC)])
+        return InlineKeyboardMarkup(rows)
 
     rows: list[list[InlineKeyboardButton]] = []
     vertical_only = ui_name == "RestoreCheckpoint"

@@ -28,7 +28,9 @@ from ccbot.handlers.notifications import (
     _should_buffer,
     enter_kb_mode,
 )
+from ccbot.handlers.kb_mode import build_kb_mode_keyboard
 from ccbot.session_models import Session
+from ccbot.session_monitor import NewMessage
 
 
 @pytest.fixture(autouse=True)
@@ -159,3 +161,144 @@ def test_should_buffer_does_not_block_when_idle():
         assert _should_buffer(42, "s1", state) is False
     finally:
         session_mod.session_manager.get_active_session = original
+
+
+def _button_rows(keyboard):
+    return [[button.text for button in row] for row in keyboard.inline_keyboard]
+
+
+def test_model_picker_uses_one_button_per_native_option(
+    sample_pane_settings: str,
+) -> None:
+    keyboard = build_kb_mode_keyboard(
+        42, "@5", ui_name="Settings", prompt_content=sample_pane_settings
+    )
+
+    assert _button_rows(keyboard) == [
+        ["Default"],
+        ["✓ Sonnet"],
+        ["Haiku"],
+        ["× Cancel"],
+    ]
+    callbacks = [row[0].callback_data for row in keyboard.inline_keyboard]
+    assert callbacks[:3] == [
+        "aq:pick:0:@5",
+        "aq:pick:1:@5",
+        "aq:pick:2:@5",
+    ]
+    assert callbacks[3] == "aq:esc:@5"
+
+
+def test_effort_picker_marks_current_value_not_cursor() -> None:
+    prompt = (
+        "Select Reasoning Level for gpt-5.6-sol\n"
+        "\n"
+        "› 1. Low (default)     Fast responses with lighter reasoning\n"
+        "  2. Medium (current)  Balances speed and reasoning depth\n"
+        "  3. High              Greater reasoning depth\n"
+        "\n"
+        "Press enter to confirm or esc to go back"
+    )
+
+    keyboard = build_kb_mode_keyboard(
+        42, "@5", ui_name="Settings", prompt_content=prompt
+    )
+
+    assert _button_rows(keyboard) == [
+        ["Low"],
+        ["✓ Medium"],
+        ["High"],
+        ["× Cancel"],
+    ]
+
+
+def test_non_model_settings_picker_keeps_navigation_grid() -> None:
+    keyboard = build_kb_mode_keyboard(
+        42,
+        "@5",
+        ui_name="Settings",
+        prompt_content="Select output style\n  1. Concise\n  2. Detailed\nEsc to cancel",
+    )
+
+    assert _button_rows(keyboard)[0] == ["␣ Space", "↑", "⇥ Tab"]
+
+
+@pytest.mark.asyncio
+async def test_repost_card_preserves_native_picker_keyboard(monkeypatch) -> None:
+    """A carrier repost while /model is open must keep its option buttons."""
+    sess = _make_sess()
+    bot = AsyncMock()
+    bot.delete_message = AsyncMock()
+    prompt = (
+        "Select model\n\n"
+        "  1. Default\n"
+        "› 2. Sonnet (current)\n"
+        "  3. Haiku\n\n"
+        "Press enter to confirm or esc to go back"
+    )
+    state = _cards.setdefault((42, sess.id), CardState())
+    state.msg_id = 999
+    state.in_kb_mode = True
+    state.kb_prompt = prompt
+    state.kb_ui_name = "Settings"
+    sends: list[object] = []
+
+    async def fake_send_card(b, uid, s, st, *, text, reply_markup=None):
+        sends.append(reply_markup)
+        st.msg_id = 1000
+        return True
+
+    monkeypatch.setattr(notifications, "_send_card", fake_send_card)
+    monkeypatch.setattr(notifications, "_ensure_seeded", AsyncMock(return_value=None))
+    monkeypatch.setattr(notifications, "_render_card", lambda *args, **kwargs: "card")
+
+    await notifications.repost_card(bot, 42, sess)
+
+    assert len(sends) == 1
+    assert sends[0] is not None
+    assert _button_rows(sends[0]) == [
+        ["Default"],
+        ["✓ Sonnet"],
+        ["Haiku"],
+        ["× Cancel"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_transcript_event_does_not_close_live_picker(monkeypatch) -> None:
+    """Transcript growth is not proof that the terminal selector disappeared."""
+    from ccbot.bot import session_events
+
+    sess = _make_sess()
+    state = _cards.setdefault((42, sess.id), CardState())
+    state.msg_id = 999
+    state.in_kb_mode = True
+    state.kb_prompt = "Select model\n› 1. Sonnet (current)\n  2. Haiku"
+    state.kb_ui_name = "Settings"
+
+    monkeypatch.setattr(
+        session_events.session_manager,
+        "all_user_sessions_with_claude_id",
+        lambda _sid: [(42, sess)],
+    )
+    monkeypatch.setattr(
+        session_events.session_manager, "touch_session", lambda _sid: None
+    )
+    monkeypatch.setattr(session_events, "is_active_for_user", lambda *_args: True)
+    monkeypatch.setattr(session_events, "fire_typing", AsyncMock())
+    monkeypatch.setattr(session_events, "update_session_card", AsyncMock())
+    exit_kb = AsyncMock()
+    monkeypatch.setattr(notifications, "exit_kb_mode", exit_kb)
+
+    msg = NewMessage(
+        session_id=sess.claude_session_id or "",
+        text="background progress",
+        is_complete=False,
+        content_type="text",
+        role="assistant",
+        stop_reason=None,
+    )
+    await session_events.handle_new_message(msg, AsyncMock())
+
+    exit_kb.assert_not_awaited()
+    session_events.update_session_card.assert_awaited_once()

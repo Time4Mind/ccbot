@@ -14,6 +14,7 @@ from .card_model import (
     _card_is_busy,
 )
 from .card_types import TurnPhase
+from .kb_mode import build_kb_mode_keyboard
 
 from .card_registry import (
     _cards,
@@ -238,7 +239,22 @@ async def repost_card(bot: Bot, user_id: int, sess: Session) -> None:
         old_msg_id = clear_carrier(state)  # force a fresh Telegram message
 
         text = _legacy("_render_card")(sess, state, user_id=user_id)
-        sent = await _legacy("_send_card")(bot, user_id, sess, state, text=text)
+        reply_markup = None
+        if state.in_kb_mode and state.kb_prompt and sess.window_id:
+            reply_markup = build_kb_mode_keyboard(
+                user_id,
+                sess.window_id,
+                ui_name=state.kb_ui_name,
+                prompt_content=state.kb_prompt,
+            )
+        sent = await _legacy("_send_card")(
+            bot,
+            user_id,
+            sess,
+            state,
+            text=text,
+            reply_markup=reply_markup,
+        )
         if sent is False or state.msg_id is None:
             restore_carrier(state, old_binding)
         state.last_rendered = text

@@ -23,11 +23,7 @@ from telegram import Bot
 from ..claude_auth import is_auth_failure_event
 from ..config import config
 from ..handlers import bg_status
-from ..handlers.interactive_ui import (
-    INTERACTIVE_TOOL_NAMES,
-    clear_interactive_msg,
-    get_interactive_msg_id,
-)
+from ..handlers.interactive_ui import INTERACTIVE_TOOL_NAMES
 from ..handlers.notifications import (
     finalize_task,
     is_active_for_user,
@@ -174,16 +170,10 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                         continue
             # Pane parse failed — fall through to regular card update.
 
-        # Any non-interactive event invalidates a previously-shown interactive UI.
-        if get_interactive_msg_id(user_id, wid):
-            await clear_interactive_msg(user_id, bot, wid)
-        # Same for the kb-mode card view — claude has moved past the
-        # prompt, so flip the card back to its regular layout.
-        from ..handlers.notifications import exit_kb_mode, has_pending_kb
-
-        has_prompt, in_kb = has_pending_kb(user_id, sess.id)
-        if has_prompt or in_kb:
-            await exit_kb_mode(bot, user_id, sess, clear_pending=True)
+        # Transcript growth does not prove that the terminal prompt is gone:
+        # Codex may emit status/tool events while the native selector remains
+        # open.  The pane poller owns interactive-surface reconciliation and
+        # clears it only after the terminal itself no longer shows that UI.
 
         if msg.is_complete:
             # Real end-of-turn assistant text → "task complete".  Mid-stream

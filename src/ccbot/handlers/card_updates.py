@@ -97,7 +97,6 @@ async def update_session_card(
 
     state = get_card_state(user_id, sess)
     state.turn_phase = TurnPhase.RUNNING
-    state.completion_marker_pending = False
     state.stall_watch_active = False
     state.last_stall_pane_refresh_ts = 0.0
     # First event after a bot restart: pull JSONL history into events
@@ -397,7 +396,6 @@ async def _retry_final_render(
                 if delivered:
                     state.last_rendered = text
                     state.last_edit_ts = time.monotonic()
-                    state.completion_marker_pending = False
                     logger.info(
                         "final card retry delivered sess=%s msg_id=%s page=%s chars=%s",
                         sess.id,
@@ -542,7 +540,6 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
                 if delivered:
                     state.last_rendered = text
                     state.last_edit_ts = time.monotonic()
-                    state.completion_marker_pending = False
                     logger.info(
                         "final card delivered sess=%s msg_id=%s page=%s chars=%s",
                         sess.id,

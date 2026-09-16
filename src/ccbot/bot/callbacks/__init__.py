@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import logging
 
-from telegram import Update
+from telegram import Bot, Update
 from telegram.ext import ContextTypes
 
 from .._common import is_user_allowed
+from ...handlers.notifications import get_card_state, refresh_panel
+from ...session import session_manager
 from ...user_activity import record as record_user_activity
 from . import (
     archive,
@@ -32,6 +34,40 @@ from . import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _acknowledge_completion_marker(
+    user_id: int, query: object
+) -> tuple[str, int] | None:
+    """Acknowledge a completion marker only from its own live carrier."""
+    message = getattr(query, "message", None)
+    message_id = getattr(message, "message_id", None)
+    if message_id is None:
+        return None
+    active = session_manager.get_active_session(user_id)
+    if active is None:
+        return None
+    state = get_card_state(user_id, active)
+    if state.msg_id != message_id or not state.completion_marker_pending:
+        return None
+    state.completion_marker_pending = False
+    return active.id, message_id
+
+
+async def _repaint_acknowledged_marker(
+    bot: Bot, user_id: int, acknowledged: tuple[str, int] | None
+) -> None:
+    """Remove the marker visually if the tap left its live card in place."""
+    if acknowledged is None:
+        return
+    session_id, message_id = acknowledged
+    active = session_manager.get_active_session(user_id)
+    if active is None or active.id != session_id:
+        return
+    state = get_card_state(user_id, active)
+    if state.msg_id != message_id or state.in_menu_view:
+        return
+    await refresh_panel(bot, user_id, immediate=True)
 
 
 # Order matters only for prefix overlap; in practice the prefixes are disjoint.
@@ -73,14 +109,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Every allowed button tap is an explicit user action, including noop
     # buttons that only dismiss Telegram's spinner.
     record_user_activity(user.id)
+    acknowledged = _acknowledge_completion_marker(user.id, query)
 
     if query.data == "noop":
         await query.answer()
+        await _repaint_acknowledged_marker(context.bot, user.id, acknowledged)
         return
 
     for h in _HANDLERS:
         if await h(query, context, user):
+            await _repaint_acknowledged_marker(context.bot, user.id, acknowledged)
             return
 
     logger.debug("unhandled callback data: %s", query.data)
     await query.answer()
+    await _repaint_acknowledged_marker(context.bot, user.id, acknowledged)

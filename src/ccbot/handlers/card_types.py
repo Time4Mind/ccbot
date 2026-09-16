@@ -189,9 +189,9 @@ class CardState:
     # may keep showing a stale Working spinner after Escape; polling must not
     # resurrect Stop or prevent the session from being closed/archived.
     user_stopped: bool = False
-    # A newly spawned final-answer card gets one visible completion marker.
-    # The flag is cleared after creation; the next ordinary update rerenders
-    # the header without it.
+    # A newly spawned final-answer card keeps its visible completion marker
+    # across automatic refreshes. Only the first user tap on that exact live
+    # carrier acknowledges it.
     completion_marker_pending: bool = False
     last_pane_hash: str = ""  # SHA-256 of the exact last rendered PNG
     last_photo_edit_ts: float = 0.0  # monotonic seconds; 3s throttle

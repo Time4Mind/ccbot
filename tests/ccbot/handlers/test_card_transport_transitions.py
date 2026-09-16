@@ -237,7 +237,7 @@ async def test_active_final_answer_spawns_new_card_and_freezes_open_page(
     bot.delete_message.assert_not_awaited()
     assert sent == ["✅ active session\nfinal answer"]
     assert state.msg_id == 10
-    assert state.completion_marker_pending is False
+    assert state.completion_marker_pending is True
 
 
 @pytest.mark.asyncio

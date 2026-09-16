@@ -7,10 +7,40 @@ from ccbot.terminal_parser import (
     extract_interactive_content,
     extract_usage_breakdown,
     is_interactive_ui,
+    parse_codex_model_effort,
     parse_status_line,
     parse_usage_output,
     strip_pane_chrome,
 )
+
+
+class TestParseCodexModelEffort:
+    def test_reads_live_footer(self) -> None:
+        pane = (
+            "• Finished the task\n\n"
+            "› Ask anything\n\n"
+            "  gpt-5.6-sol medium · ~/pet_projects/ccbot · session · Main\n"
+        )
+
+        assert parse_codex_model_effort(pane) == ("gpt-5.6-sol", "medium")
+
+    def test_does_not_treat_quoted_footer_as_live_state(self) -> None:
+        pane = (
+            "Example:\n"
+            "gpt-5.6-sol medium · ~/pet_projects/ccbot\n"
+            "This is quoted output, not the terminal footer.\n"
+        )
+
+        assert parse_codex_model_effort(pane) is None
+
+    def test_reads_footer_when_cwd_is_bare_home_with_extra_columns(self) -> None:
+        pane = (
+            "› Ask anything\n\n"
+            "  gpt-5.6-sol medium · ~ · Исправить дефект витрины платежей\n"
+        )
+
+        assert parse_codex_model_effort(pane) == ("gpt-5.6-sol", "medium")
+
 
 # ── parse_status_line ────────────────────────────────────────────────────
 

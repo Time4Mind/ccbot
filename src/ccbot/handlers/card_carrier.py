@@ -482,7 +482,16 @@ async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
                 user_id, screen="main", is_busy=_card_is_busy(state)
             )
             if await _legacy("_edit_card_unlocked")(
-                bot, user_id, state, text=text, reply_markup=keyboard
+                bot,
+                user_id,
+                state,
+                text=text,
+                reply_markup=keyboard,
+                # The carrier currently shows a menu/modal, while
+                # ``last_rendered`` still describes the card underneath.
+                # Reusing the cached pane forces the text + keyboard edit
+                # instead of letting the unchanged-card optimisation skip it.
+                refresh_pane=False,
             ):
                 state.last_rendered = text
                 state.last_edit_ts = time.monotonic()

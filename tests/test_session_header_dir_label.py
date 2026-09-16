@@ -38,6 +38,17 @@ class TestCardHeaderDirLabel:
         text = _render_card(sess, CardState())
         assert "· ccbot" in text
 
+    def test_exact_home_directory_is_rendered_as_tilde(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HOME", "/Users/tester")
+        sess = _session(workdir="/Users/tester")
+
+        text = _render_card(sess, CardState())
+
+        assert "· ~" in text.splitlines()[0]
+        assert "· tester" not in text.splitlines()[0]
+
     def test_idle_session_keeps_state_label(self) -> None:
         sess = _session(state="idle")
         text = _render_card(sess, CardState())

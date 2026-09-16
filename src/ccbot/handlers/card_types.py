@@ -137,6 +137,12 @@ class CardState:
     # (page with the latest answer-anchor). Set by pagination callbacks.
     current_page_idx: int | None = None
     last_event_ts: float = 0.0
+    # Live agent identity scraped from the session's own terminal footer.
+    # Kept state-local because /model and reasoning-effort changes are session
+    # runtime state, not global ccbot settings. The header renders the pair
+    # only when both values are known.
+    agent_model: str = ""
+    reasoning_effort: str = ""
     last_rendered: str = ""  # last text we sent to TG; skips no-op edits
     last_edit_ts: float = 0.0  # monotonic seconds; gate for CARD_EDIT_LAG coalescing
     pending_edit: asyncio.Task[None] | None = None  # one deferred edit task at most

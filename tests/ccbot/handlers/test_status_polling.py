@@ -236,6 +236,44 @@ async def test_live_pane_work_keeps_stop_visible_between_transcript_events(
 
 
 @pytest.mark.asyncio
+async def test_codex_footer_change_refreshes_session_model_header(monkeypatch) -> None:
+    """The session's own footer is authoritative after /model or effort."""
+    from ccbot.handlers import status_polling
+
+    sess = SimpleNamespace(id="s1", window_id="@1", backend="codex")
+    state = CardState(
+        msg_id=9,
+        agent_model="gpt-5.5",
+        reasoning_effort="low",
+    )
+    pane = "› Ask anything\n\n  gpt-5.6-sol medium · ~/pet_projects/ccbot"
+    bot = object()
+    refresh = AsyncMock(return_value=True)
+    monkeypatch.setattr(status_polling, "get_card_state", lambda *_a: state)
+    monkeypatch.setattr(status_polling, "parse_status_line", lambda _p: "")
+    monkeypatch.setattr(status_polling, "is_card_in_menu_view", lambda *_a: False)
+    monkeypatch.setattr(status_polling, "is_card_busy", lambda *_a: False)
+    monkeypatch.setattr(status_polling, "is_card_finalized", lambda *_a: True)
+    monkeypatch.setattr(status_polling, "maybe_finalize_stalled", AsyncMock())
+    monkeypatch.setattr(status_polling, "refresh_panel", refresh)
+    monkeypatch.setattr(status_polling, "fire_typing", AsyncMock())
+    monkeypatch.setattr(status_polling, "is_interactive_ui", lambda _p: False)
+    monkeypatch.setattr(status_polling, "get_interactive_window", lambda _u: None)
+
+    await _drive_typing_indicator(bot, 42, "@1", pane, sess, False)
+
+    assert state.agent_model == "gpt-5.6-sol"
+    assert state.reasoning_effort == "medium"
+    refresh.assert_awaited_once_with(
+        bot,
+        42,
+        immediate=False,
+        refresh_keyboard=True,
+        refresh_pane=False,
+    )
+
+
+@pytest.mark.asyncio
 async def test_status_tick_uses_one_window_snapshot_for_all_live_sessions():
     """One poll tick has fixed discovery cost instead of one scan per session."""
     sessions = [

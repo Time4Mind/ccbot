@@ -206,6 +206,11 @@ class TestToRichMarkdown:
         assert match is not None
         assert resolve_file_button(match.group(1)) == path.resolve()
 
+    def test_tilde_prose_in_inline_code_is_not_treated_as_file_path(self) -> None:
+        text = "Footer example: `~ · session title`"
+
+        assert rich.to_rich_markdown(text) == text
+
     def test_file_button_survives_runtime_registry_reset(self, tmp_path: Path) -> None:
         import ccbot.file_actions as file_actions
 

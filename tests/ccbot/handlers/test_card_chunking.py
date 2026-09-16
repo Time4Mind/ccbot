@@ -225,3 +225,63 @@ class TestSplitPageByBudget:
         # Callers iterate over .extend(); preserving the [[]] shape lets
         # pagination report 1/1 instead of 0/0 on a fresh card.
         assert _split_page_by_budget([], budget_lines=70) == [[]]
+
+
+class TestFinalAnswerPageBoundary:
+    def test_short_final_answer_starts_a_fresh_page(self) -> None:
+        request = Event(
+            type="user",
+            text="Проверь состояние",
+            body="Проверь состояние",
+            started_at=1.0,
+            is_page_break=True,
+        )
+        tool = Event(
+            type="tool_use",
+            text="**Bash** `status`",
+            body="status",
+            started_at=2.0,
+        )
+        final = Event(
+            type="final_text",
+            text="Готово.",
+            body="Готово.",
+            started_at=3.0,
+        )
+
+        pages = paginate_events_for_card(
+            CardState(events=[request, tool, final]), user_id=None
+        )
+
+        assert pages == [[request, tool], [final]]
+
+    def test_consecutive_chunks_of_one_final_never_mix_with_actions(self) -> None:
+        request = Event(
+            type="user",
+            text="Подготовь большой ответ",
+            body="Подготовь большой ответ",
+            started_at=1.0,
+            is_page_break=True,
+        )
+        tool = Event(
+            type="tool_result",
+            text="Результат команды",
+            body="Результат команды",
+            started_at=2.0,
+        )
+        final_chunks = [
+            Event(
+                type="final_text",
+                text=f"Часть {index}\n" + "строка\n" * 8,
+                body=f"Часть {index}",
+                started_at=3.0,
+            )
+            for index in range(2)
+        ]
+
+        pages = paginate_events_for_card(
+            CardState(events=[request, tool, *final_chunks]), user_id=None
+        )
+
+        assert pages[0] == [request, tool]
+        assert all(event.type == "final_text" for page in pages[1:] for event in page)

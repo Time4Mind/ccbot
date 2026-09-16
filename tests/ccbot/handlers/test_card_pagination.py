@@ -130,7 +130,7 @@ class TestPaginateEvents:
         ]
         assert paginate_events(events) == [events]
 
-    def test_each_request_anchors_its_complete_turn(self) -> None:
+    def test_each_final_answer_is_separate_from_its_turn_actions(self) -> None:
         e1 = Event(type="user_msg", text="👤 q", started_at=1.0, is_page_break=True)
         e2 = Event(type="tool_use", text="▷ t", started_at=2.0)
         e3 = Event(type="final_text", text="Done", started_at=3.0)
@@ -138,9 +138,7 @@ class TestPaginateEvents:
         e5 = Event(type="tool_use", text="▷ t2", started_at=5.0)
         e6 = Event(type="final_text", text="Done 2", started_at=6.0)
         pages = paginate_events([e1, e2, e3, e4, e5, e6])
-        assert len(pages) == 2
-        assert pages[0] == [e1, e2, e3]
-        assert pages[1] == [e4, e5, e6]
+        assert pages == [[e1, e2], [e3], [e4, e5], [e6]]
 
     def test_consecutive_breaks(self) -> None:
         e1 = Event(type="final_text", text="A1", started_at=1.0, is_page_break=True)

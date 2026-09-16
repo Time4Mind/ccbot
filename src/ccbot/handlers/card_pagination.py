@@ -42,13 +42,17 @@ __all__ = [
 
 
 def paginate_events(events: list[Event]) -> list[list[Event]]:
-    """Split ``events`` into pages by ``is_page_break``.
+    """Split ``events`` into logical request and final-answer pages.
 
-    Page break: each user request has ``is_page_break=True`` and becomes
-    the TOP of a new page. Its work events and final answer stay after it.
+    Each user request has ``is_page_break=True`` and becomes the TOP of a
+    new page. The first ``final_text`` after request/work events also starts
+    a new page, so the completed answer never shares a page with the actions
+    that produced it. Consecutive ``final_text`` events are chunks of the
+    same oversized answer and stay in one logical group; budget pagination
+    may still split that group into multiple final-only pages.
     Empty input → ``[[]]`` so callers can address page 0.
 
-    NOTE: this is the "logical" pagination — by request boundary only.
+    NOTE: this is the "logical" pagination — by request/final boundary only.
     Live cards must use :func:`paginate_events_for_card` to also split
     over-budget logical pages into navigable sub-pages, so the ◀/▶
     counter matches what's actually rendered.
@@ -56,7 +60,10 @@ def paginate_events(events: list[Event]) -> list[list[Event]]:
     pages: list[list[Event]] = []
     current: list[Event] = []
     for ev in events:
-        if ev.is_page_break and current:
+        final_answer_start = (
+            ev.type == "final_text" and current and current[-1].type != "final_text"
+        )
+        if (ev.is_page_break or final_answer_start) and current:
             pages.append(current)
             current = [ev]
         else:
@@ -168,14 +175,18 @@ def paginate_events_for_card(
     if not events:
         return [[]]
 
-    # Everything before the latest page-break belongs to completed turns and
-    # cannot change during ordinary streaming. Cache its already-split pages;
-    # only the current logical page needs render/line/Markdown measurements on
-    # every tool/text update. A new final answer moves the boundary and rebuilds
-    # the prefix once, rather than once per event.
+    # Everything before the latest logical page-break belongs to completed
+    # content and cannot change during ordinary streaming. Cache its
+    # already-split pages; only the current logical page needs render/line/
+    # Markdown measurements on every update. A new final answer moves the
+    # boundary to its own page and rebuilds the prefix once, rather than
+    # rerendering the preceding actions together with the final response.
     latest_start = 0
     for index in range(len(events) - 1, -1, -1):
-        if events[index].is_page_break:
+        final_answer_start = events[index].type == "final_text" and (
+            index == 0 or events[index - 1].type != "final_text"
+        )
+        if events[index].is_page_break or final_answer_start:
             latest_start = index
             break
 

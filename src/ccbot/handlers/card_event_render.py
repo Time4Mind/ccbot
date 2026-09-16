@@ -86,7 +86,7 @@ def _format_tool_args(tool_name: str, args: str) -> str:
     if not args:
         return ""
     if tool_name == "Bash":
-        return f"```bash\n{args}\n```"
+        return _fenced_block(args, "bash")
     return f"`{args}`"
 
 
@@ -100,10 +100,36 @@ def _format_tool_content(tool_name: str, args: str, content: str) -> str:
         return ""
     if tool_name in ("Read", "Write"):
         lang = _lang_for_path(args)
-        return f"```{lang}\n{content}\n```" if lang else f"```\n{content}\n```"
+        return _fenced_block(content, lang)
     if tool_name == "Edit":
-        return f"```diff\n{content}\n```"
+        return _fenced_block(content, "diff")
     return content
+
+
+def _fenced_block(text: str, language: str = "") -> str:
+    """Wrap text in a fence longer than any backtick run in its body."""
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return f"{fence}{language}\n{text}\n{fence}"
+
+
+_FENCE_LINE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})(.*)$")
+
+
+def _open_fence(lines: list[str]) -> str:
+    """Return the closer required by a truncated Markdown preview, if any."""
+    active = ""
+    for line in lines:
+        match = _FENCE_LINE_RE.match(line)
+        if match is None:
+            continue
+        fence, tail = match.groups()
+        if not active:
+            active = fence
+            continue
+        if fence[0] == active[0] and len(fence) >= len(active) and not tail.strip():
+            active = ""
+    return active
 
 
 def _bounded_tool_block(text: str, max_lines: int, max_chars: int = 100) -> str:
@@ -116,8 +142,17 @@ def _bounded_tool_block(text: str, max_lines: int, max_chars: int = 100) -> str:
         for line in lines
     ]
     if len(bounded) > max_lines:
-        hidden = len(bounded) - max_lines + 1
-        bounded = bounded[: max_lines - 1] + [f"… (+{hidden} more lines)"]
+        kept_count = max(0, max_lines - 1)
+        preview = bounded[:kept_count]
+        closer = _open_fence(preview)
+        if closer and max_lines >= 2:
+            kept_count = max(0, max_lines - 2)
+            preview = bounded[:kept_count]
+            closer = _open_fence(preview)
+            if closer:
+                preview.append(closer)
+        hidden = len(bounded) - kept_count
+        bounded = preview + [f"… (+{hidden} more lines)"]
     return "\n".join(bounded)
 
 
@@ -164,6 +199,66 @@ def _structured_value_lines(value: Any, indent: int = 0) -> list[str]:
                 lines.extend(f"{' ' * (indent + 2)}{row}" for row in child_lines[1:])
         return lines
     return [f"{prefix}{_scalar_text(value)}"]
+
+
+def _structure_embedded_json(text: str) -> str | None:
+    """Structure standalone JSON values embedded between ordinary rows.
+
+    ``json.loads(text)`` only handles a result made entirely of JSON.  Command
+    output frequently adds a heading or receipt around an otherwise valid JSON
+    object, so scan JSON values that start on their own line while preserving
+    the surrounding text verbatim.
+    """
+    decoder = json.JSONDecoder()
+    output: list[str] = []
+    cursor = 0
+    changed = False
+    for match in re.finditer(r"(?m)^[ \t]*(?=[{\[])", text):
+        json_start = match.end()
+        if json_start < cursor:
+            continue
+        try:
+            value, json_end = decoder.raw_decode(text, json_start)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(value, (dict, list)):
+            continue
+        line_end = text.find("\n", json_end)
+        if line_end < 0:
+            line_end = len(text)
+        if text[json_end:line_end].strip():
+            continue
+        indent = text[match.start() : json_start]
+        structured = "\n".join(
+            f"{indent}{line}" for line in _structured_value_lines(value)
+        )
+        output.extend((text[cursor : match.start()], structured))
+        cursor = json_end
+        changed = True
+    if not changed:
+        return None
+    output.append(text[cursor:])
+    return "".join(output)
+
+
+_DETAILS_SUMMARY_RE = re.compile(
+    r"<details\b[^>]*>\s*<summary\b[^>]*>(.*?)</summary\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_DETAILS_TAG_RE = re.compile(r"</?details\b[^>]*>", re.IGNORECASE)
+_SUMMARY_TAG_RE = re.compile(r"</?summary\b[^>]*>", re.IGNORECASE)
+
+
+def _flatten_nested_spoilers(text: str) -> str:
+    """Make spoiler markup from command output inert inside the card spoiler.
+
+    A line-limited preview can otherwise retain ``<details>`` while cutting
+    off ``</details>``.  Telegram then treats the tool's data as nested rich
+    markup and can hide every preview row except the overflow counter.
+    """
+    text = _DETAILS_SUMMARY_RE.sub(lambda match: match.group(1), text)
+    text = _DETAILS_TAG_RE.sub("", text)
+    return _SUMMARY_TAG_RE.sub("", text).strip()
 
 
 _KEY_VALUE_RE = re.compile(r"^([A-Za-z_][\w ./-]{0,79})=(.*)$")
@@ -268,6 +363,9 @@ def _structure_tool_result(text: str) -> str:
     table = _structure_table(normalized)
     if table is not None:
         return table
+    embedded_json = _structure_embedded_json(normalized)
+    if embedded_json is not None:
+        return embedded_json
     return normalized
 
 
@@ -288,6 +386,8 @@ def _build_tool_spoiler_body(
         if tool_name in ("Read", "Write", "Edit", "NotebookEdit")
         else _structure_tool_result(content)
     )
+    if tool_name not in ("Read", "Write", "Edit", "NotebookEdit"):
+        structured_content = _flatten_nested_spoilers(structured_content)
     bounded_content = _bounded_tool_block(structured_content, result_max_lines)
     if bounded_args:
         parts.append(_format_tool_args(tool_name, bounded_args))

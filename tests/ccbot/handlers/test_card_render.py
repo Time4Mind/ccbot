@@ -158,6 +158,83 @@ class TestSyntaxHighlightedToolBody:
             "  status: completed"
         )
 
+    def test_json_object_inside_mixed_result_is_structured(self) -> None:
+        from ccbot.handlers.card_model import _build_tool_spoiler_body
+
+        content = (
+            "request completed\n"
+            '{"service":"ccbot","runtime":{"pid":31144,"healthy":true}}\n'
+            "receipt saved"
+        )
+        result = _build_tool_spoiler_body(
+            "Bash", "inspect", content, result_max_lines=30
+        ).split("\n- - -\n", 1)[1]
+
+        assert result == (
+            "request completed\n"
+            "service: ccbot\n"
+            "runtime:\n"
+            "  pid: 31144\n"
+            "  healthy: true\n"
+            "receipt saved"
+        )
+
+    def test_truncated_tool_output_cannot_open_a_nested_rich_spoiler(self) -> None:
+        from ccbot.handlers.card_model import _build_tool_spoiler_body, _headed_block
+        from ccbot.rich import to_rich_markdown
+
+        # Real regression shape: the first ten preview rows contained an
+        # opening <details>, while its closing tag was below the line limit.
+        # Telegram then swallowed the preview and showed only the overflow row.
+        content = "\n".join(
+            [
+                "request completed",
+                "<details><summary>nested result</summary>",
+                *(f"row {number}" for number in range(99)),
+                "</details>",
+            ]
+        )
+        body = _build_tool_spoiler_body("Bash", "inspect", content, result_max_lines=10)
+        rich = to_rich_markdown(_headed_block("✓ Bash", body, trim_body=False))
+
+        assert "request completed" in rich
+        assert "… (+92 more lines)" in rich
+        assert rich.count("<details>") == 1  # only the card's outer spoiler
+        assert "nested result" in rich
+
+    def test_command_with_fence_uses_a_longer_outer_fence(self) -> None:
+        from ccbot.handlers.card_model import _build_tool_spoiler_body, _headed_block
+        from ccbot.rich import to_rich_markdown
+
+        command = "rg -n '```bash' src tests"
+        body = _build_tool_spoiler_body("Bash", command, "")
+        rich = to_rich_markdown(_headed_block("✓ Bash", body, trim_body=False))
+
+        assert "<code>rg -n '```bash' src tests</code>" in rich
+        assert rich.count("<details>") == 1
+
+    def test_truncated_result_closes_fence_before_overflow_row(self) -> None:
+        from ccbot.handlers.card_model import _build_tool_spoiler_body, _headed_block
+        from ccbot.rich import to_rich_markdown
+
+        content = "\n".join(
+            [
+                "result follows",
+                "```html",
+                "# this must not become a card heading",
+                *(f"row {number}" for number in range(20)),
+                "```",
+            ]
+        )
+        body = _build_tool_spoiler_body("Bash", "inspect", content, result_max_lines=10)
+        result = body.split("\n- - -\n", 1)[1]
+        rich = to_rich_markdown(_headed_block("✓ Bash", body, trim_body=False))
+
+        assert result.count("```") == 2
+        assert result.index("```") < result.index("… (+")
+        assert rich.count("<details>") == 1
+        assert "```html\n# this must not become a card heading" in rich
+
     def test_key_value_and_tabular_results_are_readable(self) -> None:
         from ccbot.handlers.card_model import _build_tool_spoiler_body
 

@@ -105,9 +105,9 @@ class TestToRichMarkdown:
             "printf 'a&amp;b'</code>"
         )
 
-    def test_single_line_fence_with_backtick_stays_fenced(self) -> None:
+    def test_single_line_fence_with_backtick_becomes_safe_rich_code(self) -> None:
         text = "```bash\necho `date`\n```"
-        assert rich.to_rich_markdown(text) == text
+        assert rich.to_rich_markdown(text) == "<code>echo `date`</code>"
 
     def test_single_line_non_shell_fence_keeps_language_formatting(self) -> None:
         text = "```python\nprint('hello')\n```"
@@ -147,7 +147,7 @@ class TestToRichMarkdown:
             _headed_block("✓ Bash · 15:55", body, trim_body=False)
         )
 
-        assert "printf ok\n```\n- - -\n" in out
+        assert "`printf ok`\n- - -\n" in out
         assert "status: completed<br>\nduration: 0.1 s<br>\noutput:<br>" in out
         assert "  service: ccbot<br>\n  state: running" in out
 

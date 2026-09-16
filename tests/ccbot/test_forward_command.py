@@ -33,6 +33,33 @@ def _make_context() -> MagicMock:
 
 class TestForwardCommand:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "command", ["history", "done", "memory", "compact", "effort"]
+    )
+    async def test_removed_commands_are_not_forwarded(self, command):
+        update = _make_update(f"/{command}")
+        context = _make_context()
+
+        with (
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.session_manager") as mock_sm,
+            patch("ccbot.bot._common.session_manager", mock_sm),
+            patch("ccbot.bot.messages.tmux_manager") as mock_tmux,
+            patch(
+                "ccbot.bot.messages.safe_reply", new_callable=AsyncMock
+            ) as safe_reply,
+        ):
+            mock_sm.get_active_window.return_value = "@5"
+
+            from ccbot.bot import forward_command_handler
+
+            assert not await forward_command_handler(update, context)
+
+            mock_sm.send_to_window.assert_not_called()
+            mock_tmux.find_window_by_id.assert_not_called()
+            safe_reply.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_model_sends_command_to_tmux(self):
         """/model → send_to_window called with "/model"."""
         update = _make_update("/model")

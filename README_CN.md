@@ -177,13 +177,10 @@ backend 可在 `菜单 → Settings → Agent` 全局切换；当前 backend
 | ---------- | ---- |
 | `/menu`    | 打开内联 ≡ Menu |
 | `/help`    | 简短指南(带内联导航的分节文档) |
-| `/history` | 活动会话的完整转录(分页) |
-| `/done`    | 关闭活动会话(标记为「完成」并归档) |
+| `/model`   | 打开当前后端的模型选择器 |
 
-Claude Code 自己的选择器(`/model`、`/effort`、`/compact`、
-`/memory`)会转发到活动会话,并与上面几条一起发布。另有几个命令
 输入时可用,但不出现在 `/`-菜单里:`/new`、`/kill`、`/stop`、
-`/archive`、`/usage`、`/health`、`/login`。
+`/archive`、`/usage`、`/clear`、`/cost`、`/health`、`/login`。
 
 **`/login` —— 用手机给 Claude 重新授权。** `claude` 背后的 OAuth 登录
 过期后,所有会话都会开始报错,通常没有电脑就修不了。机器人本身不需要

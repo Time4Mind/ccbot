@@ -111,7 +111,7 @@ After Phase 1 the bot routes correctly in DM but has no UI for switching — the
 | # | Commit subject | Files | LOC | Acceptance |
 |---|---|---|---|---|
 | 3.1 | `feat(cmd): /new with optional name and path; auto-session on first message` | `bot.py`, `handlers/directory_browser.py` | ~100 | `/new`, `/new myname`, `/new myname ~/path`. First message in empty DM creates a default session. |
-| 3.2 | `feat(cmd): /list /use /rename /kill /stop /done` | `bot.py`, `session.py` | ~150 | All commands functional. `/use <name>` mirrors switcher tap. `/done` archives with completed tag. `/kill` archives immediately. |
+| 3.2 | `feat(cmd): /list /use /rename /kill /stop` | `bot.py`, `session.py` | ~150 | All commands functional. `/use <name>` mirrors switcher tap. `/kill` archives immediately. |
 | 3.3 | `feat(cmd): publish setMyCommands on startup` | `bot.py`, `main.py` | ~30 | `/`-menu in TG shows the command list with descriptions. |
 
 ### Phase 4 — Sessions and archive

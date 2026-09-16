@@ -467,8 +467,7 @@ def _settings_local_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
 def _settings_cardhist_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     """How many end_turn boundaries to seed into a fresh live card.
 
-    Fixed row of values 10 / 20 / 50 / 100. Deep history beyond this is
-    always reachable via ``/history`` regardless of the chosen value.
+    Fixed row of values 10 / 20 / 50 / 100.
     """
     raw = session_manager.get_user_settings(user_id).get("card_history", 20)
     try:
@@ -641,22 +640,22 @@ def _settings_bg_notify_grid(
 def _settings_pagesize_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
     """Max page size in logical \\n-delimited lines.
 
-    Fixed row 10 / 20 / 40 / 70. Smart anchor chunking with ±5 lines
+    Fixed row 30 / 50 / 70 / 100. Smart anchor chunking with ±5 lines
     overshoot handles single events that exceed the budget without
     breaking mid-sentence / mid-word.
     """
-    raw = session_manager.get_user_settings(user_id).get("card_page_lines", 20)
+    raw = session_manager.get_user_settings(user_id).get("card_page_lines", 30)
     try:
         cur = int(raw)
     except (TypeError, ValueError):
-        cur = 20
+        cur = 30
     return [
         [
             InlineKeyboardButton(
                 _highlight(str(v), cur == v),
                 callback_data=f"{CB_ST_PAGESIZE}{v}",
             )
-            for v in (10, 20, 40, 70)
+            for v in (30, 50, 70, 100)
         ],
         [
             InlineKeyboardButton(

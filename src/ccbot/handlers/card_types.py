@@ -44,8 +44,8 @@ CARD_PAGE_BUDGET = 3500
 # Default page-size budget in LINES (logical \n-delimited rows in the
 # MarkdownV2 source — close enough to visual lines on a phone for ±5
 # tolerance the user explicitly accepted). User overrides via
-# Settings → Page size (10 / 20 / 40 / 70).
-CARD_PAGE_LINES_DEFAULT = 20
+# Settings → Page size (30 / 50 / 70 / 100).
+CARD_PAGE_LINES_DEFAULT = 30
 
 # Allowed overshoot (in lines) when trimming a page or chunking an
 # anchor so a sentence / paragraph isn't broken mid-content.

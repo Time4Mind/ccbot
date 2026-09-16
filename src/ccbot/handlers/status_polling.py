@@ -373,7 +373,7 @@ async def _reconcile_no_ui_state(
             await refresh_panel(bot, user_id)
 
     # Active session was in kb-mode for a slash-command picker that
-    # has just dismissed (no JSONL event fires for /model | /effort |
+    # has just dismissed (no JSONL event fires for native Settings pickers |
     # etc., so this is the only place the card-mode flip can happen).
     if sess is not None and not is_bg_session:
         from .notifications import exit_kb_mode, has_pending_kb

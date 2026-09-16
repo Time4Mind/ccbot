@@ -30,6 +30,6 @@ async def test_close_returns_to_sessions_not_menu(monkeypatch) -> None:
     monkeypatch.setattr(confirm, "open_more_in_place", open_menu)
 
     assert await confirm.handle(query, context, user)
-    archive.assert_awaited_once_with(user.id, context.bot, sess, completed=False)
+    archive.assert_awaited_once_with(user.id, context.bot, sess)
     open_sessions.assert_awaited_once_with(query, context.bot, user.id)
     open_menu.assert_not_awaited()

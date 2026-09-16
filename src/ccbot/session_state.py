@@ -383,8 +383,7 @@ class SessionStateMixin:
         # transcript when seeding an empty live-card state (e.g. after
         # a bot restart, after switcher-tap / Menu → Sessions on a fresh
         # state). Higher = more in-card scrollback at the cost of memory
-        # (each turn ≈ several events × ~500 bytes). Deep history is
-        # always accessible via /history regardless of this setting.
+        # (each turn ≈ several events × ~500 bytes).
         "card_history": 20,
         # Global screenshot state. The Options action toggles it and the
         # active Rich Markdown card transforms in place; text is the fallback.
@@ -402,12 +401,12 @@ class SessionStateMixin:
         "bg_notify_finished": True,
         "bg_notify_error": True,
         "bg_notify_needs_action": True,
-        # Max page size in logical \n-delimited LINES. Values 10/20/40/70.
-        # 20 keeps the card compact on phone; 70 is for power users who
+        # Max page size in logical \n-delimited LINES. Values 30/50/70/100.
+        # 30 keeps the card compact on phone; 100 is for power users who
         # scroll long bodies. Anchor (page top) chunking handles overflow
         # with smart sentence / paragraph boundaries — see
         # ``_chunk_final_text`` for the exact preference order.
-        "card_page_lines": 20,
+        "card_page_lines": 30,
         # Legacy shared spoiler limit retained only as a migration source.
         "spoiler_block_lines": 10,
         # Independent visible rows for the command and result blocks.
@@ -444,6 +443,13 @@ class SessionStateMixin:
         # produces an edit for every event; migrate persisted zero to 2s.
         if merged.get("live_lag") == 0:
             merged["live_lag"] = 2
+        try:
+            page_lines = int(merged.get("card_page_lines", 30))
+        except (TypeError, ValueError):
+            page_lines = 30
+        merged["card_page_lines"] = (
+            page_lines if page_lines in (30, 50, 70, 100) else 30
+        )
         legacy_spoiler_lines = stored.get("spoiler_block_lines", 10)
         if "spoiler_command_lines" not in stored:
             merged["spoiler_command_lines"] = legacy_spoiler_lines

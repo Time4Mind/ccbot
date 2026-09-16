@@ -108,7 +108,7 @@ async def _seed_events_from_jsonl(
     # ``resolve_session_for_window`` — the latter fully walks the JSONL
     # just to refresh summary/token stats we don't use here, then we read
     # the file again below. On a multi-MB resumed transcript that wasted
-    # walk costs >1s. Same fast-path the /history cache already uses.
+    # walk costs >1s. Same fast-path the history cache already uses.
     state = session_manager.get_window_state(sess.window_id)
     if not state.session_id or not state.cwd:
         return []

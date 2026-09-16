@@ -68,7 +68,6 @@ ZH: dict[str, str] = {
         "⚠ Codex 找到了 `auth.json`,但当前凭据存储不会读取它。请设置 "
         '`cli_auth_credentials_store = "file"`;机器人不会替换现有授权。'
     ),
-    "btn.confirm": "✓ 确认",
     "btn.no": "× 否",
     "btn.yes_kill": "⚠ 是，终止",
     "btn.yes_delete": "⚠ 是，删除",
@@ -146,14 +145,12 @@ ZH: dict[str, str] = {
     "conf.kill": (
         "终止 *{name}*?\nTmux 窗口结束,claude session id 已保存。\n可通过归档列表恢复。"
     ),
-    "conf.done": "标记 *{name}* 为完成?\n目标已关闭,会话已归档。",
     "conf.delete": "从归档中删除 *{name}*?\n状态记录消失。JSONL 保留在磁盘。",
     "conf.clear": (
         "清空 *{name}*?\n先发送 Esc,然后 /clear。会话上下文将被擦除,"
         "无法恢复(不同于 Kill → Restore)。"
     ),
     "conf.killed": "💀 已终止 `{name}`",
-    "conf.done_ok": "🎉 `{name}` 已标记完成。",
     "conf.deleted": "🗑 归档记录已删除。",
     "dir.title": "*选择工作目录*",
     "backend.choose": "*选择后端*",
@@ -176,7 +173,6 @@ ZH: dict[str, str] = {
     "toast.esc_sent": "⎋ 已发送 Esc",
     "toast.cleared": "🧹 上下文已清空",
     "toast.killed": "已终止",
-    "toast.done": "已完成",
     "toast.deleted": "已删除",
     "toast.saved": "已保存",
     "toast.agent_live": "切换全局代理前，请先结束或归档所有活动会话。",
@@ -262,7 +258,6 @@ ZH: dict[str, str] = {
         "*卡片历史*\n\n"
         "首次访问时(机器人重启 / 切换器点击 / 菜单→Sessions)\n"
         "从 JSONL 转录加载多少最近的 end-of-turn 边界。\n"
-        "更深的历史始终通过 /history 访问,与该值无关。\n\n"
         "更多 = 卡片内更多历史,每会话占用更多内存。"
     ),
     "settings.group.card_page_lines": "页面大小",
@@ -388,7 +383,7 @@ ZH: dict[str, str] = {
         "• *切换。* 点击切换器中的会话按钮。\n"
         "• *引用回复。* 回复非活动会话的机器人消息 — 你的文本\n"
         "只单次路由到该会话,不更改活动状态。\n"
-        "• *完成。* `/done [name]` — 标记并归档。\n"
+        "• *关闭。* 卡片下方的关闭按钮会归档会话。\n"
         "• *闲置 TTL。* 无活动达到所选 6/12/24 小时后自动归档。\n"
         "• *恢复。* ≡ 菜单 → 📦 Archive → *Restore*。"
     ),
@@ -407,10 +402,9 @@ ZH: dict[str, str] = {
         "Bot 端:\n"
         "• `/menu` — 打开内联菜单\n"
         "• `/help` — 本帮助\n"
-        "• `/done [name]` — 归档会话\n"
         "• `/health` — 运行时间 / 队列 / 延迟 / 计数器\n\n"
         "Claude Code 透传(原样转发):\n"
-        "• `/model` `/effort` `/clear` `/compact` `/cost` `/memory` …\n\n"
+        "• `/model` `/clear` `/cost` …\n\n"
         "前缀 `!` — 捕获本地 shell 命令的输出并转发。"
     ),
     "help.body.voice": (

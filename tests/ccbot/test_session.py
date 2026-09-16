@@ -168,6 +168,27 @@ class TestLiveLagSetting:
         assert mgr.get_user_settings(1)["live_lag"] == 2
 
 
+class TestCardPageLineSetting:
+    def test_default_is_thirty_lines(self, mgr: SessionManager) -> None:
+        assert mgr.get_user_settings(1)["card_page_lines"] == 30
+
+    @pytest.mark.parametrize("legacy", [10, 20, 40])
+    def test_removed_values_migrate_to_thirty(
+        self, mgr: SessionManager, legacy: int
+    ) -> None:
+        mgr.user_settings[1] = {"card_page_lines": legacy}
+
+        assert mgr.get_user_settings(1)["card_page_lines"] == 30
+
+    @pytest.mark.parametrize("value", [30, 50, 70, 100])
+    def test_supported_values_are_preserved(
+        self, mgr: SessionManager, value: int
+    ) -> None:
+        mgr.user_settings[1] = {"card_page_lines": value}
+
+        assert mgr.get_user_settings(1)["card_page_lines"] == value
+
+
 class TestSpoilerLineSettings:
     def test_defaults_are_ten_lines_per_block(self, mgr: SessionManager) -> None:
         settings = mgr.get_user_settings(1)

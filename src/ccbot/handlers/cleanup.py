@@ -22,7 +22,7 @@ async def clear_session_state(
     """Clear in-memory state for a (user, window) pair.
 
     Called when:
-      - A session is archived (auto-idle TTL or `/done`/`/kill`).
+      - A session is archived (auto-idle TTL or `/kill`).
       - A tmux window vanishes externally.
     """
     if bot is not None:

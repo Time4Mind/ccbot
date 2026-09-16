@@ -1,4 +1,4 @@
-"""Read-only info commands: /history, /usage, /health, /help.
+"""Read-only info commands: /usage, /health, /help.
 
 These also expose ``render_help`` used by the inline Help callbacks.
 """
@@ -10,7 +10,6 @@ import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from ...handlers.history import send_history
 from ...handlers.message_sender import safe_reply
 from ...i18n import t
 from ...session import session_manager
@@ -18,26 +17,6 @@ from ...tmux_manager import tmux_manager
 from .._common import active_window, is_user_allowed
 
 logger = logging.getLogger(__name__)
-
-
-# --- /history + emitter ---
-
-
-async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show message history for the active session."""
-    user = update.effective_user
-    if not user or not is_user_allowed(user.id):
-        return
-    if not update.message:
-        return
-    wid = active_window(user.id)
-    if not wid:
-        await safe_reply(
-            update.message, "❌ No active session. Use /new to create one."
-        )
-        return
-
-    await send_history(update.message, wid)
 
 
 # --- /usage (interactive Claude TUI) ---

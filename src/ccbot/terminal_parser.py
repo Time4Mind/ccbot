@@ -196,7 +196,8 @@ UI_PATTERNS: list[UIPattern] = [
         top=(
             re.compile(r"^\s*Settings:.*tab to cycle"),
             # ``Select <word>`` covers every Claude Code slash picker:
-            # /model → "Select model", /effort → "Select reasoning effort",
+            # Native settings use titles such as "Select model" and
+            # "Select reasoning effort".
             # /agents → "Select an agent", /style → "Select output style",
             # etc. The bottom signature (Esc/Enter/filter) keeps this
             # specific to picker modals — false positives in normal

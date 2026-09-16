@@ -69,7 +69,7 @@ def _picker_label(raw: str) -> str:
 
 
 def parse_picker_menu(prompt_content: str, ui_name: str = "") -> PickerMenu | None:
-    """Parse native /model and /effort selectors into Telegram options.
+    """Parse native model and reasoning-effort selectors into Telegram options.
 
     Other interactive Settings pickers deliberately retain the generic
     arrow-key grid. The active value comes from an explicit ``(current)`` or
@@ -200,7 +200,7 @@ def build_kb_mode_keyboard(
 ) -> InlineKeyboardMarkup:
     """Build the kb-mode keyboard shown when the card msg is in kb-mode.
 
-    Native /model and /effort pickers become one Telegram button per option,
+    Native model and reasoning-effort pickers become one Telegram button per option,
     followed by Cancel/Escape. Other interactive UIs retain the navigation
     grid below.
 

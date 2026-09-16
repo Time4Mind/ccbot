@@ -311,7 +311,7 @@ def _rechunk_oversized_finals_inplace(state: CardState, budget_lines: int) -> No
 
 
 def _resolve_line_budget(user_id: int | None) -> int:
-    """Read the user's ``card_page_lines`` setting (15/30/50/100).
+    """Read the user's ``card_page_lines`` setting (30/50/70/100).
 
     Returns the default when the user has no setting or ``user_id`` is
     None (e.g. unit-test paths). Always clamps to the allowed range.
@@ -325,7 +325,7 @@ def _resolve_line_budget(user_id: int | None) -> int:
         value = int(raw)
     except (TypeError, ValueError):
         value = CARD_PAGE_LINES_DEFAULT
-    if value not in (10, 20, 40, 70):
+    if value not in (30, 50, 70, 100):
         return CARD_PAGE_LINES_DEFAULT
     return value
 

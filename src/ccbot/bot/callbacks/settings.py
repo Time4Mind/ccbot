@@ -496,8 +496,8 @@ async def handle(
         try:
             v = int(data[len(CB_ST_PAGESIZE) :])
         except ValueError:
-            v = 20
-        if v in (10, 20, 40, 70):
+            v = 30
+        if v in (30, 50, 70, 100):
             session_manager.update_user_setting(user.id, "card_page_lines", v)
         screen_name = "settings_pagesize"
     elif data.startswith(CB_ST_SPOILER_LINES):

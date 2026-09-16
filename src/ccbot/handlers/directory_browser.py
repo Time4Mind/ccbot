@@ -15,8 +15,9 @@ Key components:
 import asyncio
 import logging
 import os
+import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,9 @@ _RECENCY_MAX_DEPTH = 8
 _RECENCY_MAX_ENTRIES = 150_000
 _RECENCY_CACHE: dict[str, tuple[float, float]] = {}
 _RECENCY_REFRESH_TASKS: dict[str, asyncio.Task[None]] = {}
+_LINUX_ROOT_VIRTUAL_DIRS = frozenset(
+    {Path("/proc"), Path("/sys"), Path("/dev"), Path("/run")}
+)
 
 # Generated dependencies, caches and platform stores should not make a project
 # look recently edited. Pruning them also keeps a home-directory scan bounded.
@@ -95,6 +99,25 @@ def _git_recency(git_dir: Path) -> float:
     return best
 
 
+def _scandir_entries(d: Path) -> Iterator[os.DirEntry[str]]:
+    """Yield readable entries while containing volatile-filesystem errors."""
+    try:
+        entries = os.scandir(d)
+    except OSError:
+        return
+    try:
+        with entries as iterator:
+            while True:
+                try:
+                    yield next(iterator)
+                except StopIteration:
+                    return
+                except OSError:
+                    return
+    except OSError:
+        return
+
+
 def _metadata_recency(d: Path) -> float:
     """Cheap non-recursive fallback from directory and direct-entry metadata."""
     try:
@@ -104,25 +127,20 @@ def _metadata_recency(d: Path) -> float:
     if d.name in _RECENCY_PRUNE_DIRS:
         return best
 
-    try:
-        entries = os.scandir(d)
-    except OSError:
-        return best
-    with entries:
-        for entry in entries:
-            try:
-                is_dir = entry.is_dir(follow_symlinks=False)
-            except OSError:
-                continue
-            if is_dir and entry.name == ".git":
-                best = max(best, _git_recency(Path(entry.path)))
-                continue
-            if is_dir and entry.name in _RECENCY_PRUNE_DIRS:
-                continue
-            try:
-                best = max(best, entry.stat(follow_symlinks=False).st_mtime)
-            except OSError:
-                continue
+    for entry in _scandir_entries(d):
+        try:
+            is_dir = entry.is_dir(follow_symlinks=False)
+        except OSError:
+            continue
+        if is_dir and entry.name == ".git":
+            best = max(best, _git_recency(Path(entry.path)))
+            continue
+        if is_dir and entry.name in _RECENCY_PRUNE_DIRS:
+            continue
+        try:
+            best = max(best, entry.stat(follow_symlinks=False).st_mtime)
+        except OSError:
+            continue
     return best
 
 
@@ -135,6 +153,11 @@ def _refresh_recency_tree(root: Path) -> float:
     """
     refreshed_at = time.monotonic()
     remaining = [_RECENCY_MAX_ENTRIES]
+    shallow_virtual_dirs = (
+        _LINUX_ROOT_VIRTUAL_DIRS
+        if sys.platform.startswith("linux") and root == Path("/")
+        else frozenset()
+    )
 
     def visit(d: Path, depth: int) -> float:
         try:
@@ -145,32 +168,35 @@ def _refresh_recency_tree(root: Path) -> float:
             _RECENCY_CACHE[str(d)] = (refreshed_at, best)
             return best
 
-        try:
-            entries = os.scandir(d)
-        except OSError:
-            _RECENCY_CACHE[str(d)] = (refreshed_at, best)
-            return best
-        with entries:
-            for entry in entries:
-                remaining[0] -= 1
-                if remaining[0] < 0:
-                    break
+        for entry in _scandir_entries(d):
+            remaining[0] -= 1
+            if remaining[0] < 0:
+                break
+            try:
+                is_dir = entry.is_dir(follow_symlinks=False)
+            except OSError:
+                continue
+            entry_path = Path(entry.path)
+            if is_dir and entry.name == ".git":
+                best = max(best, _git_recency(entry_path))
+                continue
+            if is_dir and entry.name in _RECENCY_PRUNE_DIRS:
+                continue
+            if is_dir and entry_path in shallow_virtual_dirs:
                 try:
-                    is_dir = entry.is_dir(follow_symlinks=False)
+                    entry_mtime = entry.stat(follow_symlinks=False).st_mtime
                 except OSError:
-                    continue
-                if is_dir and entry.name == ".git":
-                    best = max(best, _git_recency(Path(entry.path)))
-                    continue
-                if is_dir and entry.name in _RECENCY_PRUNE_DIRS:
-                    continue
-                if is_dir and depth < _RECENCY_MAX_DEPTH:
-                    best = max(best, visit(Path(entry.path), depth + 1))
-                    continue
-                try:
-                    best = max(best, entry.stat(follow_symlinks=False).st_mtime)
-                except OSError:
-                    continue
+                    entry_mtime = 0.0
+                _RECENCY_CACHE[str(entry_path)] = (refreshed_at, entry_mtime)
+                best = max(best, entry_mtime)
+                continue
+            if is_dir and depth < _RECENCY_MAX_DEPTH:
+                best = max(best, visit(entry_path, depth + 1))
+                continue
+            try:
+                best = max(best, entry.stat(follow_symlinks=False).st_mtime)
+            except OSError:
+                continue
         _RECENCY_CACHE[str(d)] = (refreshed_at, best)
         return best
 

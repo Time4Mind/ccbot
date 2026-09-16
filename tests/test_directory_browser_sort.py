@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import time
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,6 +21,42 @@ from ccbot.handlers.directory_browser import (
 
 def _touch(path: str, mtime: float) -> None:
     os.utime(path, (mtime, mtime))
+
+
+class _FakeEntry:
+    def __init__(self, name: str, path: str, *, is_dir: bool, mtime: float) -> None:
+        self.name = name
+        self.path = path
+        self._is_dir = is_dir
+        self._mtime = mtime
+
+    def is_dir(self, *, follow_symlinks: bool = False) -> bool:
+        return self._is_dir
+
+    def stat(self, *, follow_symlinks: bool = False):
+        return SimpleNamespace(st_mtime=self._mtime)
+
+
+class _FakeScandir:
+    def __init__(self, entries, *, error_after: int | None = None) -> None:
+        self._entries = iter(entries)
+        self._seen = 0
+        self._error_after = error_after
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._error_after is not None and self._seen >= self._error_after:
+            raise OSError(22, "volatile directory entry disappeared")
+        self._seen += 1
+        return next(self._entries)
 
 
 async def _wait_for_refreshes() -> None:
@@ -92,6 +131,157 @@ class TestDirRecency:
         _touch(str(dependency), 9000.0)
 
         assert _refresh_recency_tree(project) == 3000.0
+
+    def test_linux_root_keeps_virtual_dirs_shallow(self, tmp_path, monkeypatch) -> None:
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        source = workspace / "recent.py"
+        source.write_text("recent")
+        _touch(str(workspace), 1000.0)
+        _touch(str(source), 8000.0)
+
+        real_scandir = os.scandir
+        real_path_stat = Path.stat
+        scanned: list[Path] = []
+        virtual_mtimes = {
+            Path("/proc"): 7001.0,
+            Path("/sys"): 7002.0,
+            Path("/dev"): 7003.0,
+            Path("/run"): 7004.0,
+        }
+
+        def fake_scandir(path):
+            current = Path(path)
+            scanned.append(current)
+            if current == Path("/"):
+                return _FakeScandir(
+                    [
+                        _FakeEntry(
+                            virtual.name,
+                            str(virtual),
+                            is_dir=True,
+                            mtime=mtime,
+                        )
+                        for virtual, mtime in virtual_mtimes.items()
+                    ]
+                    + [
+                        _FakeEntry(
+                            "workspace",
+                            str(workspace),
+                            is_dir=True,
+                            mtime=1000.0,
+                        ),
+                    ]
+                )
+            if current in virtual_mtimes:
+                raise AssertionError(f"Linux root indexing recursed into {current}")
+            return real_scandir(path)
+
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(directory_browser.os, "scandir", fake_scandir)
+        monkeypatch.setattr(
+            Path,
+            "stat",
+            lambda path, *args, **kwargs: (
+                SimpleNamespace(st_mtime=virtual_mtimes[path])
+                if path in virtual_mtimes
+                else real_path_stat(path, *args, **kwargs)
+            ),
+        )
+
+        _refresh_recency_tree(Path("/"))
+
+        assert not virtual_mtimes.keys() & scanned
+        for virtual, mtime in virtual_mtimes.items():
+            assert directory_browser._RECENCY_CACHE[str(virtual)][1] == mtime
+        assert directory_browser._RECENCY_CACHE[str(workspace)][1] == 8000.0
+
+    def test_nested_project_directory_named_proc_is_still_scanned(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        project = tmp_path / "project"
+        nested = project / "proc"
+        nested.mkdir(parents=True)
+        source = nested / "worker.py"
+        source.write_text("recent")
+        _touch(str(project), 1000.0)
+        _touch(str(nested), 1000.0)
+        _touch(str(source), 9000.0)
+        monkeypatch.setattr(sys, "platform", "linux")
+
+        assert _refresh_recency_tree(project) == 9000.0
+        assert directory_browser._RECENCY_CACHE[str(nested)][1] == 9000.0
+
+    def test_iteration_error_in_one_subtree_does_not_abort_siblings(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        volatile = tmp_path / "a-volatile"
+        volatile.mkdir()
+        sibling = tmp_path / "z-sibling"
+        sibling.mkdir()
+        recent = sibling / "recent.py"
+        recent.write_text("recent")
+        _touch(str(tmp_path), 1000.0)
+        _touch(str(volatile), 1000.0)
+        _touch(str(sibling), 1000.0)
+        _touch(str(recent), 8000.0)
+
+        real_scandir = os.scandir
+
+        def fake_scandir(path):
+            if Path(path) == volatile:
+                return _FakeScandir(
+                    [
+                        _FakeEntry(
+                            "vanishing",
+                            str(volatile / "vanishing"),
+                            is_dir=False,
+                            mtime=5000.0,
+                        )
+                    ],
+                    error_after=1,
+                )
+            return real_scandir(path)
+
+        monkeypatch.setattr(directory_browser.os, "scandir", fake_scandir)
+
+        assert _refresh_recency_tree(tmp_path) == 8000.0
+        assert directory_browser._RECENCY_CACHE[str(sibling)][1] == 8000.0
+
+    @pytest.mark.parametrize("platform", ["darwin", "win32"])
+    def test_non_linux_root_keeps_existing_recursive_behavior(
+        self, monkeypatch, platform
+    ) -> None:
+        real_scandir = os.scandir
+        real_path_stat = Path.stat
+        scanned: list[Path] = []
+
+        def fake_scandir(path):
+            current = Path(path)
+            scanned.append(current)
+            if current == Path("/"):
+                return _FakeScandir(
+                    [_FakeEntry("proc", "/proc", is_dir=True, mtime=1000.0)]
+                )
+            if current == Path("/proc"):
+                return _FakeScandir([])
+            return real_scandir(path)
+
+        monkeypatch.setattr(sys, "platform", platform)
+        monkeypatch.setattr(directory_browser.os, "scandir", fake_scandir)
+        monkeypatch.setattr(
+            Path,
+            "stat",
+            lambda path, *args, **kwargs: (
+                SimpleNamespace(st_mtime=1000.0)
+                if path == Path("/proc")
+                else real_path_stat(path, *args, **kwargs)
+            ),
+        )
+
+        _refresh_recency_tree(Path("/"))
+
+        assert Path("/proc") in scanned
 
 
 class TestBuildDirectoryBrowserOrder:

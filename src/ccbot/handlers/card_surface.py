@@ -8,8 +8,10 @@ import time
 
 from telegram import Bot
 
+from ..config import config
 from ..session import Session, session_manager
 from ..telegram_rate_limit import background_telegram_request
+from ..user_activity import effective_live_lag
 from .card_binding import clear_carrier, restore_carrier, snapshot_carrier
 from .card_model import (
     TurnPhase,
@@ -26,6 +28,7 @@ from .card_registry import (
     _legacy,
 )
 from .card_seed import get_card_state
+from .card_transport import _deferred_edit
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +190,42 @@ async def refresh_panel(
     active = session_manager.get_active_session(user_id)
     if active is None:
         return False
+    if not immediate:
+        async with _card_lock(user_id, active.id):
+            return await _refresh_panel_ready(
+                bot,
+                user_id,
+                active,
+                refresh_keyboard=refresh_keyboard,
+                refresh_pane=refresh_pane,
+            )
+    return await _refresh_panel_ready(
+        bot,
+        user_id,
+        active,
+        immediate=True,
+        refresh_keyboard=refresh_keyboard,
+        refresh_pane=refresh_pane,
+    )
+
+
+def _effective_refresh_lag(user_id: int) -> float:
+    user_lag = session_manager.get_user_settings(user_id).get("live_lag")
+    if user_lag is None:
+        user_lag = config.card_edit_lag
+    return effective_live_lag(user_id, float(user_lag))
+
+
+async def _refresh_panel_ready(
+    bot: Bot,
+    user_id: int,
+    active: Session,
+    *,
+    immediate: bool = False,
+    refresh_keyboard: bool = False,
+    refresh_pane: bool | None = None,
+) -> bool:
+    """Refresh one already-resolved active card under the automatic gate."""
     state = _cards.get((user_id, active.id))
     if state is None or state.msg_id is None or state.in_menu_view:
         return False
@@ -210,6 +249,24 @@ async def refresh_panel(
             or state.in_menu_view
         ):
             return False
+    if not immediate:
+        lag = _effective_refresh_lag(user_id)
+        elapsed = time.monotonic() - state.last_edit_ts if state.last_edit_ts else lag
+        if elapsed < lag:
+            delay = max(0.05, lag - elapsed)
+            state.pending_edit = asyncio.create_task(
+                _deferred_edit(
+                    bot,
+                    user_id,
+                    active,
+                    state,
+                    delay,
+                    min_interval=lag,
+                    force=refresh_keyboard,
+                    refresh_pane=True if refresh_pane is None else refresh_pane,
+                )
+            )
+            return True
     text = _legacy("_render_card")(active, state, user_id=user_id)
     if text == state.last_rendered and not refresh_keyboard:
         return True
@@ -277,13 +334,22 @@ async def card_timer_loop(bot: Bot) -> None:
                     # up the fresh timer value when it fires.
                     if state.pending_edit is not None and not state.pending_edit.done():
                         continue
-                    text = _legacy("_render_card")(sess, state, user_id=uid)
-                    if text == state.last_rendered:
-                        continue
-                    with background_telegram_request():
-                        if await _legacy("_edit_card")(bot, uid, state, text=text):
-                            state.last_rendered = text
-                            state.last_edit_ts = time.monotonic()
+                    async with _card_lock(uid, sid):
+                        lag = _effective_refresh_lag(uid)
+                        elapsed = (
+                            time.monotonic() - state.last_edit_ts
+                            if state.last_edit_ts
+                            else lag
+                        )
+                        if elapsed < lag:
+                            continue
+                        text = _legacy("_render_card")(sess, state, user_id=uid)
+                        if text == state.last_rendered:
+                            continue
+                        with background_telegram_request():
+                            if await _legacy("_edit_card")(bot, uid, state, text=text):
+                                state.last_rendered = text
+                                state.last_edit_ts = time.monotonic()
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:

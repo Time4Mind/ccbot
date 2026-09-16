@@ -26,6 +26,7 @@ from .card_rich_media import (
 )
 from .kb_mode import _capture_pane_png
 from .card_registry import (
+    _card_lock,
     _carrier_edit_lock,
     _user_send_lock,
     _strip_stale_switchers,
@@ -388,7 +389,15 @@ _PHOTO_EDIT_MIN_INTERVAL = 2.5  # seconds — per-session throttle on editMessag
 
 
 async def _deferred_edit(
-    bot: Bot, user_id: int, sess: Session, state: CardState, delay: float
+    bot: Bot,
+    user_id: int,
+    sess: Session,
+    state: CardState,
+    delay: float,
+    *,
+    min_interval: float = 0.0,
+    force: bool = False,
+    refresh_pane: bool = True,
 ) -> None:
     """Sleep `delay` then render the latest card state and edit once.
 
@@ -396,17 +405,38 @@ async def _deferred_edit(
     events arriving during the sleep collapse into a single edit.
     """
     try:
-        await asyncio.sleep(delay)
-        # Stale guard: card may have been reset (finalize_task) while we slept.
-        if state.msg_id is None:
-            return
-        text = _legacy("_render_card")(sess, state, user_id=user_id)
-        if text == state.last_rendered:
-            return
-        state.pending_edit_in_flight = True
-        if await _legacy("_edit_card")(bot, user_id, state, text=text):
-            state.last_rendered = text
-            state.last_edit_ts = time.monotonic()
+        remaining = delay
+        while True:
+            await asyncio.sleep(remaining)
+            async with _card_lock(user_id, sess.id):
+                # An immediate user action may have edited the same carrier
+                # while this automatic repaint slept. Re-check the shared
+                # minimum inside the card lock instead of emitting a burst.
+                elapsed = (
+                    time.monotonic() - state.last_edit_ts
+                    if state.last_edit_ts
+                    else min_interval
+                )
+                remaining = max(0.0, min_interval - elapsed)
+                if remaining > 0.01:
+                    continue
+                # Stale guard: card may have been reset while we slept.
+                if state.msg_id is None:
+                    return
+                text = _legacy("_render_card")(sess, state, user_id=user_id)
+                if text == state.last_rendered and not force:
+                    return
+                state.pending_edit_in_flight = True
+                if await _legacy("_edit_card")(
+                    bot,
+                    user_id,
+                    state,
+                    text=text,
+                    refresh_pane=refresh_pane,
+                ):
+                    state.last_rendered = text
+                    state.last_edit_ts = time.monotonic()
+                return
     except asyncio.CancelledError:
         return
     except Exception as e:

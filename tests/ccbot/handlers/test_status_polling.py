@@ -198,7 +198,7 @@ async def test_codex_background_terminal_reopens_working_surface(monkeypatch) ->
     assert state.pane_status == "Working · 1 background terminal running"
     assert _card_is_busy(state) is True
     refresh.assert_awaited_once_with(
-        bot, 42, immediate=True, refresh_keyboard=True, refresh_pane=True
+        bot, 42, immediate=False, refresh_keyboard=True, refresh_pane=True
     )
 
 

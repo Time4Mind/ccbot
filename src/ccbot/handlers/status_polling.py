@@ -477,7 +477,7 @@ async def _drive_typing_indicator(
             if await refresh_panel(
                 bot,
                 user_id,
-                immediate=True,
+                immediate=False,
                 refresh_keyboard=True,
                 refresh_pane=True,
             ):

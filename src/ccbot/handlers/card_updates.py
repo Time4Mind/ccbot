@@ -283,7 +283,14 @@ async def _update_session_card_locked(
     if state.pending_edit is None or state.pending_edit.done():
         delay = max(0.05, lag - elapsed)
         state.pending_edit = asyncio.create_task(
-            _deferred_edit(bot, user_id, sess, state, delay)
+            _deferred_edit(
+                bot,
+                user_id,
+                sess,
+                state,
+                delay,
+                min_interval=lag,
+            )
         )
 
 

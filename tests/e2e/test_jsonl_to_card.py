@@ -175,7 +175,9 @@ async def test_second_final_turn_spawns_new_card_and_freezes_previous(
     set_card_context_pct(USER_ID, "cccc3333", 51)
     await refresh_panel(fake_bot, USER_ID, immediate=True)
     final_edits = [
-        edit for edit in fake_bot.edits if edit["message_id"] == final_message.message_id
+        edit
+        for edit in fake_bot.edits
+        if edit["message_id"] == final_message.message_id
     ]
     assert final_edits and "✅" in final_edits[-1]["text"]
 
@@ -201,6 +203,8 @@ async def test_second_final_turn_spawns_new_card_and_freezes_previous(
         _Ctx(),
     )
     final_edits = [
-        edit for edit in fake_bot.edits if edit["message_id"] == final_message.message_id
+        edit
+        for edit in fake_bot.edits
+        if edit["message_id"] == final_message.message_id
     ]
     assert "✅" not in final_edits[-1]["text"]

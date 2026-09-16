@@ -19,6 +19,30 @@ from dataclasses import dataclass
 from . import terminal_usage as _terminal_usage
 
 
+_CODEX_MODEL_EFFORT_FOOTER_RE = re.compile(
+    r"^\s*(?P<model>\S+)\s+"
+    r"(?P<effort>default|low|medium|high|xhigh|max|ultra)\s+·\s+"
+    r"(?:~(?:/|$)|/)",
+    re.IGNORECASE,
+)
+
+
+def parse_codex_model_effort(pane_text: str) -> tuple[str, str] | None:
+    """Read ``<model> <effort> · <cwd>`` from the live Codex footer.
+
+    Only the pane tail is considered and the path after the separator is
+    mandatory, so quoted/copied footer-like text in ordinary output does not
+    become session identity.
+    """
+    lines = [line for line in pane_text.splitlines() if line.strip()]
+    if not lines:
+        return None
+    match = _CODEX_MODEL_EFFORT_FOOTER_RE.match(lines[-1])
+    if match is not None:
+        return match.group("model"), match.group("effort").lower()
+    return None
+
+
 @dataclass
 class InteractiveUIContent:
     """Content extracted from an interactive UI."""

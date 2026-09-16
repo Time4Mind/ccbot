@@ -34,6 +34,7 @@ from ..terminal_parser import (
     InteractiveUIContent,
     extract_interactive_content,
     is_interactive_ui,
+    parse_codex_model_effort,
     parse_status_line,
 )
 from ..tmux_manager import tmux_manager
@@ -427,6 +428,16 @@ async def _drive_typing_indicator(
     background_match = _BACKGROUND_TERMINAL_RE.search(status_line)
     background_work = background_match is not None
     state = get_card_state(user_id, sess) if sess is not None else None
+    identity_changed = False
+    if state is not None and getattr(sess, "backend", "") == "codex":
+        identity = parse_codex_model_effort(pane_text)
+        if identity is not None:
+            model, effort = identity
+            identity_changed = (
+                state.agent_model != model or state.reasoning_effort != effort
+            )
+            state.agent_model = model
+            state.reasoning_effort = effort
     if state is not None and state.user_stopped:
         # Escape can leave the last TUI spinner visible for several polls.
         # Explicit user intent wins until a new inbound request clears it.
@@ -469,17 +480,18 @@ async def _drive_typing_indicator(
             and refresh_now - state.last_stall_pane_refresh_ts
             >= _WORKING_PANE_REFRESH_SECONDS
         )
+        pane_refresh_needed = status_changed or busy_changed or refresh_due
         if (
             not is_bg_session
             and not in_menu
-            and (status_changed or busy_changed or refresh_due)
+            and (pane_refresh_needed or identity_changed)
         ):
             if await refresh_panel(
                 bot,
                 user_id,
                 immediate=False,
                 refresh_keyboard=True,
-                refresh_pane=True,
+                refresh_pane=pane_refresh_needed,
             ):
                 state.last_stall_pane_refresh_ts = refresh_now
 

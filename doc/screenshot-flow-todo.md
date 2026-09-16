@@ -51,7 +51,7 @@ is pending.
 | Screenshot enabled, session running | Refresh in the same carrier on normal card events and, while the Codex pane reports active work, at most once per 4 seconds. Never emit a separate screenshot message. |
 | Parent answer is final but a Codex background terminal is still running | Keep the session unfinished, show `Working · N background terminal(s) running`, keep the busy controls, and continue same-carrier screenshot refreshes. |
 | Screenshot enabled, turn becomes idle | Keep the latest screenshot in the active card. |
-| Active session emits a final answer | Freeze the old carrier on its currently open page and remove its buttons. Create the final-answer card as a new message with `✅` before the session icon; the first later card update removes the check. |
+| Active session emits a final answer | Freeze the old carrier on its currently open page and remove its buttons. Create the final-answer card as a new message with `✅` before the session icon; automatic refreshes preserve it, and the first user tap on that exact live card removes it. |
 | User opens menu/settings/archive/new-session flow or switches away | The former active session becomes background. Its terminal changes must not repaint the visible non-session surface. |
 | User returns to/selects an active session | Immediately render that session's own cached snapshot in the same carrier when screenshots are globally enabled. Never carry the source session's image across. |
 | Target screenshot cache is at most 10s old | Use it as the completed switch; no synchronous pane capture is needed. |

@@ -17,6 +17,9 @@ from ccbot.session_monitor import SessionMonitor
 
 from harness import (
     USER_ID,
+    FakeCallbackQuery,
+    FakeUpdate,
+    FakeUser,
     append_jsonl,
     assistant_turn,
     make_jsonl_path,
@@ -163,3 +166,45 @@ async def test_second_final_turn_spawns_new_card_and_freezes_previous(
         message_id=fake_bot.sent_messages[-2].message_id,
         reply_markup=None,
     )
+
+    # Automatic card refreshes must preserve the completion marker until the
+    # user acknowledges this exact carrier with a button tap.
+    from ccbot.handlers.notifications import refresh_panel, set_card_context_pct
+
+    final_message = fake_bot.sent_messages[-1]
+    set_card_context_pct(USER_ID, "cccc3333", 51)
+    await refresh_panel(fake_bot, USER_ID, immediate=True)
+    final_edits = [
+        edit
+        for edit in fake_bot.edits
+        if edit["message_id"] == final_message.message_id
+    ]
+    assert final_edits and "✅" in final_edits[-1]["text"]
+
+    # The first tap on that carrier acknowledges the marker even when the
+    # selected control would otherwise be a no-op and not repaint the card.
+    from ccbot.bot.callbacks import callback_handler
+    from ccbot.handlers.callback_data import CB_SW_NOOP
+
+    class _Ctx:
+        bot = fake_bot
+        user_data: dict = {}
+
+    user = FakeUser(USER_ID)
+    query = FakeCallbackQuery(
+        data=CB_SW_NOOP,
+        user=user,
+        message_id=final_message.message_id,
+        chat_id=USER_ID,
+        bot=fake_bot,
+    )
+    await callback_handler(
+        FakeUpdate(user=user, callback_query=query),
+        _Ctx(),
+    )
+    final_edits = [
+        edit
+        for edit in fake_bot.edits
+        if edit["message_id"] == final_message.message_id
+    ]
+    assert "✅" not in final_edits[-1]["text"]

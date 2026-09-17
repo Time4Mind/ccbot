@@ -378,15 +378,16 @@ async def _dispatch_text_to_active(
             )
 
         sess = session_manager.find_session_by_window(wid)
-        # ``send_to_window`` and Codex's submit verification can take long
-        # enough for the user to switch sessions.  The ``owns_card`` value
-        # captured before those awaits is no longer authoritative: using it
-        # below would let the old session resume/repost the carrier that the
-        # switcher has already handed to the new active session.
+        # Re-check ownership after awaits so an old session cannot steal the
+        # carrier back after the user switches.
         owns_card = sess is not None and is_active_for_user(user_id, sess)
+        status_changed = False
         if sess is not None:
             card_state = get_card_state(user_id, sess)
             card_state.turn_phase = TurnPhase.RUNNING
+            status_changed = bg_status.update_status(
+                user_id, sess.id, "working", force=True
+            )
             session_manager.touch_session(sess.id)
             # ``maybe_auto_name`` honours the user's ``haiku_naming``
             # setting and the directory-basename guard internally — we
@@ -410,10 +411,8 @@ async def _dispatch_text_to_active(
         # interactive-UI handling, and other post-send work above may await.
         owns_card = is_active_for_user(user_id, sess)
         if not owns_card:
-            # Background session (voice pinned here, user moved on).
-            # Its only chat surface is a row in the active card's
-            # bg-status panel — no card, no push, no switcher steal.
-            if bg_status.update_status(user_id, sess.id, "working"):
+            # Background delivery stays silent in chat.
+            if status_changed:
                 try:
                     await refresh_panel(context.bot, user_id)
                 except Exception as e:

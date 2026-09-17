@@ -7,7 +7,6 @@ import time
 
 from ..i18n import t
 from ..session import Session
-from . import bg_status
 from .card_budget import _format_hhmmss
 from .card_event_render import render_event
 from .card_pagination import (
@@ -20,7 +19,6 @@ from .card_pagination import (
     render_page,
 )
 from .card_types import CardState, Event
-from .switcher import session_emoji
 
 __all__ = [
     "_BOX_DRAWING_RE",
@@ -204,7 +202,6 @@ def _render_card(
     footer: str = "",
     user_id: int | None = None,
 ) -> str:
-    emoji = session_emoji(sess)
     state_label = sess.dir_label if sess.state == "active" else sess.state
     cont_marker = " · …continued" if state.is_continuation else ""
     # Last-event timestamp in the header — HH:MM:SS of the most recent
@@ -217,7 +214,7 @@ def _render_card(
     name_part = sess.name or sess.id
     completion = "✅ " if state.completion_marker_pending else ""
     header = (
-        f"{completion}{emoji} *{name_part}* · {state_label}"
+        f"{completion}*{name_part}* · {state_label}"
         f"{identity_suffix}{cont_marker}{ts_suffix}"
     )
     if sess.goal:
@@ -269,11 +266,6 @@ def _render_card(
 
     pages = paginate_events_for_card(state, user_id)
     idx = _resolved_page_idx(state, len(pages))
-
-    # Optional bg-panel always lives at the bottom.
-    panel = ""
-    if user_id is not None:
-        panel = bg_status.render_panel(user_id, active_session_id=sess.id)
 
     # Safety net: a sub-page should fit by construction, but a single
     # huge event (one tool_result well over budget) can still overflow
@@ -353,12 +345,6 @@ def _render_card(
         # last body event.
         parts.append("\u00a0")
         parts.append(f"context: {state.context_pct}%")
-    if panel:
-        # The panel carries its own ``─── фон ───`` label-separator
-        # (pivot #39 feedback: previously the bg-row glued to the last
-        # body line). Same nbsp-paragraph trick to widen the gap.
-        parts.append("\u00a0")
-        parts.append(panel)
     # Paragraph-break join (``\n\n``) — single ``\n`` is a CommonMark
     # soft break that the rich parser collapses to a space, glueing
     # ``header ───── body ───── footer`` onto one row instead of each

@@ -11,6 +11,8 @@ header on a row above each badge.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from ccbot.handlers import bg_status
@@ -99,3 +101,63 @@ class TestPanelHardBreaks:
     def test_empty_panel_returns_empty_string(self, isolated_bg) -> None:
         """No bg sessions registered → empty panel, no orphan ``  \\n``."""
         assert bg_status.render_panel(42) == ""
+
+
+@pytest.mark.asyncio
+async def test_infer_status_treats_trailing_user_turn_as_working(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in (
+                {
+                    "type": "assistant",
+                    "message": {"stop_reason": "end_turn", "content": []},
+                },
+                {"type": "user", "message": {"content": "next request"}},
+            )
+        ),
+        encoding="utf-8",
+    )
+    sess = _seed_session("turn-open", "turn-open")
+    sess.claude_session_id = "claude-turn-open"
+    try:
+        from ccbot import session_claude_io
+
+        monkeypatch.setattr(
+            session_claude_io,
+            "build_session_file_path",
+            lambda *_args, **_kwargs: transcript,
+        )
+
+        assert await bg_status.infer_status_from_jsonl(sess) == "working"
+    finally:
+        session_manager.sessions.pop(sess.id, None)
+
+
+def test_legacy_finished_state_migrates_to_seen(isolated_bg) -> None:
+    bg_status.load_per_user(
+        {
+            "42": {
+                "old": {
+                    "status": "finished",
+                    "last_change": 1.0,
+                    "context_pct": None,
+                }
+            }
+        }
+    )
+
+    assert bg_status.status_emoji(42, "old") == "☑️"
+
+
+def test_versioned_unread_completion_survives_round_trip(isolated_bg) -> None:
+    bg_status.update_status(42, "fresh", "finished")
+
+    raw = bg_status.serialize_per_user()
+    assert raw["42"]["fresh"]["status_version"] == 2
+
+    bg_status.load_per_user(raw)
+    assert bg_status.status_emoji(42, "fresh") == "✅"

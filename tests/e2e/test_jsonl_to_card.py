@@ -161,6 +161,9 @@ async def test_second_final_turn_spawns_new_card_and_freezes_previous(
     assert fake_bot.send_message.call_count == sends_after_first + 1
     assert "Second answer" in fake_bot.sent_messages[-1].text
     assert "✅" in fake_bot.sent_messages[-1].text
+    from ccbot.handlers import bg_status
+
+    assert bg_status.status_emoji(USER_ID, "cccc3333") == "✅"
     fake_bot.edit_message_reply_markup.assert_awaited_with(
         chat_id=USER_ID,
         message_id=fake_bot.sent_messages[-2].message_id,
@@ -208,3 +211,4 @@ async def test_second_final_turn_spawns_new_card_and_freezes_previous(
         if edit["message_id"] == final_message.message_id
     ]
     assert "✅" not in final_edits[-1]["text"]
+    assert bg_status.status_emoji(USER_ID, "cccc3333") == "☑️"

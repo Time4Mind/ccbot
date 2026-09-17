@@ -295,19 +295,23 @@ async def _surface_new_interactive_ui(
     if await _maybe_auto_approve(user_id, window_id, pane_text):
         return True
 
+    content_obj = extract_interactive_content(pane_text)
+    ui_tuple = (
+        (content_obj.content, content_obj.name) if content_obj is not None else None
+    )
+    attention_changed = False
+    if sess is not None and not reserve_owner(sess):
+        attention_changed = bg_status.update_status(
+            user_id, sess.id, "needs_action", interactive_ui=ui_tuple
+        )
+
     if is_bg_session and sess is not None and not reserve_owner(sess):
         # Background session: prompt didn't qualify for auto-approve
         # (e.g. no "Yes" option, or feature off). Never surface in
         # chat — stash the snapshot in bg_status and flip ❓ on the
         # panel. The switcher-tap handler renders it when the user
         # looks at the session.
-        content_obj = extract_interactive_content(pane_text)
-        ui_tuple = (
-            (content_obj.content, content_obj.name) if content_obj is not None else None
-        )
-        if bg_status.update_status(
-            user_id, sess.id, "needs_action", interactive_ui=ui_tuple
-        ):
+        if attention_changed:
             await refresh_panel(bot, user_id)
         return True
     if interactive_window is not None:
@@ -333,7 +337,6 @@ async def _surface_new_interactive_ui(
     if sess is not None and not is_bg_session:
         from .notifications import enter_kb_mode
 
-        content_obj = extract_interactive_content(pane_text)
         if content_obj is not None:
             # Prompt re-detected — reset the teardown debounce streak.
             _kb_clear_miss.pop((user_id, sess.id), None)
@@ -366,10 +369,9 @@ async def _reconcile_no_ui_state(
     if no_ui:
         _auto_approve_attempts.pop((user_id, window_id), None)
 
-    # No interactive UI on this pane right now. If we previously stashed
-    # one for a bg session (e.g. claude dismissed the prompt without our
-    # input), clear it so the ❓ badge doesn't lie.
-    if is_bg_session and sess is not None and no_ui:
+    # No interactive UI on this pane right now. If we previously stashed one,
+    # clear the attention marker for active and background sessions alike.
+    if sess is not None and no_ui:
         if bg_status.clear_pending_ui(user_id, sess.id):
             await refresh_panel(bot, user_id)
 

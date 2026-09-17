@@ -71,6 +71,9 @@ async def handle(
         if sess is None or sess.state not in ("active", "idle"):
             await query.answer("Session not available", show_alert=True)
             return True
+        # Tapping a completed session is the explicit read acknowledgement.
+        # Do it before painting so the transferred keyboard already shows ☑️.
+        bg_status.mark_seen(user.id, target_id)
         logger.info(
             "sw_use user=%d target=%s name=%s state=%s carrier_msg=%s",
             user.id,
@@ -116,13 +119,9 @@ async def handle(
         # the next tap repaints whichever one the user happened to hit.
         await _strip_orphan_switcher_if_current(context.bot, user.id, orphan_msg_id)
 
-        # The session we just LEFT is now bg. Seed its panel row from
-        # JSONL — but only for the "working" case. If the inferred
-        # status is "finished", the user was just looking at that
-        # session's live card and saw the answer themselves — surfacing
-        # a ✅ badge for it now would be a false notification (user
-        # explicitly reported: "I looked at the session result — after
-        # this it should disappear"). Clear the entry instead.
+        # The session we just LEFT remains represented in the switcher. Seed
+        # its current lifecycle from JSONL; finished is a state now, not a
+        # dismissible notification.
         if (
             old_active is not None
             and old_active.id != target_id
@@ -139,12 +138,18 @@ async def handle(
                     logger.debug("infer bg status failed: %s", e)
                     return
                 changed = False
-                if inferred == "finished":
-                    # User just left an already-finished session — no
-                    # notification needed; clear any stale entry.
-                    changed = bg_status.clear_for_user_session(user.id, old_sess.id)
-                elif inferred == "working":
+                if inferred == "working":
                     changed = bg_status.update_status(user.id, old_sess.id, "working")
+                elif (
+                    inferred == "finished"
+                    and bg_status.get_status(user.id, old_sess.id) is None
+                ):
+                    # Legacy/migration fallback only. A tracked ``finished``
+                    # stays unread until its own carrier/session is tapped.
+                    changed = bg_status.update_status(
+                        user.id, old_sess.id, "seen_finished"
+                    )
+                if inferred == "working":
                     try:
                         from ...usage import context_pct_for_session
 
@@ -260,9 +265,6 @@ async def handle(
                 except Exception as e:
                     logger.debug("preview safe_edit failed: %s", e)
 
-        # Panel housekeeping: the user switched INTO this session, so it
-        # is no longer "background" relative to them — drop its bg entry.
-        bg_status.clear_for_user_session(user.id, target_id)
         # NB: do NOT call refresh_panel here. The carrier message just
         # got painted with the history view (or the pending interactive
         # UI). refresh_panel re-renders the live card on the same

@@ -24,7 +24,6 @@ from ..handlers.notifications import card_timer_loop, shutdown_card_surface_task
 from ..handlers.status_polling import status_poll_loop
 from ..metrics import metrics_flush_loop
 from ..session import session_manager
-from ..session_models import reserve_owner
 from ..session_monitor import NewMessage, SessionMonitor
 from ._common import CC_COMMANDS
 from .commands.auth import (
@@ -272,39 +271,39 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     asyncio.create_task(_prewarm_history_caches())
     logger.info("History cache pre-warm scheduled")
 
-    # Seed bg_status for sessions that are still "working" so a
-    # restart-spanned in-progress session lands in the panel as soon
-    # as the bot comes up. ``finished`` sessions are NOT seeded —
-    # they're already-completed turns; if the user noticed them
-    # before the restart they don't need a repeat notification, and
-    # if they didn't they can switch into the session to see the
-    # answer. The fresh-end-of-turn notification path
-    # (session_events) still fires for sessions that actually
-    # finish AFTER the bot starts.
+    # Seed the lifecycle marker for every live session.  Buttons are a full
+    # status view now, not a sparse notification feed: after restart each one
+    # must be either working, finished/ready, or awaiting attention.
     async def _seed_bg_statuses() -> None:
         from ..handlers import bg_status
         from ..handlers.notifications import refresh_panel
         from ..usage import context_pct_for_session
 
         for user_id in config.allowed_users:
-            active = session_manager.get_active_session(user_id)
-            active_id = active.id if active is not None else None
             changed = False
             for sess in list(session_manager.sessions.values()):
                 if sess.state not in ("active", "idle"):
-                    continue
-                if reserve_owner(sess):
-                    continue
-                if sess.id == active_id:
                     continue
                 try:
                     inferred = await bg_status.infer_status_from_jsonl(sess)
                 except Exception as e:
                     logger.debug("infer bg status failed for %s: %s", sess.id, e)
                     continue
-                if inferred != "working":
-                    continue
-                if bg_status.update_status(user_id, sess.id, "working"):
+                current = bg_status.get_status(user_id, sess.id)
+                if inferred == "working":
+                    seed_status: bg_status.Status = "working"
+                elif current in ("finished", "seen_finished", "error"):
+                    # Preserve durable unread/read/error state.
+                    seed_status = current
+                elif current is not None:
+                    # A formerly working/question session that became terminal
+                    # while the bot was down has an unread result.
+                    seed_status = "finished"
+                else:
+                    # Migration/default: old terminal or empty reserve sessions
+                    # have no unread evidence, so do not manufacture ✅ badges.
+                    seed_status = "seen_finished"
+                if bg_status.update_status(user_id, sess.id, seed_status):
                     changed = True
                 try:
                     pct = await context_pct_for_session(sess)

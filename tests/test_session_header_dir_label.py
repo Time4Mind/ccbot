@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import pytest
 
-from ccbot.handlers import card_layout
 from ccbot.handlers.card_model import CardState, Event, _render_card
 from ccbot.handlers.switcher import build_session_preview
 from ccbot.session_models import Session
@@ -32,6 +31,23 @@ class TestCardHeaderDirLabel:
         text = _render_card(sess, CardState())
         assert "claude-…" in text
         assert "· active" not in text
+        assert not any(
+            marker in text.splitlines()[0]
+            for marker in (
+                "🟦",
+                "🟩",
+                "🟨",
+                "🟧",
+                "🟥",
+                "🟪",
+                "🟫",
+                "⬛",
+                "🔵",
+                "🟢",
+                "🟣",
+                "🟠",
+            )
+        )
 
     def test_short_dirname_untouched(self) -> None:
         sess = _session(workdir="/root/ccbot")
@@ -114,14 +130,7 @@ class TestPaneStatusPlacement:
         assert latest_page.index("second request") < latest_page.index("• Working")
 
 
-def test_media_anchor_precedes_context_and_background_panel(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        card_layout.bg_status,
-        "render_panel",
-        lambda *_args, **_kwargs: "─── фон ───\nbackground-session",
-    )
+def test_card_omits_background_panel_but_keeps_context_after_media_anchor() -> None:
     state = CardState(
         context_pct=42,
         pane_status="Working · 1 background terminal running",
@@ -136,7 +145,9 @@ def test_media_anchor_precedes_context_and_background_panel(
     assert "context:" not in body
     assert "─── фон ───" not in body
     assert body.rstrip().endswith("• Working · 1 background terminal running")
-    assert service_tail.index("context: 42%") < service_tail.index("─── фон ───")
+    assert "context: 42%" in service_tail
+    assert "─── фон ───" not in service_tail
+    assert "background-session" not in service_tail
     assert "background terminal running" not in service_tail
 
 

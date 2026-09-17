@@ -320,7 +320,7 @@ Reply-цитата на сообщение бота из неактивной с
 сессии:
 
 ```
-🟦 session-A ⏳        ← работает в фоне
+🟦 session-A 🔶        ← работает в фоне
 🟪 scraper   ✅        ← завершилась
 🟧 chores    ❌        ← упала
 🟨 frontend  ❓        ← требует действия (AskUserQuestion / permission)

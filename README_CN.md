@@ -250,7 +250,7 @@ Terminal 默认隐藏。
 底部的紧凑面板形式呈现:
 
 ```
-🟦 session-A ⏳        ← 后台运行中
+🟦 session-A 🔶        ← 后台运行中
 🟪 scraper   ✅        ← 完成
 🟧 chores    ❌        ← 出错
 🟨 frontend  ❓        ← 需要用户操作(AskUserQuestion / permission)

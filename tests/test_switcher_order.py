@@ -105,7 +105,7 @@ def test_switcher_uses_status_without_arbitrary_colour_emoji() -> None:
         assert markup is not None
         labels = [button.text for row in markup.inline_keyboard for button in row]
         assert "✓ ☑️ current" in labels
-        assert "⏳ background" in labels
+        assert "🔶 background" in labels
         assert all("🟩" not in label and "🟨" not in label for label in labels)
     finally:
         session_manager.sessions.clear()
@@ -142,7 +142,7 @@ def test_error_marker_is_sticky_until_explicit_user_recovery() -> None:
         assert bg_status.status_emoji(42, "broken") == "❗"
 
         assert bg_status.update_status(42, "broken", "working", force=True) is True
-        assert bg_status.status_emoji(42, "broken") == "⏳"
+        assert bg_status.status_emoji(42, "broken") == "🔶"
     finally:
         bg_status._bg.clear()
         bg_status._bg.update(saved_bg)

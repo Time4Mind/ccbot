@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
@@ -30,7 +30,9 @@ def _session() -> Session:
     )
 
 
-def _patch_route(monkeypatch: pytest.MonkeyPatch, sess: Session) -> None:
+def _patch_route(
+    monkeypatch: pytest.MonkeyPatch, sess: Session, *, active: bool = True
+) -> None:
     monkeypatch.setattr(
         session_events.session_manager,
         "all_user_sessions_with_claude_id",
@@ -39,7 +41,7 @@ def _patch_route(monkeypatch: pytest.MonkeyPatch, sess: Session) -> None:
     monkeypatch.setattr(
         session_events.session_manager, "touch_session", lambda _sid: None
     )
-    monkeypatch.setattr(session_events, "is_active_for_user", lambda *_args: True)
+    monkeypatch.setattr(session_events, "is_active_for_user", lambda *_args: active)
     monkeypatch.setattr(session_events, "fire_typing", AsyncMock())
     monkeypatch.setattr(session_events, "update_session_card", AsyncMock())
     monkeypatch.setattr(session_events, "finalize_task", AsyncMock())
@@ -96,3 +98,37 @@ async def test_terminal_api_error_sets_sticky_attention_marker(monkeypatch) -> N
 
     assert bg_status._bg[42][sess.id].status == "error"
     assert bg_status.status_emoji(42, sess.id) == "❗"
+
+
+@pytest.mark.asyncio
+async def test_background_terminal_api_error_pushes_attention_once(monkeypatch) -> None:
+    sess = _session()
+    _patch_route(monkeypatch, sess, active=False)
+    push_event = AsyncMock()
+    refresh_panel = AsyncMock()
+    monkeypatch.setattr(session_events, "refresh_panel", refresh_panel)
+    monkeypatch.setattr(
+        session_events.session_manager,
+        "get_user_settings",
+        lambda _user_id: {"bg_notify_error": True},
+    )
+    monkeypatch.setattr("ccbot.handlers.notifications.push_event", push_event)
+
+    message = NewMessage(
+        session_id="claude-1",
+        text="backend failed",
+        is_complete=True,
+        role="assistant",
+        stop_reason="end_turn",
+        api_error="backend_error",
+    )
+    await session_events.handle_new_message(message, AsyncMock())
+    await session_events.handle_new_message(message, AsyncMock())
+
+    push_event.assert_awaited_once_with(
+        ANY,
+        42,
+        sess,
+        status="error",
+        text="error",
+    )

@@ -325,15 +325,13 @@ RU: dict[str, str] = {
     ),
     "settings.bg_notify.error.body": (
         "*Bg-сессия: ошибки*\n\n"
-        "Push ❌ [<name>] error когда фоновая сессия эмитит\n"
-        "ошибочный ивент. (Сейчас срабатывает только на явные\n"
-        "error-ивенты; детект исключений будет расширен.)"
+        "Push ❗ [<name>] error один раз при переходе фоновой "
+        "сессии в блокирующую ошибку."
     ),
     "settings.bg_notify.needs_action.body": (
         "*Bg-сессия: нужен ввод*\n\n"
-        "Push ❓ [<name>] needs your attention когда фоновая сессия\n"
-        "показывает AskUserQuestion / ExitPlanMode / Permission промпт.\n"
-        "Иначе только ❓ бейдж в bg-panel — легко пропустить."
+        "Push ❗ [<name>] needs your attention когда фоновая сессия\n"
+        "ждет ввода или ручного подтверждения."
     ),
     "settings.group.haiku_naming": "Имена сессий через AI",
     "settings.group.archive_ai_description": "AI-описание",

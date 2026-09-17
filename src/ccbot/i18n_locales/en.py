@@ -338,16 +338,13 @@ EN: dict[str, str] = {
     ),
     "settings.bg_notify.error.body": (
         "*Bg session: errors*\n\n"
-        "Push ❌ [<name>] error when a background session emits an "
-        "error event. (Currently fires only on explicit error events; "
-        "exception detection is being extended.)"
+        "Push ❗ [<name>] error once when a background session enters "
+        "a blocking error state."
     ),
     "settings.bg_notify.needs_action.body": (
         "*Bg session: needs action*\n\n"
-        "Push ❓ [<name>] needs your attention when a background session "
-        "shows an AskUserQuestion / ExitPlanMode / Permission prompt. "
-        "Otherwise only the ❓ badge in the bg-panel signals it — easy "
-        "to miss."
+        "Push ❗ [<name>] needs your attention when a background session "
+        "waits for input or manual confirmation."
     ),
     "settings.group.haiku_naming": "AI session names",
     "settings.group.archive_ai_description": "AI-description",

@@ -75,10 +75,58 @@ async def test_background_push_has_exact_session_navigation_button(
     )
     session = SimpleNamespace(id="abc123", name="Target")
 
-    await card_updates.push_event(SimpleNamespace(), 42, session, text="task complete")
+    await card_updates.push_event(
+        SimpleNamespace(), 42, session, status="finished", text="task complete"
+    )
 
+    assert safe_send.await_args.args[2].startswith("✅ ")
     markup = safe_send.await_args.kwargs["reply_markup"]
     button = markup.inline_keyboard[0][0]
     assert button.callback_data == f"{CB_SW_USE}{session.id}"
     assert "Target" in button.text
     assert registered == [(42, 321, "abc123")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["needs_action", "error"])
+async def test_background_attention_push_uses_exclamation(
+    monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    from ccbot.handlers import card_updates
+
+    safe_send = AsyncMock(return_value=SimpleNamespace(message_id=321))
+    monkeypatch.setattr(
+        card_updates,
+        "_legacy",
+        lambda name: safe_send if name == "safe_send" else None,
+    )
+    monkeypatch.setattr(card_updates, "_register_msg", lambda *_args: None)
+    session = SimpleNamespace(id="abc123", name="Target")
+
+    await card_updates.push_event(
+        SimpleNamespace(), 42, session, status=status, text="needs your attention"
+    )
+
+    assert safe_send.await_args.args[2].startswith("❗ ")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["working", "seen_finished", "stalled"])
+async def test_routine_background_status_does_not_push(
+    monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    from ccbot.handlers import card_updates
+
+    safe_send = AsyncMock()
+    monkeypatch.setattr(
+        card_updates,
+        "_legacy",
+        lambda name: safe_send if name == "safe_send" else None,
+    )
+    session = SimpleNamespace(id="abc123", name="Target")
+
+    await card_updates.push_event(
+        SimpleNamespace(), 42, session, status=status, text="routine update"
+    )
+
+    safe_send.assert_not_awaited()

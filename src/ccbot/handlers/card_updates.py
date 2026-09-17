@@ -29,7 +29,6 @@ from .card_model import (
 from .card_binding import clear_carrier
 from .callback_data import CB_SW_USE
 from .card_types import TurnPhase
-from .switcher import session_emoji
 from .tg_format import Attachment, split_overflow
 
 from .card_registry import (
@@ -595,11 +594,20 @@ async def push_event(
     user_id: int,
     sess: Session,
     *,
+    status: str,
     text: str,
-    is_error: bool = False,
 ) -> None:
-    """Send a compact background-session notification with an exact jump."""
-    emoji = "🟥" if is_error else session_emoji(sess)
+    """Send an actionable background notification with an exact jump.
+
+    Routine lifecycle states are card-only and intentionally produce no push.
+    """
+    emoji = {
+        "finished": "✅",
+        "needs_action": "❗",
+        "error": "❗",
+    }.get(status)
+    if emoji is None:
+        return
     name = sess.name or sess.id
     body = f"{emoji} {name} {text}"
     if len(body) > 3500:

@@ -64,7 +64,7 @@ async def test_active_session_turn_transitions_working_to_finished(monkeypatch) 
         ),
         AsyncMock(),
     )
-    assert bg_status.status_emoji(42, sess.id) == "⏳"
+    assert bg_status.status_emoji(42, sess.id) == "⚡"
 
     await session_events.handle_new_message(
         NewMessage(

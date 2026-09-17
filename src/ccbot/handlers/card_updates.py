@@ -58,6 +58,9 @@ def _apply_preprocessing_marker(
 ) -> None:
     if event.type != "user_msg":
         return
+    if state.pending_request_sequences:
+        _message_id, sequence = state.pending_request_sequences.pop(0)
+        state.active_turn_sequence = sequence
     normalized = raw_text.strip()
     if state.pending_prompts:
         # Telegram dispatch and Codex transcript append are FIFO for one
@@ -445,11 +448,20 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
         # Recover and seed under the same lock as final mutation/render so a
         # next-turn event cannot interleave a stale snapshot.
         await _legacy("_ensure_seeded")(user_id, sess, state)
-        state.turn_phase = TurnPhase.IDLE
+        newer_request_pending = any(
+            sequence > state.active_turn_sequence
+            for _message_id, sequence in state.pending_request_sequences
+        )
+        # A later Telegram prompt already owns the live tail even when its
+        # transcript row has not appeared yet. The older final still belongs
+        # in history, but must not freeze/spawn the visible card above it.
+        state.turn_phase = (
+            TurnPhase.RUNNING if newer_request_pending else TurnPhase.IDLE
+        )
         state.stall_watch_active = False
         state.last_stall_pane_refresh_ts = 0.0
         await _drain_pending_edit(state)
-        buffered = _should_buffer(user_id, sess.id, state)
+        buffered = _should_buffer(user_id, sess.id, state) or newer_request_pending
 
         old_card_msg_id = state.msg_id
         if final_events and not buffered and old_card_msg_id is not None:
@@ -473,16 +485,27 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
             # Focus the first answer chunk. Budget pagination may produce a
             # different number of sub-pages than chunks, so arithmetic based
             # on ``len(final_events)`` is not a valid page lookup.
-            pages_after = paginate_events_for_card(state, user_id)
-            first_final = final_events[0]
-            state.current_page_idx = next(
-                (
-                    index
-                    for index, page in enumerate(pages_after)
-                    if any(event is first_final for event in page)
-                ),
-                None,
-            )
+            if not newer_request_pending:
+                pages_after = paginate_events_for_card(state, user_id)
+                first_final = final_events[0]
+                state.current_page_idx = next(
+                    (
+                        index
+                        for index, page in enumerate(pages_after)
+                        if any(event is first_final for event in page)
+                    ),
+                    None,
+                )
+            else:
+                logger.info(
+                    "final card focus deferred sess=%s active_turn=%s pending=%s",
+                    sess.id,
+                    state.active_turn_sequence,
+                    [
+                        sequence
+                        for _message_id, sequence in state.pending_request_sequences
+                    ],
+                )
             if not buffered:
                 state.completion_marker_pending = True
 

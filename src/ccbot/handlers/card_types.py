@@ -136,6 +136,14 @@ class CardState:
     # Page the user is currently looking at. ``None`` = default focus
     # (page with the latest answer-anchor). Set by pagination callbacks.
     current_page_idx: int | None = None
+    # Telegram can accept the next prompt before the transcript exposes the
+    # previous turn's final answer. Keep a tiny FIFO of accepted prompts so
+    # that older final cannot steal the live card/page from a newer request.
+    # The sequence is state-local: it orders UI intent, not transcript data,
+    # and therefore does not need persistence.
+    next_request_sequence: int = 0
+    active_turn_sequence: int = 0
+    pending_request_sequences: list[tuple[int, int]] = field(default_factory=list)
     last_event_ts: float = 0.0
     # Live agent identity scraped from the session's own terminal footer.
     # Kept state-local because /model and reasoning-effort changes are session

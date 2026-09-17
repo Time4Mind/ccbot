@@ -241,6 +241,62 @@ async def test_active_final_answer_spawns_new_card_and_freezes_open_page(
 
 
 @pytest.mark.asyncio
+async def test_older_final_does_not_take_card_from_already_accepted_next_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A queued next prompt owns the live tail before it reaches JSONL.
+
+    This is the production ordering from the ``colleague request`` incident:
+    Telegram accepted request B, then JSONL exposed final A, and only after
+    that exposed request B. Final A must remain in history without freezing
+    the card on its page or spawning a replacement carrier above request B.
+    """
+    state = CardState(
+        msg_id=9,
+        current_page_idx=None,
+        events=[
+            Event(
+                type="user_msg",
+                text="request A",
+                started_at=1.0,
+                is_page_break=True,
+            )
+        ],
+    )
+    # Request A already owns the running turn; request B has been accepted by
+    # Telegram but its transcript row has not arrived yet.
+    state.active_turn_sequence = 1
+    state.pending_request_sequences = [(102, 2)]
+    state.next_request_sequence = 2
+    bot = SimpleNamespace(edit_message_reply_markup=AsyncMock(return_value=True))
+    send_card = AsyncMock(return_value=True)
+
+    monkeypatch.setattr(card_updates, "get_card_state", lambda _uid, _sess: state)
+    monkeypatch.setattr(card_updates, "_should_buffer", lambda *_args: False)
+    monkeypatch.setattr(
+        card_updates,
+        "_legacy",
+        lambda name: {
+            "_ensure_seeded": AsyncMock(return_value=None),
+            "_render_card": lambda *_args, **_kwargs: "unused",
+            "build_footer_keyboard": lambda *_args, **_kwargs: None,
+            "_send_card": send_card,
+            "_edit_card": AsyncMock(return_value=True),
+        }[name],
+    )
+    session = SimpleNamespace(id="s1", window_id="")
+
+    await card_updates.finalize_task(bot, 42, session, "answer A")
+
+    bot.edit_message_reply_markup.assert_not_awaited()
+    send_card.assert_not_awaited()
+    assert state.msg_id == 9
+    assert state.current_page_idx is None
+    assert state.turn_phase is TurnPhase.RUNNING
+    assert [event.text for event in state.events][-1] == "answer A"
+
+
+@pytest.mark.asyncio
 async def test_final_card_is_not_sent_until_render_contains_the_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -167,6 +167,24 @@ class TestToRichMarkdown:
         assert match is not None
         assert resolve_file_button(match.group(1)) == path.resolve()
 
+    def test_sanitized_codex_file_citation_becomes_download_button(
+        self, tmp_path: Path
+    ) -> None:
+        from ccbot.handlers.card_text import _strip_for_card
+
+        path = tmp_path / "financial.report.xlsx"
+        path.write_text("data", encoding="utf-8")
+        source = (
+            f'Готово: :codex-file-citation{{path="{path}" purpose="output"}}'
+        )
+
+        out = rich.to_rich_markdown(_strip_for_card(source))
+
+        assert ":codex-file-citation" not in out
+        assert str(path) not in out
+        assert "financial.report " in out
+        assert ">xlsx</tg-button>" in out
+
     def test_session_inbox_relative_path_becomes_file_button(
         self, tmp_path: Path
     ) -> None:

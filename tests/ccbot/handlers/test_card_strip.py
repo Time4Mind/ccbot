@@ -51,6 +51,23 @@ class TestStripForCard:
         assert "~" in out
         assert home not in out
 
+    def test_codex_file_citation_becomes_plain_local_path(self) -> None:
+        source = (
+            'Готово: :codex-file-citation{path="/tmp/report.xlsx" '
+            'purpose="output"}'
+        )
+
+        assert _strip_for_card(source) == "Готово: /tmp/report.xlsx"
+
+    def test_codex_followup_directives_are_removed_as_complete_list_items(self) -> None:
+        source = (
+            "Итог готов.\n\n"
+            '- :codex-followup[Пересчитать модель]{prompt="Пересчитай модель."}\n'
+            '- :codex-followup[Показать расхождения]{prompt="Покажи 8 строк."}\n'
+        )
+
+        assert _strip_for_card(source) == "Итог готов.\n"
+
 
 class TestExtractExpquoteInner:
     def test_no_block_returns_empty(self) -> None:

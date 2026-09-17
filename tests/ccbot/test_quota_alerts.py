@@ -1,5 +1,11 @@
 """Tests for handlers.quota_alerts level transitions."""
 
+from unittest.mock import AsyncMock
+
+import pytest
+
+from ccbot.codex_usage import CodexRateLimitWindow, CodexUsageInfo
+from ccbot.handlers import quota_alerts
 from ccbot.handlers.quota_alerts import _level_for_pct
 
 
@@ -23,3 +29,22 @@ class TestLevelForPct:
     def test_levels_are_monotonic(self) -> None:
         levels = [_level_for_pct(p) for p in range(0, 101)]
         assert all(b >= a for a, b in zip(levels, levels[1:]))
+
+
+@pytest.mark.asyncio
+async def test_interval_poll_refreshes_selected_codex_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    info = CodexUsageInfo(
+        weekly=CodexRateLimitWindow(
+            used_percent=18,
+            duration_minutes=10_080,
+            resets_at=1_900_000_000,
+        )
+    )
+    fetch = AsyncMock(return_value=info)
+    monkeypatch.setattr("ccbot.bot._usage_window.fetch_live_usage", fetch)
+
+    await quota_alerts._poll_once(AsyncMock(), suppress_push=True)
+
+    fetch.assert_awaited_once_with()

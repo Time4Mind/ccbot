@@ -240,6 +240,29 @@ def test_daily_budget_uses_equal_calendar_day_buckets() -> None:
     assert state["daily_budget"] == 10.0
 
 
+def test_cached_menu_render_does_not_create_daily_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale cached menu paint must not establish the new day's target."""
+    from ccbot import usage
+    from ccbot.codex_usage import CodexRateLimitWindow, CodexUsageInfo
+
+    monkeypatch.setattr(usage.config, "config_dir", tmp_path)
+    reset = datetime.now() + timedelta(days=2)
+    info = CodexUsageInfo(
+        weekly=CodexRateLimitWindow(
+            used_percent=37,
+            duration_minutes=10_080,
+            resets_at=int(reset.timestamp()),
+        )
+    )
+
+    rendered = format_usage_breakdown_compact(1, info)
+
+    assert not (tmp_path / "codex_quota_day.json").exists()
+    assert "| 37% | - |" in rendered
+
+
 def test_daily_budget_stays_fixed_and_reports_overspend() -> None:
     now = datetime(2026, 7, 31, 18, 0)
     reset = now + timedelta(days=3, hours=6)

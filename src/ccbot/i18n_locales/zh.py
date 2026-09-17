@@ -69,7 +69,7 @@ ZH: dict[str, str] = {
         '`cli_auth_credentials_store = "file"`;机器人不会替换现有授权。'
     ),
     "btn.no": "× 否",
-    "btn.yes_kill": "⚠ 是，终止",
+    "btn.yes_kill": "⚠ 是，关闭",
     "btn.yes_delete": "⚠ 是，删除",
     "btn.yes_clear": "⚠ 是，清空",
     "btn.refresh": "🔄 刷新",

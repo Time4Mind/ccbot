@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ccbot.bot.callbacks import footer
-from ccbot.handlers.callback_data import CB_PG_NEXT, CB_PG_PREV
+from ccbot.handlers.callback_data import CB_FT_KILL, CB_PG_NEXT, CB_PG_PREV
 from ccbot.handlers.card_model import CardState
 
 
@@ -64,3 +64,28 @@ async def test_pagination_wraps_cyclically(
 
     assert await footer.handle(query, context, user)
     assert state.current_page_idx == expected
+
+
+@pytest.mark.asyncio
+async def test_close_confirmation_uses_close_wording_in_russian(monkeypatch) -> None:
+    query = SimpleNamespace(data=CB_FT_KILL, answer=AsyncMock())
+    context = SimpleNamespace(bot=SimpleNamespace())
+    user = SimpleNamespace(id=42)
+    session = SimpleNamespace(id="s1", name="Target", state="active")
+    set_view = AsyncMock()
+
+    monkeypatch.setattr(
+        footer.session_manager, "get_active_session", lambda _uid: session
+    )
+    monkeypatch.setattr(
+        footer.session_manager,
+        "get_user_settings",
+        lambda _uid: {"language": "ru"},
+    )
+    monkeypatch.setattr(footer, "pause_card_view", lambda *_args: None)
+    monkeypatch.setattr(footer, "set_view", set_view)
+
+    assert await footer.handle(query, context, user)
+
+    keyboard = set_view.await_args.args[4]
+    assert keyboard.inline_keyboard[0][0].text == "⚠ Да, закрыть"

@@ -84,7 +84,7 @@ EN: dict[str, str] = {
         "will not replace the existing authorization."
     ),
     "btn.no": "× No",
-    "btn.yes_kill": "⚠ Yes, kill",
+    "btn.yes_kill": "⚠ Yes, close",
     "btn.yes_delete": "⚠ Yes, delete",
     "btn.yes_clear": "⚠ Yes, clear",
     "btn.refresh": "🔄 Refresh",

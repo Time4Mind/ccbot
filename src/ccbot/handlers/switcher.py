@@ -18,6 +18,7 @@ import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from . import bg_status
 from ..session_models import reserve_owner
 
 from ..config import config
@@ -52,16 +53,16 @@ def session_emoji(sess: Session) -> str:
     return _SESSION_EMOJI[h % len(_SESSION_EMOJI)]
 
 
-def _label(sess: Session, *, is_active: bool) -> str:
+def _label(sess: Session, *, is_active: bool, user_id: int) -> str:
     """Render a button label for a session in the switcher."""
     name = sess.name or sess.id
     # Trim long names so several fit on one row
     if len(name) > 14:
         name = name[:13] + "…"
-    emoji = session_emoji(sess)
+    status = bg_status.status_emoji(user_id, sess.id)
     if is_active:
-        return f"✓ {emoji} {name}"
-    return f"{emoji} {name}"
+        return f"✓ {status} {name}"
+    return f"{status} {name}"
 
 
 def build_switcher_keyboard(
@@ -115,7 +116,7 @@ def build_switcher_keyboard(
             # from the switcher — the ``✓`` button just toasted
             # "already active" and the user couldn't see the history.
             cb = f"{CB_SW_USE}{sess.id}"
-            label = _label(sess, is_active=is_active)
+            label = _label(sess, is_active=is_active, user_id=user_id)
         row.append(
             InlineKeyboardButton(
                 label,
@@ -145,12 +146,11 @@ def build_session_preview(
     PREVIEW_USER_LINES / PREVIEW_ASSISTANT_LINES / PREVIEW_TOOLS env vars.
     """
     parts: list[str] = []
-    emoji = session_emoji(sess)
     if sess.state == "active":
         state_label = sess.dir_label
     else:
         state_label = sess.state if sess.state else "?"
-    header = f"{emoji} {sess.name or sess.id} · {state_label}"
+    header = f"{sess.name or sess.id} · {state_label}"
     if sess.goal:
         header += f"\ngoal: {sess.goal}"
     parts.append(header)

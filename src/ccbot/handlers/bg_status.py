@@ -52,16 +52,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-Status = Literal["working", "finished", "error", "needs_action", "stalled"]
+Status = Literal[
+    "working", "finished", "seen_finished", "error", "needs_action", "stalled"
+]
 
 
 _STATUS_EMOJI: dict[Status, str] = {
     "working": "⏳",
     "finished": "✅",
-    "error": "❌",
-    "needs_action": "❓",
-    "stalled": "⚠️",
+    "seen_finished": "☑️",
+    "error": "❗",
+    "needs_action": "❗",
+    "stalled": "❗",
 }
+
+_STATUS_VERSION = 2
 
 
 @dataclass
@@ -105,6 +110,7 @@ def update_status(
     status: Status,
     *,
     interactive_ui: tuple[str, str] | None = None,
+    force: bool = False,
 ) -> bool:
     """Set status for one bg session. Returns True if the visible state
     changed (status emoji flipped) so callers can decide whether the
@@ -115,6 +121,11 @@ def update_status(
     is_new_entry = session_id not in _bg.get(user_id, {})
     entry = _entry(user_id, session_id)
     old_status = entry.status
+    # A terminal error is intentionally sticky: incidental transcript/pane
+    # activity must not make the session look healthy again.  A new explicit
+    # user request (or another confirmed recovery path) passes ``force=True``.
+    if old_status == "error" and status != "error" and not force:
+        return False
     entry.status = status
     if status == "needs_action" and interactive_ui is not None:
         entry.pending_interactive_ui = interactive_ui
@@ -131,6 +142,34 @@ def get_pending_interactive_ui(user_id: int, session_id: str) -> tuple[str, str]
     if entry is None:
         return None
     return entry.pending_interactive_ui
+
+
+def status_emoji(user_id: int, session_id: str) -> str:
+    """Return the latest background-status glyph for a session button.
+
+    A session with no recorded transition is idle/ready with no unread result,
+    hence ``☑️``. Startup asynchronously replaces that fallback for
+    restart-spanning work.
+    """
+    entry = _bg.get(user_id, {}).get(session_id)
+    if entry is None:
+        return "☑️"
+    return _STATUS_EMOJI.get(entry.status, "")
+
+
+def get_status(user_id: int, session_id: str) -> Status | None:
+    entry = _bg.get(user_id, {}).get(session_id)
+    return entry.status if entry is not None else None
+
+
+def mark_seen(user_id: int, session_id: str) -> bool:
+    """Turn an unread completion into an acknowledged completion."""
+    entry = _bg.get(user_id, {}).get(session_id)
+    if entry is None or entry.status != "finished":
+        return False
+    entry.status = "seen_finished"
+    _touch(entry)
+    return True
 
 
 def clear_pending_ui(user_id: int, session_id: str) -> bool:
@@ -194,7 +233,14 @@ async def infer_status_from_jsonl(sess: "Session") -> Status | None:
                     obj = _json.loads(line)
                 except _json.JSONDecodeError:
                     continue
-                if obj.get("type") != "assistant":
+                msg_type = obj.get("type")
+                if msg_type == "user":
+                    # A real user/tool-result entry after the last assistant
+                    # message means the turn is not terminal yet.
+                    last_role = "user"
+                    last_stop = ""
+                    continue
+                if msg_type != "assistant":
                     continue
                 msg = obj.get("message", {})
                 last_role = "assistant"
@@ -202,6 +248,8 @@ async def infer_status_from_jsonl(sess: "Session") -> Status | None:
     except OSError as e:
         logger.debug("infer_status: cannot read %s: %s", file_path, e)
         return None
+    if last_role == "user":
+        return "working"
     if last_role != "assistant":
         return None
     if last_stop in ("end_turn", "stop_sequence", "max_tokens"):
@@ -319,6 +367,7 @@ def serialize_per_user() -> dict[str, dict[str, dict[str, Any]]]:
         for sid, entry in bucket.items():
             row[sid] = {
                 "status": entry.status,
+                "status_version": _STATUS_VERSION,
                 "last_change": entry.last_change,
                 "context_pct": entry.context_pct,
             }
@@ -347,9 +396,19 @@ def load_per_user(raw: dict[str, Any] | None) -> None:
             if not isinstance(data, dict):
                 continue
             status_val = data.get("status", "working")
+            try:
+                status_version = int(data.get("status_version", 1))
+            except (TypeError, ValueError):
+                status_version = 1
+            if status_val == "finished" and status_version < _STATUS_VERSION:
+                # Before v2, ``finished`` meant only "last turn is terminal";
+                # no unread/read distinction existed. Treat those historical
+                # rows as acknowledged instead of manufacturing unread badges.
+                status_val = "seen_finished"
             if status_val not in (
                 "working",
                 "finished",
+                "seen_finished",
                 "error",
                 "needs_action",
                 "stalled",

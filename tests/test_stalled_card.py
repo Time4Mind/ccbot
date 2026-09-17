@@ -105,7 +105,7 @@ async def test_background_stall_sets_only_warning_badge(
     )
 
     assert bg_status._bg[user_id][sess.id].status == "stalled"
-    assert "⚠️" in bg_status.render_panel(user_id, active_session_id=active.id)
+    assert "❗" in bg_status.render_panel(user_id, active_session_id=active.id)
     refresh.assert_awaited_once()
     notifications._edit_card.assert_not_awaited()
 

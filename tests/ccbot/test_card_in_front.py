@@ -86,7 +86,7 @@ class TestBackgroundDispatchKeepsQuiet:
         # ...but nothing was posted or repainted in chat for it.
         repost.assert_not_awaited()
         # Only the bg-status panel of the *active* card moved.
-        bg_update.assert_called_once_with(1, "sessA", "working")
+        bg_update.assert_called_once_with(1, "sessA", "working", force=True)
         refresh.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -170,7 +170,7 @@ class TestBackgroundDispatchKeepsQuiet:
         # Dispatch never clears a navigation pause. After the switch only the
         # new active card's bg panel moves.
         repost.assert_not_awaited()
-        bg_update.assert_called_once_with(1, "sessA", "working")
+        bg_update.assert_called_once_with(1, "sessA", "working", force=True)
         refresh.assert_awaited_once()
 
 

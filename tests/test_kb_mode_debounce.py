@@ -171,6 +171,30 @@ def _content(name="PermissionPrompt", body="fetch example.com"):
 
 
 @pytest.mark.asyncio
+async def test_auto_approved_prompt_does_not_raise_attention_marker():
+    sess = _sess()
+    bot = AsyncMock()
+    with (
+        patch.object(
+            status_polling, "_maybe_auto_approve", AsyncMock(return_value=True)
+        ),
+        patch.object(status_polling.bg_status, "update_status") as update_status,
+    ):
+        handled = await _surface_new_interactive_ui(
+            bot,
+            1,
+            sess.window_id,
+            _YESNO_PANE,
+            sess,
+            is_bg_session=True,
+            interactive_window=None,
+        )
+
+    assert handled is True
+    update_status.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_auto_approve_escalates_after_max_attempts():
     """A prompt that survives the auto-Yes keystroke stops being re-pressed
     after AUTO_APPROVE_MAX_ATTEMPTS and returns False so the caller can

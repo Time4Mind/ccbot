@@ -113,10 +113,26 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 content_type=msg.content_type,
             )
 
+        # Button markers describe every live session, including the active
+        # one.  Set the lifecycle state before rendering so the same card edit
+        # already contains the new glyph. Routine tool failures stay working;
+        # only a terminal backend/API failure becomes a sticky error.
+        is_terminal_text = (
+            msg.role == "assistant"
+            and msg.content_type == "text"
+            and msg.stop_reason in ("end_turn", "stop_sequence", "max_tokens")
+        )
+        new_status: bg_status.Status = (
+            "error" if msg.api_error else "finished" if is_terminal_text else "working"
+        )
+        status_changed = bg_status.update_status(user_id, sess.id, new_status)
+
         if not config.show_tool_calls and msg.content_type in (
             "tool_use",
             "tool_result",
         ):
+            if not is_active and status_changed:
+                await refresh_panel(bot, user_id)
             continue
 
         # Tools that render their own UI go through the interactive-UI surface.
@@ -166,6 +182,12 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 if pane_text:
                     ui = extract_interactive_content(pane_text)
                     if ui is not None:
+                        bg_status.update_status(
+                            user_id,
+                            sess.id,
+                            "needs_action",
+                            interactive_ui=(ui.content, ui.name),
+                        )
                         await enter_kb_mode(bot, user_id, sess, ui.content, ui.name)
                         continue
             # Pane parse failed — fall through to regular card update.
@@ -179,11 +201,6 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             # Real end-of-turn assistant text → "task complete".  Mid-stream
             # text blocks (stop_reason=tool_use) are intermediate narration —
             # those belong on the live card, not the completion summary.
-            is_terminal_text = (
-                msg.role == "assistant"
-                and msg.content_type == "text"
-                and msg.stop_reason in ("end_turn", "stop_sequence", "max_tokens")
-            )
             # The live-card calls below silently buffer (in_menu_view=True
             # is already set on bg sessions by the carrier-transfer path)
             # so a switch-back later renders the full tool history. The
@@ -194,10 +211,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 await update_session_card(bot, user_id, sess, msg)
 
             if not is_active:
-                new_status: bg_status.Status = (
-                    "finished" if is_terminal_text else "working"
-                )
-                if bg_status.update_status(user_id, sess.id, new_status):
+                if status_changed:
                     await refresh_panel(bot, user_id)
                     # Bg push (Task #42): only on TRANSITION into finished.
                     # ``update_status`` returns True only on actual change
@@ -233,6 +247,5 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         else:
             # Streaming chunk — best-effort card update.
             await update_session_card(bot, user_id, sess, msg)
-            if not is_active:
-                if bg_status.update_status(user_id, sess.id, "working"):
-                    await refresh_panel(bot, user_id)
+            if not is_active and status_changed:
+                await refresh_panel(bot, user_id)

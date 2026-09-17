@@ -266,7 +266,7 @@ def _daily_quota_budget(
 def _persisted_daily_quota_budget(
     used_percent: int, resets_at: int | None
 ) -> float | None:
-    """Calculate today's budget and persist its daily baseline."""
+    """Calculate today's budget from a fresh read and persist its baseline."""
     state_file = config.config_dir / "codex_quota_day.json"
     state: dict[str, object] | None = None
     try:
@@ -285,6 +285,45 @@ def _persisted_daily_quota_budget(
     except OSError as e:
         logger.debug("usage: cannot persist daily quota budget: %s", e)
     return remaining_today
+
+
+def record_fresh_codex_daily_quota(info: object) -> float | None:
+    """Update the daily Codex target from one successful live usage read."""
+    from .codex_usage import CodexUsageInfo
+
+    if not isinstance(info, CodexUsageInfo) or info.weekly is None:
+        return None
+    return _persisted_daily_quota_budget(
+        info.weekly.used_percent,
+        info.weekly.resets_at,
+    )
+
+
+def _read_daily_quota_budget(used_percent: int, resets_at: int | None) -> float | None:
+    """Read today's established target without creating or resetting it."""
+    if resets_at is None:
+        return None
+    state_file = config.config_dir / "codex_quota_day.json"
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            return None
+        if state.get("resets_at") != resets_at:
+            return None
+        if state.get("date") != datetime.now().date().isoformat():
+            return None
+        day_start_used = state["day_start_used"]
+        daily_budget = state["daily_budget"]
+        if not isinstance(day_start_used, int | float) or not isinstance(
+            daily_budget, int | float
+        ):
+            return None
+        if used_percent < float(day_start_used):
+            return None
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
+    spent_today = max(0.0, used_percent - float(day_start_used))
+    return float(daily_budget) - spent_today
 
 
 def format_usage_breakdown_compact(
@@ -322,7 +361,7 @@ def format_usage_breakdown_compact(
         today = "-"
         reset = "-"
         if info.weekly:
-            budget = _persisted_daily_quota_budget(
+            budget = _read_daily_quota_budget(
                 info.weekly.used_percent, info.weekly.resets_at
             )
             if budget is not None:

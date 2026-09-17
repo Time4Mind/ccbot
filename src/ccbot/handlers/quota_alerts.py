@@ -1,11 +1,9 @@
 """Background poll of the live /usage modal — push on threshold crossings.
 
 A single shared task runs every ``QUOTA_ALERT_POLL_INTERVAL`` (default 10
-minutes), reuses the dedicated ccbot-usage tmux window via
-``fetch_claude_usage``, and emits one push per (quota, threshold)
-transition. The thresholds match the at-a-glance emoji bands in
-``usage._quota_emoji`` so the bot reaches the same conclusion the user
-would by looking at the modal.
+minutes) and refreshes the selected backend's live usage cache. Claude reads
+also emit one push per (quota, threshold) transition. Codex reads establish
+and advance the persisted daily target consumed by the Menu table.
 
 State is process-local: the task remembers the last "level" it observed
 for each of the three quota rows; on level increase it fires once.
@@ -82,9 +80,9 @@ async def _poll_once(bot: Bot, *, suppress_push: bool = False) -> None:
     reports without sending notifications — used on first poll so the bot
     doesn't spam already-crossed thresholds when it starts up.
     """
-    from ..bot._usage_window import fetch_claude_usage
+    from ..bot._usage_window import fetch_live_usage
 
-    info = await fetch_claude_usage()
+    info = await fetch_live_usage()
     if not isinstance(info, UsageInfo):
         return
     b = extract_usage_breakdown(info)

@@ -388,4 +388,8 @@ async def fetch_live_usage() -> object | None:
     if info is not None:
         _live_usage_cache[backend] = info
         _live_usage_collected_at[backend] = time.time()
+        if backend == "codex":
+            from ..usage import record_fresh_codex_daily_quota
+
+            record_fresh_codex_daily_quota(info)
     return info

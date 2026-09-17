@@ -15,6 +15,7 @@ from collections.abc import Iterator
 import pytest
 
 from ccbot.bot import _usage_window
+from ccbot.codex_usage import CodexRateLimitWindow, CodexUsageInfo
 from ccbot.terminal_parser import extract_usage_breakdown
 
 
@@ -181,6 +182,37 @@ async def test_codex_usage_window_is_reused_across_bot_starts(
     monkeypatch.setattr(_usage_window.tmux_manager, "create_window", _unexpected_create)
 
     assert await _usage_window._ensure_codex_usage_window() == "@6"
+
+
+@pytest.mark.asyncio
+async def test_fresh_codex_fetch_records_daily_target(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import json
+
+    from ccbot import usage
+    from ccbot.session import session_manager
+
+    info = CodexUsageInfo(
+        weekly=CodexRateLimitWindow(
+            used_percent=18,
+            duration_minutes=10_080,
+            resets_at=1_900_000_000,
+        )
+    )
+
+    async def _fetch():
+        return info
+
+    monkeypatch.setattr(usage.config, "config_dir", tmp_path)
+    monkeypatch.setattr(session_manager, "agent_backend", "codex")
+    monkeypatch.setattr(_usage_window, "fetch_codex_usage", _fetch)
+
+    assert await _usage_window.fetch_live_usage() is info
+
+    state = json.loads((tmp_path / "codex_quota_day.json").read_text())
+    assert state["day_start_used"] == 18
 
 
 @pytest.mark.asyncio

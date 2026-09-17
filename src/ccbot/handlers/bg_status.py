@@ -66,7 +66,7 @@ _STATUS_EMOJI: dict[Status, str] = {
     "stalled": "❗",
 }
 
-_STATUS_VERSION = 2
+_STATUS_VERSION = 3
 
 
 @dataclass
@@ -90,6 +90,10 @@ class BgStatus:
     # the JSONL transcript by ``usage.context_pct_for_session`` after each
     # assistant turn. Rendered compactly as ``N%`` in the panel row.
     context_pct: int | None = None
+    # Number of times the completed result has been presented as the selected
+    # session. The unread marker survives the first presentation and becomes
+    # acknowledged only on the second one.
+    finished_views: int = 0
 
 
 # Per-user, per-session BgStatus.
@@ -127,6 +131,10 @@ def update_status(
     if old_status == "error" and status != "error" and not force:
         return False
     entry.status = status
+    if status == "finished" and old_status != "finished":
+        entry.finished_views = 0
+    elif status not in ("finished", "seen_finished"):
+        entry.finished_views = 0
     if status == "needs_action" and interactive_ui is not None:
         entry.pending_interactive_ui = interactive_ui
     elif status != "needs_action":
@@ -162,10 +170,14 @@ def get_status(user_id: int, session_id: str) -> Status | None:
     return entry.status if entry is not None else None
 
 
-def mark_seen(user_id: int, session_id: str) -> bool:
-    """Turn an unread completion into an acknowledged completion."""
+def record_finished_view(user_id: int, session_id: str) -> bool:
+    """Record one presentation; acknowledge completion on the second one."""
     entry = _bg.get(user_id, {}).get(session_id)
     if entry is None or entry.status != "finished":
+        return False
+    entry.finished_views += 1
+    if entry.finished_views < 2:
+        _touch(entry)
         return False
     entry.status = "seen_finished"
     _touch(entry)
@@ -370,6 +382,7 @@ def serialize_per_user() -> dict[str, dict[str, dict[str, Any]]]:
                 "status_version": _STATUS_VERSION,
                 "last_change": entry.last_change,
                 "context_pct": entry.context_pct,
+                "finished_views": entry.finished_views,
             }
         if row:
             out[str(uid)] = row
@@ -400,7 +413,7 @@ def load_per_user(raw: dict[str, Any] | None) -> None:
                 status_version = int(data.get("status_version", 1))
             except (TypeError, ValueError):
                 status_version = 1
-            if status_val == "finished" and status_version < _STATUS_VERSION:
+            if status_val == "finished" and status_version < 2:
                 # Before v2, ``finished`` meant only "last turn is terminal";
                 # no unread/read distinction existed. Treat those historical
                 # rows as acknowledged instead of manufacturing unread badges.
@@ -424,8 +437,13 @@ def load_per_user(raw: dict[str, Any] | None) -> None:
                 ctx_pct = int(ctx_raw) if ctx_raw is not None else None
             except (TypeError, ValueError):
                 ctx_pct = None
+            try:
+                finished_views = max(0, int(data.get("finished_views", 0)))
+            except (TypeError, ValueError):
+                finished_views = 0
             target[sid] = BgStatus(
                 status=status_val,
                 last_change=last_change,
                 context_pct=ctx_pct,
+                finished_views=finished_views,
             )

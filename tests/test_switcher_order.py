@@ -157,9 +157,11 @@ def test_finished_marker_becomes_seen_only_on_explicit_acknowledgement() -> None
         bg_status.update_status(42, "done", "finished")
         assert bg_status.status_emoji(42, "done") == "✅"
 
-        assert bg_status.mark_seen(42, "done") is True
+        assert bg_status.record_finished_view(42, "done") is False
+        assert bg_status.status_emoji(42, "done") == "✅"
+        assert bg_status.record_finished_view(42, "done") is True
         assert bg_status.status_emoji(42, "done") == "☑️"
-        assert bg_status.mark_seen(42, "done") is False
+        assert bg_status.record_finished_view(42, "done") is False
     finally:
         bg_status._bg.clear()
         bg_status._bg.update(saved_bg)

@@ -153,11 +153,35 @@ def test_legacy_finished_state_migrates_to_seen(isolated_bg) -> None:
     assert bg_status.status_emoji(42, "old") == "☑️"
 
 
+def test_v2_unread_completion_migrates_to_two_view_flow(isolated_bg) -> None:
+    bg_status.load_per_user(
+        {
+            "42": {
+                "unread": {
+                    "status": "finished",
+                    "status_version": 2,
+                    "last_change": 1.0,
+                    "context_pct": None,
+                }
+            }
+        }
+    )
+
+    assert bg_status.status_emoji(42, "unread") == "✅"
+    assert bg_status.record_finished_view(42, "unread") is False
+    assert bg_status.record_finished_view(42, "unread") is True
+    assert bg_status.status_emoji(42, "unread") == "☑️"
+
+
 def test_versioned_unread_completion_survives_round_trip(isolated_bg) -> None:
     bg_status.update_status(42, "fresh", "finished")
+    assert bg_status.record_finished_view(42, "fresh") is False
 
     raw = bg_status.serialize_per_user()
-    assert raw["42"]["fresh"]["status_version"] == 2
+    assert raw["42"]["fresh"]["status_version"] == 3
+    assert raw["42"]["fresh"]["finished_views"] == 1
 
     bg_status.load_per_user(raw)
     assert bg_status.status_emoji(42, "fresh") == "✅"
+    assert bg_status.record_finished_view(42, "fresh") is True
+    assert bg_status.status_emoji(42, "fresh") == "☑️"

@@ -71,9 +71,10 @@ async def handle(
         if sess is None or sess.state not in ("active", "idle"):
             await query.answer("Session not available", show_alert=True)
             return True
-        # Tapping a completed session is the explicit read acknowledgement.
-        # Do it before painting so the transferred keyboard already shows ☑️.
-        bg_status.mark_seen(user.id, target_id)
+        # A completed result stays unread through its first presentation and
+        # becomes acknowledged only when the user enters it a second time.
+        # Record before painting so that second entry already shows ☑️.
+        bg_status.record_finished_view(user.id, target_id)
         logger.info(
             "sw_use user=%d target=%s name=%s state=%s carrier_msg=%s",
             user.id,

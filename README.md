@@ -312,8 +312,9 @@ session's card:
 ```
 
 The panel sticks across active-card edits so a finished bg session
-isn't lost above a long tool log. Tap the badge's session in the
-switcher to drop it from the panel (you've "seen" it). If the badge
+isn't lost above a long tool log. The first entry into a completed session
+keeps `✅`; only the second entry changes it to `☑️`. Actions inside it and
+leaving for another session do not increment that counter. If the badge
 shows `❓`, the switcher tap paints the stashed AskUserQuestion /
 ExitPlanMode prompt with the same arrow/Enter/Esc keyboard you'd
 get on a foreground prompt.

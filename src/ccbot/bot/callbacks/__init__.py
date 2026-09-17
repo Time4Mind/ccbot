@@ -14,7 +14,6 @@ from telegram import Bot, Update
 from telegram.ext import ContextTypes
 
 from .._common import is_user_allowed
-from ...handlers import bg_status
 from ...handlers.notifications import get_card_state, refresh_panel
 from ...session import session_manager
 from ...user_activity import record as record_user_activity
@@ -52,7 +51,6 @@ def _acknowledge_completion_marker(
     if state.msg_id != message_id or not state.completion_marker_pending:
         return None
     state.completion_marker_pending = False
-    bg_status.mark_seen(user_id, active.id)
     return active.id, message_id
 
 

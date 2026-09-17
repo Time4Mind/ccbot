@@ -44,6 +44,18 @@ class TestConfigValid:
         cfg = Config()
         assert cfg.monitor_poll_interval == 5.0
 
+    def test_recency_exclude_dirs_are_parsed_as_trimmed_basenames(self, monkeypatch):
+        monkeypatch.setenv(
+            "CCBOT_RECENCY_EXCLUDE_DIRS",
+            " .private-index,generated-metadata,.private-index, ",
+        )
+
+        cfg = Config()
+
+        assert cfg.recency_exclude_dirs == frozenset(
+            {".private-index", "generated-metadata"}
+        )
+
     def test_is_user_allowed_true(self):
         cfg = Config()
         assert cfg.is_user_allowed(12345) is True

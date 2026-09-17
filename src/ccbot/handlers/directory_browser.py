@@ -124,10 +124,12 @@ def _metadata_recency(d: Path) -> float:
         best = d.stat().st_mtime
     except OSError:
         return 0.0
-    if d.name in _RECENCY_PRUNE_DIRS:
+    if d.name in _RECENCY_PRUNE_DIRS or d.name in config.recency_exclude_dirs:
         return best
 
     for entry in _scandir_entries(d):
+        if entry.name in config.recency_exclude_dirs:
+            continue
         try:
             is_dir = entry.is_dir(follow_symlinks=False)
         except OSError:
@@ -164,7 +166,11 @@ def _refresh_recency_tree(root: Path) -> float:
             best = d.stat().st_mtime
         except OSError:
             return 0.0
-        if d.name in _RECENCY_PRUNE_DIRS or remaining[0] <= 0:
+        if (
+            d.name in _RECENCY_PRUNE_DIRS
+            or d.name in config.recency_exclude_dirs
+            or remaining[0] <= 0
+        ):
             _RECENCY_CACHE[str(d)] = (refreshed_at, best)
             return best
 
@@ -172,6 +178,8 @@ def _refresh_recency_tree(root: Path) -> float:
             remaining[0] -= 1
             if remaining[0] < 0:
                 break
+            if entry.name in config.recency_exclude_dirs:
+                continue
             try:
                 is_dir = entry.is_dir(follow_symlinks=False)
             except OSError:

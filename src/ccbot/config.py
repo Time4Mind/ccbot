@@ -151,6 +151,11 @@ class Config:
         self.show_hidden_dirs = (
             os.getenv("CCBOT_SHOW_HIDDEN_DIRS", "").lower() == "true"
         )
+        self.recency_exclude_dirs = frozenset(
+            name.strip()
+            for name in os.getenv("CCBOT_RECENCY_EXCLUDE_DIRS", "").split(",")
+            if name.strip()
+        )
 
         # --- DM multi-session mode ---
         # Sessions

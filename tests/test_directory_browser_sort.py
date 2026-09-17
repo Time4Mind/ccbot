@@ -132,6 +132,29 @@ class TestDirRecency:
 
         assert _refresh_recency_tree(project) == 3000.0
 
+    def test_configured_directory_does_not_affect_recency(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        project = tmp_path / "project"
+        project.mkdir()
+        source = project / "app.py"
+        source.write_text("old")
+        excluded = project / ".private-index"
+        excluded.mkdir()
+        generated = excluded / "latest-state"
+        generated.write_text("generated")
+        _touch(str(project), 1000.0)
+        _touch(str(source), 3000.0)
+        _touch(str(excluded), 4000.0)
+        _touch(str(generated), 9000.0)
+        monkeypatch.setattr(
+            directory_browser.config,
+            "recency_exclude_dirs",
+            frozenset({".private-index"}),
+        )
+
+        assert _refresh_recency_tree(project) == 3000.0
+
     def test_linux_root_keeps_virtual_dirs_shallow(self, tmp_path, monkeypatch) -> None:
         workspace = tmp_path / "workspace"
         workspace.mkdir()

@@ -501,7 +501,10 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
                     "final card focus deferred sess=%s active_turn=%s pending=%s",
                     sess.id,
                     state.active_turn_sequence,
-                    [sequence for _message_id, sequence in state.pending_request_sequences],
+                    [
+                        sequence
+                        for _message_id, sequence in state.pending_request_sequences
+                    ],
                 )
             if not buffered:
                 state.completion_marker_pending = True

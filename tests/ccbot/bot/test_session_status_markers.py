@@ -106,7 +106,14 @@ async def test_background_terminal_api_error_pushes_attention_once(monkeypatch) 
     _patch_route(monkeypatch, sess, active=False)
     push_event = AsyncMock()
     refresh_panel = AsyncMock()
+    refresh_keyboard = AsyncMock(return_value=True)
     monkeypatch.setattr(session_events, "refresh_panel", refresh_panel)
+    monkeypatch.setattr(
+        session_events,
+        "refresh_session_keyboard",
+        refresh_keyboard,
+        raising=False,
+    )
     monkeypatch.setattr(
         session_events.session_manager,
         "get_user_settings",
@@ -132,3 +139,37 @@ async def test_background_terminal_api_error_pushes_attention_once(monkeypatch) 
         status="error",
         text="error",
     )
+    refresh_keyboard.assert_awaited_once()
+    refresh_panel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_background_completion_refreshes_active_keyboard_only(
+    monkeypatch,
+) -> None:
+    sess = _session()
+    _patch_route(monkeypatch, sess, active=False)
+    refresh_keyboard = AsyncMock(return_value=True)
+    refresh_panel = AsyncMock()
+    monkeypatch.setattr(session_events, "refresh_session_keyboard", refresh_keyboard)
+    monkeypatch.setattr(session_events, "refresh_panel", refresh_panel)
+    monkeypatch.setattr(
+        session_events.session_manager,
+        "get_user_settings",
+        lambda _user_id: {"bg_notify_finished": False},
+    )
+
+    await session_events.handle_new_message(
+        NewMessage(
+            session_id="claude-1",
+            text="done",
+            is_complete=True,
+            role="assistant",
+            stop_reason="end_turn",
+        ),
+        AsyncMock(),
+    )
+
+    assert bg_status.status_emoji(42, sess.id) == "✅"
+    refresh_keyboard.assert_awaited_once()
+    refresh_panel.assert_not_awaited()

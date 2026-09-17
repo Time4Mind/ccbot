@@ -7,6 +7,7 @@ import logging
 import time
 
 from telegram import Bot
+from telegram.error import BadRequest
 
 from ..config import config
 from ..session import Session, session_manager
@@ -15,6 +16,7 @@ from ..user_activity import effective_live_lag
 from .card_binding import clear_carrier, restore_carrier, snapshot_carrier
 from .card_model import (
     TurnPhase,
+    _card_is_busy,
     _latest_inflight_idx,
     _resolved_page_idx,
     paginate_events_for_card,
@@ -38,9 +40,49 @@ __all__ = [
     "schedule_card_after_message",
     "shutdown_card_surface_tasks",
     "refresh_panel",
+    "refresh_session_keyboard",
     "CARD_TIMER_TICK_SECONDS",
     "card_timer_loop",
 ]
+
+
+async def refresh_session_keyboard(bot: Bot, user_id: int) -> bool:
+    """Refresh only the active card's inline keyboard.
+
+    Background-session lifecycle changes affect switcher labels but not card
+    content.  Updating reply markup directly avoids re-rendering text or rich
+    media and preserves the open page exactly as-is.
+    """
+    active = session_manager.get_active_session(user_id)
+    if active is None:
+        return False
+    async with _card_lock(user_id, active.id):
+        state = _cards.get((user_id, active.id))
+        if state is None or state.msg_id is None or state.in_menu_view:
+            return False
+        current = session_manager.get_active_session(user_id)
+        if current is None or current.id != active.id:
+            return False
+        keyboard = _legacy("build_footer_keyboard")(
+            user_id,
+            screen="main",
+            is_busy=_card_is_busy(state),
+        )
+        try:
+            with background_telegram_request():
+                await bot.edit_message_reply_markup(
+                    chat_id=user_id,
+                    message_id=state.msg_id,
+                    reply_markup=keyboard,
+                )
+            return True
+        except BadRequest as exc:
+            if "Message is not modified" in str(exc):
+                return True
+            logger.debug("session keyboard refresh failed: %s", exc)
+        except Exception as exc:
+            logger.debug("session keyboard refresh failed: %s", exc)
+        return False
 
 
 async def surface_card_after_message(

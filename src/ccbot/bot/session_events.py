@@ -28,6 +28,7 @@ from ..handlers.notifications import (
     finalize_task,
     is_active_for_user,
     refresh_panel,
+    refresh_session_keyboard,
     update_session_card,
 )
 from ..handlers.typing import fire_typing
@@ -126,14 +127,13 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             "error" if msg.api_error else "finished" if is_terminal_text else "working"
         )
         status_changed = bg_status.update_status(user_id, sess.id, new_status)
-        status_refreshed = False
+        if not is_active and status_changed:
+            await refresh_session_keyboard(bot, user_id)
 
         # A sticky backend failure is actionable even when it arrives outside
         # a normal terminal-text turn.  Notify once on the state transition;
         # routine working/seen states remain card-only.
         if not is_active and status_changed and new_status == "error":
-            await refresh_panel(bot, user_id)
-            status_refreshed = True
             if session_manager.get_user_settings(user_id).get("bg_notify_error", True):
                 from ..handlers.notifications import push_event
 
@@ -146,8 +146,6 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             "tool_use",
             "tool_result",
         ):
-            if not is_active and status_changed and not status_refreshed:
-                await refresh_panel(bot, user_id)
             continue
 
         # Tools that render their own UI go through the interactive-UI surface.
@@ -169,7 +167,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 if bg_status.update_status(
                     user_id, sess.id, "needs_action", interactive_ui=ui_tuple
                 ):
-                    await refresh_panel(bot, user_id)
+                    await refresh_session_keyboard(bot, user_id)
                     # Bg push notification (Task #42): only on TRANSITION
                     # into needs_action (update_status returned True). The
                     # user-setting toggles this — default on.
@@ -230,8 +228,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 await update_session_card(bot, user_id, sess, msg)
 
             if not is_active:
-                if status_changed and not status_refreshed:
-                    await refresh_panel(bot, user_id)
+                if status_changed:
                     # Bg push (Task #42): only on TRANSITION into finished.
                     # ``update_status`` returns True only on actual change
                     # — natural dedup, won't spam if same state re-affirms.
@@ -272,5 +269,3 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         else:
             # Streaming chunk — best-effort card update.
             await update_session_card(bot, user_id, sess, msg)
-            if not is_active and status_changed and not status_refreshed:
-                await refresh_panel(bot, user_id)

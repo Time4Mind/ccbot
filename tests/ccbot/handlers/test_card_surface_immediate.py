@@ -110,6 +110,42 @@ async def test_keyboard_refresh_paints_when_card_text_is_unchanged(
 
 
 @pytest.mark.asyncio
+async def test_status_keyboard_refresh_does_not_edit_card_text(monkeypatch) -> None:
+    session = SimpleNamespace(id="s1")
+    state = CardState(msg_id=7, last_rendered="unchanged card text")
+    card_surface._cards[(42, "s1")] = state
+    monkeypatch.setattr(
+        card_surface.session_manager, "get_active_session", lambda _uid: session
+    )
+    keyboard = SimpleNamespace(inline_keyboard=[[SimpleNamespace(text="✅ target")]])
+    monkeypatch.setattr(
+        card_surface,
+        "_legacy",
+        lambda name: {
+            "build_footer_keyboard": lambda *_args, **_kwargs: keyboard,
+        }[name],
+    )
+    bot = SimpleNamespace(
+        edit_message_reply_markup=AsyncMock(return_value=True),
+        edit_message_text=AsyncMock(),
+        edit_message_media=AsyncMock(),
+    )
+
+    try:
+        assert await card_surface.refresh_session_keyboard(bot, 42)
+        bot.edit_message_reply_markup.assert_awaited_once_with(
+            chat_id=42,
+            message_id=7,
+            reply_markup=keyboard,
+        )
+        bot.edit_message_text.assert_not_awaited()
+        bot.edit_message_media.assert_not_awaited()
+        assert state.last_rendered == "unchanged card text"
+    finally:
+        card_surface._cards.pop((42, "s1"), None)
+
+
+@pytest.mark.asyncio
 async def test_automatic_refresh_joins_the_live_lag_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

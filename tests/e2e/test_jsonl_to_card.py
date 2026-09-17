@@ -211,4 +211,6 @@ async def test_second_final_turn_spawns_new_card_and_freezes_previous(
         if edit["message_id"] == final_message.message_id
     ]
     assert "✅" not in final_edits[-1]["text"]
-    assert bg_status.status_emoji(USER_ID, "cccc3333") == "☑️"
+    # A tap on the newly completed active card clears its header marker, but
+    # the session button stays unread until the second session presentation.
+    assert bg_status.status_emoji(USER_ID, "cccc3333") == "✅"

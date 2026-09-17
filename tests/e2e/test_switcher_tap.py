@@ -52,6 +52,7 @@ async def test_switcher_tap_flips_active_and_renders_multipage(
     fake_tmux, fake_bot, projects_path, no_card_lag
 ):
     from ccbot.config import config
+    from ccbot.handlers import bg_status
 
     # Session A active on @100; session B background on @200.
     fake_tmux.add_window("@100", name="sessA", cwd=WORKDIR_A, pane="idle\n")
@@ -89,6 +90,7 @@ async def test_switcher_tap_flips_active_and_renders_multipage(
     append_jsonl(jsonl_b, assistant_turn("answer two"))
     append_jsonl(jsonl_b, user_turn("q3", cwd=WORKDIR_B))
     append_jsonl(jsonl_b, assistant_turn("answer three"))
+    bg_status.update_status(USER_ID, "bbbbbbbb", "finished")
 
     # The carrier is the message the switcher button lives on (msg 8000).
     user = FakeUser(USER_ID)
@@ -106,6 +108,7 @@ async def test_switcher_tap_flips_active_and_renders_multipage(
     # Active session flipped to B.
     active = session_manager.get_active_session(USER_ID)
     assert active is not None and active.id == "bbbbbbbb"
+    assert bg_status.status_emoji(USER_ID, "bbbbbbbb") == "✅"
 
     # The carrier (msg 8000) was claimed + painted as B's live card.
     assert fake_bot.edit_message_text.call_count >= 1
@@ -119,6 +122,38 @@ async def test_switcher_tap_flips_active_and_renders_multipage(
 
     # The query was acknowledged.
     assert query.answers, "switcher tap did not answer the callback query"
+
+    # Leaving after the first presentation does not acknowledge completion.
+    await callback_handler(
+        FakeUpdate(
+            user=user,
+            callback_query=FakeCallbackQuery(
+                data="sw:aaaaaaaa",
+                user=user,
+                message_id=8000,
+                chat_id=USER_ID,
+                bot=fake_bot,
+            ),
+        ),
+        _ctx(fake_bot),
+    )
+    assert bg_status.status_emoji(USER_ID, "bbbbbbbb") == "✅"
+
+    # Entering the same completed session a second time acknowledges it.
+    await callback_handler(
+        FakeUpdate(
+            user=user,
+            callback_query=FakeCallbackQuery(
+                data="sw:bbbbbbbb",
+                user=user,
+                message_id=8000,
+                chat_id=USER_ID,
+                bot=fake_bot,
+            ),
+        ),
+        _ctx(fake_bot),
+    )
+    assert bg_status.status_emoji(USER_ID, "bbbbbbbb") == "☑️"
 
 
 @pytest.mark.asyncio

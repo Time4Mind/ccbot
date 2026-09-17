@@ -305,7 +305,7 @@ Their state surfaces as a compact panel at the bottom of the active
 session's card:
 
 ```
-🟦 session-A ⏳        ← working in background
+🟦 session-A 🔶        ← working in background
 🟪 scraper   ✅        ← finished
 🟧 chores    ❌        ← errored
 🟨 frontend  ❓        ← needs user action (AskUserQuestion / permission)

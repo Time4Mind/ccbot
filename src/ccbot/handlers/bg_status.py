@@ -6,7 +6,7 @@ map of their latest status, and ``render_panel`` formats a compact
 block that the active session's card appends at its tail.
 
 Status states (driven only by ``handle_new_message`` transitions):
-  - "working"      ⏳  events arriving while session is bg
+  - "working"      🔶  events arriving while session is bg
   - "finished"     ✅  terminal text turn (end_turn) while bg
   - "error"        ❌  error event while bg
   - "needs_action" ❓  AskUserQuestion / ExitPlanMode / permission
@@ -58,7 +58,7 @@ Status = Literal[
 
 
 _STATUS_EMOJI: dict[Status, str] = {
-    "working": "⏳",
+    "working": "🔶",
     "finished": "✅",
     "seen_finished": "☑️",
     "error": "❗",

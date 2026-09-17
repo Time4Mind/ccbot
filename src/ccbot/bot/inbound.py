@@ -87,7 +87,7 @@ def _enqueue(
         # owns the update. A session switch immediately after this point can
         # never redirect the request or make a second message claim it.
         claim_default_session(context.bot, user.id, sess)
-    enqueue_inbound(
+    receipt = enqueue_inbound(
         user.id,
         wid,
         update,
@@ -100,7 +100,43 @@ def _enqueue(
         # before async queue work: a later pagination tap must stay authoritative
         # even if this request's transcript event arrives after that tap.
         state = get_card_state(user.id, sess)
+        message_id = update.message.message_id
+        pending_sequences = getattr(state, "pending_request_sequences", None)
+        if pending_sequences is None:
+            pending_sequences = []
+            state.pending_request_sequences = pending_sequences
+        existing = next(
+            (
+                sequence
+                for queued_message_id, sequence in pending_sequences
+                if queued_message_id == message_id
+            ),
+            None,
+        )
+        if existing is None:
+            state.next_request_sequence = getattr(state, "next_request_sequence", 0) + 1
+            request_sequence = state.next_request_sequence
+            pending_sequences.append((message_id, request_sequence))
+        else:
+            request_sequence = existing
         state.current_page_idx = None
+
+        def _discard_failed_request(done: object) -> None:
+            try:
+                delivered = bool(done.result())  # type: ignore[attr-defined]
+            except Exception:
+                delivered = False
+            if delivered:
+                return
+            state.pending_request_sequences = [
+                item
+                for item in state.pending_request_sequences
+                if item != (message_id, request_sequence)
+            ]
+
+        completion = getattr(receipt, "completion", None)
+        if completion is not None:
+            completion.add_done_callback(_discard_failed_request)
         if kind == "voice":
             state.voice_pending = True
         schedule_card_after_message(

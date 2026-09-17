@@ -167,6 +167,39 @@ async def test_buffered_late_user_event_keeps_explicit_page_selection(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_user_transcript_rows_claim_accepted_requests_in_fifo_order(monkeypatch):
+    """Burst prompts bind their eventual finals to A, B, C respectively."""
+    sess = _make_sess()
+    user_id = 42
+    state = _cards.setdefault((user_id, sess.id), CardState())
+    state.pending_request_sequences = [(101, 1), (102, 2), (103, 3)]
+    state.next_request_sequence = 3
+
+    monkeypatch.setattr(notifications, "_ensure_seeded", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        notifications.session_manager,
+        "get_active_session",
+        lambda uid: sess,
+    )
+
+    begin_repost_intent(user_id, sess.id)
+    try:
+        await notifications.update_session_card(
+            AsyncMock(), user_id, sess, _make_user_msg("request A")
+        )
+        assert state.active_turn_sequence == 1
+        assert state.pending_request_sequences == [(102, 2), (103, 3)]
+
+        await notifications.update_session_card(
+            AsyncMock(), user_id, sess, _make_user_msg("request B")
+        )
+        assert state.active_turn_sequence == 2
+        assert state.pending_request_sequences == [(103, 3)]
+    finally:
+        end_repost_intent(user_id, sess.id)
+
+
+@pytest.mark.asyncio
 async def test_concurrent_update_session_card_spawns_once(monkeypatch):
     """Two ``update_session_card`` calls firing at once must result in
     exactly one ``_send_card`` invocation; the loser sees msg_id set

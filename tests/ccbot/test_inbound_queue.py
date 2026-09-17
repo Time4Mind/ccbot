@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ccbot.bot.inbound import text_intake_handler, voice_intake_handler
+from ccbot.handlers.card_model import CardState
 from ccbot.inbound_queue import (
     enqueue_inbound,
     pending_inbound_count,
@@ -146,6 +147,65 @@ async def test_text_intake_focuses_latest_before_delayed_monitor_event() -> None
         assert await text_intake_handler(text, context)
 
     assert observed == [None]
+
+
+@pytest.mark.asyncio
+async def test_two_intakes_keep_ordered_focus_receipts_until_transcript() -> None:
+    context = _context()
+    first = _update(21, text="request A")
+    second = _update(22, text="request B")
+    sess = SimpleNamespace(id="s1")
+    state = CardState(current_page_idx=3)
+    release = asyncio.Event()
+
+    async def blocked_processor(_update, _context, _wid):
+        await release.wait()
+        return True
+
+    with (
+        patch("ccbot.bot.inbound.is_user_allowed", return_value=True),
+        patch("ccbot.bot.inbound.active_window", return_value="@A"),
+        patch(
+            "ccbot.bot.inbound.session_manager.find_session_by_window",
+            return_value=sess,
+        ),
+        patch("ccbot.bot.inbound.get_card_state", return_value=state),
+        patch("ccbot.bot.inbound._run_text", new=blocked_processor),
+        patch("ccbot.bot.inbound.schedule_card_after_message"),
+    ):
+        assert await text_intake_handler(first, context)
+        assert await text_intake_handler(second, context)
+        assert state.current_page_idx is None
+        assert state.pending_request_sequences == [(21, 1), (22, 2)]
+        release.set()
+        while pending_inbound_count(42, "@A"):
+            await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_failed_intake_drops_only_its_focus_receipt() -> None:
+    context = _context()
+    failed = _update(31, text="failed")
+    sess = SimpleNamespace(id="s1")
+    state = CardState()
+
+    with (
+        patch("ccbot.bot.inbound.is_user_allowed", return_value=True),
+        patch("ccbot.bot.inbound.active_window", return_value="@A"),
+        patch(
+            "ccbot.bot.inbound.session_manager.find_session_by_window",
+            return_value=sess,
+        ),
+        patch("ccbot.bot.inbound.get_card_state", return_value=state),
+        patch("ccbot.bot.inbound._run_text", new=AsyncMock(return_value=False)),
+        patch("ccbot.bot.inbound.schedule_card_after_message"),
+    ):
+        assert await text_intake_handler(failed, context)
+        while pending_inbound_count(42, "@A"):
+            await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    assert state.pending_request_sequences == []
 
 
 @pytest.mark.asyncio

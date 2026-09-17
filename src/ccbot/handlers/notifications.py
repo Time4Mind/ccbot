@@ -125,6 +125,7 @@ from .card_surface import (
     schedule_card_after_message,
     shutdown_card_surface_tasks,
     refresh_panel,
+    refresh_session_keyboard,
     CARD_TIMER_TICK_SECONDS,
     card_timer_loop,
 )
@@ -234,6 +235,7 @@ __all__ = [
     "is_active_for_user",
     "repost_card",
     "refresh_panel",
+    "refresh_session_keyboard",
     "CARD_TIMER_TICK_SECONDS",
     "card_timer_loop",
     "session_manager",

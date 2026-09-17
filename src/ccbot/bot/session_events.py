@@ -126,12 +126,27 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             "error" if msg.api_error else "finished" if is_terminal_text else "working"
         )
         status_changed = bg_status.update_status(user_id, sess.id, new_status)
+        status_refreshed = False
+
+        # A sticky backend failure is actionable even when it arrives outside
+        # a normal terminal-text turn.  Notify once on the state transition;
+        # routine working/seen states remain card-only.
+        if not is_active and status_changed and new_status == "error":
+            await refresh_panel(bot, user_id)
+            status_refreshed = True
+            if session_manager.get_user_settings(user_id).get("bg_notify_error", True):
+                from ..handlers.notifications import push_event
+
+                try:
+                    await push_event(bot, user_id, sess, status="error", text="error")
+                except Exception as e:
+                    logger.debug("bg error push failed: %s", e)
 
         if not config.show_tool_calls and msg.content_type in (
             "tool_use",
             "tool_result",
         ):
-            if not is_active and status_changed:
+            if not is_active and status_changed and not status_refreshed:
                 await refresh_panel(bot, user_id)
             continue
 
@@ -165,7 +180,11 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
 
                         try:
                             await push_event(
-                                bot, user_id, sess, text="needs your attention"
+                                bot,
+                                user_id,
+                                sess,
+                                status="needs_action",
+                                text="needs your attention",
                             )
                         except Exception as e:
                             logger.debug("bg needs_action push failed: %s", e)
@@ -211,7 +230,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 await update_session_card(bot, user_id, sess, msg)
 
             if not is_active:
-                if status_changed:
+                if status_changed and not status_refreshed:
                     await refresh_panel(bot, user_id)
                     # Bg push (Task #42): only on TRANSITION into finished.
                     # ``update_status`` returns True only on actual change
@@ -222,7 +241,13 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                         from ..handlers.notifications import push_event
 
                         try:
-                            await push_event(bot, user_id, sess, text="task complete")
+                            await push_event(
+                                bot,
+                                user_id,
+                                sess,
+                                status="finished",
+                                text="task complete",
+                            )
                         except Exception as e:
                             logger.debug("bg finished push failed: %s", e)
 
@@ -247,5 +272,5 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         else:
             # Streaming chunk — best-effort card update.
             await update_session_card(bot, user_id, sess, msg)
-            if not is_active and status_changed:
+            if not is_active and status_changed and not status_refreshed:
                 await refresh_panel(bot, user_id)

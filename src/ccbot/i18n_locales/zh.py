@@ -287,12 +287,12 @@ ZH: dict[str, str] = {
         "后台会话进入 end-of-turn 时,推送 ✅ [<name>] task complete。"
     ),
     "settings.bg_notify.error.body": (
-        "*Bg 会话:错误*\n\n后台会话发出错误事件时,推送 ❌ [<name>] error。"
+        "*Bg 会话:错误*\n\n后台会话进入阻塞错误状态时,推送 ❗ [<name>] error。"
     ),
     "settings.bg_notify.needs_action.body": (
         "*Bg 会话:需要操作*\n\n"
         "后台会话显示 AskUserQuestion / ExitPlanMode / Permission\n"
-        "提示时,推送 ❓ [<name>] needs your attention。"
+        "提示时,推送 ❗ [<name>] needs your attention。"
     ),
     "settings.cat.card": "🃏 卡片 / 视图",
     "settings.cat.notifications": "🔔 通知",

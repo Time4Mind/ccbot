@@ -16,6 +16,7 @@ import asyncio
 import logging
 import os
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -47,6 +48,7 @@ _RECENCY_MAX_DEPTH = 8
 _RECENCY_MAX_ENTRIES = 150_000
 _RECENCY_CACHE: dict[str, tuple[float, float]] = {}
 _RECENCY_REFRESH_TASKS: dict[str, asyncio.Task[None]] = {}
+_RECENCY_STOP_EVENT = threading.Event()
 _LINUX_ROOT_VIRTUAL_DIRS = frozenset(
     {Path("/proc"), Path("/sys"), Path("/dev"), Path("/run")}
 )
@@ -146,7 +148,9 @@ def _metadata_recency(d: Path) -> float:
     return best
 
 
-def _refresh_recency_tree(root: Path) -> float:
+def _refresh_recency_tree(
+    root: Path, stop_event: threading.Event | None = None
+) -> float:
     """Index one tree and cache aggregate recency for every visited directory.
 
     A single bottom-up pass makes later navigation into child directories a
@@ -162,6 +166,8 @@ def _refresh_recency_tree(root: Path) -> float:
     )
 
     def visit(d: Path, depth: int) -> float:
+        if stop_event is not None and stop_event.is_set():
+            return 0.0
         try:
             best = d.stat().st_mtime
         except OSError:
@@ -175,6 +181,8 @@ def _refresh_recency_tree(root: Path) -> float:
             return best
 
         for entry in _scandir_entries(d):
+            if stop_event is not None and stop_event.is_set():
+                break
             remaining[0] -= 1
             if remaining[0] < 0:
                 break
@@ -240,10 +248,12 @@ def _schedule_recency_refresh(path: Path) -> None:
     existing = _RECENCY_REFRESH_TASKS.get(key)
     if existing is not None and not existing.done():
         return
+    if not any(not task.done() for task in _RECENCY_REFRESH_TASKS.values()):
+        _RECENCY_STOP_EVENT.clear()
 
     async def refresh() -> None:
         try:
-            await asyncio.to_thread(_refresh_recency_tree, path)
+            await asyncio.to_thread(_refresh_recency_tree, path, _RECENCY_STOP_EVENT)
         except Exception as e:
             logger.debug("directory recency refresh failed for %s: %s", path, e)
         finally:
@@ -255,6 +265,24 @@ def _schedule_recency_refresh(path: Path) -> None:
 def prewarm_directory_recency(path: Path | None = None) -> None:
     """Schedule a non-blocking recursive index, normally for the home tree."""
     _schedule_recency_refresh(path or Path.home())
+
+
+async def shutdown_directory_recency(*, timeout_s: float = 2.0) -> None:
+    """Ask recursive refresh workers to stop, without blocking shutdown forever."""
+    _RECENCY_STOP_EVENT.set()
+    tasks = list(_RECENCY_REFRESH_TASKS.values())
+    if tasks:
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=timeout_s,
+            )
+        except TimeoutError:
+            logger.warning(
+                "Timed out after %.1fs waiting for directory-recency workers",
+                timeout_s,
+            )
+    _RECENCY_REFRESH_TASKS.clear()
 
 
 # Directories per page in directory browser

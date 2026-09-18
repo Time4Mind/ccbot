@@ -12,6 +12,24 @@ from ccbot.bot import _app_lifecycle
 from ccbot.bot.app import create_bot
 from ccbot.config import config
 from ccbot.bot._app_lifecycle import _sync_bot_commands
+from ccbot.tmux_manager import tmux_manager
+
+
+class _LiveControlProcess:
+    def __init__(self) -> None:
+        self.returncode: int | None = None
+        self.terminated = False
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self.returncode = 0
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+    async def wait(self) -> int:
+        assert self.returncode is not None
+        return self.returncode
 
 
 @pytest.mark.asyncio
@@ -68,6 +86,81 @@ async def test_published_command_menu_omits_hidden_commands(monkeypatch) -> None
     published = [command.command for command in sync.await_args.args[1]]
     assert published == ["menu", "help", "model"]
     assert not {"history", "done", "memory", "compact", "effort"} & set(published)
+
+
+@pytest.mark.asyncio
+async def test_post_shutdown_stops_persistent_tmux_control_process(
+    monkeypatch,
+) -> None:
+    process = _LiveControlProcess()
+    monkeypatch.setattr(tmux_manager._control_client, "proc", process)
+    monkeypatch.setattr(_app_lifecycle, "session_monitor", None)
+    for name in (
+        "shutdown_auth_flows",
+        "shutdown_inbound_queues",
+        "shutdown_card_surface_tasks",
+    ):
+        monkeypatch.setattr(_app_lifecycle, name, AsyncMock())
+    monkeypatch.setattr(
+        "ccbot.default_session.shutdown_default_session_tasks", AsyncMock()
+    )
+    monkeypatch.setattr("ccbot.request_preprocessing.prompt_preprocessor.close", AsyncMock())
+    monkeypatch.setattr("ccbot.handlers.history.cancel_pending_prewarm", AsyncMock())
+    monkeypatch.setattr(
+        "ccbot.handlers.directory_browser.shutdown_directory_recency", AsyncMock()
+    )
+    monkeypatch.setattr(
+        "ccbot.handlers.notifications.cancel_pending_card_edits", AsyncMock()
+    )
+    monkeypatch.setattr(_app_lifecycle.session_manager, "save_state", lambda: None)
+
+    await _app_lifecycle.post_shutdown(SimpleNamespace())
+
+    assert process.terminated
+    assert tmux_manager._control_client.proc is None
+
+
+@pytest.mark.asyncio
+async def test_post_shutdown_releases_lock_before_directory_worker_cleanup(
+    monkeypatch,
+) -> None:
+    lock_released = False
+
+    def release_lock() -> None:
+        nonlocal lock_released
+        lock_released = True
+
+    async def shutdown_directory_recency() -> None:
+        assert lock_released
+
+    monkeypatch.setattr("ccbot.main._release_singleton_lock", release_lock)
+    monkeypatch.setattr(_app_lifecycle, "session_monitor", None)
+    for name in (
+        "shutdown_auth_flows",
+        "shutdown_inbound_queues",
+        "shutdown_card_surface_tasks",
+    ):
+        monkeypatch.setattr(_app_lifecycle, name, AsyncMock())
+    monkeypatch.setattr(
+        "ccbot.default_session.shutdown_default_session_tasks", AsyncMock()
+    )
+    monkeypatch.setattr(
+        "ccbot.request_preprocessing.prompt_preprocessor.close", AsyncMock()
+    )
+    monkeypatch.setattr("ccbot.handlers.history.cancel_pending_prewarm", AsyncMock())
+    monkeypatch.setattr(
+        "ccbot.handlers.directory_browser.shutdown_directory_recency",
+        shutdown_directory_recency,
+    )
+    monkeypatch.setattr(
+        "ccbot.handlers.notifications.cancel_pending_card_edits", AsyncMock()
+    )
+    monkeypatch.setattr(tmux_manager, "_drop_control_client", AsyncMock())
+    monkeypatch.setattr(_app_lifecycle.session_manager, "save_state", lambda: None)
+
+    await _app_lifecycle.post_shutdown(SimpleNamespace())
+
+    assert lock_released
 
 
 def test_removed_commands_have_no_dedicated_routes(monkeypatch) -> None:

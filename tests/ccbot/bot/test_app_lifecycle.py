@@ -104,7 +104,9 @@ async def test_post_shutdown_stops_persistent_tmux_control_process(
     monkeypatch.setattr(
         "ccbot.default_session.shutdown_default_session_tasks", AsyncMock()
     )
-    monkeypatch.setattr("ccbot.request_preprocessing.prompt_preprocessor.close", AsyncMock())
+    monkeypatch.setattr(
+        "ccbot.request_preprocessing.prompt_preprocessor.close", AsyncMock()
+    )
     monkeypatch.setattr("ccbot.handlers.history.cancel_pending_prewarm", AsyncMock())
     monkeypatch.setattr(
         "ccbot.handlers.directory_browser.shutdown_directory_recency", AsyncMock()

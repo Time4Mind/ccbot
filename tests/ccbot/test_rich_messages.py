@@ -174,9 +174,7 @@ class TestToRichMarkdown:
 
         path = tmp_path / "financial.report.xlsx"
         path.write_text("data", encoding="utf-8")
-        source = (
-            f'Готово: :codex-file-citation{{path="{path}" purpose="output"}}'
-        )
+        source = f'Готово: :codex-file-citation{{path="{path}" purpose="output"}}'
 
         out = rich.to_rich_markdown(_strip_for_card(source))
 

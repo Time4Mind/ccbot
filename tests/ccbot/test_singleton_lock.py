@@ -52,7 +52,9 @@ def test_released_lock_can_be_reacquired(tmp_path: Path) -> None:
         second.close()
 
 
-def test_explicit_release_allows_replacement_before_process_exit(tmp_path: Path) -> None:
+def test_explicit_release_allows_replacement_before_process_exit(
+    tmp_path: Path,
+) -> None:
     lock = tmp_path / "ccbot.lock"
     held = _acquire_singleton_lock(lock)
     ccbot_main._singleton_lock_handle = held

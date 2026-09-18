@@ -44,9 +44,7 @@ _EXPQUOTE_INNER_RE = re.compile(
 # the existing Rich Markdown file-button converter handle that path later.
 # Suggested follow-up actions have no Telegram equivalent and are removed as
 # whole list rows before pagination instead of leaking their prompt payload.
-_CODEX_FILE_CITATION_RE = re.compile(
-    r":codex-file-citation\{(?P<attrs>[^{}\n]*)\}"
-)
+_CODEX_FILE_CITATION_RE = re.compile(r":codex-file-citation\{(?P<attrs>[^{}\n]*)\}")
 _CODEX_PATH_ATTR_RE = re.compile(r'\bpath="(?P<path>[^"\n]+)"')
 _CODEX_FOLLOWUP_BLOCK_RE = re.compile(
     r"(?m)(?:^[ \t]*\n)?"

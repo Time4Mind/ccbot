@@ -53,8 +53,7 @@ class TestStripForCard:
 
     def test_codex_file_citation_becomes_plain_local_path(self) -> None:
         source = (
-            'Готово: :codex-file-citation{path="/tmp/report.xlsx" '
-            'purpose="output"}'
+            'Готово: :codex-file-citation{path="/tmp/report.xlsx" purpose="output"}'
         )
 
         assert _strip_for_card(source) == "Готово: /tmp/report.xlsx"

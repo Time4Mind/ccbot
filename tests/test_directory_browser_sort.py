@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -63,6 +64,75 @@ async def _wait_for_refreshes() -> None:
     tasks = list(directory_browser._RECENCY_REFRESH_TASKS.values())
     if tasks:
         await asyncio.gather(*tasks)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_stops_running_recency_refresh(tmp_path, monkeypatch) -> None:
+    started = threading.Event()
+    fallback_release = threading.Event()
+    stopped = threading.Event()
+
+    def blocking_refresh(path: Path, *args) -> float:
+        del path
+        started.set()
+        stop_event = args[0] if args else fallback_release
+        stop_event.wait()
+        stopped.set()
+        return 0.0
+
+    monkeypatch.setattr(directory_browser, "_refresh_recency_tree", blocking_refresh)
+    directory_browser.prewarm_directory_recency(tmp_path)
+    for _ in range(100):
+        if started.is_set():
+            break
+        await asyncio.sleep(0.01)
+
+    try:
+        await directory_browser.shutdown_directory_recency()
+    finally:
+        fallback_release.set()
+        await _wait_for_refreshes()
+
+    assert stopped.is_set()
+    assert not directory_browser._RECENCY_REFRESH_TASKS
+
+
+@pytest.mark.asyncio
+async def test_shutdown_does_not_wait_forever_for_blocked_filesystem_scan(
+    tmp_path, monkeypatch
+) -> None:
+    started = threading.Event()
+    fallback_release = threading.Event()
+    stopped = threading.Event()
+
+    def blocked_refresh(path: Path, *args) -> float:
+        del path, args
+        started.set()
+        fallback_release.wait()
+        stopped.set()
+        return 0.0
+
+    monkeypatch.setattr(directory_browser, "_refresh_recency_tree", blocked_refresh)
+    directory_browser.prewarm_directory_recency(tmp_path)
+    for _ in range(100):
+        if started.is_set():
+            break
+        await asyncio.sleep(0.01)
+
+    try:
+        await asyncio.wait_for(
+            directory_browser.shutdown_directory_recency(timeout_s=0.01),
+            timeout=0.2,
+        )
+    finally:
+        fallback_release.set()
+        for _ in range(100):
+            if stopped.is_set():
+                break
+            await asyncio.sleep(0.01)
+
+    assert stopped.is_set()
+    assert not directory_browser._RECENCY_REFRESH_TASKS
 
 
 class TestDirRecency:
@@ -129,6 +199,29 @@ class TestDirRecency:
         _touch(str(project), 1000.0)
         _touch(str(source), 3000.0)
         _touch(str(dependency), 9000.0)
+
+        assert _refresh_recency_tree(project) == 3000.0
+
+    def test_configured_directory_does_not_affect_recency(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        project = tmp_path / "project"
+        project.mkdir()
+        source = project / "app.py"
+        source.write_text("old")
+        excluded = project / ".private-index"
+        excluded.mkdir()
+        generated = excluded / "latest-state"
+        generated.write_text("generated")
+        _touch(str(project), 1000.0)
+        _touch(str(source), 3000.0)
+        _touch(str(excluded), 4000.0)
+        _touch(str(generated), 9000.0)
+        monkeypatch.setattr(
+            directory_browser.config,
+            "recency_exclude_dirs",
+            frozenset({".private-index"}),
+        )
 
         assert _refresh_recency_tree(project) == 3000.0
 

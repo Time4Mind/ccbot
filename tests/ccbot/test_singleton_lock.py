@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from ccbot.main import _acquire_singleton_lock
+import ccbot.main as ccbot_main
+from ccbot.main import _acquire_singleton_lock, release_singleton_lock
 
 
 def test_fresh_path_locks_and_returns_handle(tmp_path: Path) -> None:
@@ -49,6 +50,21 @@ def test_released_lock_can_be_reacquired(tmp_path: Path) -> None:
         assert not second.closed
     finally:
         second.close()
+
+
+def test_explicit_release_allows_replacement_before_process_exit(
+    tmp_path: Path,
+) -> None:
+    lock = tmp_path / "ccbot.lock"
+    held = _acquire_singleton_lock(lock)
+    ccbot_main._singleton_lock_handle = held
+
+    release_singleton_lock()
+
+    assert held.closed
+    assert ccbot_main._singleton_lock_handle is None
+    replacement = _acquire_singleton_lock(lock)
+    replacement.close()
 
 
 def test_creates_parent_directory(tmp_path: Path) -> None:

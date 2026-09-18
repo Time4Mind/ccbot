@@ -457,6 +457,30 @@ async def post_shutdown(
         await session_monitor.stop()
         logger.info("Session monitor stopped")
 
+    # Telegram polling and the session monitor are both stopped now, so this
+    # process no longer owns the live-bot role. Release the process gate before
+    # potentially slow filesystem/subprocess cleanup lets launchd bring up the
+    # replacement even if an OS call in that cleanup stalls.
+    from ..main import release_singleton_lock
+
+    release_singleton_lock()
+    logger.info("Singleton lock released for replacement")
+
+    # Cancelling an ``asyncio.to_thread`` task does not stop its filesystem
+    # worker. Signal the recursive directory index and wait for it before the
+    # event loop starts shutting down its default executor.
+    from ..handlers.directory_browser import shutdown_directory_recency
+
+    await shutdown_directory_recency()
+
+    # The persistent tmux control client owns a long-lived ``/usr/bin/script``
+    # subprocess on macOS.  Leaving it alive keeps the Python process stuck in
+    # the exiting state after a launchd restart, so the process never releases
+    # the singleton lock and every replacement yields on contention.
+    from ..tmux_manager import tmux_manager
+
+    await tmux_manager.close_control_client()
+
     # Flush the newest in-memory activity timestamps before a clean exit.
     # The periodic status checkpoint keeps crash exposure below one minute;
     # an orderly deploy/restart loses nothing.

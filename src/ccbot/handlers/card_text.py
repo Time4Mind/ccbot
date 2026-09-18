@@ -39,6 +39,19 @@ _EXPQUOTE_INNER_RE = re.compile(
     re.DOTALL,
 )
 
+# Codex UI directives are transcript metadata, not user-facing Markdown.
+# ``file-citation`` still carries a useful local path, so unwrap it and let
+# the existing Rich Markdown file-button converter handle that path later.
+# Suggested follow-up actions have no Telegram equivalent and are removed as
+# whole list rows before pagination instead of leaking their prompt payload.
+_CODEX_FILE_CITATION_RE = re.compile(r":codex-file-citation\{(?P<attrs>[^{}\n]*)\}")
+_CODEX_PATH_ATTR_RE = re.compile(r'\bpath="(?P<path>[^"\n]+)"')
+_CODEX_FOLLOWUP_BLOCK_RE = re.compile(
+    r"(?m)(?:^[ \t]*\n)?"
+    r"(?:^[ \t]*(?:[-*+]\s+)?"
+    r":codex-followup\[[^\]\n]*\]\{[^\n]*\}[ \t]*(?:\n|$))+"
+)
+
 
 def _extract_expquote_inner(text: str) -> str:
     """Return the content between the FIRST EXPQUOTE_START / END pair."""
@@ -57,6 +70,7 @@ def _strip_for_card(text: str) -> str:
       INSIDE a head line (heads are one-liners; the embedded quote
       belongs in the body, not the head).
     * Any orphan ``EXPQUOTE_*`` sentinel that escaped pair-matching.
+    * Codex-only file/follow-up directives that Rich Markdown cannot render.
     * ``$HOME`` → ``~`` so long Mac paths don't waste 30+ chars.
 
     The MarkdownV2 ``convert_markdown`` step inside ``send_with_fallback``
@@ -65,7 +79,13 @@ def _strip_for_card(text: str) -> str:
     """
     import os
 
-    out = _EXPQUOTE_BLOCK_RE.sub("", text)
+    def unwrap_file_citation(match: re.Match[str]) -> str:
+        path_match = _CODEX_PATH_ATTR_RE.search(match.group("attrs"))
+        return path_match.group("path") if path_match is not None else ""
+
+    out = _CODEX_FILE_CITATION_RE.sub(unwrap_file_citation, text)
+    out = _CODEX_FOLLOWUP_BLOCK_RE.sub("", out)
+    out = _EXPQUOTE_BLOCK_RE.sub("", out)
     out = _EXPQUOTE_ANY_RE.sub("", out)
     home = os.path.expanduser("~")
     if home and home != "/":

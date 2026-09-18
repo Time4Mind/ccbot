@@ -41,9 +41,9 @@ from typing import IO, Any
 EXIT_CLEAN = 0
 EXIT_CRASH = 1
 
-# Held at module scope so the OS keeps the flock for the whole process
-# lifetime. Local-scope file handles would be GC-closed once main()
-# returns from acquiring them.
+# Held at module scope for the bot's live-polling lifetime. Shutdown releases
+# it explicitly once polling and the session monitor are stopped; relying on
+# interpreter exit can deadlock replacement startup on slow teardown work.
 _singleton_lock_handle: IO[Any] | None = None
 
 
@@ -51,7 +51,7 @@ def _acquire_singleton_lock(lock_path: Path) -> IO[Any]:
     """Acquire an exclusive flock on ``lock_path`` or ``sys.exit(1)``.
 
     Returns the file handle holding the lock; callers MUST keep the
-    handle alive for the process lifetime (we assign it to
+    handle alive for the live-polling lifetime (we assign it to
     ``_singleton_lock_handle`` for this). ``FD_CLOEXEC`` is set so the
     lock doesn't leak into ``subprocess`` / ``asyncio.subprocess``
     children — a stray child outliving the parent would otherwise hold
@@ -79,6 +79,25 @@ def _acquire_singleton_lock(lock_path: Path) -> IO[Any]:
         fh.close()
         raise SystemExit(1)
     return fh
+
+
+def release_singleton_lock() -> None:
+    """Release the process gate once Telegram polling has stopped.
+
+    Shutdown hooks can still be draining filesystem workers or subprocesses at
+    this point.  Releasing explicitly lets launchd start the replacement
+    without waiting for the old Python interpreter to finish tearing down.
+    """
+    global _singleton_lock_handle
+
+    fh = _singleton_lock_handle
+    _singleton_lock_handle = None
+    if fh is None:
+        return
+    try:
+        fcntl.flock(fh, fcntl.LOCK_UN)
+    finally:
+        fh.close()
 
 
 def main() -> None:
@@ -152,14 +171,18 @@ def main() -> None:
     from .bot import create_bot
 
     application = create_bot()
-    # run_polling installs SIGTERM/SIGINT handlers and shuts the
-    # Application down gracefully before returning. When it returns, the
-    # process exits and the OS closes ``_singleton_lock_handle`` — which
-    # releases the flock. restart.sh polls for that release before
-    # launching a replacement (bug A2d), so a clean-shutdown marker in the
-    # log makes the boundary observable between the old and new instance.
-    application.run_polling(allowed_updates=["message", "callback_query"])
-    logger.info("Telegram bot stopped; releasing singleton lock and exiting.")
+    # run_polling installs SIGTERM/SIGINT handlers and shuts the Application
+    # down gracefully before returning. ``post_shutdown`` releases the process
+    # gate once polling is stopped; restart.sh observes that release before
+    # launching a replacement.
+    try:
+        application.run_polling(allowed_updates=["message", "callback_query"])
+    finally:
+        # Normally released by ``post_shutdown`` as soon as polling and the
+        # session monitor are down. Keep this idempotent fallback for startup
+        # failures and shutdown paths that do not reach that hook.
+        release_singleton_lock()
+    logger.info("Telegram bot stopped; singleton lock released; exiting.")
 
 
 if __name__ == "__main__":

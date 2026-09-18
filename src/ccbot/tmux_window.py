@@ -159,12 +159,15 @@ async def create_window(
     def _create_and_start() -> tuple[bool, str, str, str]:
         nonlocal created_pane
         session = manager.get_or_create_session()
+        window: Any | None = None
         try:
             # Create new window
             window = session.new_window(
                 window_name=final_window_name,
                 start_directory=str(path),
             )
+            if window is None:
+                raise RuntimeError("tmux did not return the created window")
 
             wid = window.window_id or ""
 
@@ -227,8 +230,24 @@ async def create_window(
             )
 
         except Exception as e:
-            logger_obj.error(f"Failed to create window: {e}")
-            return False, f"Failed to create window: {e}", "", ""
+            message = f"Failed to create window: {e}"
+            logger_obj.error(message)
+            if window is not None:
+                failed_wid = window.window_id or final_window_name
+                try:
+                    window.kill()
+                    logger_obj.info(
+                        "Rolled back window %s after agent startup failure",
+                        failed_wid,
+                    )
+                except Exception as cleanup_error:
+                    logger_obj.error(
+                        "Failed to roll back window %s: %s",
+                        failed_wid,
+                        cleanup_error,
+                    )
+                    message += f"; failed to roll back window: {cleanup_error}"
+            return False, message, "", ""
 
     result = await asyncio.to_thread(_create_and_start)
     if result[0] and selected_backend == "codex" and created_pane is not None:

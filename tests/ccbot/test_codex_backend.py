@@ -1177,3 +1177,82 @@ async def test_tmux_builds_codex_resume_command(
     assert not startup_tasks[0].done()
     release_trust.set()
     await asyncio.gather(*startup_tasks)
+
+
+@pytest.mark.asyncio
+async def test_tmux_rolls_back_created_window_when_agent_start_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Pane:
+        def send_keys(self, _value: str, enter: bool = True) -> None:
+            raise RuntimeError("agent launch failed")
+
+    class Window:
+        window_id = "@29"
+        active_pane = Pane()
+
+        def __init__(self) -> None:
+            self.killed = False
+
+        def set_window_option(self, _name: str, _value: str) -> None:
+            pass
+
+        def kill(self) -> None:
+            self.killed = True
+
+    window = Window()
+
+    class Session:
+        def new_window(self, **_kwargs):
+            return window
+
+    mgr = TmuxManager()
+    monkeypatch.setattr(mgr, "get_or_create_session", lambda: Session())
+    monkeypatch.setattr(mgr, "find_window_by_name", AsyncMock(return_value=None))
+
+    ok, message, name, wid = await mgr.create_window(
+        str(tmp_path),
+        backend="claude",
+    )
+
+    assert ok is False
+    assert "agent launch failed" in message
+    assert name == ""
+    assert wid == ""
+    assert window.killed is True
+
+
+@pytest.mark.asyncio
+async def test_tmux_start_failure_reports_window_rollback_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Pane:
+        def send_keys(self, _value: str, enter: bool = True) -> None:
+            raise RuntimeError("agent launch failed")
+
+    class Window:
+        window_id = "@30"
+        active_pane = Pane()
+
+        def set_window_option(self, _name: str, _value: str) -> None:
+            pass
+
+        def kill(self) -> None:
+            raise RuntimeError("window rollback failed")
+
+    class Session:
+        def new_window(self, **_kwargs):
+            return Window()
+
+    mgr = TmuxManager()
+    monkeypatch.setattr(mgr, "get_or_create_session", lambda: Session())
+    monkeypatch.setattr(mgr, "find_window_by_name", AsyncMock(return_value=None))
+
+    ok, message, _name, _wid = await mgr.create_window(
+        str(tmp_path),
+        backend="claude",
+    )
+
+    assert ok is False
+    assert "agent launch failed" in message
+    assert "window rollback failed" in message

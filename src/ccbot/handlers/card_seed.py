@@ -35,7 +35,7 @@ def _prompt_key(text: str) -> str:
     return " ".join(_strip_for_card(text).split())
 
 
-def _matching_pending_prefix_count(
+def matching_pending_prefix_count(
     pending_prompts: list[PendingPrompt], raw_text: str
 ) -> int:
     """Return the exact oldest pending prefix represented by one user row."""
@@ -75,7 +75,7 @@ def _reconcile_seeded_pending(state: CardState, seeded: list[Event]) -> int:
     for event in seeded:
         if event.type != "user_msg" or len(remaining) < 2:
             continue
-        count = _matching_pending_prefix_count(remaining, event.text)
+        count = matching_pending_prefix_count(remaining, event.text)
         if count < 2 or event.started_at + 30.0 < remaining[0].created_at:
             continue
         consumed = remaining[:count]

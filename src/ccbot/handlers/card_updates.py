@@ -37,7 +37,7 @@ from .card_registry import (
     _should_buffer,
     _legacy,
 )
-from .card_seed import get_card_state, _matching_pending_prefix_count
+from .card_seed import get_card_state, matching_pending_prefix_count
 from .card_transport import _deferred_edit
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ def _apply_preprocessing_marker(
     # Preserve the established one-row FIFO fallback for harmless transcript
     # normalisation that is not an exact textual match.
     consumed_count = (
-        _matching_pending_prefix_count(state.pending_prompts, raw_text) or 1
+        matching_pending_prefix_count(state.pending_prompts, raw_text) or 1
         if state.pending_prompts
         else 0
     )

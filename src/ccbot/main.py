@@ -81,7 +81,7 @@ def _acquire_singleton_lock(lock_path: Path) -> IO[Any]:
     return fh
 
 
-def _release_singleton_lock() -> None:
+def release_singleton_lock() -> None:
     """Release the process gate once Telegram polling has stopped.
 
     Shutdown hooks can still be draining filesystem workers or subprocesses at
@@ -181,7 +181,7 @@ def main() -> None:
         # Normally released by ``post_shutdown`` as soon as polling and the
         # session monitor are down. Keep this idempotent fallback for startup
         # failures and shutdown paths that do not reach that hook.
-        _release_singleton_lock()
+        release_singleton_lock()
     logger.info("Telegram bot stopped; singleton lock released; exiting.")
 
 

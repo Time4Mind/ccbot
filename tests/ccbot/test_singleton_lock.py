@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 import ccbot.main as ccbot_main
-from ccbot.main import _acquire_singleton_lock, _release_singleton_lock
+from ccbot.main import _acquire_singleton_lock, release_singleton_lock
 
 
 def test_fresh_path_locks_and_returns_handle(tmp_path: Path) -> None:
@@ -59,7 +59,7 @@ def test_explicit_release_allows_replacement_before_process_exit(
     held = _acquire_singleton_lock(lock)
     ccbot_main._singleton_lock_handle = held
 
-    _release_singleton_lock()
+    release_singleton_lock()
 
     assert held.closed
     assert ccbot_main._singleton_lock_handle is None

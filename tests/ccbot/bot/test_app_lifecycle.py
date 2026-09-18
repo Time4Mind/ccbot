@@ -135,7 +135,7 @@ async def test_post_shutdown_releases_lock_before_directory_worker_cleanup(
     async def shutdown_directory_recency() -> None:
         assert lock_released
 
-    monkeypatch.setattr("ccbot.main._release_singleton_lock", release_lock)
+    monkeypatch.setattr("ccbot.main.release_singleton_lock", release_lock)
     monkeypatch.setattr(_app_lifecycle, "session_monitor", None)
     for name in (
         "shutdown_auth_flows",
@@ -157,7 +157,7 @@ async def test_post_shutdown_releases_lock_before_directory_worker_cleanup(
     monkeypatch.setattr(
         "ccbot.handlers.notifications.cancel_pending_card_edits", AsyncMock()
     )
-    monkeypatch.setattr(tmux_manager, "_drop_control_client", AsyncMock())
+    monkeypatch.setattr(tmux_manager, "close_control_client", AsyncMock())
     monkeypatch.setattr(_app_lifecycle.session_manager, "save_state", lambda: None)
 
     await _app_lifecycle.post_shutdown(SimpleNamespace())

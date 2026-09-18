@@ -461,9 +461,9 @@ async def post_shutdown(
     # process no longer owns the live-bot role. Release the process gate before
     # potentially slow filesystem/subprocess cleanup lets launchd bring up the
     # replacement even if an OS call in that cleanup stalls.
-    from ..main import _release_singleton_lock
+    from ..main import release_singleton_lock
 
-    _release_singleton_lock()
+    release_singleton_lock()
     logger.info("Singleton lock released for replacement")
 
     # Cancelling an ``asyncio.to_thread`` task does not stop its filesystem
@@ -479,7 +479,7 @@ async def post_shutdown(
     # the singleton lock and every replacement yields on contention.
     from ..tmux_manager import tmux_manager
 
-    await tmux_manager._drop_control_client()
+    await tmux_manager.close_control_client()
 
     # Flush the newest in-memory activity timestamps before a clean exit.
     # The periodic status checkpoint keeps crash exposure below one minute;

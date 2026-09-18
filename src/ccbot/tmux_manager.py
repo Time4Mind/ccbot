@@ -82,7 +82,8 @@ class TmuxManager:
         self._startup_tasks: set[asyncio.Task[bool]] = set()
         self._control_client = TmuxControlClient(self.session_name)
 
-    async def _drop_control_client(self) -> None:
+    async def close_control_client(self) -> None:
+        """Close the persistent read-only tmux client during shutdown."""
         await self._control_client.close()
 
     async def _control_request(self, command: str) -> str | None:

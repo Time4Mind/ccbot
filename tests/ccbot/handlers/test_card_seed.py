@@ -179,6 +179,52 @@ class TestEnsureSeededIdempotent:
         assert rendered.count(prompt) == 1
         assert rendered.index(prompt) < rendered.index("Проверяю данные")
 
+    async def test_seed_reconciles_concatenated_pending_prompt_batch(
+        self, monkeypatch
+    ) -> None:
+        import ccbot.handlers.notifications as notif
+        from ccbot.session import Session
+
+        combined = "Первый запрос.Второй запрос"
+        seeded_prompt = Event(
+            type="user_msg",
+            text=combined,
+            body=combined,
+            started_at=3.0,
+            is_page_break=True,
+        )
+
+        async def _seed(_sess, max_turns=0):
+            del max_turns
+            return [seeded_prompt]
+
+        monkeypatch.setattr(notif, "_seed_events_from_jsonl", _seed)
+        state = CardState(
+            pending_prompts=[
+                PendingPrompt(request_id="81", text="Первый запрос.", created_at=1.0),
+                PendingPrompt(
+                    request_id="82",
+                    text="Второй запрос",
+                    preprocessed=True,
+                    created_at=2.0,
+                ),
+            ],
+            pending_request_sequences=[(81, 41), (82, 42)],
+        )
+        sess = Session(id="international", name="international marts", window_id="@99")
+
+        await _ensure_seeded(1, sess, state)
+
+        assert state.pending_prompts == []
+        assert state.pending_request_sequences == []
+        assert state.active_turn_sequence == 42
+        assert seeded_prompt.user_icon == "👤💻"
+        from ccbot.handlers.card_layout import _render_card
+
+        rendered = _render_card(sess, state, user_id=1)
+        assert rendered.count("Первый запрос.") == 1
+        assert rendered.count("Второй запрос") == 1
+
     async def test_no_op_when_events_present(self, monkeypatch) -> None:
         import ccbot.session_claude_io as scio
         from ccbot.handlers.notifications import Event

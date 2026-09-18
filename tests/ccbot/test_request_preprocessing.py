@@ -516,6 +516,94 @@ def test_transcript_event_clears_oldest_pending_prompt_when_text_differs() -> No
     assert event.user_icon == "👤💻"
 
 
+def test_concatenated_transcript_event_clears_every_matching_pending_prompt() -> None:
+    state = CardState(
+        pending_prompts=[
+            PendingPrompt(request_id="21", text="Напомни мне."),
+            PendingPrompt(
+                request_id="22",
+                text="Пайплайн истории перемещения отключила.",
+                preprocessed=True,
+            ),
+        ],
+        pending_request_sequences=[(21, 7), (22, 8)],
+    )
+    sess = Session(id="international", name="international marts")
+    text = "Напомни мне.Пайплайн истории перемещения отключила."
+    event = Event(type="user_msg", text=text, started_at=1)
+
+    _apply_preprocessing_marker(sess, state, event, text)
+    state.events.append(event)
+    rendered = _render_card(sess, state, user_id=42)
+
+    assert state.pending_prompts == []
+    assert state.pending_request_sequences == []
+    assert state.active_turn_sequence == 8
+    assert rendered.count("Напомни мне.") == 1
+    assert rendered.count("Пайплайн истории перемещения отключила.") == 1
+    assert event.user_icon == "👤💻"
+
+
+def test_concatenated_transcript_event_consumes_only_exact_pending_prefix() -> None:
+    state = CardState(
+        pending_prompts=[
+            PendingPrompt(request_id="31", text="Первый"),
+            PendingPrompt(request_id="32", text="Второй"),
+            PendingPrompt(request_id="33", text="Третий"),
+        ],
+        pending_request_sequences=[(31, 11), (32, 12), (33, 13)],
+    )
+    sess = Session(id="international", name="international marts")
+    event = Event(type="user_msg", text="Первый Второй", started_at=1)
+
+    _apply_preprocessing_marker(sess, state, event, event.text)
+    state.events.append(event)
+    rendered = _render_card(sess, state, user_id=42)
+
+    assert [row.request_id for row in state.pending_prompts] == ["33"]
+    assert state.pending_request_sequences == [(33, 13)]
+    assert state.active_turn_sequence == 12
+    assert rendered.count("Первый") == 1
+    assert rendered.count("Второй") == 1
+    assert rendered.count("Третий") == 1
+
+
+def test_concatenated_identical_prompts_are_reconciled_fifo() -> None:
+    state = CardState(
+        pending_prompts=[
+            PendingPrompt(request_id="41", text="Ок"),
+            PendingPrompt(request_id="42", text="Ок"),
+        ],
+        pending_request_sequences=[(41, 21), (42, 22)],
+    )
+    sess = Session(id="international", name="international marts")
+    event = Event(type="user_msg", text="ОкОк", started_at=1)
+
+    _apply_preprocessing_marker(sess, state, event, event.text)
+
+    assert state.pending_prompts == []
+    assert state.pending_request_sequences == []
+    assert state.active_turn_sequence == 22
+
+
+def test_near_match_does_not_consume_multiple_pending_prompts() -> None:
+    state = CardState(
+        pending_prompts=[
+            PendingPrompt(request_id="51", text="Первый"),
+            PendingPrompt(request_id="52", text="Второй"),
+        ],
+        pending_request_sequences=[(51, 31), (52, 32)],
+    )
+    sess = Session(id="international", name="international marts")
+    event = Event(type="user_msg", text="Первый Второй!", started_at=1)
+
+    _apply_preprocessing_marker(sess, state, event, event.text)
+
+    assert [row.request_id for row in state.pending_prompts] == ["52"]
+    assert state.pending_request_sequences == [(52, 32)]
+    assert state.active_turn_sequence == 31
+
+
 def test_preprocessed_marker_survives_session_state_roundtrip() -> None:
     sess = Session(id="abc12345", name="demo")
     sess.remember_preprocessed_prompt("Готовый запрос")

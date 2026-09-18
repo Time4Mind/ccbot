@@ -16,6 +16,7 @@ from .card_model import (
     CARD_SEED_TURNS,
     CardState,
     Event,
+    PendingPrompt,
     _apply_tool_result,
     _build_event,
     _strip_for_card,
@@ -34,7 +35,28 @@ def _prompt_key(text: str) -> str:
     return " ".join(_strip_for_card(text).split())
 
 
-def _reconcile_seeded_pending(state: CardState, seeded: list[Event]) -> None:
+def _matching_pending_prefix_count(
+    pending_prompts: list[PendingPrompt], raw_text: str
+) -> int:
+    """Return the exact oldest pending prefix represented by one user row."""
+    target = _prompt_key(raw_text)
+    if not target:
+        return 0
+    compact = ""
+    spaced_parts: list[str] = []
+    matched = 0
+    for index, pending in enumerate(pending_prompts, 1):
+        part = _prompt_key(pending.text)
+        if not part:
+            break
+        compact += part
+        spaced_parts.append(part)
+        if target in (compact, " ".join(spaced_parts)):
+            matched = index
+    return matched
+
+
+def _reconcile_seeded_pending(state: CardState, seeded: list[Event]) -> int:
     """Bind pending receipts to their already-seeded user events in place.
 
     The seed loader can observe the user's JSONL row and the first assistant
@@ -43,7 +65,28 @@ def _reconcile_seeded_pending(state: CardState, seeded: list[Event]) -> None:
     synthetic tail after the assistant work that it initiated.
     """
     if not state.pending_prompts:
-        return
+        return 0
+    original_count = len(state.pending_prompts)
+
+    # A queued Codex turn may contain several Telegram requests in one user
+    # row. Reconcile exact multi-request batches first; the reverse single-row
+    # matcher below then retains its protection against repeated old text.
+    remaining = list(state.pending_prompts)
+    for event in seeded:
+        if event.type != "user_msg" or len(remaining) < 2:
+            continue
+        count = _matching_pending_prefix_count(remaining, event.text)
+        if count < 2 or event.started_at + 30.0 < remaining[0].created_at:
+            continue
+        consumed = remaining[:count]
+        if any(pending.preprocessed for pending in consumed):
+            event.user_icon = "👤💻"
+        elif consumed[0].user_icon:
+            event.user_icon = consumed[0].user_icon
+        del remaining[:count]
+    state.pending_prompts = remaining
+    if not state.pending_prompts:
+        return original_count
 
     matched_pending_ids: set[int] = set()
     search_before = len(seeded)
@@ -75,6 +118,7 @@ def _reconcile_seeded_pending(state: CardState, seeded: list[Event]) -> None:
             for pending in state.pending_prompts
             if id(pending) not in matched_pending_ids
         ]
+    return original_count - len(state.pending_prompts)
 
 
 __all__ = [
@@ -256,7 +300,10 @@ async def _ensure_seeded(user_id: int, sess: Session, state: CardState) -> None:
         max_turns = CARD_SEED_TURNS
     seeded = await _legacy_seed_loader()(sess, max_turns=max_turns)
     if seeded:
-        _reconcile_seeded_pending(state, seeded)
+        reconciled = _reconcile_seeded_pending(state, seeded)
+        for _ in range(min(reconciled, len(state.pending_request_sequences))):
+            _message_id, sequence = state.pending_request_sequences.pop(0)
+            state.active_turn_sequence = sequence
         state.events = seeded
         state.seed_attempted = True
         logger.info(

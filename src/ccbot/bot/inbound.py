@@ -101,42 +101,49 @@ def _enqueue(
         # even if this request's transcript event arrives after that tap.
         state = get_card_state(user.id, sess)
         message_id = update.message.message_id
-        pending_sequences = getattr(state, "pending_request_sequences", None)
-        if pending_sequences is None:
-            pending_sequences = []
-            state.pending_request_sequences = pending_sequences
-        existing = next(
-            (
-                sequence
-                for queued_message_id, sequence in pending_sequences
-                if queued_message_id == message_id
-            ),
-            None,
-        )
-        if existing is None:
-            state.next_request_sequence = getattr(state, "next_request_sequence", 0) + 1
-            request_sequence = state.next_request_sequence
-            pending_sequences.append((message_id, request_sequence))
-        else:
-            request_sequence = existing
+        if kind != "command":
+            # Slash commands are control-plane input. Claude records commands
+            # such as /model as ``local_command`` rather than ``user_msg``, so
+            # they must not reserve a conversational receipt that the next
+            # real prompt would consume.
+            pending_sequences = getattr(state, "pending_request_sequences", None)
+            if pending_sequences is None:
+                pending_sequences = []
+                state.pending_request_sequences = pending_sequences
+            existing = next(
+                (
+                    sequence
+                    for queued_message_id, sequence in pending_sequences
+                    if queued_message_id == message_id
+                ),
+                None,
+            )
+            if existing is None:
+                state.next_request_sequence = (
+                    getattr(state, "next_request_sequence", 0) + 1
+                )
+                request_sequence = state.next_request_sequence
+                pending_sequences.append((message_id, request_sequence))
+            else:
+                request_sequence = existing
+
+            def _discard_failed_request(done: object) -> None:
+                try:
+                    delivered = bool(done.result())  # type: ignore[attr-defined]
+                except Exception:
+                    delivered = False
+                if delivered:
+                    return
+                state.pending_request_sequences = [
+                    item
+                    for item in state.pending_request_sequences
+                    if item != (message_id, request_sequence)
+                ]
+
+            completion = getattr(receipt, "completion", None)
+            if completion is not None:
+                completion.add_done_callback(_discard_failed_request)
         state.current_page_idx = None
-
-        def _discard_failed_request(done: object) -> None:
-            try:
-                delivered = bool(done.result())  # type: ignore[attr-defined]
-            except Exception:
-                delivered = False
-            if delivered:
-                return
-            state.pending_request_sequences = [
-                item
-                for item in state.pending_request_sequences
-                if item != (message_id, request_sequence)
-            ]
-
-        completion = getattr(receipt, "completion", None)
-        if completion is not None:
-            completion.add_done_callback(_discard_failed_request)
         if kind == "voice":
             state.voice_pending = True
         schedule_card_after_message(

@@ -15,6 +15,7 @@ from .config import config
 from .node_models import Node
 from .session_defaults import DEFAULT_IDLE_ARCHIVE_HOURS
 from .session_models import reserve_owner, Session, SessionState
+from .transfer_models import SessionTransfer
 
 logger = logging.getLogger("ccbot.session")
 
@@ -29,6 +30,7 @@ class SessionStateMixin:
     sessions: dict[str, Session]
     nodes: dict[str, Node]
     selected_node_ids: dict[int, str]
+    transfers: dict[str, SessionTransfer]
     user_settings: dict[int, dict[str, Any]]
     summary_cache: dict[str, dict[str, Any]]
     last_switcher_msg_id: dict[int, int]
@@ -170,6 +172,110 @@ class SessionStateMixin:
         else:
             self.active_sessions.pop(user_id, None)
         self.save_state()
+
+    def start_context_transfer(
+        self,
+        *,
+        source_session_id: str,
+        target_node_id: str,
+        target_backend: str,
+        context_path: str,
+    ) -> SessionTransfer:
+        """Create an idempotent leader-side transfer record.
+
+        This method only admits a transfer. The actual relay/worker command
+        is owned by the node runtime and completes it with
+        ``complete_context_transfer``.
+        """
+        source = self.sessions.get(source_session_id)
+        target = self.nodes.get(target_node_id)
+        if source is None:
+            raise KeyError(f"Unknown source session: {source_session_id}")
+        if source.state not in ("active", "idle"):
+            raise ValueError("Only a live session can be transferred")
+        if target is None:
+            raise KeyError(f"Unknown target node: {target_node_id}")
+        target_backends = target.backends
+        # The implicit local node predates capability registration. Its
+        # effective backend list is the user's enabled list at the UI gate;
+        # the concrete local runtime still performs the final readiness check.
+        if target_node_id == "local" and not target_backends:
+            target_backends = ["claude", "codex"]
+        if target.state != "ready" or target_backend not in target_backends:
+            raise ValueError("Target backend is unavailable on the target node")
+        for transfer in self.transfers.values():
+            if transfer.source_session_id == source_session_id and transfer.state in (
+                "pending",
+                "starting",
+            ):
+                return transfer
+        transfer = SessionTransfer(
+            id=SessionTransfer.new_id(),
+            source_session_id=source_session_id,
+            source_node_id=source.node_id,
+            target_node_id=target_node_id,
+            target_backend=target_backend,
+            context_path=context_path,
+            created_at=time.time(),
+        )
+        self.transfers[transfer.id] = transfer
+        self.save_state()
+        return transfer
+
+    def fail_context_transfer(self, transfer_id: str, error: str) -> SessionTransfer:
+        """Persist a terminal transfer failure without changing sessions."""
+        transfer = self.transfers.get(transfer_id)
+        if transfer is None:
+            raise KeyError(f"Unknown transfer id: {transfer_id}")
+        transfer.state = "failed"
+        transfer.error = error
+        self.save_state()
+        return transfer
+
+    def complete_context_transfer(
+        self,
+        transfer_id: str,
+        *,
+        user_id: int,
+        context_error: str = "",
+        target_window_id: str = "",
+        target_workdir: str = "",
+        target_agent_session_id: str = "",
+    ) -> "Session":
+        """Create the independent target session and archive the source."""
+        transfer = self.transfers.get(transfer_id)
+        if transfer is None:
+            raise KeyError(f"Unknown transfer: {transfer_id}")
+        if transfer.state == "ready":
+            target = self.sessions.get(transfer.target_session_id)
+            if target is None:
+                raise RuntimeError("Completed transfer has no target session")
+            return target
+        if transfer.state not in ("pending", "starting"):
+            raise ValueError(f"Transfer is not completable: {transfer.state}")
+        source = self.sessions.get(transfer.source_session_id)
+        if source is None or source.state not in ("active", "idle"):
+            raise ValueError("Source session is no longer live")
+        target = self.create_session(
+            name=source.name,
+            window_id=target_window_id,
+            workdir=target_workdir or source.workdir,
+            backend=transfer.target_backend,
+            node_id=transfer.target_node_id,
+        )
+        target.context_path = transfer.context_path
+        target.context_error = context_error
+        target.imported_from_backend = source.backend
+        target.imported_from_session_id = source.id
+        target.claude_session_id = target_agent_session_id
+        transfer.target_session_id = target.id
+        transfer.state = "ready"
+        transfer.error = context_error
+        self.set_selected_node(user_id, transfer.target_node_id)
+        self.set_active_session(user_id, target.id)
+        self.mark_session_archived(source.id)
+        self.save_state()
+        return target
 
     def list_user_sessions(
         self,

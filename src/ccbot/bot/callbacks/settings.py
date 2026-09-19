@@ -16,6 +16,7 @@ from ...handlers.callback_data import (
     CB_ST_AGENT,
     CB_ST_DEFAULT_DIR,
     CB_ST_DEFAULT_SESSION,
+    CB_ST_NODE_PAIR,
     CB_ST_BACK,
     CB_ST_BGNOTIFY,
     CB_ST_CAT,
@@ -280,6 +281,13 @@ async def handle(
         await query.answer()
         return True
 
+    if data == CB_ST_NODE_PAIR:
+        from ...handlers.nodes import pairing_invitation_text
+
+        await safe_send(context.bot, user.id, pairing_invitation_text(user.id))
+        await query.answer()
+        return True
+
     if data == CB_ST_LCLAUDE:
         await _send_linux_claude_prompt(query, user.id)
         await query.answer()
@@ -312,6 +320,7 @@ async def handle(
         CB_ST_AGENT,
         CB_ST_DEFAULT_DIR,
         CB_ST_DEFAULT_SESSION,
+        CB_ST_NODE_PAIR,
         CB_ST_LAG,
         CB_ST_VOICE,
         CB_ST_LANG,

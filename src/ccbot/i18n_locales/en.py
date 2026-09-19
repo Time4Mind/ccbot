@@ -405,6 +405,28 @@ EN: dict[str, str] = {
     "nodes.state.online": "online",
     "nodes.state.offline": "offline",
     "nodes.state.ready": "ready",
+    "settings.nodes.add": "🔗 Pair a node",
+    "nodes.pairing.created": "Copy this link and paste it on the node being connected:\n\n`{link}`",
+    "nodes.pairing.relay_missing": "Set the relay server in CCBOT_NODE_RELAY_URL first.",
+    "transfer.choose_node": "*Session transfer*\n\nSession: *{session}*\n\nChoose the target node.",
+    "transfer.choose_backend": "*Choose a backend*\n\nTarget node: *{node}*",
+    "transfer.confirm": (
+        "*Confirm transfer*\n\nSession: *{session}*\n"
+        "Target node: *{node}*\nBackend: *{backend}*\n\n"
+        "Only the session context will be transferred."
+    ),
+    "transfer.btn.start": "✅ Transfer",
+    "transfer.started": "⏳ Transfer started. New requests will be queued until the target session is ready.",
+    "transfer.ready": "✅ Target session is ready.",
+    "transfer.cancelled": "Transfer cancelled.",
+    "transfer.unavailable": "Transfer is currently unavailable.",
+    "transfer.target_unavailable": "The target node is unavailable.",
+    "transfer.backend_unavailable": "This backend is unavailable on the target node.",
+    "transfer.failed": "❌ Session transfer failed: {error}",
+    "transfer.context_limit": (
+        "⚠ The target session was created, but the full context did not fit.\n"
+        "Reason: {error}\n\nFull context: `{path}`"
+    ),
     "settings.cat.preprocessing.body": (
         "*Preprocessing*\n\nConservative request cleanup by one shared Luna before delivery to the pinned session."
     ),

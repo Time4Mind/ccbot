@@ -33,6 +33,20 @@ def test_legacy_session_and_window_state_default_to_local_node() -> None:
     assert window.node_id == "local"
 
 
+def test_session_context_metadata_round_trips() -> None:
+    session = Session(
+        id="target",
+        name="Imported",
+        context_path="/var/lib/ccbot/imports/target-full.md",
+        context_error="Backend context window is smaller than the imported context",
+    )
+
+    restored = Session.from_dict(session.to_dict())
+
+    assert restored.context_path == session.context_path
+    assert restored.context_error == session.context_error
+
+
 def test_node_scoped_session_state_round_trips_and_selects_node(
     monkeypatch,
 ) -> None:
@@ -83,3 +97,63 @@ def test_archiving_remote_session_clears_node_scoped_active_pointer(monkeypatch)
     manager.mark_session_archived(session.id)
 
     assert manager.get_active_session(42) is None
+
+
+def test_context_transfer_creates_independent_target_and_archives_source(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
+    monkeypatch.setattr(SessionManager, "save_state", lambda self: None)
+    manager = SessionManager()
+    manager.register_node(
+        Node(
+            id="office",
+            display_name="Office",
+            state="ready",
+            backends=["codex"],
+        )
+    )
+    source = manager.create_session(name="same title", backend="claude")
+    manager.set_active_session(42, source.id)
+
+    transfer = manager.start_context_transfer(
+        source_session_id=source.id,
+        target_node_id="office",
+        target_backend="codex",
+        context_path="/target/imports/full.md",
+    )
+    target = manager.complete_context_transfer(
+        transfer.id,
+        user_id=42,
+        context_error="Context window is smaller",
+    )
+
+    assert target.id != source.id
+    assert target.name == source.name
+    assert target.node_id == "office"
+    assert target.context_path == "/target/imports/full.md"
+    assert target.context_error == "Context window is smaller"
+    assert source.state == "archived"
+    assert manager.get_active_session(42) is target
+
+
+def test_transfer_rejects_backend_not_available_on_worker(monkeypatch) -> None:
+    monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
+    monkeypatch.setattr(SessionManager, "save_state", lambda self: None)
+    manager = SessionManager()
+    manager.register_node(
+        Node(id="office", display_name="Office", state="ready", backends=["claude"])
+    )
+    source = manager.create_session(name="source")
+
+    try:
+        manager.start_context_transfer(
+            source_session_id=source.id,
+            target_node_id="office",
+            target_backend="codex",
+            context_path="/target/imports/full.md",
+        )
+    except ValueError as exc:
+        assert "unavailable" in str(exc)
+    else:
+        raise AssertionError("transfer admission must reject unavailable backend")

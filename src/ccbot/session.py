@@ -43,6 +43,7 @@ from .session_models import ClaudeSession, Session, SessionState, WindowState
 from .session_state import SessionStateMixin
 from .terminal_parser import is_interactive_ui, parse_status_line
 from .tmux_manager import tmux_manager
+from .transfer_models import SessionTransfer
 from .transcript_parser import TranscriptParser
 from .utils import atomic_write_json
 
@@ -114,6 +115,7 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
         default_factory=lambda: {"local": Node.local()}
     )
     selected_node_ids: dict[int, str] = field(default_factory=dict)
+    transfers: dict[str, SessionTransfer] = field(default_factory=dict)
     # Telegram message_id of the bot message that currently carries the inline
     # session switcher for each user. Used to strip stale switchers when a new
     # bot message goes out.
@@ -178,6 +180,10 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
             "selected_node_ids": {
                 str(uid): node_id
                 for uid, node_id in self.selected_node_ids.items()
+            },
+            "transfers": {
+                transfer_id: transfer.to_dict()
+                for transfer_id, transfer in self.transfers.items()
             },
             "last_switcher_msg_id": {
                 str(uid): mid for uid, mid in self.last_switcher_msg_id.items()
@@ -259,6 +265,11 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                     int(uid): str(node_id)
                     for uid, node_id in state.get("selected_node_ids", {}).items()
                 }
+                self.transfers = {
+                    transfer_id: SessionTransfer.from_dict(data)
+                    for transfer_id, data in state.get("transfers", {}).items()
+                    if isinstance(data, dict) and str(transfer_id)
+                }
                 self.last_switcher_msg_id = {
                     int(uid): int(mid)
                     for uid, mid in state.get("last_switcher_msg_id", {}).items()
@@ -308,6 +319,7 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                 self.sessions = {}
                 self.nodes = {"local": Node.local()}
                 self.selected_node_ids = {}
+                self.transfers = {}
                 self.last_switcher_msg_id = {}
                 self.card_msg_id = {}
                 self.window_display_names = {}

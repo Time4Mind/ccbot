@@ -7,7 +7,9 @@ from typing import Any
 from telegram import CallbackQuery
 from telegram.ext import ContextTypes
 
-from ...handlers.callback_data import CB_NODE_USE
+from ...handlers.callback_data import CB_NODE_ADD, CB_NODE_USE
+from ...handlers.message_sender import safe_send
+from ...handlers.nodes import pairing_invitation_text
 from ...session import session_manager
 from .._common import open_sessions_in_place
 
@@ -16,6 +18,10 @@ async def handle(
     query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
 ) -> bool:
     data = query.data or ""
+    if data == CB_NODE_ADD:
+        await safe_send(context.bot, user.id, pairing_invitation_text(user.id))
+        await query.answer()
+        return True
     if not data.startswith(CB_NODE_USE):
         return False
     node_id = data[len(CB_NODE_USE) :]

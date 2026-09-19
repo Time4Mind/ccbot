@@ -4,14 +4,22 @@ from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from ..config import config
 from ..i18n import t
+from ..node_pairing import create_pairing_invitation
 from ..node_models import Node
 from ..session import session_manager
-from .callback_data import CB_MM_BACK, CB_NODE_USE
+from .callback_data import CB_MM_BACK, CB_NODE_ADD, CB_NODE_USE
 
 
 def _node_state_text(user_id: int, node: Node) -> str:
     return t(user_id, f"nodes.state.{node.state}")
+
+
+def _node_backends(user_id: int, node: Node) -> tuple[str, ...]:
+    if node.id == "local" and not node.backends:
+        return session_manager.get_enabled_backends(user_id)
+    return tuple(node.backends)
 
 
 def render_nodes_text(user_id: int) -> str:
@@ -31,7 +39,7 @@ def render_nodes_text(user_id: int) -> str:
     selected_id = session_manager.get_selected_node_id(user_id)
     for node in nodes:
         marker = "✓ " if node.id == selected_id else ""
-        backends = ", ".join(node.backends) or "-"
+        backends = ", ".join(_node_backends(user_id, node)) or "-"
         lines.append(
             f"| {marker}{node.display_name or node.id} | "
             f"{_node_state_text(user_id, node)} | {backends} |"
@@ -51,9 +59,32 @@ def build_nodes_keyboard(user_id: int) -> InlineKeyboardMarkup:
                 [InlineKeyboardButton(label, callback_data=f"{CB_NODE_USE}{node.id}")]
             )
     rows.append(
+        [
+            InlineKeyboardButton(
+                t(user_id, "settings.nodes.add"), callback_data=CB_NODE_ADD
+            )
+        ]
+    )
+    rows.append(
         [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_BACK)]
     )
     return InlineKeyboardMarkup(rows)
 
 
-__all__ = ["build_nodes_keyboard", "render_nodes_text"]
+def pairing_invitation_text(user_id: int) -> str:
+    """Return a copyable one-time pairing payload for the other node."""
+    try:
+        invitation = create_pairing_invitation(
+            relay_url=config.node_relay_url,
+            leader_id=config.node_leader_id,
+        )
+    except ValueError:
+        return t(user_id, "nodes.pairing.relay_missing")
+    return t(user_id, "nodes.pairing.created", link=invitation.to_link())
+
+
+__all__ = [
+    "build_nodes_keyboard",
+    "pairing_invitation_text",
+    "render_nodes_text",
+]

@@ -149,6 +149,10 @@ class Session:
     default_reserve_user_id: int = 0
     # Stable execution scope.  Legacy state is implicitly local.
     node_id: str = "local"
+    # Durable full-context artifact for imported sessions. This is separate
+    # from the provider's active context window and survives archive/restore.
+    context_path: str = ""
+    context_error: str = ""
 
     @staticmethod
     def new_id() -> str:
@@ -237,6 +241,8 @@ class Session:
             "pending_preprocessing": self.pending_preprocessing,
             "default_reserve_user_id": self.default_reserve_user_id,
             "node_id": self.node_id,
+            "context_path": self.context_path,
+            "context_error": self.context_error,
         }
 
     @classmethod
@@ -280,4 +286,6 @@ class Session:
             ][-128:],
             default_reserve_user_id=int(data.get("default_reserve_user_id", 0)),
             node_id=str(data.get("node_id", "local")),
+            context_path=str(data.get("context_path", "")),
+            context_error=str(data.get("context_error", "")),
         )

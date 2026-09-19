@@ -268,6 +268,14 @@ class Config:
         # (e.g. RU-blocked IPs). Accepts http://host:port or socks5://host:port.
         self.tg_proxy_url: str = os.getenv("TG_PROXY_URL", "").strip()
 
+        # Multi-node control-plane relay. Provider/VPN connectivity remains
+        # local to each node; this URL is only the stable rendezvous path for
+        # leader/worker transport.
+        self.node_relay_url: str = os.getenv("CCBOT_NODE_RELAY_URL", "").strip()
+        self.node_leader_id: str = (
+            os.getenv("CCBOT_NODE_LEADER_ID", "local").strip() or "local"
+        )
+
         # Identifying label for this deployment — surfaced to Claude via
         # ``CCBOT_HOST`` so a session can tell which device it's running
         # on (Mac vs. arm64 box etc.). Defaults to ``socket.gethostname()``

@@ -388,6 +388,28 @@ RU: dict[str, str] = {
     "nodes.state.online": "онлайн",
     "nodes.state.offline": "оффлайн",
     "nodes.state.ready": "готова",
+    "settings.nodes.add": "🔗 Подключить ноду",
+    "nodes.pairing.created": "Скопируй ссылку и вставь её на подключаемой ноде:\n\n`{link}`",
+    "nodes.pairing.relay_missing": "Сначала настрой адрес relay-сервера в CCBOT_NODE_RELAY_URL.",
+    "transfer.choose_node": "*Перенос сессии*\n\nСессия: *{session}*\n\nВыбери целевую ноду.",
+    "transfer.choose_backend": "*Выбери бэкенд*\n\nЦелевая нода: *{node}*",
+    "transfer.confirm": (
+        "*Подтвердить перенос*\n\nСессия: *{session}*\n"
+        "Целевая нода: *{node}*\nБэкенд: *{backend}*\n\n"
+        "Переносится только контекст сессии."
+    ),
+    "transfer.btn.start": "✅ Перенести",
+    "transfer.started": "⏳ Перенос запущен. Новые запросы будут поставлены в очередь до готовности целевой сессии.",
+    "transfer.ready": "✅ Целевая сессия готова.",
+    "transfer.cancelled": "Перенос отменён.",
+    "transfer.unavailable": "Перенос сейчас недоступен.",
+    "transfer.target_unavailable": "Целевая нода недоступна.",
+    "transfer.backend_unavailable": "Этот бэкенд недоступен на целевой ноде.",
+    "transfer.failed": "❌ Не удалось перенести сессию: {error}",
+    "transfer.context_limit": (
+        "⚠ Целевая сессия создана, но весь контекст не поместился.\n"
+        "Причина: {error}\n\nПолный контекст: `{path}`"
+    ),
     "settings.cat.preprocessing.body": (
         "*Препроцессинг*\n\nКонсервативная подготовка запроса общей Luna перед отправкой в целевую сессию."
     ),

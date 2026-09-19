@@ -55,6 +55,7 @@ _auth_preflight_task: asyncio.Task[None] | None = None
 _usage_prewarm_task: asyncio.Task[None] | None = None
 _preprocessing_recovery_task: asyncio.Task[int] | None = None
 _default_session_task: asyncio.Task[None] | None = None
+_node_runtime_task: asyncio.Task[None] | None = None
 
 
 async def _sync_bot_commands(bot: Any, commands: list[BotCommand]) -> bool:
@@ -90,6 +91,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
         _usage_prewarm_task, \
         _preprocessing_recovery_task, \
         _default_session_task, \
+        _node_runtime_task, \
         _last_heartbeat, \
         _conflict_app
 
@@ -134,6 +136,32 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     # window vanished get state=lost and surface in the switcher with a
     # Restore button.
     await session_manager.reconcile_sessions_with_tmux()
+
+    async def _connect_node_runtime() -> None:
+        if not config.node_relay_url or not config.node_secret:
+            return
+        from ..node_runtime import connect_configured_remote_runtimes
+
+        while True:
+            try:
+                await connect_configured_remote_runtimes(
+                    relay_url=config.node_relay_url,
+                    leader_id=config.node_leader_id,
+                    secret=config.node_secret,
+                    node_ids=[node.id for node in session_manager.list_nodes()],
+                    tls=config.node_relay_tls,
+                )
+                logger.info("Multi-node relay connected")
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Multi-node relay connection failed: %s", exc)
+                await asyncio.sleep(5.0)
+
+    _node_runtime_task = asyncio.create_task(
+        _connect_node_runtime(), name="node-runtime-connect"
+    )
 
     from ..default_session import default_session_loop
 
@@ -366,7 +394,8 @@ async def post_shutdown(
         _auth_preflight_task, \
         _usage_prewarm_task, \
         _preprocessing_recovery_task, \
-        _default_session_task
+        _default_session_task, \
+        _node_runtime_task
 
     if _usage_prewarm_task:
         if not _usage_prewarm_task.done():
@@ -388,6 +417,13 @@ async def post_shutdown(
         _default_session_task.cancel()
         await asyncio.gather(_default_session_task, return_exceptions=True)
         _default_session_task = None
+    if _node_runtime_task:
+        _node_runtime_task.cancel()
+        await asyncio.gather(_node_runtime_task, return_exceptions=True)
+        _node_runtime_task = None
+    from ..node_runtime import shutdown_remote_runtimes
+
+    await shutdown_remote_runtimes()
     from ..default_session import shutdown_default_session_tasks
 
     await shutdown_default_session_tasks()

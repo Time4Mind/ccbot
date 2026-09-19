@@ -275,6 +275,14 @@ class Config:
         self.node_leader_id: str = (
             os.getenv("CCBOT_NODE_LEADER_ID", "local").strip() or "local"
         )
+        self.node_id: str = (
+            os.getenv("CCBOT_NODE_ID", self.node_leader_id).strip()
+            or self.node_leader_id
+        )
+        self.node_secret: str = os.getenv("CCBOT_NODE_SECRET", "")
+        self.node_relay_tls: bool = os.getenv(
+            "CCBOT_NODE_RELAY_TLS", "false"
+        ).strip().lower() in ("1", "true", "yes", "on")
 
         # Identifying label for this deployment — surfaced to Claude via
         # ``CCBOT_HOST`` so a session can tell which device it's running

@@ -22,6 +22,7 @@ class TransferRuntimeResult:
     target_window_id: str = ""
     target_workdir: str = ""
     target_agent_session_id: str = ""
+    target_context_path: str = ""
     context_error: str = ""
     delivery: TransferDelivery | None = None
 

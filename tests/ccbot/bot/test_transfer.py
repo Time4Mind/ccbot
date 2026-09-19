@@ -202,5 +202,6 @@ async def test_finish_transfer_archives_source_and_binds_target_queue(monkeypatc
         target_window_id="remote-window",
         target_workdir="",
         target_agent_session_id="",
+        target_context_path="",
     )
     paint.assert_awaited_once_with(bot, 42, target, 91)

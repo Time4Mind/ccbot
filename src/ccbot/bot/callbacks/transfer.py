@@ -189,6 +189,7 @@ async def _finish_transfer(
             target_window_id=result.target_window_id,
             target_workdir=result.target_workdir,
             target_agent_session_id=result.target_agent_session_id,
+            target_context_path=result.target_context_path,
         )
         delivery = result.delivery
         if delivery is None and target.node_id == "local" and target.window_id:

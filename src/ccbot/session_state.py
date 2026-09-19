@@ -241,6 +241,7 @@ class SessionStateMixin:
         target_window_id: str = "",
         target_workdir: str = "",
         target_agent_session_id: str = "",
+        target_context_path: str = "",
     ) -> "Session":
         """Create the independent target session and archive the source."""
         transfer = self.transfers.get(transfer_id)
@@ -263,7 +264,7 @@ class SessionStateMixin:
             backend=transfer.target_backend,
             node_id=transfer.target_node_id,
         )
-        target.context_path = transfer.context_path
+        target.context_path = target_context_path or transfer.context_path
         target.context_error = context_error
         target.imported_from_backend = source.backend
         target.imported_from_session_id = source.id

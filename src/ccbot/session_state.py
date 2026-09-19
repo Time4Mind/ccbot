@@ -93,9 +93,9 @@ class SessionStateMixin:
             # Cap recent-history depth.
             if len(history) > 10:
                 del history[: len(history) - 10]
-        self.active_sessions_by_node.setdefault(user_id, {})[
-            session.node_id
-        ] = session_id
+        self.active_sessions_by_node.setdefault(user_id, {})[session.node_id] = (
+            session_id
+        )
         if self.get_selected_node_id(user_id) == session.node_id:
             self.active_sessions[user_id] = session_id
         else:
@@ -164,9 +164,7 @@ class SessionStateMixin:
         if node_id not in self.nodes:
             raise KeyError(f"Unknown node id: {node_id}")
         self.selected_node_ids[user_id] = node_id
-        selected_session_id = self.active_sessions_by_node.get(user_id, {}).get(
-            node_id
-        )
+        selected_session_id = self.active_sessions_by_node.get(user_id, {}).get(node_id)
         if selected_session_id:
             self.active_sessions[user_id] = selected_session_id
         else:

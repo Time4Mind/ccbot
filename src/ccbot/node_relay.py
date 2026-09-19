@@ -27,7 +27,9 @@ def _ssl_context() -> ssl.SSLContext | None:
     if not cert and not key:
         return None
     if not cert or not key:
-        raise RuntimeError("CCBOT_RELAY_TLS_CERT and CCBOT_RELAY_TLS_KEY are both required")
+        raise RuntimeError(
+            "CCBOT_RELAY_TLS_CERT and CCBOT_RELAY_TLS_KEY are both required"
+        )
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(certfile=cert, keyfile=key)
     return context

@@ -18,9 +18,7 @@ def test_nodes_button_is_in_main_menu_only_with_multiple_nodes(monkeypatch) -> N
     keyboard = menu.build_footer_keyboard(42, screen="more")
 
     assert keyboard is not None
-    assert CB_MM_NODES in {
-        callback for row in _callbacks(keyboard) for callback in row
-    }
+    assert CB_MM_NODES in {callback for row in _callbacks(keyboard) for callback in row}
 
 
 def test_sessions_bottom_row_places_nodes_between_new_and_menu(monkeypatch) -> None:

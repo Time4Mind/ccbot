@@ -22,18 +22,20 @@ class PairingInvitation:
 
     def to_link(self) -> str:
         """Serialize as a copy/paste-friendly URI."""
-        return f"{PAIRING_SCHEME}://pair?{urlencode({
-            'relay': self.relay_url,
-            'leader': self.leader_id,
-            'nonce': self.nonce,
-            'secret': self.secret,
-            'expires': str(int(self.expires_at)),
-        })}"
+        return f"{PAIRING_SCHEME}://pair?{
+            urlencode(
+                {
+                    'relay': self.relay_url,
+                    'leader': self.leader_id,
+                    'nonce': self.nonce,
+                    'secret': self.secret,
+                    'expires': str(int(self.expires_at)),
+                }
+            )
+        }"
 
     @classmethod
-    def from_link(
-        cls, value: str, *, now: float | None = None
-    ) -> "PairingInvitation":
+    def from_link(cls, value: str, *, now: float | None = None) -> "PairingInvitation":
         parsed = urlparse(value.strip())
         if parsed.scheme != PAIRING_SCHEME or parsed.netloc != "pair":
             raise ValueError("invalid node pairing link")

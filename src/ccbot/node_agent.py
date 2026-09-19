@@ -123,7 +123,10 @@ class NodeAgent:
         try:
             result = await self._dispatch(message.payload or {})
         except Exception as exc:
-            logger.exception("node command failed operation=%s", (message.payload or {}).get("operation"))
+            logger.exception(
+                "node command failed operation=%s",
+                (message.payload or {}).get("operation"),
+            )
             result = {"ok": False, "error": str(exc)}
         self._ledger.complete(message.request_id, result)
         await self._transport.send(

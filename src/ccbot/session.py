@@ -111,9 +111,7 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
     sessions: dict[str, "Session"] = field(default_factory=dict)
     # Registered execution nodes. ``local`` is the implicit node for legacy
     # state and for all existing single-node sessions.
-    nodes: dict[str, Node] = field(
-        default_factory=lambda: {"local": Node.local()}
-    )
+    nodes: dict[str, Node] = field(default_factory=lambda: {"local": Node.local()})
     selected_node_ids: dict[int, str] = field(default_factory=dict)
     transfers: dict[str, SessionTransfer] = field(default_factory=dict)
     # Telegram message_id of the bot message that currently carries the inline
@@ -178,8 +176,7 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
             "sessions": {sid: s.to_dict() for sid, s in self.sessions.items()},
             "nodes": {node_id: node.to_dict() for node_id, node in self.nodes.items()},
             "selected_node_ids": {
-                str(uid): node_id
-                for uid, node_id in self.selected_node_ids.items()
+                str(uid): node_id for uid, node_id in self.selected_node_ids.items()
             },
             "transfers": {
                 transfer_id: transfer.to_dict()

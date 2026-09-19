@@ -50,7 +50,9 @@ def _session(*, node_id: str = "local") -> Session:
 
 def test_transfer_node_picker_hides_unavailable_nodes_and_backends(monkeypatch):
     source = _session()
-    monkeypatch.setattr(transfer.session_manager, "get_active_session", lambda _uid: source)
+    monkeypatch.setattr(
+        transfer.session_manager, "get_active_session", lambda _uid: source
+    )
     monkeypatch.setattr(
         transfer.session_manager,
         "get_session",
@@ -87,7 +89,9 @@ def test_transfer_node_picker_hides_unavailable_nodes_and_backends(monkeypatch):
 async def test_transfer_flow_is_node_then_backend_then_confirmation(monkeypatch):
     source = _session()
     target = Node("remote", "Удалённый Mac", state="ready", backends=["codex"])
-    monkeypatch.setattr(transfer.session_manager, "get_active_session", lambda _uid: source)
+    monkeypatch.setattr(
+        transfer.session_manager, "get_active_session", lambda _uid: source
+    )
     monkeypatch.setattr(
         transfer.session_manager,
         "get_session",
@@ -181,7 +185,9 @@ async def test_finish_transfer_archives_source_and_binds_target_queue(monkeypatc
     monkeypatch.setattr(transfer, "get_node_runtime", lambda _node_id: runtime)
     complete = Mock(return_value=target)
     monkeypatch.setattr(transfer.session_manager, "complete_context_transfer", complete)
-    monkeypatch.setattr(transfer, "bind_transfer_queue", lambda _uid, delivery: delivery)
+    monkeypatch.setattr(
+        transfer, "bind_transfer_queue", lambda _uid, delivery: delivery
+    )
     paint = AsyncMock()
     monkeypatch.setattr(transfer, "paint_card_on_carrier", paint)
 

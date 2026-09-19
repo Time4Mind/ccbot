@@ -51,7 +51,9 @@ def build_nodes_keyboard(user_id: int) -> InlineKeyboardMarkup:
     selected_id = session_manager.get_selected_node_id(user_id)
     rows: list[list[InlineKeyboardButton]] = []
     for node in session_manager.list_nodes():
-        label = f"{'✓ ' if node.id == selected_id else ''}{node.display_name or node.id}"
+        label = (
+            f"{'✓ ' if node.id == selected_id else ''}{node.display_name or node.id}"
+        )
         if node.state in ("offline", "pending"):
             rows.append([InlineKeyboardButton(f"⚪ {label}")])
         else:

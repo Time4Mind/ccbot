@@ -268,6 +268,7 @@ async def connect_leader_rpc(
         leader_id=leader_id,
         ssl=ssl,
     )
+
     async def reconnect() -> NodeTransport:
         return await connect_relay(
             host,
@@ -313,6 +314,7 @@ async def connect_configured_remote_runtimes(
     if _leader_rpc is not None:
         return _leader_rpc
     host, port, ssl_context = _relay_endpoint(relay_url, tls)
+
     async def handle_node_event(message: NodeEnvelope) -> None:
         payload = message.payload or {}
         node_id = str(payload.get("node_id", ""))

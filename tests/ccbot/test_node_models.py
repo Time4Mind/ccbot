@@ -77,15 +77,15 @@ def test_registering_second_node_is_the_visibility_boundary(monkeypatch) -> None
 
     assert manager.registered_node_count == 1
 
-    manager.register_node(
-        Node(id="office", display_name="Office Mac", state="offline")
-    )
+    manager.register_node(Node(id="office", display_name="Office Mac", state="offline"))
 
     assert manager.registered_node_count == 2
     assert manager.has_multiple_nodes is True
 
 
-def test_archiving_remote_session_clears_node_scoped_active_pointer(monkeypatch) -> None:
+def test_archiving_remote_session_clears_node_scoped_active_pointer(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
     monkeypatch.setattr(SessionManager, "save_state", lambda self: None)
     manager = SessionManager()

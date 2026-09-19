@@ -85,7 +85,9 @@ async def test_node_agent_accepts_context_chunks_and_deduplicates_commands(tmp_p
             },
         )
     )
-    result_count = len([message for message in transport.sent if message.kind == "result"])
+    result_count = len(
+        [message for message in transport.sent if message.kind == "result"]
+    )
     await agent._handle_command(
         NodeEnvelope(
             kind="command",
@@ -98,7 +100,10 @@ async def test_node_agent_accepts_context_chunks_and_deduplicates_commands(tmp_p
     )
 
     assert len(executor.started) == 1
-    assert len([message for message in transport.sent if message.kind == "result"]) == result_count + 1
+    assert (
+        len([message for message in transport.sent if message.kind == "result"])
+        == result_count + 1
+    )
     assert transport.sent[-1].payload["target_agent_session_id"] == "agent-7"
 
 

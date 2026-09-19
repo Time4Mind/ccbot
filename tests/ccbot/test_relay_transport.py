@@ -98,9 +98,7 @@ async def test_stream_transport_round_trips_json_lines() -> None:
     response = await asyncio.wait_for(transport.receive(), timeout=1)
 
     assert response.kind == "ack"
-    assert received == [
-        NodeEnvelope(kind="command", request_id="r1", payload={})
-    ]
+    assert received == [NodeEnvelope(kind="command", request_id="r1", payload={})]
     await transport.close()
     server.close()
     await server.wait_closed()

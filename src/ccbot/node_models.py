@@ -61,7 +61,11 @@ class Node:
         if state not in _NODE_STATES:
             state = "offline"
         raw_backends = data.get("backends", [])
-        backends = list(dict.fromkeys(str(value) for value in raw_backends)) if isinstance(raw_backends, list) else []
+        backends = (
+            list(dict.fromkeys(str(value) for value in raw_backends))
+            if isinstance(raw_backends, list)
+            else []
+        )
         raw_capabilities = data.get("capabilities", {})
         capabilities = (
             {str(key): bool(value) for key, value in raw_capabilities.items()}

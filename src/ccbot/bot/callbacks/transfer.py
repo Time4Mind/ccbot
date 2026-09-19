@@ -81,9 +81,7 @@ def build_transfer_node_keyboard(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def build_transfer_backend_keyboard(
-    user_id: int, node_id: str
-) -> InlineKeyboardMarkup:
+def build_transfer_backend_keyboard(user_id: int, node_id: str) -> InlineKeyboardMarkup:
     node = session_manager.get_node(node_id)
     rows: list[list[InlineKeyboardButton]] = []
     if node is not None and node.state == "ready":
@@ -99,7 +97,11 @@ def build_transfer_backend_keyboard(
     rows.extend(
         [
             [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_TR_BACK)],
-            [InlineKeyboardButton(t(user_id, "btn.cancel"), callback_data=CB_TR_CANCEL)],
+            [
+                InlineKeyboardButton(
+                    t(user_id, "btn.cancel"), callback_data=CB_TR_CANCEL
+                )
+            ],
         ]
     )
     return InlineKeyboardMarkup(rows)
@@ -135,7 +137,9 @@ def _clear_flow_state(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _local_delivery(update: Any, context: Any, window_id: str) -> bool:
     """Route queued local prompts through the normal text handler."""
-    if not getattr(update, "message", None) or not getattr(update.message, "text", None):
+    if not getattr(update, "message", None) or not getattr(
+        update.message, "text", None
+    ):
         return False
     from .._messages_text import text_handler
 
@@ -193,6 +197,7 @@ async def _finish_transfer(
         )
         delivery = result.delivery
         if delivery is None and target.node_id == "local" and target.window_id:
+
             async def local_delivery(update: Any, context: Any) -> bool:
                 return await _local_delivery(update, context, target.window_id)
 
@@ -311,7 +316,9 @@ async def handle(
         node_id = data[len(CB_TR_NODE) :]
         node = session_manager.get_node(node_id)
         if source is None or node is None or node not in _target_nodes(user.id, source):
-            await query.answer(t(user.id, "transfer.target_unavailable"), show_alert=True)
+            await query.answer(
+                t(user.id, "transfer.target_unavailable"), show_alert=True
+            )
             return True
         _set_flow_state(context, **{TARGET_NODE_KEY: node_id, TARGET_BACKEND_KEY: None})
         await set_view(
@@ -334,7 +341,9 @@ async def handle(
             or node_id != (context.user_data or {}).get(TARGET_NODE_KEY)
             or backend not in _available_backends(user.id, node)
         ):
-            await query.answer(t(user.id, "transfer.backend_unavailable"), show_alert=True)
+            await query.answer(
+                t(user.id, "transfer.backend_unavailable"), show_alert=True
+            )
             return True
         source = _source_from_context(context)
         if source is None:

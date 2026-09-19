@@ -85,7 +85,9 @@ async def test_context_transfer_crosses_real_relay_and_worker_agent(tmp_path: Pa
             context_path=str(context_path),
         )
 
-        result = await RemoteNodeRuntime(leader_rpc, chunk_size=4).start_context_transfer(
+        result = await RemoteNodeRuntime(
+            leader_rpc, chunk_size=4
+        ).start_context_transfer(
             transfer=transfer,
             source=source,
             user_id=42,
@@ -94,9 +96,9 @@ async def test_context_transfer_crosses_real_relay_and_worker_agent(tmp_path: Pa
 
         assert result.target_agent_session_id == "worker-session"
         assert executor.started[0]["backend"] == "codex"
-        assert Path(executor.started[0]["context_path"]).read_text(encoding="utf-8") == (
-            "full transferred context"
-        )
+        assert Path(executor.started[0]["context_path"]).read_text(
+            encoding="utf-8"
+        ) == ("full transferred context")
 
         update = SimpleNamespace(message=SimpleNamespace(text="continue"))
         assert await result.delivery(update, SimpleNamespace())

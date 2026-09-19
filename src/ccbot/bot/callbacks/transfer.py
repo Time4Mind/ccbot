@@ -29,7 +29,7 @@ from ...transfer_queue import (
     bind_transfer_queue,
     cancel_transfer_queue,
 )
-from ...transfer_runtime import TransferRuntimeResult, get_node_runtime
+from ...transfer_runtime import get_node_runtime
 from .._common import open_sessions_in_place, set_view
 
 logger = logging.getLogger(__name__)
@@ -184,8 +184,6 @@ async def _finish_transfer(
             user_id=user_id,
             bot=bot,
         )
-        if not isinstance(result, TransferRuntimeResult):
-            raise TypeError("node runtime returned an invalid transfer result")
         target = session_manager.complete_context_transfer(
             transfer_id,
             user_id=user_id,

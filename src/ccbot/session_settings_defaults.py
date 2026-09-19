@@ -1,9 +1,11 @@
 """Default per-user settings for the DM session pool."""
 
+from typing import Any
+
 from .session_defaults import DEFAULT_IDLE_ARCHIVE_HOURS
 
 
-DEFAULT_USER_SETTINGS: dict[str, object] = {
+DEFAULT_USER_SETTINGS: dict[str, Any] = {
     "language": "en",  # "en" | "ru" | "zh" - UI strings
     "live_lag": 4,  # seconds, see PREVIEW_LIVE_LAG
     "voice": "auto",  # "auto" | "parakeet" | "whisper" | "apple" | "off"

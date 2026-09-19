@@ -20,6 +20,9 @@ class NodeSessionStateMixin:
     active_sessions: dict[int, str]
     active_sessions_by_node: dict[int, dict[str, str]]
     save_state: Any
+    create_session: Any
+    set_active_session: Any
+    mark_session_archived: Any
 
     @property
     def registered_node_count(self) -> int:

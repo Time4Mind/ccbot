@@ -32,8 +32,6 @@ class NodeEnvelope:
             raise ValueError(f"unsupported node message kind: {self.kind}")
         if self.sequence < 0:
             raise ValueError("node message sequence cannot be negative")
-        if self.payload is not None and not isinstance(self.payload, dict):
-            raise TypeError("node message payload must be an object")
 
     def to_json_line(self) -> str:
         return json.dumps(
@@ -145,9 +143,10 @@ class RelayServer:
 
     @property
     def port(self) -> int:
-        if self._server is None or not self._server.sockets:
+        sockets = getattr(self._server, "sockets", None)
+        if not sockets:
             raise RuntimeError("relay server is not started")
-        return int(self._server.sockets[0].getsockname()[1])
+        return int(sockets[0].getsockname()[1])
 
     async def start(self, host: str, port: int, *, ssl: Any = None) -> None:
         if self._server is not None:

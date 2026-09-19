@@ -16,8 +16,6 @@ dependencies = [
 
 [project.scripts]
 ccbot = "ccbot.main:main"
-ccbot-node-agent = "ccbot.node_agent:main"
-ccbot-node-relay = "ccbot.node_relay:main"
 
 [project.optional-dependencies]
 dev = [

@@ -23,7 +23,6 @@ from ...handlers.callback_data import (
     CB_MM_BACK,
     CB_MM_LIST,
     CB_MM_NEW,
-    CB_MM_NODES,
     CB_MM_SETTINGS,
     CB_MM_STATUS,
 )
@@ -129,19 +128,6 @@ async def handle(
             await open_sessions_in_place(query, context.bot, user.id)
         except Exception as e:
             logger.debug("mm sessions paint failed: %s", e)
-        return True
-
-    if data == CB_MM_NODES:
-        from ...handlers.nodes import build_nodes_keyboard, render_nodes_text
-
-        await query.answer()
-        await safe_edit(
-            query,
-            render_nodes_text(user.id),
-            reply_markup=build_nodes_keyboard(user.id),
-        )
-        if query.message:
-            session_manager.set_last_switcher_msg(user.id, query.message.message_id)
         return True
 
     if data == CB_MM_STATUS:

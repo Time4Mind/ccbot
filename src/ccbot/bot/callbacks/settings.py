@@ -16,7 +16,6 @@ from ...handlers.callback_data import (
     CB_ST_AGENT,
     CB_ST_DEFAULT_DIR,
     CB_ST_DEFAULT_SESSION,
-    CB_ST_NODE_PAIR,
     CB_ST_BACK,
     CB_ST_BGNOTIFY,
     CB_ST_CAT,
@@ -221,7 +220,6 @@ _GROUP_TO_SCREEN: dict[str, Screen] = {
     "screenshot_profile": "settings_profile",
     "option_button_screenshot": "settings_option_screenshot",
     "option_button_terminal": "settings_option_terminal",
-    "option_button_transfer": "settings_option_transfer",
     "archive_ai_description": "settings_archive_ai_description",
     "preprocessing_mode": "settings_preprocessing_mode",
     "preprocessing_instruction": "settings_preprocessing_instruction",
@@ -281,13 +279,6 @@ async def handle(
         await query.answer()
         return True
 
-    if data == CB_ST_NODE_PAIR:
-        from ...handlers.nodes import pairing_invitation_text
-
-        await safe_send(context.bot, user.id, pairing_invitation_text(user.id))
-        await query.answer()
-        return True
-
     if data == CB_ST_LCLAUDE:
         await _send_linux_claude_prompt(query, user.id)
         await query.answer()
@@ -320,7 +311,6 @@ async def handle(
         CB_ST_AGENT,
         CB_ST_DEFAULT_DIR,
         CB_ST_DEFAULT_SESSION,
-        CB_ST_NODE_PAIR,
         CB_ST_LAG,
         CB_ST_VOICE,
         CB_ST_LANG,
@@ -552,7 +542,6 @@ async def handle(
         key = {
             "screenshot": "option_button_screenshot",
             "terminal": "option_button_terminal",
-            "transfer": "option_button_transfer",
         }.get(option)
         if key is not None and sval in ("on", "off"):
             session_manager.update_user_setting(user.id, key, sval == "on")
@@ -560,11 +549,7 @@ async def handle(
             Screen,
             "settings_option_screenshot"
             if option == "screenshot"
-            else (
-                "settings_option_terminal"
-                if option == "terminal"
-                else "settings_option_transfer"
-            ),
+            else "settings_option_terminal",
         )
     elif data.startswith(CB_ST_BGNOTIFY):
         payload = data[len(CB_ST_BGNOTIFY) :]

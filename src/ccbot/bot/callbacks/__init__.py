@@ -28,8 +28,10 @@ from . import (
     history_pagination,
     interactive_ui,
     more_menu,
+    nodes,
     settings as settings_callbacks,
     switcher,
+    transfer,
     window_picker,
 )
 
@@ -78,6 +80,8 @@ _HANDLERS = (
     file_buttons.handle,
     window_picker.handle,
     switcher.handle,
+    nodes.handle,
+    transfer.handle,
     archive.handle,
     footer.handle,
     more_menu.handle,

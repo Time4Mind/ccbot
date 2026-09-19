@@ -19,7 +19,7 @@ from ccbot.handlers import archive
 from ccbot.handlers.history import render_archived_card_pages
 from ccbot.handlers.menu import build_footer_keyboard, render_settings_group_text
 from ccbot.session import SessionManager, session_manager
-from ccbot.session_import import build_import_context
+from ccbot.session_import import build_full_import_context, build_import_context
 from ccbot.session_models import Session as BotSession
 from ccbot.tmux_manager import TmuxManager
 from ccbot.transcript_parser import TranscriptParser
@@ -241,6 +241,46 @@ def test_claude_transcript_converts_to_portable_context(
     assert "Target agent: `codex`" in text
     assert "## User\n\nFix the parser" in text
     assert "## Assistant\n\nI found the bug." in text
+
+
+def test_full_import_context_keeps_all_importable_turns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workdir = tmp_path / "project"
+    workdir.mkdir()
+    sid = "550e8400-e29b-41d4-a716-446655440000"
+    project_dir = tmp_path / "claude-projects" / str(workdir).replace("/", "-")
+    project_dir.mkdir(parents=True)
+    transcript = project_dir / f"{sid}.jsonl"
+    transcript.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {"content": [{"type": "text", "text": text}]},
+                }
+            )
+            for text in ("first turn", "second turn", "last turn")
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(config, "claude_projects_path", tmp_path / "claude-projects")
+    monkeypatch.setattr(config, "config_dir", tmp_path / "ccbot")
+    sess = BotSession(
+        id="full-context",
+        name="imported",
+        workdir=str(workdir),
+        claude_session_id=sid,
+        backend="claude",
+        state="archived",
+    )
+
+    context = build_full_import_context(sess, "codex")
+    text = context.read_text()
+
+    assert "## User\n\nfirst turn" in text
+    assert "## User\n\nsecond turn" in text
+    assert "## User\n\nlast turn" in text
 
 
 @pytest.mark.asyncio

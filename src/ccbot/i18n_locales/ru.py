@@ -103,6 +103,8 @@ RU: dict[str, str] = {
     "mm.new": "🆕 Новая",
     "mm.archive": "🗄 Архив",
     "mm.settings": "⚙ Настройки",
+    "mm.nodes": "🖧 Ноды",
+    "mm.transfer": "⇄ Перенос",
     "menu.title": "*Меню*",
     "menu.empty": "*Меню*\n\nАктивной сессии нет — выбери в свитчере или тапни 🆕 Новая.",
     "menu.active": "*Меню* · активна: *{name}*",
@@ -372,6 +374,42 @@ RU: dict[str, str] = {
         "*Локальный терминал*\n\nНативное Terminal / iTerm окно к tmux."
     ),
     "settings.cat.options.body": "*Кнопки опций*\n\nКакие действия показывать под кнопкой Опции.",
+    "settings.group.option_button_transfer": "Перенос сессии",
+    "settings.option_button_transfer.body": (
+        "*Перенос сессии*\n\nПоказывать кнопку переноса контекста на другую ноду. "
+        "Кнопка появится только при наличии нескольких нод и в простой сессии."
+    ),
+    "nodes.title": "*Ноды*",
+    "nodes.empty": "Зарегистрированных нод нет.",
+    "nodes.table.node": "Нода",
+    "nodes.table.state": "Состояние",
+    "nodes.table.backends": "Бэкенды",
+    "nodes.state.pending": "подключается",
+    "nodes.state.online": "онлайн",
+    "nodes.state.offline": "оффлайн",
+    "nodes.state.ready": "готова",
+    "settings.nodes.add": "🔗 Подключить ноду",
+    "nodes.pairing.created": "Скопируй ссылку и вставь её на подключаемой ноде:\n\n`{link}`",
+    "nodes.pairing.relay_missing": "Сначала настрой адрес relay-сервера в CCBOT_NODE_RELAY_URL.",
+    "transfer.choose_node": "*Перенос сессии*\n\nСессия: *{session}*\n\nВыбери целевую ноду.",
+    "transfer.choose_backend": "*Выбери бэкенд*\n\nЦелевая нода: *{node}*",
+    "transfer.confirm": (
+        "*Подтвердить перенос*\n\nСессия: *{session}*\n"
+        "Целевая нода: *{node}*\nБэкенд: *{backend}*\n\n"
+        "Переносится только контекст сессии."
+    ),
+    "transfer.btn.start": "✅ Перенести",
+    "transfer.started": "⏳ Перенос запущен. Новые запросы будут поставлены в очередь до готовности целевой сессии.",
+    "transfer.ready": "✅ Целевая сессия готова.",
+    "transfer.cancelled": "Перенос отменён.",
+    "transfer.unavailable": "Перенос сейчас недоступен.",
+    "transfer.target_unavailable": "Целевая нода недоступна.",
+    "transfer.backend_unavailable": "Этот бэкенд недоступен на целевой ноде.",
+    "transfer.failed": "❌ Не удалось перенести сессию: {error}",
+    "transfer.context_limit": (
+        "⚠ Целевая сессия создана, но весь контекст не поместился.\n"
+        "Причина: {error}\n\nПолный контекст: `{path}`"
+    ),
     "settings.cat.preprocessing.body": (
         "*Препроцессинг*\n\nКонсервативная подготовка запроса общей Luna перед отправкой в целевую сессию."
     ),

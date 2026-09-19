@@ -104,6 +104,8 @@ EN: dict[str, str] = {
     "mm.new": "🆕 New",
     "mm.archive": "🗄 Archive",
     "mm.settings": "⚙ Settings",
+    "mm.nodes": "🖧 Nodes",
+    "mm.transfer": "⇄ Transfer",
     # Menu screen body
     "menu.title": "*Menu*",
     "menu.empty": "*Menu*\n\nNo active session — pick one from the switcher or tap 🆕 New.",
@@ -389,6 +391,20 @@ EN: dict[str, str] = {
         "Native Terminal / iTerm window attached to each new session."
     ),
     "settings.cat.options.body": "*Option buttons*\n\nChoose which actions appear under Options.",
+    "settings.group.option_button_transfer": "Session transfer",
+    "settings.option_button_transfer.body": (
+        "*Session transfer*\n\nShow the context-transfer button for another node. "
+        "It appears only with multiple nodes and while the session is idle."
+    ),
+    "nodes.title": "*Nodes*",
+    "nodes.empty": "No registered nodes.",
+    "nodes.table.node": "Node",
+    "nodes.table.state": "State",
+    "nodes.table.backends": "Backends",
+    "nodes.state.pending": "connecting",
+    "nodes.state.online": "online",
+    "nodes.state.offline": "offline",
+    "nodes.state.ready": "ready",
     "settings.cat.preprocessing.body": (
         "*Preprocessing*\n\nConservative request cleanup by one shared Luna before delivery to the pinned session."
     ),

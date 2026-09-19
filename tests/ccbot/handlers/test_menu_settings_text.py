@@ -206,8 +206,10 @@ def test_options_category_renders_button_visibility_table(
     assert "| Кнопка | Показывать |" in rendered
     assert "| 🧑‍💻 Скрин | on |" in rendered
     assert "| 🖥 Терминал | off |" in rendered
+    assert "| Перенос сессии | off |" in rendered
     assert keyboard is not None
     assert [row[0].text for row in keyboard.inline_keyboard[:-1]] == [
         "🧑‍💻 Скрин",
         "🖥 Терминал",
+        "Перенос сессии",
     ]

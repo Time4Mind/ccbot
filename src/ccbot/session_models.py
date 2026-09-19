@@ -55,6 +55,7 @@ class WindowState:
     window_name: str = ""
     backend: str = "claude"
     transcript_path: str = ""
+    node_id: str = "local"
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -67,6 +68,8 @@ class WindowState:
             d["backend"] = self.backend
         if self.transcript_path:
             d["transcript_path"] = self.transcript_path
+        if self.node_id != "local":
+            d["node_id"] = self.node_id
         return d
 
     @classmethod
@@ -77,6 +80,7 @@ class WindowState:
             window_name=data.get("window_name", ""),
             backend=data.get("backend", "claude"),
             transcript_path=data.get("transcript_path", ""),
+            node_id=data.get("node_id", "local"),
         )
 
 
@@ -143,6 +147,8 @@ class Session:
     # Non-zero only while this is the single empty prewarmed session reserved
     # for the given Telegram user. Cleared synchronously on the first request.
     default_reserve_user_id: int = 0
+    # Stable execution scope.  Legacy state is implicitly local.
+    node_id: str = "local"
 
     @staticmethod
     def new_id() -> str:
@@ -230,6 +236,7 @@ class Session:
             "preprocessed_prompt_hashes": prompt_hashes,
             "pending_preprocessing": self.pending_preprocessing,
             "default_reserve_user_id": self.default_reserve_user_id,
+            "node_id": self.node_id,
         }
 
     @classmethod
@@ -272,4 +279,5 @@ class Session:
                 and isinstance(value.get("original"), str)
             ][-128:],
             default_reserve_user_id=int(data.get("default_reserve_user_id", 0)),
+            node_id=str(data.get("node_id", "local")),
         )

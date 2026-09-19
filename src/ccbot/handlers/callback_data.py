@@ -70,6 +70,7 @@ CB_FT_MORE = "ft:more"  # open the Menu screen (pauses live-card updates)
 CB_FT_OPTIONS = "ft:options"  # toggle per-session actions under the control row
 CB_FT_SCREENSHOT = "ft:shot"  # toggle global inline screenshots on this carrier
 CB_FT_TERM = "ft:term"  # open a native desktop terminal for the active session
+CB_FT_TRANSFER = "ft:xfer"  # start a session-context transfer
 CB_KB_BACK = "kb:back"  # exit kb-mode view → regular card; Resume button stays
 CB_KB_RESUME = "kb:resume"  # re-enter kb-mode (when pending still active)
 
@@ -89,7 +90,12 @@ CB_MM_STATUS = "mm:status"
 CB_MM_NEW = "mm:new"
 CB_MM_ARCHIVE = "mm:arch"
 CB_MM_SETTINGS = "mm:set"
+CB_MM_NODES = "mm:nodes"
 CB_MM_BACK = "mm:back"  # back to default footer
+
+# Node menu
+CB_NODE_USE = "nd:use:"
+CB_NODE_ADD = "nd:add"
 
 # Settings (toggle screens)
 CB_ST_GRP = "st:grp:"  # st:grp:<name>  open a per-group settings screen

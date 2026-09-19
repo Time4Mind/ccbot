@@ -220,6 +220,7 @@ _GROUP_TO_SCREEN: dict[str, Screen] = {
     "screenshot_profile": "settings_profile",
     "option_button_screenshot": "settings_option_screenshot",
     "option_button_terminal": "settings_option_terminal",
+    "option_button_transfer": "settings_option_transfer",
     "archive_ai_description": "settings_archive_ai_description",
     "preprocessing_mode": "settings_preprocessing_mode",
     "preprocessing_instruction": "settings_preprocessing_instruction",
@@ -542,6 +543,7 @@ async def handle(
         key = {
             "screenshot": "option_button_screenshot",
             "terminal": "option_button_terminal",
+            "transfer": "option_button_transfer",
         }.get(option)
         if key is not None and sval in ("on", "off"):
             session_manager.update_user_setting(user.id, key, sval == "on")
@@ -549,7 +551,11 @@ async def handle(
             Screen,
             "settings_option_screenshot"
             if option == "screenshot"
-            else "settings_option_terminal",
+            else (
+                "settings_option_terminal"
+                if option == "terminal"
+                else "settings_option_transfer"
+            ),
         )
     elif data.startswith(CB_ST_BGNOTIFY):
         payload = data[len(CB_ST_BGNOTIFY) :]

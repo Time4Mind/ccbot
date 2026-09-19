@@ -12,6 +12,7 @@ import time
 from typing import Any, ClassVar
 
 from .config import config
+from .node_models import Node
 from .session_defaults import DEFAULT_IDLE_ARCHIVE_HOURS
 from .session_models import reserve_owner, Session, SessionState
 
@@ -23,8 +24,11 @@ class SessionStateMixin:
 
     user_window_offsets: dict[int, dict[str, int]]
     active_sessions: dict[int, str]
+    active_sessions_by_node: dict[int, dict[str, str]]
     active_history: dict[int, list[str]]
     sessions: dict[str, Session]
+    nodes: dict[str, Node]
+    selected_node_ids: dict[int, str]
     user_settings: dict[int, dict[str, Any]]
     summary_cache: dict[str, dict[str, Any]]
     last_switcher_msg_id: dict[int, int]
@@ -48,10 +52,22 @@ class SessionStateMixin:
 
     def get_active_session(self, user_id: int) -> "Session | None":
         """Return the currently active Session for a user, or None."""
-        sid = self.active_sessions.get(user_id)
+        node_id = self.get_selected_node_id(user_id)
+        # Prefer the compatibility pointer when present. Besides preserving
+        # old state, this keeps direct state repairs made by recovery/tests
+        # authoritative while the node-scoped map is being introduced.
+        legacy_sid = self.active_sessions.get(user_id)
+        legacy = self.sessions.get(legacy_sid) if legacy_sid else None
+        if legacy is not None and legacy.node_id == node_id:
+            sid = legacy_sid
+        else:
+            sid = self.active_sessions_by_node.get(user_id, {}).get(node_id)
         if not sid:
             return None
-        return self.sessions.get(sid)
+        session = self.sessions.get(sid)
+        if session is None or session.state not in ("active", "idle"):
+            return None
+        return session
 
     def get_active_window(self, user_id: int) -> str | None:
         """Return the tmux window_id of the user's active session, or None."""
@@ -64,6 +80,7 @@ class SessionStateMixin:
         """Make `session_id` the active session for `user_id`."""
         if session_id not in self.sessions:
             raise KeyError(f"Unknown session id: {session_id}")
+        session = self.sessions[session_id]
         prev = self.active_sessions.get(user_id)
         if prev and prev != session_id:
             history = self.active_history.setdefault(user_id, [])
@@ -74,28 +91,85 @@ class SessionStateMixin:
             # Cap recent-history depth.
             if len(history) > 10:
                 del history[: len(history) - 10]
-        self.active_sessions[user_id] = session_id
+        self.active_sessions_by_node.setdefault(user_id, {})[
+            session.node_id
+        ] = session_id
+        if self.get_selected_node_id(user_id) == session.node_id:
+            self.active_sessions[user_id] = session_id
+        else:
+            self.active_sessions.pop(user_id, None)
         self.save_state()
-        sess = self.sessions[session_id]
         logger.info(
             "active_session_change user=%d prev=%s next=%s next_name=%s "
             "next_window=%s next_state=%s",
             user_id,
             prev or "-",
             session_id,
-            sess.name,
-            sess.window_id,
-            sess.state,
+            session.name,
+            session.window_id,
+            session.state,
             extra={
                 "event": "active_session_change",
                 "user_id": user_id,
                 "prev_session_id": prev,
                 "next_session_id": session_id,
-                "next_session_name": sess.name,
-                "next_window_id": sess.window_id,
-                "next_session_state": sess.state,
+                "next_session_name": session.name,
+                "next_window_id": session.window_id,
+                "next_session_state": session.state,
             },
         )
+
+    # --- Node registry and node-scoped selection ---
+
+    @property
+    def registered_node_count(self) -> int:
+        """Number of registered nodes, including the implicit local node."""
+        return len(self.nodes)
+
+    @property
+    def has_multiple_nodes(self) -> bool:
+        return self.registered_node_count > 1
+
+    def list_nodes(self) -> list[Node]:
+        """Return nodes in stable UI order: local first, then by name."""
+        return sorted(
+            self.nodes.values(),
+            key=lambda node: (
+                node.id != "local",
+                node.display_name.casefold(),
+                node.id,
+            ),
+        )
+
+    def get_node(self, node_id: str) -> Node | None:
+        return self.nodes.get(node_id)
+
+    def register_node(self, node: Node) -> Node:
+        if not node.id:
+            raise ValueError("node id cannot be empty")
+        self.nodes[node.id] = node
+        self.save_state()
+        return node
+
+    def get_selected_node_id(self, user_id: int) -> str:
+        selected = self.selected_node_ids.get(user_id, "local")
+        return selected if selected in self.nodes else "local"
+
+    def get_selected_node(self, user_id: int) -> Node:
+        return self.nodes[self.get_selected_node_id(user_id)]
+
+    def set_selected_node(self, user_id: int, node_id: str) -> None:
+        if node_id not in self.nodes:
+            raise KeyError(f"Unknown node id: {node_id}")
+        self.selected_node_ids[user_id] = node_id
+        selected_session_id = self.active_sessions_by_node.get(user_id, {}).get(
+            node_id
+        )
+        if selected_session_id:
+            self.active_sessions[user_id] = selected_session_id
+        else:
+            self.active_sessions.pop(user_id, None)
+        self.save_state()
 
     def list_user_sessions(
         self,
@@ -104,10 +178,12 @@ class SessionStateMixin:
         states: tuple[SessionState, ...] = ("active", "idle"),
     ) -> list["Session"]:
         """List sessions for a user filtered by state. Active first, by name."""
-        # In v0.1 every session is implicitly the bot's single user's; we still
-        # accept user_id so the public surface is uniform with other helpers.
-        del user_id  # no per-user partitioning yet
-        out = [s for s in self.sessions.values() if s.state in states]
+        selected_node_id = self.get_selected_node_id(user_id)
+        out = [
+            s
+            for s in self.sessions.values()
+            if s.state in states and s.node_id == selected_node_id
+        ]
         out.sort(key=lambda s: (s.state != "active", s.name or s.id))
         return out
 
@@ -129,6 +205,7 @@ class SessionStateMixin:
         goal: str = "",
         backend: str | None = None,
         default_reserve_user_id: int = 0,
+        node_id: str = "local",
     ) -> "Session":
         """Register a new Session record. Caller is responsible for the tmux window."""
         now = time.time()
@@ -149,6 +226,7 @@ class SessionStateMixin:
             last_event_at=now,
             backend=backend or self.agent_backend,
             default_reserve_user_id=default_reserve_user_id,
+            node_id=node_id,
         )
         self.sessions[sid] = sess
         self.save_state()
@@ -191,6 +269,9 @@ class SessionStateMixin:
         # A request admitted for this exact session must never migrate to the
         # fallback active session after the target is closed.
         sess.pending_preprocessing.clear()
+        for uid, node_sessions in self.active_sessions_by_node.items():
+            if node_sessions.get(sess.node_id) == session_id:
+                del node_sessions[sess.node_id]
         # If this was anyone's active session, auto-pick the
         # previously-active session as the replacement (per user
         # request: "при удалении активной сессии необходимо
@@ -246,6 +327,12 @@ class SessionStateMixin:
         sess.state = "lost"
         sess.window_id = ""
         sess.pending_preprocessing.clear()
+        for node_sessions in self.active_sessions_by_node.values():
+            if node_sessions.get(sess.node_id) == session_id:
+                del node_sessions[sess.node_id]
+        for uid, sid in list(self.active_sessions.items()):
+            if sid == session_id:
+                del self.active_sessions[uid]
         # Lost sessions can't make progress; remove from the bg panel.
         from .handlers import bg_status
 
@@ -312,7 +399,11 @@ class SessionStateMixin:
         """Permanently remove a Session record. Transcripts on disk are kept."""
         if session_id not in self.sessions:
             return False
+        sess = self.sessions[session_id]
         del self.sessions[session_id]
+        for node_sessions in self.active_sessions_by_node.values():
+            if node_sessions.get(sess.node_id) == session_id:
+                del node_sessions[sess.node_id]
         # Defensive auto-replacement: delete is normally called on already-
         # archived sessions, but if a record is purged while still listed as
         # active, walk active_history newest-first to pick a successor (same
@@ -392,6 +483,7 @@ class SessionStateMixin:
         # Visibility is independent from the global screenshot state above.
         "option_button_screenshot": True,
         "option_button_terminal": False,
+        "option_button_transfer": False,
         # Pane suffix budget and deterministic image profile.
         "screenshot_capture_kib": 48,
         "screenshot_profile": "full8",

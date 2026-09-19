@@ -35,7 +35,6 @@ if TYPE_CHECKING:
     from telegram import Bot
 
 from .config import config
-from .node_models import Node
 from .session_defaults import DEFAULT_IDLE_ARCHIVE_HOURS, IDLE_ARCHIVE_HOUR_CHOICES
 from .session_keys import key_matches_window
 from .session_map import SessionMapMixin
@@ -43,7 +42,6 @@ from .session_models import ClaudeSession, Session, SessionState, WindowState
 from .session_state import SessionStateMixin
 from .terminal_parser import is_interactive_ui, parse_status_line
 from .tmux_manager import tmux_manager
-from .transfer_models import SessionTransfer
 from .transcript_parser import TranscriptParser
 from .utils import atomic_write_json
 
@@ -97,9 +95,6 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
     # DM mode: routing key for inbound user text.
     # user_id -> Session.id (short hex). Single active session per user.
     active_sessions: dict[int, str] = field(default_factory=dict)
-    # Node-scoped active pointers. ``active_sessions`` remains as the
-    # compatibility pointer for the currently selected node.
-    active_sessions_by_node: dict[int, dict[str, str]] = field(default_factory=dict)
     # Stack of previously-active session ids per user (most recent at the
     # end). Used by ``mark_session_archived`` to auto-pick the next
     # active session when the current one gets killed — without this the
@@ -109,11 +104,6 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
     # All sessions known to the bot (active, idle, archived, completed, lost).
     # Keyed by Session.id.
     sessions: dict[str, "Session"] = field(default_factory=dict)
-    # Registered execution nodes. ``local`` is the implicit node for legacy
-    # state and for all existing single-node sessions.
-    nodes: dict[str, Node] = field(default_factory=lambda: {"local": Node.local()})
-    selected_node_ids: dict[int, str] = field(default_factory=dict)
-    transfers: dict[str, SessionTransfer] = field(default_factory=dict)
     # Telegram message_id of the bot message that currently carries the inline
     # session switcher for each user. Used to strip stale switchers when a new
     # bot message goes out.
@@ -166,22 +156,10 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
             "active_sessions": {
                 str(uid): sid for uid, sid in self.active_sessions.items()
             },
-            "active_sessions_by_node": {
-                str(uid): dict(node_sessions)
-                for uid, node_sessions in self.active_sessions_by_node.items()
-            },
             "active_history": {
                 str(uid): hist for uid, hist in self.active_history.items()
             },
             "sessions": {sid: s.to_dict() for sid, s in self.sessions.items()},
-            "nodes": {node_id: node.to_dict() for node_id, node in self.nodes.items()},
-            "selected_node_ids": {
-                str(uid): node_id for uid, node_id in self.selected_node_ids.items()
-            },
-            "transfers": {
-                transfer_id: transfer.to_dict()
-                for transfer_id, transfer in self.transfers.items()
-            },
             "last_switcher_msg_id": {
                 str(uid): mid for uid, mid in self.last_switcher_msg_id.items()
             },
@@ -232,16 +210,6 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                     int(uid): sid
                     for uid, sid in state.get("active_sessions", {}).items()
                 }
-                self.active_sessions_by_node = {
-                    int(uid): {
-                        str(node_id): str(session_id)
-                        for node_id, session_id in node_sessions.items()
-                    }
-                    for uid, node_sessions in state.get(
-                        "active_sessions_by_node", {}
-                    ).items()
-                    if isinstance(node_sessions, dict)
-                }
                 self.active_history = {
                     int(uid): list(hist)
                     for uid, hist in state.get("active_history", {}).items()
@@ -250,22 +218,6 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                 self.sessions = {
                     sid: Session.from_dict(data)
                     for sid, data in state.get("sessions", {}).items()
-                }
-                raw_nodes = state.get("nodes", {})
-                self.nodes = {
-                    str(node_id): Node.from_dict(data)
-                    for node_id, data in raw_nodes.items()
-                    if isinstance(data, dict) and str(node_id)
-                }
-                self.nodes.setdefault("local", Node.local())
-                self.selected_node_ids = {
-                    int(uid): str(node_id)
-                    for uid, node_id in state.get("selected_node_ids", {}).items()
-                }
-                self.transfers = {
-                    transfer_id: SessionTransfer.from_dict(data)
-                    for transfer_id, data in state.get("transfers", {}).items()
-                    if isinstance(data, dict) and str(transfer_id)
                 }
                 self.last_switcher_msg_id = {
                     int(uid): int(mid)
@@ -312,11 +264,7 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                 self.window_states = {}
                 self.user_window_offsets = {}
                 self.active_sessions = {}
-                self.active_sessions_by_node = {}
                 self.sessions = {}
-                self.nodes = {"local": Node.local()}
-                self.selected_node_ids = {}
-                self.transfers = {}
                 self.last_switcher_msg_id = {}
                 self.card_msg_id = {}
                 self.window_display_names = {}

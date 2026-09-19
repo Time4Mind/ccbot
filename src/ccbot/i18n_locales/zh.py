@@ -88,8 +88,6 @@ ZH: dict[str, str] = {
     "mm.new": "🆕 新建",
     "mm.archive": "🗄 归档",
     "mm.settings": "⚙ 设置",
-    "mm.nodes": "🖧 节点",
-    "mm.transfer": "⇄ 转移",
     "menu.title": "*菜单*",
     "menu.empty": "*菜单*\n\n无活动会话——从切换器选一个或点 🆕 新建。",
     "menu.active": "*菜单* · 活动: *{name}*",
@@ -310,42 +308,6 @@ ZH: dict[str, str] = {
     "settings.cat.voice.body": "*语音*\n\n语音消息的 STT 后端。",
     "settings.cat.terminal.body": "*本地终端*\n\n附加到每个新会话的本地终端窗口。",
     "settings.cat.options.body": "*选项按钮*\n\n选择在选项下显示的操作。",
-    "settings.group.option_button_transfer": "会话转移",
-    "settings.option_button_transfer.body": (
-        "*会话转移*\n\n显示将上下文转移到其他节点的按钮。"
-        "仅在有多个节点且会话空闲时显示。"
-    ),
-    "nodes.title": "*节点*",
-    "nodes.empty": "没有已注册的节点。",
-    "nodes.table.node": "节点",
-    "nodes.table.state": "状态",
-    "nodes.table.backends": "后端",
-    "nodes.state.pending": "连接中",
-    "nodes.state.online": "在线",
-    "nodes.state.offline": "离线",
-    "nodes.state.ready": "就绪",
-    "settings.nodes.add": "🔗 连接节点",
-    "nodes.pairing.created": "复制此链接并粘贴到要连接的节点：\n\n`{link}`",
-    "nodes.pairing.relay_missing": "请先在 CCBOT_NODE_RELAY_URL 中设置 relay 服务器。",
-    "transfer.choose_node": "*转移会话*\n\n会话：*{session}*\n\n选择目标节点。",
-    "transfer.choose_backend": "*选择后端*\n\n目标节点：*{node}*",
-    "transfer.confirm": (
-        "*确认转移*\n\n会话：*{session}*\n"
-        "目标节点：*{node}*\n后端：*{backend}*\n\n"
-        "只会转移会话上下文。"
-    ),
-    "transfer.btn.start": "✅ 转移",
-    "transfer.started": "⏳ 转移已开始。目标会话准备好之前的新请求会进入队列。",
-    "transfer.ready": "✅ 目标会话已准备好。",
-    "transfer.cancelled": "转移已取消。",
-    "transfer.unavailable": "当前无法转移。",
-    "transfer.target_unavailable": "目标节点不可用。",
-    "transfer.backend_unavailable": "目标节点没有此后端。",
-    "transfer.failed": "❌ 会话转移失败：{error}",
-    "transfer.context_limit": (
-        "⚠ 目标会话已创建，但完整上下文无法放入。\n"
-        "原因：{error}\n\n完整上下文：`{path}`"
-    ),
     "settings.cat.preprocessing.body": "*预处理*\n\n由共享 Luna 保守整理请求，再发送到已固定的会话。",
     "settings.group.preprocessing_mode": "模式",
     "settings.group.preprocessing_instruction": "指令",

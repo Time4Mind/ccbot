@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shlex
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from ..config import config
@@ -75,14 +77,23 @@ def build_nodes_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 def pairing_invitation_text(user_id: int) -> str:
     """Return a copyable one-time pairing payload for the other node."""
+    if not config.node_relay_url or not config.node_secret:
+        return t(user_id, "nodes.pairing.config_missing")
     try:
         invitation = create_pairing_invitation(
             relay_url=config.node_relay_url,
             leader_id=config.node_leader_id,
+            signing_secret=config.node_secret,
         )
     except ValueError:
-        return t(user_id, "nodes.pairing.relay_missing")
-    return t(user_id, "nodes.pairing.created", link=invitation.to_link())
+        return t(user_id, "nodes.pairing.config_missing")
+    command = "uv run ccbot-node-agent --pairing " + shlex.quote(invitation.to_link())
+    return t(
+        user_id,
+        "nodes.pairing.created",
+        link=invitation.to_link(),
+        command=command,
+    )
 
 
 __all__ = [

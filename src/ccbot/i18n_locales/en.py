@@ -406,8 +406,14 @@ EN: dict[str, str] = {
     "nodes.state.offline": "offline",
     "nodes.state.ready": "ready",
     "settings.nodes.add": "🔗 Pair a node",
-    "nodes.pairing.created": "Copy this link and paste it on the node being connected:\n\n`{link}`",
-    "nodes.pairing.relay_missing": "Set the relay server in CCBOT_NODE_RELAY_URL first.",
+    "nodes.pairing.created": (
+        "Run this on the server being connected through SSH or another remote shell:\n\n"
+        "`{command}`\n\n"
+        "The agent will return the leader connection facts after startup."
+    ),
+    "nodes.pairing.config_missing": (
+        "Set CCBOT_NODE_RELAY_URL and CCBOT_NODE_SECRET on the leader first."
+    ),
     "transfer.choose_node": "*Session transfer*\n\nSession: *{session}*\n\nChoose the target node.",
     "transfer.choose_backend": "*Choose a backend*\n\nTarget node: *{node}*",
     "transfer.confirm": (

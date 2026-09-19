@@ -325,8 +325,14 @@ ZH: dict[str, str] = {
     "nodes.state.offline": "离线",
     "nodes.state.ready": "就绪",
     "settings.nodes.add": "🔗 连接节点",
-    "nodes.pairing.created": "复制此链接并粘贴到要连接的节点：\n\n`{link}`",
-    "nodes.pairing.relay_missing": "请先在 CCBOT_NODE_RELAY_URL 中设置 relay 服务器。",
+    "nodes.pairing.created": (
+        "请通过 SSH 或其他远程 shell 在目标服务器执行：\n\n"
+        "`{command}`\n\n"
+        "启动后，代理会返回连接 leader 所需的信息。"
+    ),
+    "nodes.pairing.config_missing": (
+        "请先在 leader 上设置 CCBOT_NODE_RELAY_URL 和 CCBOT_NODE_SECRET。"
+    ),
     "transfer.choose_node": "*转移会话*\n\n会话：*{session}*\n\n选择目标节点。",
     "transfer.choose_backend": "*选择后端*\n\n目标节点：*{node}*",
     "transfer.confirm": (

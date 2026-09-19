@@ -12,8 +12,11 @@ import json
 import asyncio
 import hmac
 import secrets
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol, Self
+
+from .node_pairing import pairing_signature
 
 
 _KINDS = {"handshake", "command", "ack", "result", "event", "health", "error"}
@@ -220,17 +223,40 @@ class RelayServer:
         secret = str(payload.get("secret", ""))
         claimed_leader = str(payload.get("leader_id", ""))
         expected = self._credentials.get(node_id, "")
+        regular_credentials = bool(expected) and hmac.compare_digest(secret, expected)
+        pairing_credentials = self._pairing_credentials_match(payload, secret)
         if (
             not node_id
             or role not in ("leader", "worker")
-            or not expected
-            or not hmac.compare_digest(secret, expected)
             or claimed_leader != self.leader_id
             or (role == "leader" and node_id != self.leader_id)
             or (role == "worker" and node_id == self.leader_id)
+            or not (regular_credentials or pairing_credentials)
         ):
             raise PermissionError("relay authentication failed")
         return node_id, role
+
+    def _pairing_credentials_match(self, payload: dict[str, Any], secret: str) -> bool:
+        """Accept an unknown worker with a leader-signed bootstrap token."""
+        if str(payload.get("role", "")) != "worker":
+            return False
+        nonce = str(payload.get("pairing_nonce", ""))
+        try:
+            expires_at = float(payload.get("pairing_expires", 0))
+        except (TypeError, ValueError):
+            return False
+        if not nonce or expires_at <= time.time():
+            return False
+        leader_secret = self._credentials.get(self.leader_id, "")
+        if not leader_secret:
+            return False
+        expected = pairing_signature(
+            leader_secret,
+            leader_id=self.leader_id,
+            nonce=nonce,
+            expires_at=expires_at,
+        )
+        return hmac.compare_digest(secret, expected)
 
     async def _route(
         self,
@@ -275,20 +301,21 @@ async def connect_relay(
     secret: str,
     leader_id: str,
     ssl: Any = None,
+    pairing_nonce: str = "",
+    pairing_expires: float = 0.0,
 ) -> StreamNodeTransport:
     """Connect and authenticate one leader/worker relay participant."""
     transport = await StreamNodeTransport.connect(host, port, ssl=ssl)
-    await transport.send(
-        NodeEnvelope(
-            kind="handshake",
-            payload={
-                "node_id": node_id,
-                "role": role,
-                "secret": secret,
-                "leader_id": leader_id,
-            },
-        )
-    )
+    payload: dict[str, Any] = {
+        "node_id": node_id,
+        "role": role,
+        "secret": secret,
+        "leader_id": leader_id,
+    }
+    if pairing_nonce:
+        payload["pairing_nonce"] = pairing_nonce
+        payload["pairing_expires"] = pairing_expires
+    await transport.send(NodeEnvelope(kind="handshake", payload=payload))
     response = await transport.receive()
     if response.kind == "error":
         await transport.close()

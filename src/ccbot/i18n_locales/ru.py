@@ -389,8 +389,14 @@ RU: dict[str, str] = {
     "nodes.state.offline": "оффлайн",
     "nodes.state.ready": "готова",
     "settings.nodes.add": "🔗 Подключить ноду",
-    "nodes.pairing.created": "Скопируй ссылку и вставь её на подключаемой ноде:\n\n`{link}`",
-    "nodes.pairing.relay_missing": "Сначала настрой адрес relay-сервера в CCBOT_NODE_RELAY_URL.",
+    "nodes.pairing.created": (
+        "Выполни на подключаемом сервере через SSH или другой remote shell:\n\n"
+        "`{command}`\n\n"
+        "После запуска агент сам вернёт leader данные для подключения."
+    ),
+    "nodes.pairing.config_missing": (
+        "Сначала настрой CCBOT_NODE_RELAY_URL и CCBOT_NODE_SECRET на leader."
+    ),
     "transfer.choose_node": "*Перенос сессии*\n\nСессия: *{session}*\n\nВыбери целевую ноду.",
     "transfer.choose_backend": "*Выбери бэкенд*\n\nЦелевая нода: *{node}*",
     "transfer.confirm": (

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
 import base64
 import hashlib
 import logging
 import os
 import secrets
 import shlex
+import ssl as ssl_module
 import platform
 import uuid
 from dataclasses import dataclass
@@ -23,9 +25,11 @@ from .node_transport import (
     RequestReceiptLedger,
     connect_relay,
 )
+from .node_pairing import PairingInvitation
 from .terminal_parser import parse_status_line
 
 logger = logging.getLogger(__name__)
+HEALTH_INTERVAL_SECONDS = 15.0
 
 
 class WorkerSessionExecutor(Protocol):
@@ -79,6 +83,19 @@ class NodeAgent:
         self._transport = transport
 
     async def run(self) -> None:
+        await self._send_health()
+        heartbeat = asyncio.create_task(self._health_loop(), name="node-health")
+        try:
+            while True:
+                message = await self._transport.receive()
+                if message.kind != "command":
+                    continue
+                await self._handle_command(message)
+        finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+
+    async def _send_health(self) -> None:
         await self._transport.send(
             NodeEnvelope(
                 kind="health",
@@ -93,11 +110,14 @@ class NodeAgent:
                 },
             )
         )
+
+    async def _health_loop(self) -> None:
         while True:
-            message = await self._transport.receive()
-            if message.kind != "command":
-                continue
-            await self._handle_command(message)
+            await asyncio.sleep(HEALTH_INTERVAL_SECONDS)
+            try:
+                await self._send_health()
+            except (ConnectionError, asyncio.CancelledError):
+                return
 
     async def _handle_command(self, message: NodeEnvelope) -> None:
         if not message.request_id:
@@ -233,6 +253,8 @@ class NodeAgent:
         display_name: str = "",
         backends: tuple[str, ...] = (),
         ssl: Any = None,
+        pairing_nonce: str = "",
+        pairing_expires: float = 0.0,
     ) -> "NodeAgent":
         transport = await connect_relay(
             host,
@@ -242,6 +264,8 @@ class NodeAgent:
             secret=secret,
             leader_id=leader_id,
             ssl=ssl,
+            pairing_nonce=pairing_nonce,
+            pairing_expires=pairing_expires,
         )
         return cls(
             transport,
@@ -416,8 +440,8 @@ class TmuxWorkerExecutor:
         )
 
 
-def _relay_address() -> tuple[str, int]:
-    raw = os.environ.get("CCBOT_NODE_RELAY_URL", "").strip()
+def _relay_address(raw: str) -> tuple[str, int, Any]:
+    raw = raw.strip()
     if not raw:
         raise RuntimeError("CCBOT_NODE_RELAY_URL is required for node-agent")
     parsed = urlparse(raw if "://" in raw else f"tcp://{raw}")
@@ -425,14 +449,55 @@ def _relay_address() -> tuple[str, int]:
     port = parsed.port
     if not host or port is None:
         raise RuntimeError("CCBOT_NODE_RELAY_URL must include host and port")
-    return host, port
+    use_tls = parsed.scheme in ("tls", "ssl", "https")
+    return host, port, ssl_module.create_default_context() if use_tls else None
 
 
-async def _run_agent_forever() -> None:
-    host, port = _relay_address()
-    node_id = os.environ.get("CCBOT_NODE_ID", "").strip()
-    secret = os.environ.get("CCBOT_NODE_SECRET", "")
-    leader_id = os.environ.get("CCBOT_NODE_LEADER_ID", "local").strip()
+def _default_node_id() -> str:
+    value = "".join(
+        char.lower() if char.isalnum() else "-" for char in platform.node()
+    ).strip("-")
+    if not value or value == "local":
+        return f"worker-{secrets.token_hex(4)}"
+    return value
+
+
+def _print_connection_receipt(
+    *, node_id: str, display_name: str, leader_id: str, relay_url: str
+) -> None:
+    """Print safe machine-readable facts for an SSH/remote-agent caller."""
+    print("ccbot-node-agent: connected", flush=True)
+    print(f"node_id={node_id}", flush=True)
+    print(f"display_name={display_name}", flush=True)
+    print(f"leader_id={leader_id}", flush=True)
+    print(f"relay_url={relay_url}", flush=True)
+
+
+async def _run_agent_forever(
+    *, pairing_link: str = "", node_id_override: str = "", name_override: str = ""
+) -> None:
+    invitation = PairingInvitation.from_link(pairing_link) if pairing_link else None
+    relay_url = (
+        invitation.relay_url
+        if invitation is not None
+        else os.environ.get("CCBOT_NODE_RELAY_URL", "")
+    )
+    host, port, ssl_context = _relay_address(relay_url)
+    node_id = (
+        node_id_override.strip()
+        or os.environ.get("CCBOT_NODE_ID", "").strip()
+        or _default_node_id()
+    )
+    secret = (
+        invitation.secret
+        if invitation is not None
+        else os.environ.get("CCBOT_NODE_SECRET", "")
+    )
+    leader_id = (
+        invitation.leader_id
+        if invitation is not None
+        else os.environ.get("CCBOT_NODE_LEADER_ID", "local").strip()
+    )
     if not node_id or not secret:
         raise RuntimeError("CCBOT_NODE_ID and CCBOT_NODE_SECRET are required")
     executor = TmuxWorkerExecutor(
@@ -455,8 +520,15 @@ async def _run_agent_forever() -> None:
         for value in os.environ.get("CCBOT_NODE_BACKENDS", "").split(",")
         if value.strip() in ("claude", "codex")
     )
-    display_name = os.environ.get("CCBOT_NODE_NAME", node_id).strip() or node_id
+    if not backends:
+        backends = ("claude", "codex")
+    display_name = (
+        name_override.strip()
+        or os.environ.get("CCBOT_NODE_NAME", node_id).strip()
+        or node_id
+    )
     agent: NodeAgent | None = None
+    receipt_printed = False
     while True:
         try:
             transport = await connect_relay(
@@ -466,7 +538,20 @@ async def _run_agent_forever() -> None:
                 role="worker",
                 secret=secret,
                 leader_id=leader_id,
+                ssl=ssl_context,
+                pairing_nonce=invitation.nonce if invitation is not None else "",
+                pairing_expires=(
+                    invitation.expires_at if invitation is not None else 0.0
+                ),
             )
+            if not receipt_printed:
+                _print_connection_receipt(
+                    node_id=node_id,
+                    display_name=display_name,
+                    leader_id=leader_id,
+                    relay_url=relay_url,
+                )
+                receipt_printed = True
             if agent is None:
                 agent = NodeAgent(
                     transport,
@@ -486,9 +571,24 @@ async def _run_agent_forever() -> None:
             await asyncio.sleep(2.0)
 
 
-def main() -> None:
-    """Run the Telegram-free worker process."""
-    asyncio.run(_run_agent_forever())
+def main(argv: list[str] | None = None) -> None:
+    """Run the Telegram-free worker process or bootstrap it from a link."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--pairing",
+        dest="pairing_link",
+        help="one-time ccbot-node pairing link from the leader",
+    )
+    parser.add_argument("--node-id", default="", help="stable worker node id")
+    parser.add_argument("--name", default="", help="worker display name")
+    args = parser.parse_args(argv)
+    asyncio.run(
+        _run_agent_forever(
+            pairing_link=args.pairing_link or "",
+            node_id_override=args.node_id,
+            name_override=args.name,
+        )
+    )
 
 
 __all__ = ["NodeAgent", "TmuxWorkerExecutor", "WorkerSessionExecutor", "main"]

@@ -343,6 +343,8 @@ async def connect_configured_remote_runtimes(
         }
         node.last_seen_at = time.time()
         session_manager.register_node(node)
+        if _leader_rpc is not None:
+            register_remote_runtime(node_id)
 
     _leader_rpc = await connect_leader_rpc(
         host=host,

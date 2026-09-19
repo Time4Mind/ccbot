@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from ccbot.node_pairing import PairingInvitation, create_pairing_invitation
+from ccbot.node_pairing import (
+    PairingInvitation,
+    create_pairing_invitation,
+    pairing_signature,
+)
 
 
 def test_pairing_invitation_is_copyable_and_round_trips() -> None:
@@ -36,3 +40,19 @@ def test_pairing_requires_relay_and_leader() -> None:
         create_pairing_invitation(relay_url="", leader_id="leader")
     with pytest.raises(ValueError, match="leader id"):
         create_pairing_invitation(relay_url="https://relay", leader_id="")
+
+
+def test_pairing_invitation_can_be_verified_by_relay() -> None:
+    invitation = create_pairing_invitation(
+        relay_url="relay.example.test:8765",
+        leader_id="leader",
+        signing_secret="leader-secret",
+        ttl=600,
+    )
+
+    assert invitation.secret == pairing_signature(
+        "leader-secret",
+        leader_id="leader",
+        nonce=invitation.nonce,
+        expires_at=invitation.expires_at,
+    )

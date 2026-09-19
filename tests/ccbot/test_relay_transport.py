@@ -10,6 +10,7 @@ from ccbot.node_transport import (
     StreamNodeTransport,
     connect_relay,
 )
+from ccbot.node_pairing import create_pairing_invitation
 
 
 @pytest.mark.asyncio
@@ -78,6 +79,55 @@ async def test_relay_rejects_invalid_credentials() -> None:
             leader_id="leader",
         )
 
+    await server.close()
+
+
+@pytest.mark.asyncio
+async def test_relay_accepts_signed_bootstrap_worker_without_static_credential() -> (
+    None
+):
+    server = RelayServer(credentials={"leader": "leader-secret"}, leader_id="leader")
+    await server.start("127.0.0.1", 0)
+    invitation = create_pairing_invitation(
+        relay_url=f"127.0.0.1:{server.port}",
+        leader_id="leader",
+        signing_secret="leader-secret",
+        ttl=600,
+    )
+    leader = await connect_relay(
+        "127.0.0.1",
+        server.port,
+        node_id="leader",
+        role="leader",
+        secret="leader-secret",
+        leader_id="leader",
+    )
+    worker = await connect_relay(
+        "127.0.0.1",
+        server.port,
+        node_id="worker-from-hostname",
+        role="worker",
+        secret=invitation.secret,
+        leader_id="leader",
+        pairing_nonce=invitation.nonce,
+        pairing_expires=invitation.expires_at,
+    )
+
+    await leader.send(
+        NodeEnvelope(
+            kind="command",
+            request_id="bootstrap-1",
+            payload={
+                "target_node_id": "worker-from-hostname",
+                "operation": "health",
+            },
+        )
+    )
+    received = await asyncio.wait_for(worker.receive(), timeout=1)
+    assert received.payload["operation"] == "health"
+
+    await leader.close()
+    await worker.close()
     await server.close()
 
 

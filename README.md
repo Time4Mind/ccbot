@@ -101,6 +101,8 @@ ccbot                           # foreground; for prod use the systemd unit
 
 A full step-by-step Linux install (written for an AI agent to follow)
 lives in `doc/install-linux.md`.
+Automatic worker-node connection through the direct CLI handle is documented
+in `doc/multi-node-bootstrap.md`.
 
 ## Configuration
 

@@ -405,15 +405,12 @@ EN: dict[str, str] = {
     "nodes.state.online": "online",
     "nodes.state.offline": "offline",
     "nodes.state.ready": "ready",
-    "settings.nodes.add": "🔗 Pair a node",
-    "nodes.pairing.created": (
-        "Run this on the server being connected through SSH or another remote shell:\n\n"
-        "`{command}`\n\n"
-        "The agent will return the leader connection facts after startup."
+    "nodes.delete.confirm": (
+        "*Remove node from ccbot?*\n\nNode: *{node}*\n\n"
+        "Sessions, transcripts, and archives are preserved."
     ),
-    "nodes.pairing.config_missing": (
-        "Set CCBOT_NODE_RELAY_URL and CCBOT_NODE_SECRET on the leader first."
-    ),
+    "nodes.delete.done": "Node removed from the ccbot registry.",
+    "nodes.delete.not_found": "Node not found or already removed.",
     "transfer.choose_node": "*Session transfer*\n\nSession: *{session}*\n\nChoose the target node.",
     "transfer.choose_backend": "*Choose a backend*\n\nTarget node: *{node}*",
     "transfer.confirm": (

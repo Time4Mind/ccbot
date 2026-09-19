@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import shlex
-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from ..config import config
 from ..i18n import t
-from ..node_pairing import create_pairing_invitation
 from ..node_models import Node
 from ..session import session_manager
-from .callback_data import CB_MM_BACK, CB_NODE_ADD, CB_NODE_USE
+from .callback_data import CB_MM_BACK, CB_NODE_DELETE, CB_NODE_USE
 
 
 def _node_state_text(user_id: int, node: Node) -> str:
@@ -56,48 +52,28 @@ def build_nodes_keyboard(user_id: int) -> InlineKeyboardMarkup:
         label = (
             f"{'✓ ' if node.id == selected_id else ''}{node.display_name or node.id}"
         )
-        if node.state in ("offline", "pending"):
-            rows.append([InlineKeyboardButton(f"⚪ {label}")])
-        else:
-            rows.append(
-                [InlineKeyboardButton(label, callback_data=f"{CB_NODE_USE}{node.id}")]
-            )
-    rows.append(
-        [
+        delete_button = (
             InlineKeyboardButton(
-                t(user_id, "settings.nodes.add"), callback_data=CB_NODE_ADD
+                t(user_id, "btn.delete"),
+                callback_data=f"{CB_NODE_DELETE}{node.id}",
             )
-        ]
-    )
+            if node.id != "local"
+            else None
+        )
+        if node.state in ("offline", "pending"):
+            row = [InlineKeyboardButton(f"⚪ {label}")]
+        else:
+            row = [InlineKeyboardButton(label, callback_data=f"{CB_NODE_USE}{node.id}")]
+        if delete_button is not None:
+            row.append(delete_button)
+        rows.append(row)
     rows.append(
         [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_BACK)]
     )
     return InlineKeyboardMarkup(rows)
 
 
-def pairing_invitation_text(user_id: int) -> str:
-    """Return a copyable one-time pairing payload for the other node."""
-    if not config.node_relay_url or not config.node_secret:
-        return t(user_id, "nodes.pairing.config_missing")
-    try:
-        invitation = create_pairing_invitation(
-            relay_url=config.node_relay_url,
-            leader_id=config.node_leader_id,
-            signing_secret=config.node_secret,
-        )
-    except ValueError:
-        return t(user_id, "nodes.pairing.config_missing")
-    command = "uv run ccbot-node-agent --pairing " + shlex.quote(invitation.to_link())
-    return t(
-        user_id,
-        "nodes.pairing.created",
-        link=invitation.to_link(),
-        command=command,
-    )
-
-
 __all__ = [
     "build_nodes_keyboard",
-    "pairing_invitation_text",
     "render_nodes_text",
 ]

@@ -324,15 +324,12 @@ ZH: dict[str, str] = {
     "nodes.state.online": "在线",
     "nodes.state.offline": "离线",
     "nodes.state.ready": "就绪",
-    "settings.nodes.add": "🔗 连接节点",
-    "nodes.pairing.created": (
-        "请通过 SSH 或其他远程 shell 在目标服务器执行：\n\n"
-        "`{command}`\n\n"
-        "启动后，代理会返回连接 leader 所需的信息。"
+    "nodes.delete.confirm": (
+        "*从 ccbot 移除节点？*\n\n节点：*{node}*\n\n"
+        "会话、transcript 和存档会保留。"
     ),
-    "nodes.pairing.config_missing": (
-        "请先在 leader 上设置 CCBOT_NODE_RELAY_URL 和 CCBOT_NODE_SECRET。"
-    ),
+    "nodes.delete.done": "节点已从 ccbot 注册表移除。",
+    "nodes.delete.not_found": "节点不存在或已被移除。",
     "transfer.choose_node": "*转移会话*\n\n会话：*{session}*\n\n选择目标节点。",
     "transfer.choose_backend": "*选择后端*\n\n目标节点：*{node}*",
     "transfer.confirm": (

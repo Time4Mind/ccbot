@@ -1,9 +1,16 @@
 # Multi-node ccbot - TODO и контракт разработки
 
-Статус: черновик для согласования и последующей реализации агентами.
+Статус: UX и полный функциональный паритет остаются черновиком; автоматический
+bootstrap нод реализован отдельно и описан в
+[`doc/multi-node-bootstrap.md`](multi-node-bootstrap.md).
 
 Базовый эталон: commit `5f8ddaa` (`main`). Ветка разработки:
 `feature/multi-node-runtime`.
+
+Подключение ноды не должно инициироваться через Telegram-настройки. Для
+automation-агента authoritative flow - `ccbot node bootstrap` на leader,
+затем `ccbot-node-agent --pairing ...` на worker. Telegram оставляет только
+выбор, состояние и удаление уже подключённой ноды.
 
 ## 1. Подтверждённая цель
 
@@ -208,10 +215,13 @@ Gate: полный suite и live single-node acceptance; визуально по
 
 ### Wave 2 - node-agent и transport
 
-- [ ] Добавить отдельный режим запуска node-agent без Telegram token.
-- [ ] Реализовать pairing, auth, capabilities и version handshake.
-- [ ] Реализовать idempotent commands, ack/result и event sequence replay.
-- [ ] Добавить reconnect, bounded buffers и health.
+- [x] Добавить отдельный режим запуска node-agent без Telegram token и прямую
+  CLI-ручку `ccbot node bootstrap`.
+- [x] Реализовать подписанный pairing/auth, capabilities и health handshake;
+  version compatibility gate остаётся в полном scope.
+- [x] Реализовать typed idempotent commands и ack/result; event sequence replay
+  остаётся в полном scope.
+- [x] Добавить reconnect и health; bounded buffers остаются в полном scope.
 - [ ] Тестировать disconnect на каждой границе request/ack/result.
 
 Gate: синтетический leader управляет worker без Telegram и без дублей после
@@ -243,7 +253,8 @@ Gate: матрица существующих функций проходит о
 - [ ] Installer/service definitions для node-agent на уже поддержанных ОС.
 - [ ] Обновление leader/worker с version gate и rollback.
 - [ ] Метрики reconnect, command latency, queue depth, event lag и traffic.
-- [ ] Документация pairing/revoke/recovery.
+- [x] Документация базового pairing/bootstrap; revoke/recovery полного контура
+  остаются в scope.
 - [ ] Пятиминутный load audit и restart/network-partition smoke.
 
 Gate: rollback не повреждает single-node state, worker sessions продолжают

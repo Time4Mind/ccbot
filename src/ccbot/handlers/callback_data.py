@@ -100,7 +100,9 @@ CB_MM_BACK = "mm:back"  # back to default footer
 
 # Node menu
 CB_NODE_USE = "nd:use:"
-CB_NODE_ADD = "nd:add"
+CB_NODE_DELETE = "nd:del:"
+CB_NODE_DELETE_CONFIRM = "nd:del:y:"
+CB_NODE_DELETE_CANCEL = "nd:del:n"
 
 # Settings (toggle screens)
 CB_ST_GRP = "st:grp:"  # st:grp:<name>  open a per-group settings screen
@@ -128,7 +130,6 @@ CB_ST_PREPROCESS_INSTRUCTION = "st:prepi:"  # edit | reset
 CB_ST_AGENT = "st:agent:"  # st:agent:<claude|codex> bot-wide agent backend
 CB_ST_DEFAULT_SESSION = "st:def:"  # st:def:<on|off>
 CB_ST_DEFAULT_DIR = "st:defdir:"  # st:defdir:pick
-CB_ST_NODE_PAIR = "st:node:pair"
 CB_ST_VOICE_INSTALL_GO = "st:vi:go"  # confirm whisper.cpp auto-install
 CB_ST_VOICE_INSTALL_NO = "st:vi:no"  # dismiss whisper.cpp install prompt
 CB_ST_BACK = "st:back"  # back to Menu

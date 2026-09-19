@@ -102,6 +102,12 @@ def release_singleton_lock() -> None:
 
 def main() -> None:
     """Main entry point."""
+    if len(sys.argv) > 2 and sys.argv[1:3] == ["node", "bootstrap"]:
+        from .node_bootstrap import main as node_bootstrap_main
+
+        node_bootstrap_main(sys.argv[3:])
+        return
+
     if len(sys.argv) > 1 and sys.argv[1] == "hook":
         from .hook import hook_main
 

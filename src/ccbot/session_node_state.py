@@ -54,6 +54,39 @@ class NodeSessionStateMixin:
         self.save_state()
         return node
 
+    def remove_node(self, node_id: str) -> Node:
+        """Remove a remote node from the leader registry, preserving sessions."""
+        if node_id == "local":
+            raise ValueError("the local node cannot be removed")
+        node = self.nodes.pop(node_id, None)
+        if node is None:
+            raise KeyError(f"Unknown node id: {node_id}")
+        user_ids = (
+            set(self.selected_node_ids)
+            | set(self.active_sessions_by_node)
+            | set(self.active_sessions)
+        )
+        for user_id in user_ids:
+            selected = self.selected_node_ids.get(user_id, "local")
+            if selected == node_id:
+                self.selected_node_ids[user_id] = "local"
+            node_sessions = self.active_sessions_by_node.get(user_id, {})
+            node_sessions.pop(node_id, None)
+            active_session_id = self.active_sessions.get(user_id)
+            active_session = (
+                self.sessions.get(active_session_id) if active_session_id else None
+            )
+            if active_session_id and (
+                active_session is None or active_session.node_id == node_id
+            ):
+                local_session_id = node_sessions.get("local")
+                if local_session_id:
+                    self.active_sessions[user_id] = local_session_id
+                else:
+                    self.active_sessions.pop(user_id, None)
+        self.save_state()
+        return node
+
     def get_selected_node_id(self, user_id: int) -> str:
         selected = self.selected_node_ids.get(user_id, "local")
         return selected if selected in self.nodes else "local"

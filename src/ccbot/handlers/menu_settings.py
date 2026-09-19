@@ -19,7 +19,6 @@ from .callback_data import (
     CB_ST_AGENT,
     CB_ST_DEFAULT_DIR,
     CB_ST_DEFAULT_SESSION,
-    CB_ST_NODE_PAIR,
     CB_ST_BACK,
     CB_ST_BGNOTIFY,
     CB_ST_CAT,
@@ -192,14 +191,6 @@ def _settings_category_grid(
                 InlineKeyboardButton(
                     label,
                     callback_data=f"{CB_ST_GRP}{member_key}",
-                )
-            ]
-        )
-    if screen_name == "settings_cat_sessions":
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    t(user_id, "settings.nodes.add"), callback_data=CB_ST_NODE_PAIR
                 )
             ]
         )

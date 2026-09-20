@@ -34,6 +34,8 @@ _remote_message_handler: Callable[[Any], Awaitable[None]] | None = None
 _node_update_tasks: dict[str, asyncio.Task[None]] = {}
 _node_update_attempts: dict[str, float] = {}
 _NODE_UPDATE_RETRY_SECONDS = 300.0
+_RECONNECT_INITIAL_SECONDS = 0.5
+_RECONNECT_MAX_SECONDS = 5.0
 
 
 async def _request_node_update(node_id: str, revision: str) -> None:
@@ -119,8 +121,11 @@ class NodeRpcClient:
         self._event_queue: asyncio.Queue[NodeEnvelope] = asyncio.Queue(maxsize=1024)
         self._health_queue: asyncio.Queue[NodeEnvelope] = asyncio.Queue(maxsize=256)
         self._reconnect_lock = asyncio.Lock()
+        self._closed = False
 
     async def start(self) -> None:
+        if self._closed:
+            raise ConnectionError("node RPC is closed")
         if self._event_handler is not None:
             if self._event_task is None or self._event_task.done():
                 self._event_task = asyncio.create_task(
@@ -136,6 +141,9 @@ class NodeRpcClient:
             )
 
     async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         task, self._reader_task = self._reader_task, None
         background = [task, self._event_task, self._health_task]
         self._event_task = None
@@ -167,13 +175,16 @@ class NodeRpcClient:
         attempts = max(0, retries) + 1
         last_error: Exception | None = None
         for attempt in range(attempts):
+            transport = self._transport
             try:
-                return await self._request_once(request_id, body, timeout=timeout)
+                return await self._request_once(
+                    request_id, body, transport=transport, timeout=timeout
+                )
             except (ConnectionError, TimeoutError, asyncio.TimeoutError) as exc:
                 last_error = exc
                 if attempt + 1 >= attempts or self._reconnect is None:
                     raise
-                await self._reconnect_transport()
+                await self._reconnect_transport(transport)
         raise last_error or RuntimeError("node RPC request failed")
 
     async def _request_once(
@@ -181,13 +192,14 @@ class NodeRpcClient:
         request_id: str,
         payload: dict[str, Any],
         *,
+        transport: NodeTransport,
         timeout: float | None = None,
     ) -> dict[str, Any]:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[dict[str, Any]] = loop.create_future()
         self._pending[request_id] = future
         try:
-            await self._transport.send(
+            await transport.send(
                 NodeEnvelope(kind="command", request_id=request_id, payload=payload)
             )
             return await asyncio.wait_for(
@@ -197,25 +209,31 @@ class NodeRpcClient:
         finally:
             self._pending.pop(request_id, None)
 
-    async def _reconnect_transport(self) -> None:
-        if self._reconnect is None:
-            return
+    async def _reconnect_transport(self, failed_transport: NodeTransport) -> bool:
+        if self._reconnect is None or self._closed:
+            return False
         async with self._reconnect_lock:
-            if self._reader_task is not None and not self._reader_task.done():
-                return
+            if self._closed:
+                return False
+            if self._transport is not failed_transport:
+                return True
             try:
-                await self._transport.close()
+                await failed_transport.close()
             except Exception:
                 pass
-            self._transport = await self._reconnect()
-            self._reader_task = asyncio.create_task(
-                self._read_loop(), name="node-rpc-reader"
-            )
+            replacement = await self._reconnect()
+            if self._closed:
+                await replacement.close()
+                return False
+            self._transport = replacement
+            return True
 
     async def _read_loop(self) -> None:
-        try:
-            while True:
-                message = await self._transport.receive()
+        backoff = _RECONNECT_INITIAL_SECONDS
+        while not self._closed:
+            transport = self._transport
+            try:
+                message = await transport.receive()
                 if message.kind in ("result", "error") and message.request_id:
                     future = self._pending.get(message.request_id)
                     if future is None or future.done():
@@ -237,10 +255,33 @@ class NodeRpcClient:
                     await queue.put(message)
                 # Acks are deliberately not terminal: request completion is
                 # proven only by the matching result.
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            self._fail_pending(ConnectionError(str(exc)))
+                backoff = _RECONNECT_INITIAL_SECONDS
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._fail_pending(ConnectionError(str(exc)))
+                if self._closed or self._reconnect is None:
+                    return
+                logger.warning("Node relay reader disconnected: %s", exc)
+                while not self._closed:
+                    try:
+                        if await self._reconnect_transport(transport):
+                            logger.info("Node relay reader reconnected")
+                            backoff = _RECONNECT_INITIAL_SECONDS
+                            break
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as reconnect_error:
+                        logger.warning(
+                            "Node relay reconnect failed; retrying in %.1fs: %s",
+                            backoff,
+                            reconnect_error,
+                        )
+                    await asyncio.sleep(backoff)
+                    backoff = min(
+                        _RECONNECT_MAX_SECONDS,
+                        max(_RECONNECT_INITIAL_SECONDS, backoff * 2),
+                    )
 
     async def _handle_events(self, queue: asyncio.Queue[NodeEnvelope]) -> None:
         while True:

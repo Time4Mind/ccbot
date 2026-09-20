@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-
-import asyncio
 
 from ccbot import node_runtime
 from ccbot.node_runtime import NodeRpcClient
@@ -240,3 +239,129 @@ async def test_rpc_result_is_not_blocked_by_slow_event_handler():
     assert await asyncio.wait_for(request, timeout=0.2) == {"ok": True}
     release_event.set()
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_idle_reader_reconnects_and_delivers_health_without_rpc() -> None:
+    class QueueTransport:
+        def __init__(self) -> None:
+            self.incoming: asyncio.Queue[NodeEnvelope | Exception] = asyncio.Queue()
+            self.closed = False
+
+        async def send(self, _message: NodeEnvelope) -> None:
+            return None
+
+        async def receive(self) -> NodeEnvelope:
+            item = await self.incoming.get()
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        async def close(self) -> None:
+            self.closed = True
+
+    first = QueueTransport()
+    replacement = QueueTransport()
+    reconnects = 0
+    health_seen = asyncio.Event()
+
+    async def reconnect() -> QueueTransport:
+        nonlocal reconnects
+        reconnects += 1
+        return replacement
+
+    async def handle(message: NodeEnvelope) -> None:
+        if message.kind == "health" and message.payload == {"node_id": "worker-a"}:
+            health_seen.set()
+
+    client = NodeRpcClient(first, reconnect=reconnect, event_handler=handle)
+    await client.start()
+    try:
+        await first.incoming.put(ConnectionError("idle relay closed"))
+        await replacement.incoming.put(
+            NodeEnvelope(kind="health", payload={"node_id": "worker-a"})
+        )
+
+        await asyncio.wait_for(health_seen.wait(), timeout=0.1)
+        assert reconnects == 1
+        assert first.closed is True
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_intentional_close_does_not_reconnect() -> None:
+    class BlockingTransport:
+        async def send(self, _message: NodeEnvelope) -> None:
+            return None
+
+        async def receive(self) -> NodeEnvelope:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        async def close(self) -> None:
+            return None
+
+    reconnect = AsyncMock(return_value=BlockingTransport())
+    client = NodeRpcClient(BlockingTransport(), reconnect=reconnect)
+
+    await client.start()
+    await client.close()
+    await asyncio.sleep(0)
+
+    reconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_request_and_reader_failure_share_one_reconnect() -> None:
+    class FailedTransport:
+        def __init__(self) -> None:
+            self.closed = asyncio.Event()
+
+        async def send(self, _message: NodeEnvelope) -> None:
+            raise ConnectionError("send failed")
+
+        async def receive(self) -> NodeEnvelope:
+            await self.closed.wait()
+            raise ConnectionError("reader failed")
+
+        async def close(self) -> None:
+            self.closed.set()
+
+    class ReplyTransport:
+        def __init__(self) -> None:
+            self.incoming: asyncio.Queue[NodeEnvelope] = asyncio.Queue()
+
+        async def send(self, message: NodeEnvelope) -> None:
+            await self.incoming.put(
+                NodeEnvelope(
+                    kind="result",
+                    request_id=message.request_id,
+                    payload={"ok": True},
+                )
+            )
+
+        async def receive(self) -> NodeEnvelope:
+            return await self.incoming.get()
+
+        async def close(self) -> None:
+            return None
+
+    first = FailedTransport()
+    replacement = ReplyTransport()
+    reconnects = 0
+
+    async def reconnect() -> ReplyTransport:
+        nonlocal reconnects
+        reconnects += 1
+        await asyncio.sleep(0)
+        return replacement
+
+    client = NodeRpcClient(first, reconnect=reconnect, request_timeout=0.2)
+    try:
+        result = await client.request("worker-a", "health", retries=1)
+
+        assert result == {"ok": True}
+        assert reconnects == 1
+    finally:
+        await client.close()

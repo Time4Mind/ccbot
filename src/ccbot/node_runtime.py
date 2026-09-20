@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 from .node_transport import NodeEnvelope, NodeTransport, RequestReceiptLedger
 from .node_transport import connect_relay
+from .node_update import current_git_revision
 from .transfer_models import SessionTransfer
 from .transfer_runtime import (
     TransferRuntimeResult,
@@ -29,6 +30,57 @@ TransportFactory = Callable[[], Awaitable[NodeTransport]]
 _leader_rpc: NodeRpcClient | None = None
 _remote_node_ids: set[str] = set()
 _remote_message_handler: Callable[[Any], Awaitable[None]] | None = None
+_node_update_tasks: dict[str, asyncio.Task[None]] = {}
+_node_update_attempts: dict[str, float] = {}
+_NODE_UPDATE_RETRY_SECONDS = 300.0
+
+
+async def _request_node_update(node_id: str, revision: str) -> None:
+    if _leader_rpc is None:
+        return
+    try:
+        result = await _leader_rpc.request(
+            node_id,
+            "update_runtime",
+            {"revision": revision},
+            retries=0,
+            timeout=600.0,
+        )
+        if not result.get("ok"):
+            logger.warning(
+                "node auto-update rejected node=%s revision=%s error=%s",
+                node_id,
+                revision,
+                result.get("error", "unknown error"),
+            )
+    except Exception as exc:
+        logger.warning(
+            "node auto-update failed node=%s revision=%s error=%s",
+            node_id,
+            revision,
+            exc,
+        )
+
+
+def _schedule_node_update(node_id: str, revision: str) -> None:
+    now = time.monotonic()
+    active = _node_update_tasks.get(node_id)
+    if active is not None and not active.done():
+        return
+    if now - _node_update_attempts.get(node_id, 0.0) < _NODE_UPDATE_RETRY_SECONDS:
+        return
+    _node_update_attempts[node_id] = now
+    task = asyncio.create_task(
+        _request_node_update(node_id, revision),
+        name=f"node-update-{node_id}",
+    )
+    _node_update_tasks[node_id] = task
+
+    def discard(completed: asyncio.Task[None]) -> None:
+        if _node_update_tasks.get(node_id) is completed:
+            _node_update_tasks.pop(node_id, None)
+
+    task.add_done_callback(discard)
 
 
 def set_remote_message_handler(
@@ -437,6 +489,11 @@ async def connect_configured_remote_runtimes(
     global _leader_rpc
     if _leader_rpc is not None:
         return _leader_rpc
+    leader_revision = current_git_revision()
+    if not leader_revision:
+        logger.warning(
+            "node auto-update disabled: leader is not running a clean Git revision"
+        )
     host, port, ssl_context = _relay_endpoint(relay_url, tls)
 
     async def handle_node_event(message: NodeEnvelope) -> None:
@@ -484,6 +541,7 @@ async def connect_configured_remote_runtimes(
                 existing.arch,
                 tuple(existing.backends),
                 tuple(sorted(existing.capabilities.items())),
+                existing.ccbot_version,
             )
         )
         node = existing or Node(node_id, node_id)
@@ -505,6 +563,7 @@ async def connect_configured_remote_runtimes(
             for key, value in (payload.get("capacity", {}) or {}).items()
             if isinstance(value, (int, float))
         }
+        node.ccbot_version = str(payload.get("ccbot_version", node.ccbot_version))
         node.last_seen_at = time.time()
         durable_after = (
             node.display_name,
@@ -513,6 +572,7 @@ async def connect_configured_remote_runtimes(
             node.arch,
             tuple(node.backends),
             tuple(sorted(node.capabilities.items())),
+            node.ccbot_version,
         )
         session_manager.register_node(node, persist=durable_before != durable_after)
         if (
@@ -522,6 +582,14 @@ async def connect_configured_remote_runtimes(
         ):
             register_remote_runtime(node_id)
             _remote_node_ids.add(node_id)
+        if (
+            message.kind == "health"
+            and leader_revision
+            and node.ccbot_version
+            and node.ccbot_version != leader_revision
+            and node.enabled
+        ):
+            _schedule_node_update(node_id, leader_revision)
 
     _leader_rpc = await connect_leader_rpc(
         host=host,
@@ -551,6 +619,12 @@ async def shutdown_remote_runtimes() -> None:
     for node_id in tuple(_remote_node_ids):
         unregister_node_runtime(node_id)
     _remote_node_ids.clear()
+    update_tasks = list(_node_update_tasks.values())
+    _node_update_tasks.clear()
+    _node_update_attempts.clear()
+    for task in update_tasks:
+        task.cancel()
+    await asyncio.gather(*update_tasks, return_exceptions=True)
     if _leader_rpc is not None:
         await _leader_rpc.close()
         _leader_rpc = None

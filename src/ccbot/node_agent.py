@@ -13,11 +13,12 @@ import secrets
 import shlex
 import ssl as ssl_module
 import platform
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Protocol, cast
+from typing import Any, Awaitable, Callable, Coroutine, Protocol, cast
 from urllib.parse import urlparse
 
 from . import tmux_input_transport
@@ -28,6 +29,7 @@ from .node_transport import (
     connect_relay,
 )
 from .node_pairing import PairingInvitation
+from .node_update import GitNodeUpdater, current_git_revision
 from .terminal_parser import parse_status_line
 from .transcript_parser import TranscriptParser
 from .utils import ccbot_dir
@@ -105,6 +107,16 @@ class WorkerSessionExecutor(Protocol):
     async def terminate_session(self, *, session_id: str) -> dict[str, Any]: ...
 
 
+class RuntimeUpdater(Protocol):
+    async def update(self, revision: str) -> dict[str, object]: ...
+
+
+async def _restart_current_process() -> None:
+    """Replace the agent process after its update result reaches the leader."""
+    await asyncio.sleep(0.2)
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+
+
 @dataclass
 class _PendingContext:
     transfer_id: str
@@ -131,6 +143,9 @@ class NodeAgent:
         backends: tuple[str, ...] = (),
         receipt_ledger: RequestReceiptLedger | None = None,
         max_context_bytes: int = 50 * 1024 * 1024,
+        runtime_revision: str | None = None,
+        runtime_updater: RuntimeUpdater | None = None,
+        restart_callback: Callable[[], Coroutine[Any, Any, None]] | None = None,
     ):
         self._transport = transport
         self._executor = executor
@@ -142,6 +157,11 @@ class NodeAgent:
         self._ledger = receipt_ledger or RequestReceiptLedger()
         self._max_context_bytes = max_context_bytes
         self._pending_contexts: dict[str, _PendingContext] = {}
+        self._runtime_revision = (
+            current_git_revision() if runtime_revision is None else runtime_revision
+        )
+        self._runtime_updater = runtime_updater or GitNodeUpdater()
+        self._restart_callback = restart_callback or _restart_current_process
 
     def attach_transport(self, transport: NodeTransport) -> None:
         """Attach a reconnected relay while retaining receipts and context."""
@@ -209,6 +229,7 @@ class NodeAgent:
                         "send_text": True,
                     },
                     "capacity": capacity,
+                    "ccbot_version": self._runtime_revision,
                 },
             )
         )
@@ -272,6 +293,10 @@ class NodeAgent:
         await self._transport.send(
             NodeEnvelope(kind="result", request_id=message.request_id, payload=result)
         )
+        if result.get("ok") and result.get("restart_required"):
+            asyncio.create_task(
+                self._restart_callback(), name="node-runtime-restart"
+            )
 
     async def _dispatch(self, payload: dict[str, Any]) -> dict[str, Any]:
         operation = str(payload.get("operation", ""))
@@ -317,6 +342,10 @@ class NodeAgent:
             )
         if operation == "health":
             return {"ok": True}
+        if operation == "update_runtime":
+            return await self._runtime_updater.update(
+                str(payload.get("revision", ""))
+            )
         raise ValueError(f"unsupported node operation: {operation}")
 
     def _begin_context(self, payload: dict[str, Any]) -> dict[str, Any]:

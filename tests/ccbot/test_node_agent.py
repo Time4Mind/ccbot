@@ -147,6 +147,90 @@ async def test_node_agent_routes_send_text_to_executor(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_worker_health_reports_exact_runtime_revision(tmp_path):
+    transport = FakeTransport()
+    agent = NodeAgent(
+        transport,
+        FakeExecutor(),
+        context_dir=tmp_path,
+        runtime_revision="a" * 40,
+    )
+
+    await agent._send_health()
+
+    assert transport.sent[-1].payload["ccbot_version"] == "a" * 40
+
+
+@pytest.mark.asyncio
+async def test_successful_runtime_update_restarts_only_after_result(tmp_path):
+    transport = FakeTransport()
+    updater = SimpleNamespace(
+        update=AsyncMock(
+            return_value={
+                "ok": True,
+                "revision": "b" * 40,
+                "previous_revision": "a" * 40,
+                "restart_required": True,
+            }
+        )
+    )
+    restart = AsyncMock()
+    agent = NodeAgent(
+        transport,
+        FakeExecutor(),
+        context_dir=tmp_path,
+        runtime_updater=updater,
+        restart_callback=restart,
+    )
+
+    await agent._handle_command(
+        NodeEnvelope(
+            kind="command",
+            request_id="update-1",
+            payload={"operation": "update_runtime", "revision": "b" * 40},
+        )
+    )
+    await asyncio.sleep(0)
+
+    updater.update.assert_awaited_once_with("b" * 40)
+    assert [message.kind for message in transport.sent] == ["ack", "result"]
+    assert transport.sent[-1].payload["restart_required"] is True
+    restart.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_failed_runtime_update_keeps_worker_running(tmp_path):
+    transport = FakeTransport()
+    updater = SimpleNamespace(
+        update=AsyncMock(side_effect=RuntimeError("worker checkout has tracked changes"))
+    )
+    restart = AsyncMock()
+    agent = NodeAgent(
+        transport,
+        FakeExecutor(),
+        context_dir=tmp_path,
+        runtime_updater=updater,
+        restart_callback=restart,
+    )
+
+    await agent._handle_command(
+        NodeEnvelope(
+            kind="command",
+            request_id="update-failed",
+            payload={"operation": "update_runtime", "revision": "b" * 40},
+        )
+    )
+    await asyncio.sleep(0)
+
+    assert transport.sent[-1].kind == "result"
+    assert transport.sent[-1].payload == {
+        "ok": False,
+        "error": "worker checkout has tracked changes",
+    }
+    restart.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_node_agent_routes_directory_and_new_session_commands(tmp_path):
     transport = FakeTransport()
     executor = FakeExecutor()

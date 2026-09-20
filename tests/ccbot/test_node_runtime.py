@@ -91,6 +91,95 @@ async def test_worker_health_auto_registers_remote_node_and_runtime(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_health_mismatch_requests_exact_leader_revision_once(monkeypatch):
+    rpc = SimpleNamespace(close=AsyncMock(), request=AsyncMock(return_value={"ok": True}))
+    captured: dict[str, object] = {}
+
+    async def fake_connect_leader_rpc(**kwargs):
+        captured.update(kwargs)
+        return rpc
+
+    monkeypatch.setattr(node_runtime, "connect_leader_rpc", fake_connect_leader_rpc)
+    monkeypatch.setattr(node_runtime, "current_git_revision", lambda: "b" * 40)
+    monkeypatch.setattr(session_manager, "get_node", lambda _node_id: None)
+    monkeypatch.setattr(session_manager, "register_node", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(node_runtime, "register_node_runtime", lambda *_args: None)
+    node_runtime._leader_rpc = None
+    node_runtime._remote_node_ids.clear()
+
+    await node_runtime.connect_configured_remote_runtimes(
+        relay_url="relay.example.test:8765",
+        leader_id="leader",
+        secret="secret",
+        node_ids=["local"],
+    )
+    handler = captured["event_handler"]
+    health = NodeEnvelope(
+        kind="health",
+        payload={
+            "node_id": "worker-a",
+            "state": "ready",
+            "backends": ["codex"],
+            "ccbot_version": "a" * 40,
+        },
+    )
+    await handler(health)
+    await handler(health)
+    await asyncio.sleep(0)
+
+    rpc.request.assert_awaited_once_with(
+        "worker-a",
+        "update_runtime",
+        {"revision": "b" * 40},
+        retries=0,
+        timeout=600.0,
+    )
+    await node_runtime.shutdown_remote_runtimes()
+
+
+@pytest.mark.asyncio
+async def test_matching_or_unknown_version_does_not_request_update(monkeypatch):
+    rpc = SimpleNamespace(close=AsyncMock(), request=AsyncMock(return_value={"ok": True}))
+    captured: dict[str, object] = {}
+
+    async def fake_connect_leader_rpc(**kwargs):
+        captured.update(kwargs)
+        return rpc
+
+    monkeypatch.setattr(node_runtime, "connect_leader_rpc", fake_connect_leader_rpc)
+    monkeypatch.setattr(node_runtime, "current_git_revision", lambda: "b" * 40)
+    monkeypatch.setattr(session_manager, "get_node", lambda _node_id: None)
+    monkeypatch.setattr(session_manager, "register_node", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(node_runtime, "register_node_runtime", lambda *_args: None)
+    node_runtime._leader_rpc = None
+    node_runtime._remote_node_ids.clear()
+
+    await node_runtime.connect_configured_remote_runtimes(
+        relay_url="relay.example.test:8765",
+        leader_id="leader",
+        secret="secret",
+        node_ids=["local"],
+    )
+    handler = captured["event_handler"]
+    for version in ("b" * 40, ""):
+        await handler(
+            NodeEnvelope(
+                kind="health",
+                payload={
+                    "node_id": "worker-a",
+                    "state": "ready",
+                    "backends": ["codex"],
+                    "ccbot_version": version,
+                },
+            )
+        )
+    await asyncio.sleep(0)
+
+    rpc.request.assert_not_awaited()
+    await node_runtime.shutdown_remote_runtimes()
+
+
+@pytest.mark.asyncio
 async def test_rpc_result_is_not_blocked_by_slow_event_handler():
     class QueueTransport:
         def __init__(self) -> None:

@@ -182,6 +182,26 @@ Worker по умолчанию допускает не более 8 одновр
 пользователь получает ошибку capacity. Worker сообщает leader текущие
 `active_sessions` и `max_sessions` в health payload.
 
+## Автообновление worker
+
+Worker сообщает в health точный Git commit запущенного ccbot. После обновления
+и перезапуска leader сравнивает этот commit со своим и через уже
+аутентифицированный relay отправляет worker команду перейти на тот же SHA.
+Worker делает `git fetch origin`, проверяет наличие именно этого commit,
+переходит в detached HEAD и перезапускает только `ccbot-node-agent`. Живые
+tmux-сессии продолжают работать.
+
+Обновление не запускается, если leader работает не из чистого Git commit,
+worker имеет локальные изменения отслеживаемых файлов или commit недоступен в
+его `origin`. Повторная попытка ограничена интервалом в пять минут. Неизвестные
+и произвольные refs не принимаются - только полный 40-символьный SHA.
+
+Если в целевой ревизии отслеживается `uv.lock`, worker перед перезапуском
+выполняет `uv sync --frozen`; при ошибке возвращает checkout на прежний commit
+и остаётся на старом процессе. Без отслеживаемого lock-файла зависимости
+автоматически не переразрешаются. Для нестандартного расположения checkout
+можно задать `CCBOT_NODE_REPO_DIR`.
+
 Если worker receipt есть, а нода не стала `ready`, не объявляй подключение
 завершённым: проверь health payload, наличие `claude`/`codex` в PATH и запуск
 tmux. Если receipt нет, проверь relay address/port, TLS, срок действия payload
@@ -217,6 +237,7 @@ pairing token проверяется relay через leader secret; стати�
 | timeout до receipt | DNS/порт/VPN/TLS на worker | проверить стабильный relay endpoint и сертификат |
 | receipt есть, state `online`, но не `ready` | health backends и локальные binaries | установить/починить нужный backend и перезапустить worker |
 | нода исчезла после перезапуска worker | supervisor и рабочая директория | запускать `ccbot-node-agent` как long-lived service из checkout |
+| worker не обновляется вслед за leader | `ccbot_version` в health, чистота обоих checkout и доступность SHA в `origin` | убрать tracked-изменения либо отправить commit в remote; проверить warning `node auto-update` |
 
 ## Удаление и отзыв
 

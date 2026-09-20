@@ -44,6 +44,7 @@ _SHELL_PROCESSES = {
     "tcsh",
     "zsh",
 }
+CODEX_READY_SETTLE_SECONDS = 3.0
 
 
 def classify_codex_screen(text: str) -> CodexScreen:
@@ -109,23 +110,29 @@ async def drive_codex_startup(
     relaunch: Callable[[str], Awaitable[None]],
     timeout: float,
     poll_interval: float = 0.25,
+    ready_settle_time: float = CODEX_READY_SETTLE_SECONDS,
 ) -> CodexStartupResult:
     """Drive known startup prompts until the real input state is visible.
 
-    An offered update is accepted once. Codex's updater exits instead of
-    returning to the TUI, so the exact original command is relaunched after
-    the pane returns to its shell. A second update prompt is a bounded error.
+    A composer must remain continuously ready for ``ready_settle_time`` so a
+    delayed startup modal can still be handled. An offered update is accepted
+    once. Codex's updater exits instead of returning to the TUI, so the exact
+    original command is relaunched after the pane returns to its shell. A
+    second update prompt is a bounded error.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + max(0.0, timeout)
     updated = False
     waiting_for_updater_exit = False
     relaunched_after_update = False
+    ready_since: float | None = None
+    settle_time = max(0.0, ready_settle_time)
 
     while loop.time() <= deadline:
         text, process = await asyncio.gather(capture(), current_process())
 
         if waiting_for_updater_exit:
+            ready_since = None
             if _is_shell(process):
                 await relaunch(command)
                 waiting_for_updater_exit = False
@@ -135,7 +142,13 @@ async def drive_codex_startup(
 
         screen = classify_codex_screen(text)
         if screen is CodexScreen.READY:
-            return CodexStartupResult(updated=updated)
+            now = loop.time()
+            if ready_since is None:
+                ready_since = now
+            if now - ready_since >= settle_time:
+                return CodexStartupResult(updated=updated)
+        else:
+            ready_since = None
         if screen is CodexScreen.TRUST:
             await send_key("ENTER")
         elif screen is CodexScreen.RESUME_DIRECTORY:
@@ -156,6 +169,7 @@ async def drive_codex_startup(
 
 
 __all__ = [
+    "CODEX_READY_SETTLE_SECONDS",
     "CodexScreen",
     "CodexStartupError",
     "CodexStartupResult",

@@ -129,6 +129,7 @@ class TmuxManager:
         *,
         command: str,
         poll_interval: float = 0.25,
+        ready_settle_time: float = _tmux_window.CODEX_READY_SETTLE_SECONDS,
     ) -> bool:
         """Cancellation-safe long watcher for cold Codex launches."""
         return await _tmux_window.watch_codex_startup_screens(
@@ -137,6 +138,7 @@ class TmuxManager:
             timeout=config.resume_settle_timeout,
             to_thread=asyncio.to_thread,
             poll_interval=poll_interval,
+            ready_settle_time=ready_settle_time,
         )
 
     @property

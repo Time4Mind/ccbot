@@ -14,7 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from . import tmux_input_transport
-from .codex_startup import CodexStartupError, drive_codex_startup
+from .codex_startup import (
+    CODEX_READY_SETTLE_SECONDS,
+    CodexStartupError,
+    drive_codex_startup,
+)
 from .transcript_parser import TranscriptParser
 from .utils import ccbot_dir
 
@@ -47,6 +51,7 @@ class TmuxWorkerExecutor:
         context_limit_bytes: int = 0,
         reconcile_interval: float = 10.0,
         codex_poll_interval: float = 0.25,
+        codex_ready_settle_time: float = CODEX_READY_SETTLE_SECONDS,
     ):
         self._workdir = Path(workdir).expanduser().resolve()
         self._tmux_session = tmux_session
@@ -58,6 +63,7 @@ class TmuxWorkerExecutor:
         self._context_limit_bytes = max(0, context_limit_bytes)
         self._reconcile_interval = max(0.0, reconcile_interval)
         self._codex_poll_interval = max(0.0, codex_poll_interval)
+        self._codex_ready_settle_time = max(0.0, codex_ready_settle_time)
         self._last_reconcile_at = time.monotonic()
         self._sessions: dict[str, _TmuxWorkerSession] = {}
         self._startup_windows: dict[str, str] = {}
@@ -535,6 +541,7 @@ class TmuxWorkerExecutor:
                 relaunch=relaunch,
                 timeout=self._ready_timeout,
                 poll_interval=self._codex_poll_interval,
+                ready_settle_time=self._codex_ready_settle_time,
             )
             return
 

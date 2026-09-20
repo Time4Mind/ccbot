@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from ccbot.codex_startup import (
@@ -22,6 +24,40 @@ READY_PROMPT = """OpenAI Codex
 
 gpt-5.6 medium · ~/project
 """
+
+
+@pytest.mark.asyncio
+async def test_delayed_update_is_handled_before_readiness_is_final() -> None:
+    screens = [
+        READY_PROMPT,
+        READY_PROMPT,
+        UPDATE_PROMPT,
+        "Installing update",
+        "shell",
+    ]
+    processes = ["codex", "codex", "codex", "npm", "zsh"]
+    keys: list[str] = []
+    relaunched: list[str] = []
+
+    async def capture() -> str:
+        return screens.pop(0) if screens else READY_PROMPT
+
+    async def current_process() -> str:
+        return processes.pop(0) if processes else "codex"
+
+    result = await drive_codex_startup(
+        command="codex --no-alt-screen",
+        capture=capture,
+        current_process=current_process,
+        send_key=lambda key: _append(keys, key),
+        relaunch=lambda command: _append(relaunched, command),
+        timeout=7,
+        poll_interval=0.001,
+    )
+
+    assert result.updated is True
+    assert keys == ["ENTER"]
+    assert relaunched == ["codex --no-alt-screen"]
 
 
 @pytest.mark.asyncio
@@ -51,6 +87,7 @@ async def test_update_is_installed_then_exact_command_is_relaunched() -> None:
         relaunch=relaunch,
         timeout=1,
         poll_interval=0,
+        ready_settle_time=0,
     )
 
     assert result.updated is True
@@ -62,8 +99,8 @@ async def test_update_is_installed_then_exact_command_is_relaunched() -> None:
 
 @pytest.mark.asyncio
 async def test_repeated_update_prompt_after_relaunch_is_bounded_failure() -> None:
-    screens = iter([UPDATE_PROMPT, "shell", UPDATE_PROMPT])
-    processes = iter(["codex", "zsh", "codex"])
+    screens = iter([UPDATE_PROMPT, "shell", READY_PROMPT, UPDATE_PROMPT])
+    processes = iter(["codex", "zsh", "codex", "codex"])
 
     with pytest.raises(CodexStartupError, match="repeated update prompt"):
         await drive_codex_startup(
@@ -73,7 +110,8 @@ async def test_repeated_update_prompt_after_relaunch_is_bounded_failure() -> Non
             send_key=lambda _key: _done(),
             relaunch=lambda _command: _done(),
             timeout=1,
-            poll_interval=0,
+            poll_interval=0.001,
+            ready_settle_time=0.02,
         )
 
 
@@ -99,6 +137,7 @@ async def test_trust_and_resume_directory_prompts_use_the_same_lifecycle() -> No
         relaunch=lambda _command: _done(),
         timeout=1,
         poll_interval=0,
+        ready_settle_time=0,
     )
 
     assert result.updated is False
@@ -118,9 +157,78 @@ async def test_initial_shell_render_race_does_not_fail_startup() -> None:
         relaunch=lambda _command: _done(),
         timeout=1,
         poll_interval=0,
+        ready_settle_time=0,
     )
 
     assert result.updated is False
+
+
+@pytest.mark.asyncio
+async def test_stable_readiness_completes_within_bounded_settle_window() -> None:
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+
+    result = await drive_codex_startup(
+        command="codex",
+        capture=lambda: _value(READY_PROMPT),
+        current_process=lambda: _value("codex"),
+        send_key=lambda _key: _done(),
+        relaunch=lambda _command: _done(),
+        timeout=0.5,
+        poll_interval=0.001,
+        ready_settle_time=0.02,
+    )
+
+    elapsed = loop.time() - started
+    assert result.updated is False
+    assert 0.02 <= elapsed < 0.5
+
+
+@pytest.mark.asyncio
+async def test_startup_prompts_reset_readiness_settle_window() -> None:
+    trust = "Do you trust the contents of this directory?\n› 1. Yes, continue"
+    resume = (
+        "Choose working directory to resume this session\n"
+        "› 1. Use session directory\n"
+        "  2. Use current directory\n"
+        "Press enter to continue"
+    )
+    screens = [
+        READY_PROMPT,
+        READY_PROMPT,
+        trust,
+        READY_PROMPT,
+        READY_PROMPT,
+        resume,
+        READY_PROMPT,
+        READY_PROMPT,
+        "Running startup hooks",
+    ]
+    keys: list[str] = []
+    loop = asyncio.get_running_loop()
+    last_non_ready_at: float | None = None
+
+    async def capture() -> str:
+        nonlocal last_non_ready_at
+        screen = screens.pop(0) if screens else READY_PROMPT
+        if screen == "Running startup hooks":
+            last_non_ready_at = loop.time()
+        return screen
+
+    await drive_codex_startup(
+        command="codex resume abc",
+        capture=capture,
+        current_process=lambda: _value("codex"),
+        send_key=lambda key: _append(keys, key),
+        relaunch=lambda _command: _done(),
+        timeout=1,
+        poll_interval=0.005,
+        ready_settle_time=0.05,
+    )
+
+    assert keys == ["ENTER", "DOWN", "ENTER"]
+    assert last_non_ready_at is not None
+    assert loop.time() - last_non_ready_at >= 0.05
 
 
 def test_modal_selector_is_not_codex_readiness() -> None:

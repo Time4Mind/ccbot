@@ -13,7 +13,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from .codex_startup import drive_codex_startup
+from .codex_startup import CODEX_READY_SETTLE_SECONDS, drive_codex_startup
 
 
 _CODEX_STARTUP_POLL_SECONDS = 0.25
@@ -89,6 +89,7 @@ async def watch_codex_startup_screens(
     timeout: float,
     to_thread: Any,
     poll_interval: float = _CODEX_STARTUP_POLL_SECONDS,
+    ready_settle_time: float = CODEX_READY_SETTLE_SECONDS,
 ) -> bool:
     """Drive the same bounded Codex lifecycle used by remote workers."""
     capture_pane = getattr(pane, "capture_pane", None)
@@ -120,6 +121,7 @@ async def watch_codex_startup_screens(
         relaunch=relaunch,
         timeout=timeout,
         poll_interval=poll_interval,
+        ready_settle_time=ready_settle_time,
     )
     return result.updated
 

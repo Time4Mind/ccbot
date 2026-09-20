@@ -128,32 +128,33 @@ def test_codex_ready_prompt_is_not_auto_confirmed(
 async def test_local_codex_update_relaunches_the_exact_startup_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    screens = iter(
+    screens = [
+        ["OpenAI Codex", "› Ask anything", "gpt-5.6 medium · ~/project"],
+        ["OpenAI Codex", "› Ask anything", "gpt-5.6 medium · ~/project"],
         [
-            [
-                "Update available! 0.147.0 -> 0.151.0",
-                "› 1. Update now",
-                "  2. Skip",
-                "  3. Skip until next version",
-                "Press enter to continue",
-            ],
-            ["Installing update"],
-            ["shell"],
-            ["OpenAI Codex", "› Ask anything", "gpt-5.6 medium · ~/project"],
-        ]
-    )
-    processes = iter(["codex", "npm", "zsh", "codex"])
+            "Update available! 0.147.0 -> 0.151.0",
+            "› 1. Update now",
+            "  2. Skip",
+            "  3. Skip until next version",
+            "Press enter to continue",
+        ],
+        ["Installing update"],
+        ["shell"],
+    ]
+    processes = ["codex", "codex", "codex", "npm", "zsh"]
 
     class Pane:
         def __init__(self) -> None:
             self.sent: list[tuple[str, bool]] = []
 
         def capture_pane(self) -> list[str]:
-            return next(screens)
+            if screens:
+                return screens.pop(0)
+            return ["OpenAI Codex", "› Ask anything", "gpt-5.6 medium · ~/project"]
 
         @property
         def pane_current_command(self) -> str:
-            return next(processes)
+            return processes.pop(0) if processes else "codex"
 
         def send_keys(self, value: str, enter: bool = True) -> None:
             self.sent.append((value, enter))
@@ -162,7 +163,7 @@ async def test_local_codex_update_relaunches_the_exact_startup_command(
     command = "env CCBOT_INTERFACE=telegram codex --no-alt-screen resume abc"
 
     updated = await TmuxManager._watch_codex_startup_screens(
-        pane, command=command, poll_interval=0
+        pane, command=command, poll_interval=0.001, ready_settle_time=0.02
     )
 
     assert updated is True

@@ -714,19 +714,21 @@ async def test_worker_installs_codex_update_and_relaunches_exact_command(
         workdir=tmp_path,
         codex_flags="--no-alt-screen",
         ready_timeout=1,
-        codex_poll_interval=0,
+        codex_poll_interval=0.001,
+        codex_ready_settle_time=0.02,
     )
-    screens = iter(
-        [
+    screens = [
+        "OpenAI Codex\n\n› Ask anything\n\ngpt-5.6 medium · ~/project",
+        "OpenAI Codex\n\n› Ask anything\n\ngpt-5.6 medium · ~/project",
+        (
             "Update available! 0.147.0 -> 0.151.0\n"
             "› 1. Update now\n  2. Skip\n  3. Skip until next version\n"
-            "Press enter to continue",
-            "Installing update",
-            "shell",
-            "OpenAI Codex\n\n› Ask anything\n\ngpt-5.6 medium · ~/project",
-        ]
-    )
-    processes = iter(["codex", "npm", "zsh", "codex"])
+            "Press enter to continue"
+        ),
+        "Installing update",
+        "shell",
+    ]
+    processes = ["codex", "codex", "codex", "npm", "zsh"]
     calls: list[tuple[str, ...]] = []
 
     async def fake_tmux(*args: str):
@@ -738,9 +740,14 @@ async def test_worker_installs_codex_update_and_relaunches_exact_command(
         if args[0] == "new-window":
             return 0, "@9\n", ""
         if args[0] == "capture-pane":
-            return 0, next(screens), ""
+            pane = (
+                screens.pop(0)
+                if screens
+                else ("OpenAI Codex\n\n› Ask anything\n\ngpt-5.6 medium · ~/project")
+            )
+            return 0, pane, ""
         if args[0] == "display-message":
-            return 0, next(processes), ""
+            return 0, processes.pop(0) if processes else "codex", ""
         return 0, "", ""
 
     monkeypatch.setattr(executor, "_run_tmux", fake_tmux)

@@ -161,6 +161,44 @@ async def test_queued_directory_flow_voice_replays_into_created_session() -> Non
 
 
 @pytest.mark.asyncio
+async def test_first_queued_message_waits_for_settled_readiness() -> None:
+    context = MagicMock()
+    begin_startup_queue(42)
+    enqueue_startup_message(_update(1, text="first marker"), context)
+    readiness_checked = asyncio.Event()
+    settled = asyncio.Event()
+
+    async def wait_for_ready(_window_id: str) -> bool:
+        readiness_checked.set()
+        await settled.wait()
+        return True
+
+    with (
+        patch(
+            "ccbot.session.session_manager.wait_for_window_ready",
+            side_effect=wait_for_ready,
+        ),
+        patch(
+            "ccbot.session.session_manager.find_session_by_window",
+            return_value=SimpleNamespace(id="fresh", node_id="local"),
+        ),
+        patch(
+            "ccbot.startup_queue._replay", new=AsyncMock(return_value=True)
+        ) as replay,
+    ):
+        task = bind_startup_queue(42, "@new")
+        assert task is not None
+        await readiness_checked.wait()
+        replay.assert_not_awaited()
+        settled.set()
+        await task
+
+    replay.assert_awaited_once()
+    assert replay.await_args.args[0].update.message.text == "first marker"
+    assert replay.await_args.args[1] == "@new"
+
+
+@pytest.mark.asyncio
 async def test_drain_includes_messages_arriving_while_window_becomes_ready() -> None:
     context = MagicMock()
     begin_startup_queue(42)

@@ -192,6 +192,60 @@ class SessionStateMixin(NodeSessionStateMixin):
         sess.last_event_at = time.time()
         # Don't save on every touch; callers batch via _save_state when appropriate.
 
+    def _replace_terminal_active_session(self, sess: Session) -> None:
+        """Repair both active pointers after a live session becomes terminal."""
+        user_ids = set(self.active_sessions) | set(self.active_sessions_by_node)
+        for uid in user_ids:
+            node_sessions = self.active_sessions_by_node.setdefault(uid, {})
+            was_node_active = node_sessions.get(sess.node_id) == sess.id
+            was_legacy_active = self.active_sessions.get(uid) == sess.id
+            if was_node_active:
+                node_sessions.pop(sess.node_id, None)
+            if was_legacy_active:
+                self.active_sessions.pop(uid, None)
+
+            history = self.active_history.get(uid, [])
+            while sess.id in history:
+                history.remove(sess.id)
+            if not (was_node_active or was_legacy_active):
+                continue
+
+            replacement: Session | None = None
+            for candidate_id in reversed(history):
+                candidate = self.sessions.get(candidate_id)
+                if (
+                    candidate is not None
+                    and candidate.node_id == sess.node_id
+                    and candidate.state in ("active", "idle")
+                ):
+                    replacement = candidate
+                    break
+            if replacement is None:
+                continue
+            while replacement.id in history:
+                history.remove(replacement.id)
+            node_sessions[sess.node_id] = replacement.id
+            if self.get_selected_node_id(uid) == sess.node_id:
+                self.active_sessions[uid] = replacement.id
+            logger.info(
+                "auto_active_replacement user=%d terminal=%s -> %s node=%s",
+                uid,
+                sess.id,
+                replacement.id,
+                sess.node_id,
+                extra={
+                    "event": "auto_active_replacement",
+                    "user_id": uid,
+                    "killed_session_id": sess.id,
+                    "new_active_session_id": replacement.id,
+                    "node_id": sess.node_id,
+                },
+            )
+
+        for history in self.active_history.values():
+            while sess.id in history:
+                history.remove(sess.id)
+
     def mark_session_archived(
         self, session_id: str, *, completed: bool = False
     ) -> None:
@@ -217,45 +271,7 @@ class SessionStateMixin(NodeSessionStateMixin):
         # A request admitted for this exact session must never migrate to the
         # fallback active session after the target is closed.
         sess.pending_preprocessing.clear()
-        for uid, node_sessions in self.active_sessions_by_node.items():
-            if node_sessions.get(sess.node_id) == session_id:
-                del node_sessions[sess.node_id]
-        # If this was anyone's active session, auto-pick the
-        # previously-active session as the replacement (per user
-        # request: "при удалении активной сессии необходимо
-        # автоматически выбирать последнюю активную до нее"). Walks
-        # ``active_history`` newest-first, skipping any entries that
-        # are themselves no longer live.
-        for uid, sid in list(self.active_sessions.items()):
-            if sid != session_id:
-                continue
-            del self.active_sessions[uid]
-            history = self.active_history.get(uid, [])
-            # Also drop the just-archived session from history if
-            # present so it can't be re-picked later.
-            while session_id in history:
-                history.remove(session_id)
-            while history:
-                candidate_id = history.pop()
-                candidate = self.sessions.get(candidate_id)
-                if candidate is not None and candidate.state in (
-                    "active",
-                    "idle",
-                ):
-                    self.active_sessions[uid] = candidate_id
-                    logger.info(
-                        "auto_active_replacement user=%d killed=%s -> %s",
-                        uid,
-                        session_id,
-                        candidate_id,
-                        extra={
-                            "event": "auto_active_replacement",
-                            "user_id": uid,
-                            "killed_session_id": session_id,
-                            "new_active_session_id": candidate_id,
-                        },
-                    )
-                    break
+        self._replace_terminal_active_session(sess)
         # Drop any bg-status panel entry — an archived session shouldn't
         # linger as a stale ✅/❓ badge on the next user message.
         from .handlers import bg_status
@@ -275,12 +291,7 @@ class SessionStateMixin(NodeSessionStateMixin):
         sess.state = "lost"
         sess.window_id = ""
         sess.pending_preprocessing.clear()
-        for node_sessions in self.active_sessions_by_node.values():
-            if node_sessions.get(sess.node_id) == session_id:
-                del node_sessions[sess.node_id]
-        for uid, sid in list(self.active_sessions.items()):
-            if sid == session_id:
-                del self.active_sessions[uid]
+        self._replace_terminal_active_session(sess)
         # Lost sessions can't make progress; remove from the bg panel.
         from .handlers import bg_status
 
@@ -349,27 +360,7 @@ class SessionStateMixin(NodeSessionStateMixin):
             return False
         sess = self.sessions[session_id]
         del self.sessions[session_id]
-        for node_sessions in self.active_sessions_by_node.values():
-            if node_sessions.get(sess.node_id) == session_id:
-                del node_sessions[sess.node_id]
-        # Defensive auto-replacement: delete is normally called on already-
-        # archived sessions, but if a record is purged while still listed as
-        # active, walk active_history newest-first to pick a successor (same
-        # rule as ``mark_session_archived``).
-        for uid, sid in list(self.active_sessions.items()):
-            if sid != session_id:
-                continue
-            del self.active_sessions[uid]
-            history = self.active_history.get(uid, [])
-            while history:
-                candidate_id = history.pop()
-                candidate = self.sessions.get(candidate_id)
-                if candidate is not None and candidate.state in ("active", "idle"):
-                    self.active_sessions[uid] = candidate_id
-                    break
-        for hist in self.active_history.values():
-            while session_id in hist:
-                hist.remove(session_id)
+        self._replace_terminal_active_session(sess)
         from .handlers import bg_status
 
         bg_status.clear_for_session(session_id)

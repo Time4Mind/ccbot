@@ -68,7 +68,11 @@ def build_nodes_keyboard(user_id: int) -> InlineKeyboardMarkup:
             else None
         )
         if not node.is_available():
-            row = [InlineKeyboardButton(f"⚪ {label}")]
+            row = [
+                InlineKeyboardButton(
+                    f"⚪ {label}", callback_data=f"{CB_NODE_USE}{node.id}"
+                )
+            ]
         else:
             row = [InlineKeyboardButton(label, callback_data=f"{CB_NODE_USE}{node.id}")]
         if delete_button is not None:

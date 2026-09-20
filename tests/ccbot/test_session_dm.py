@@ -62,6 +62,35 @@ class TestActiveSessions:
         assert mgr.sessions[sess.id].state == "archived"
         assert mgr.sessions[sess.id].window_id == ""
 
+    def test_lost_then_archived_active_session_selects_prior_live_same_node(
+        self, mgr: SessionManager
+    ) -> None:
+        prior = mgr.create_session(name="prior", window_id="@1", node_id="local")
+        closing = mgr.create_session(
+            name="closing", window_id="@2", node_id="local"
+        )
+        other_node = mgr.create_session(
+            name="remote", window_id="@3", node_id="office"
+        )
+        mgr.set_active_session(100, prior.id)
+        mgr.set_active_session(100, closing.id)
+        # A newer history entry for another node must neither be selected nor lost.
+        mgr.active_history[100].append(other_node.id)
+
+        mgr.mark_session_lost(closing.id)
+
+        assert mgr.get_active_session(100) is prior
+        assert mgr.active_sessions[100] == prior.id
+        assert mgr.active_sessions_by_node[100]["local"] == prior.id
+
+        mgr.mark_session_archived(closing.id)
+
+        assert mgr.get_active_session(100) is prior
+        assert mgr.active_sessions[100] == prior.id
+        assert mgr.active_sessions_by_node[100]["local"] == prior.id
+        assert other_node.id in mgr.active_history[100]
+        assert closing.state == "archived"
+
     def test_done_marks_completed(self, mgr: SessionManager) -> None:
         sess = mgr.create_session(name="x", window_id="@1", workdir="/tmp")
         mgr.mark_session_archived(sess.id, completed=True)

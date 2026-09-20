@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Bot
 
 from ..config import config
 from ..handlers.card_registry import _carrier_edit_lock
@@ -174,22 +174,12 @@ async def open_more_in_place(query: Any, user_id: int) -> None:
 
 async def open_sessions_in_place(query: Any, bot: Bot, user_id: int) -> None:
     """Return the current carrier to the active session or Sessions empty state."""
-    from ..handlers.callback_data import CB_MM_BACK, CB_SW_NEW
     from ..handlers.notifications import paint_card_on_carrier
     from ..i18n import t
 
     active = session_manager.get_active_session(user_id)
     if active is None or not active.window_id:
-        keyboard = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("+ new", callback_data=CB_SW_NEW),
-                    InlineKeyboardButton(
-                        t(user_id, "btn.back"), callback_data=CB_MM_BACK
-                    ),
-                ]
-            ]
-        )
+        keyboard = build_footer_keyboard(user_id, screen="main")
         await safe_edit(query, t(user_id, "list.empty"), reply_markup=keyboard)
         message = getattr(query, "message", None)
         if message:

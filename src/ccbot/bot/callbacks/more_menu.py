@@ -33,6 +33,8 @@ from ...handlers.menu import (
     render_settings_text,
 )
 from ...handlers.message_sender import safe_edit, safe_send
+from ...handlers.nodes import NODES_ORIGIN_KEY
+from ...handlers.notifications import get_card_state, pause_card_view
 from ...session import session_manager
 from .._common import open_sessions_in_place, set_view
 from .._usage_window import (
@@ -134,6 +136,21 @@ async def handle(
     if data == CB_MM_NODES:
         from ...handlers.nodes import build_nodes_keyboard, render_nodes_text
 
+        message = getattr(query, "message", None)
+        message_id = getattr(message, "message_id", None)
+        origin: dict[str, Any] = {"kind": "menu", "message_id": message_id}
+        active = session_manager.get_active_session(user.id)
+        if active is not None and message_id is not None:
+            state = get_card_state(user.id, active)
+            if state.msg_id == message_id and not state.in_menu_view:
+                pause_card_view(user.id, active.id)
+                origin = {
+                    "kind": "session",
+                    "session_id": active.id,
+                    "message_id": message_id,
+                }
+        if context.user_data is not None:
+            context.user_data[NODES_ORIGIN_KEY] = origin
         await query.answer()
         await safe_edit(
             query,

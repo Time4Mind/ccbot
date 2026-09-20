@@ -8,12 +8,14 @@ from ..i18n import t
 from ..node_models import Node
 from ..session import session_manager
 from .callback_data import (
-    CB_MM_BACK,
+    CB_NODE_BACK,
     CB_NODE_DELETE,
     CB_NODE_DISABLE,
     CB_NODE_ENABLE,
     CB_NODE_USE,
 )
+
+NODES_ORIGIN_KEY = "_nodes_origin"
 
 
 def _node_state_text(user_id: int, node: Node) -> str:
@@ -89,12 +91,13 @@ def build_nodes_keyboard(user_id: int) -> InlineKeyboardMarkup:
             row.append(delete_button)
         rows.append(row)
     rows.append(
-        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_MM_BACK)]
+        [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_NODE_BACK)]
     )
     return InlineKeyboardMarkup(rows)
 
 
 __all__ = [
+    "NODES_ORIGIN_KEY",
     "build_nodes_keyboard",
     "render_nodes_text",
 ]

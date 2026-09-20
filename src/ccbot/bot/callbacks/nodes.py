@@ -8,6 +8,7 @@ from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from ...handlers.callback_data import (
+    CB_NODE_BACK,
     CB_NODE_DELETE,
     CB_NODE_DELETE_CANCEL,
     CB_NODE_DELETE_CONFIRM,
@@ -16,18 +17,58 @@ from ...handlers.callback_data import (
     CB_NODE_USE,
 )
 from ...handlers.message_sender import safe_edit
-from ...handlers.nodes import build_nodes_keyboard, render_nodes_text
+from ...handlers.nodes import NODES_ORIGIN_KEY, build_nodes_keyboard, render_nodes_text
+from ...handlers.notifications import get_card_state, pause_card_view, resume_card_view
 from ...i18n import t
 from ...session import session_manager
 from ...transfer_runtime import unregister_node_runtime
 from ...transfer_runtime import get_node_runtime
-from .._common import open_sessions_in_place
+from .._common import open_more_in_place, open_sessions_in_place
+
+
+def _pop_nodes_origin(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
+    user_data = context.user_data
+    if user_data is None:
+        return {}
+    value = user_data.pop(NODES_ORIGIN_KEY, {})
+    return value if isinstance(value, dict) else {}
+
+
+async def _return_from_nodes(
+    query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user_id: int
+) -> None:
+    origin = _pop_nodes_origin(context)
+    if origin.get("kind") == "session":
+        session_id = str(origin.get("session_id", ""))
+        message_id = getattr(getattr(query, "message", None), "message_id", None)
+        sess = session_manager.get_session(session_id)
+        active = session_manager.get_active_session(user_id)
+        if (
+            sess is not None
+            and active is not None
+            and active.id == sess.id
+            and sess.state in ("active", "idle")
+            and message_id == origin.get("message_id")
+        ):
+            state = get_card_state(user_id, sess)
+            if state.msg_id == message_id and state.in_menu_view:
+                await resume_card_view(context.bot, user_id, sess)
+                return
+
+    active = session_manager.get_active_session(user_id)
+    if active is not None:
+        pause_card_view(user_id, active.id)
+    await open_more_in_place(query, user_id)
 
 
 async def handle(
     query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
 ) -> bool:
     data = query.data or ""
+    if data == CB_NODE_BACK:
+        await _return_from_nodes(query, context, user.id)
+        await query.answer()
+        return True
     for prefix, enabled in ((CB_NODE_DISABLE, False), (CB_NODE_ENABLE, True)):
         if data.startswith(prefix):
             node_id = data[len(prefix) :]
@@ -146,6 +187,7 @@ async def handle(
     if not node.is_available():
         await query.answer("Node is unavailable", show_alert=True)
         return True
+    _pop_nodes_origin(context)
     session_manager.set_selected_node(user.id, node_id)
     await query.answer()
     await open_sessions_in_place(query, context.bot, user.id)

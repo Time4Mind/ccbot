@@ -105,6 +105,7 @@ CB_NODE_ENABLE = "nd:on:"
 CB_NODE_DELETE = "nd:del:"
 CB_NODE_DELETE_CONFIRM = "nd:del:y:"
 CB_NODE_DELETE_CANCEL = "nd:del:n"
+CB_NODE_BACK = "nd:back"
 
 # Settings (toggle screens)
 CB_ST_GRP = "st:grp:"  # st:grp:<name>  open a per-group settings screen

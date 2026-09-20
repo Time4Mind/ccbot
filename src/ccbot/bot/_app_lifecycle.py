@@ -56,6 +56,7 @@ _usage_prewarm_task: asyncio.Task[None] | None = None
 _preprocessing_recovery_task: asyncio.Task[int] | None = None
 _default_session_task: asyncio.Task[None] | None = None
 _node_runtime_task: asyncio.Task[None] | None = None
+_node_notifications_task: asyncio.Task[None] | None = None
 
 
 async def _sync_bot_commands(bot: Any, commands: list[BotCommand]) -> bool:
@@ -83,6 +84,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     global \
         session_monitor, \
         _status_poll_task, \
+        _node_notifications_task, \
         _card_timer_task, \
         _quota_alerts_task, \
         _metrics_flush_task, \
@@ -161,6 +163,13 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
 
     _node_runtime_task = asyncio.create_task(
         _connect_node_runtime(), name="node-runtime-connect"
+    )
+    from ..node_notifications import NodeNotificationMonitor
+
+    node_notification_monitor = NodeNotificationMonitor(manager=session_manager)
+    _node_notifications_task = asyncio.create_task(
+        node_notification_monitor.run(application.bot, tuple(config.allowed_users)),
+        name="node-status-notifications",
     )
 
     from ..default_session import default_session_loop
@@ -248,6 +257,9 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     async def message_callback(msg: NewMessage) -> None:
         await handle_new_message(msg, application.bot)
 
+    from ..node_runtime import set_remote_message_handler
+
+    set_remote_message_handler(message_callback)
     monitor.set_message_callback(message_callback)
     monitor.start()
     session_monitor = monitor
@@ -395,7 +407,8 @@ async def post_shutdown(
         _usage_prewarm_task, \
         _preprocessing_recovery_task, \
         _default_session_task, \
-        _node_runtime_task
+        _node_runtime_task, \
+        _node_notifications_task
 
     if _usage_prewarm_task:
         if not _usage_prewarm_task.done():
@@ -421,9 +434,16 @@ async def post_shutdown(
         _node_runtime_task.cancel()
         await asyncio.gather(_node_runtime_task, return_exceptions=True)
         _node_runtime_task = None
+    if _node_notifications_task:
+        _node_notifications_task.cancel()
+        await asyncio.gather(_node_notifications_task, return_exceptions=True)
+        _node_notifications_task = None
     from ..node_runtime import shutdown_remote_runtimes
 
     await shutdown_remote_runtimes()
+    from ..remote_prompt_queue import remote_prompt_queue
+
+    remote_prompt_queue.reset()
     from ..default_session import shutdown_default_session_tasks
 
     await shutdown_default_session_tasks()

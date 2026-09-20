@@ -284,6 +284,11 @@ ZH: dict[str, str] = {
     "settings.group.bg_notify_finished": "Bg:任务完成",
     "settings.group.bg_notify_error": "Bg:错误",
     "settings.group.bg_notify_needs_action": "Bg:需要操作",
+    "settings.group.bg_notify_node_status": "节点:连接",
+    "settings.bg_notify.node_status.body": (
+        "*节点状态*\n\n所选节点或有活动会话的节点离线超过一分钟时通知,"
+        "恢复后再通知一次。短暂网络中断不会通知。"
+    ),
     "settings.bg_notify.finished.body": (
         "*Bg 会话:任务完成*\n\n"
         "后台会话进入 end-of-turn 时,推送 ✅ [<name>] task complete。"
@@ -324,9 +329,12 @@ ZH: dict[str, str] = {
     "nodes.state.online": "在线",
     "nodes.state.offline": "离线",
     "nodes.state.ready": "就绪",
+    "nodes.disable": "断开",
+    "nodes.enable": "重新连接",
+    "nodes.disable.done": "节点已断开，会话和历史记录已保留。",
+    "nodes.enable.done": "节点已重新可用。",
     "nodes.delete.confirm": (
-        "*从 ccbot 移除节点？*\n\n节点：*{node}*\n\n"
-        "会话、transcript 和存档会保留。"
+        "*从 ccbot 移除节点？*\n\n节点：*{node}*\n\n会话、transcript 和存档会保留。"
     ),
     "nodes.delete.done": "节点已从 ccbot 注册表移除。",
     "nodes.delete.not_found": "节点不存在或已被移除。",

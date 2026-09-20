@@ -439,6 +439,12 @@ def build_footer_keyboard(
                 user_id, "bg_notify_needs_action", "settings_cat_notifications"
             )
         )
+    elif screen == "settings_bg_notify_node_status":
+        rows.extend(
+            _settings_bg_notify_grid(
+                user_id, "bg_notify_node_status", "settings_cat_notifications"
+            )
+        )
     elif screen == "settings_haiku":
         rows.extend(_settings_haiku_grid(user_id))
     elif screen == "settings_archive_ai_description":

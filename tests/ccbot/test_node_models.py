@@ -25,6 +25,19 @@ def test_node_round_trip_preserves_runtime_capabilities() -> None:
     assert restored == node
 
 
+def test_remote_node_health_expires_without_changing_local_node() -> None:
+    remote = Node(
+        id="office",
+        display_name="Office",
+        state="ready",
+        last_seen_at=100.0,
+    )
+
+    assert remote.is_available(now=144.9)
+    assert not remote.is_available(now=145.0)
+    assert Node.local().is_available(now=10_000.0)
+
+
 def test_legacy_session_and_window_state_default_to_local_node() -> None:
     session = Session.from_dict({"id": "legacy", "name": "Legacy"})
     window = WindowState.from_dict({"session_id": "provider"})

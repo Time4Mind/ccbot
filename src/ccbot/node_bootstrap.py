@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import shlex
 from pathlib import Path
 from typing import Any
@@ -39,9 +40,12 @@ def build_bootstrap_payload(
         raise ValueError("CCBOT_NODE_RELAY_URL is required")
     if not signing_secret.strip():
         raise ValueError("CCBOT_NODE_SECRET is required")
+    resolved_node_id = node_id.strip() or f"worker-{secrets.token_hex(4)}"
+    resolved_display_name = display_name.strip() or resolved_node_id
     invitation = create_pairing_invitation(
         relay_url=relay_url,
         leader_id=leader_id,
+        node_id=resolved_node_id,
         ttl=ttl,
         signing_secret=signing_secret,
     )
@@ -52,14 +56,12 @@ def build_bootstrap_payload(
         "--pairing",
         invitation.to_link(),
     ]
-    if node_id.strip():
-        command_parts.extend(("--node-id", node_id.strip()))
-    if display_name.strip():
-        command_parts.extend(("--name", display_name.strip()))
+    command_parts.extend(("--node-id", resolved_node_id))
+    command_parts.extend(("--name", resolved_display_name))
     return {
         "command": shlex.join(command_parts),
-        "node_id": node_id.strip(),
-        "display_name": display_name.strip(),
+        "node_id": resolved_node_id,
+        "display_name": resolved_display_name,
         "leader_id": invitation.leader_id,
         "relay_url": invitation.relay_url,
         "expires_at": int(invitation.expires_at),

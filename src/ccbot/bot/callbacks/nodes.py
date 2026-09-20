@@ -11,6 +11,8 @@ from ...handlers.callback_data import (
     CB_NODE_DELETE,
     CB_NODE_DELETE_CANCEL,
     CB_NODE_DELETE_CONFIRM,
+    CB_NODE_DISABLE,
+    CB_NODE_ENABLE,
     CB_NODE_USE,
 )
 from ...handlers.message_sender import safe_edit
@@ -25,6 +27,34 @@ async def handle(
     query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
 ) -> bool:
     data = query.data or ""
+    for prefix, enabled in ((CB_NODE_DISABLE, False), (CB_NODE_ENABLE, True)):
+        if data.startswith(prefix):
+            node_id = data[len(prefix) :]
+            try:
+                session_manager.set_node_enabled(node_id, enabled)
+            except (KeyError, ValueError):
+                await query.answer(
+                    t(user.id, "nodes.delete.not_found"), show_alert=True
+                )
+                return True
+            if enabled:
+                from ...node_runtime import register_remote_runtime
+
+                try:
+                    register_remote_runtime(node_id)
+                except RuntimeError:
+                    pass
+            else:
+                unregister_node_runtime(node_id)
+            await safe_edit(
+                query,
+                render_nodes_text(user.id),
+                reply_markup=build_nodes_keyboard(user.id),
+            )
+            await query.answer(
+                t(user.id, "nodes.enable.done" if enabled else "nodes.disable.done")
+            )
+            return True
     if data == CB_NODE_DELETE_CANCEL:
         await safe_edit(
             query,
@@ -86,7 +116,7 @@ async def handle(
     if node is None:
         await query.answer("Node not found", show_alert=True)
         return True
-    if node.state in ("offline", "pending"):
+    if not node.is_available():
         await query.answer("Node is unavailable", show_alert=True)
         return True
     session_manager.set_selected_node(user.id, node_id)

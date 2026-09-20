@@ -112,6 +112,7 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
     # Registered execution nodes. ``local`` is the implicit node for legacy
     # state and for all existing single-node sessions.
     nodes: dict[str, Node] = field(default_factory=lambda: {"local": Node.local()})
+    removed_node_ids: set[str] = field(default_factory=set)
     selected_node_ids: dict[int, str] = field(default_factory=dict)
     transfers: dict[str, SessionTransfer] = field(default_factory=dict)
     # Telegram message_id of the bot message that currently carries the inline
@@ -175,6 +176,7 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
             },
             "sessions": {sid: s.to_dict() for sid, s in self.sessions.items()},
             "nodes": {node_id: node.to_dict() for node_id, node in self.nodes.items()},
+            "removed_node_ids": sorted(self.removed_node_ids),
             "selected_node_ids": {
                 str(uid): node_id for uid, node_id in self.selected_node_ids.items()
             },
@@ -258,6 +260,11 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                     if isinstance(data, dict) and str(node_id)
                 }
                 self.nodes.setdefault("local", Node.local())
+                self.removed_node_ids = {
+                    str(node_id)
+                    for node_id in state.get("removed_node_ids", [])
+                    if str(node_id) and str(node_id) != "local"
+                }
                 self.selected_node_ids = {
                     int(uid): str(node_id)
                     for uid, node_id in state.get("selected_node_ids", {}).items()
@@ -711,6 +718,9 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
             from .transfer_runtime import get_node_runtime
 
             node_id = getattr(sess, "node_id", "local")
+            node = self.get_node(node_id)
+            if node is None or not node.is_available():
+                return False, "Remote node is offline; message was not sent"
             runtime = get_node_runtime(node_id)
             if runtime is None or not getattr(sess, "claude_session_id", ""):
                 return False, "Remote node session is not available"

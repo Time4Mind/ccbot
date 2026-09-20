@@ -35,7 +35,8 @@ def test_nodes_menu_renders_status_and_selected_node(monkeypatch) -> None:
     assert "оффлайн" in text
     assert keyboard.inline_keyboard[0][0].callback_data == "nd:use:local"
     assert keyboard.inline_keyboard[1][0].callback_data is None
-    assert keyboard.inline_keyboard[1][1].callback_data == "nd:del:office"
+    assert keyboard.inline_keyboard[1][1].callback_data == "nd:off:office"
+    assert keyboard.inline_keyboard[1][2].callback_data == "nd:del:office"
 
 
 def test_remove_node_preserves_local_registry_and_session_data(
@@ -50,6 +51,7 @@ def test_remove_node_preserves_local_registry_and_session_data(
     monkeypatch.setattr(session_manager, "active_sessions", {42: "remote-session"})
     monkeypatch.setattr(session_manager, "active_sessions_by_node", {42: {}})
     monkeypatch.setattr(session_manager, "sessions", {})
+    monkeypatch.setattr(session_manager, "removed_node_ids", set())
     monkeypatch.setattr(session_manager, "save_state", lambda: None)
 
     removed = session_manager.remove_node("office")
@@ -58,3 +60,18 @@ def test_remove_node_preserves_local_registry_and_session_data(
     assert [node.id for node in session_manager.list_nodes()] == ["local"]
     assert session_manager.get_selected_node_id(42) == "local"
     assert 42 not in session_manager.active_sessions
+    assert "office" in session_manager.removed_node_ids
+
+
+def test_disabled_node_remains_registered_but_cannot_accept_work(monkeypatch) -> None:
+    node = Node("office", "Office", state="ready", last_seen_at=100.0)
+    monkeypatch.setattr(
+        session_manager, "nodes", {"local": Node.local(), "office": node}
+    )
+    monkeypatch.setattr(session_manager, "save_state", lambda: None)
+
+    session_manager.set_node_enabled("office", False)
+
+    assert session_manager.get_node("office") is node
+    assert node.enabled is False
+    assert node.is_available(now=100.0) is False

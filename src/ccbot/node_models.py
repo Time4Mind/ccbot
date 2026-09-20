@@ -8,11 +8,13 @@ belong in the state file.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import time
 from typing import Any, Literal
 
 
 NodeState = Literal["pending", "online", "offline", "ready"]
 _NODE_STATES = {"pending", "online", "offline", "ready"}
+NODE_HEALTH_STALE_SECONDS = 45.0
 
 
 @dataclass
@@ -30,6 +32,20 @@ class Node:
     ccbot_version: str = ""
     last_seen_at: float = 0.0
     health_reason: str = ""
+    enabled: bool = True
+
+    def is_available(self, *, now: float | None = None) -> bool:
+        """Return whether this node is currently safe to admit new work."""
+        if self.id == "local":
+            return True
+        if not self.enabled:
+            return False
+        if self.state != "ready":
+            return False
+        if self.last_seen_at <= 0:
+            return True
+        current = time.time() if now is None else now
+        return current - self.last_seen_at < NODE_HEALTH_STALE_SECONDS
 
     @classmethod
     def local(cls) -> "Node":
@@ -53,6 +69,7 @@ class Node:
             "ccbot_version": self.ccbot_version,
             "last_seen_at": self.last_seen_at,
             "health_reason": self.health_reason,
+            "enabled": self.enabled,
         }
 
     @classmethod
@@ -84,7 +101,8 @@ class Node:
             ccbot_version=str(data.get("ccbot_version", "")),
             last_seen_at=float(data.get("last_seen_at", 0.0)),
             health_reason=str(data.get("health_reason", "")),
+            enabled=bool(data.get("enabled", True)),
         )
 
 
-__all__ = ["Node", "NodeState"]
+__all__ = ["NODE_HEALTH_STALE_SECONDS", "Node", "NodeState"]

@@ -333,6 +333,12 @@ EN: dict[str, str] = {
     "settings.group.bg_notify_finished": "Bg: task complete",
     "settings.group.bg_notify_error": "Bg: errors",
     "settings.group.bg_notify_needs_action": "Bg: needs action",
+    "settings.group.bg_notify_node_status": "Nodes: connection",
+    "settings.bg_notify.node_status.body": (
+        "*Node status*\n\nNotify when the selected node or a node with an active "
+        "session is unavailable for over a minute, and once when it recovers. "
+        "Short network interruptions stay quiet."
+    ),
     "settings.bg_notify.finished.body": (
         "*Bg session: task complete*\n\n"
         "When a background session reaches end-of-turn, push a quiet "
@@ -405,6 +411,10 @@ EN: dict[str, str] = {
     "nodes.state.online": "online",
     "nodes.state.offline": "offline",
     "nodes.state.ready": "ready",
+    "nodes.disable": "Disconnect",
+    "nodes.enable": "Reconnect",
+    "nodes.disable.done": "Node disconnected. Sessions and history were preserved.",
+    "nodes.enable.done": "Node is available again.",
     "nodes.delete.confirm": (
         "*Remove node from ccbot?*\n\nNode: *{node}*\n\n"
         "Sessions, transcripts, and archives are preserved."

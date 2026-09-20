@@ -320,6 +320,12 @@ RU: dict[str, str] = {
     "settings.group.bg_notify_finished": "Bg: задача готова",
     "settings.group.bg_notify_error": "Bg: ошибки",
     "settings.group.bg_notify_needs_action": "Bg: нужен ввод",
+    "settings.group.bg_notify_node_status": "Ноды: связь",
+    "settings.bg_notify.node_status.body": (
+        "*Состояние нод*\n\nУведомлять, если выбранная нода или нода с активной "
+        "сессией недоступна больше минуты, и один раз после восстановления. "
+        "Краткие сетевые сбои остаются без уведомлений."
+    ),
     "settings.bg_notify.finished.body": (
         "*Bg-сессия: задача готова*\n\n"
         "Когда фоновая сессия достигает end-of-turn, шлём тихий\n"
@@ -388,6 +394,10 @@ RU: dict[str, str] = {
     "nodes.state.online": "онлайн",
     "nodes.state.offline": "оффлайн",
     "nodes.state.ready": "готова",
+    "nodes.disable": "Отключить",
+    "nodes.enable": "Подключить",
+    "nodes.disable.done": "Нода отключена. Сессии и история сохранены.",
+    "nodes.enable.done": "Нода снова доступна для работы.",
     "nodes.delete.confirm": (
         "*Удалить ноду из ccbot?*\n\nНода: *{node}*\n\n"
         "Сессии, transcript и архивы не удаляются."

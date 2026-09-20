@@ -567,6 +567,7 @@ async def handle(
             "bg_notify_finished",
             "bg_notify_error",
             "bg_notify_needs_action",
+            "bg_notify_node_status",
         ) and sval in ("on", "off"):
             session_manager.update_user_setting(user.id, key, sval == "on")
         short = key.removeprefix("bg_notify_")

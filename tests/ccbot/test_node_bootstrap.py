@@ -30,6 +30,21 @@ def test_bootstrap_payload_is_machine_readable_and_contains_worker_command() -> 
     invitation = PairingInvitation.from_link(command[command.index("--pairing") + 1])
     assert invitation.leader_id == "local"
     assert invitation.relay_url == "relay.example.test:8765"
+    assert invitation.node_id == "worker1"
+
+
+def test_bootstrap_assigns_and_binds_generated_node_id() -> None:
+    payload = build_bootstrap_payload(
+        relay_url="relay.example.test:8765",
+        leader_id="local",
+        signing_secret="leader-secret",
+    )
+
+    assert payload["node_id"].startswith("worker-")
+    command = shlex.split(payload["command"])
+    assert command[command.index("--node-id") + 1] == payload["node_id"]
+    invitation = PairingInvitation.from_link(command[command.index("--pairing") + 1])
+    assert invitation.node_id == payload["node_id"]
 
 
 def test_ccbot_node_bootstrap_does_not_require_telegram_configuration(

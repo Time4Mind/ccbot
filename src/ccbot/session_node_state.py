@@ -14,6 +14,7 @@ class NodeSessionStateMixin:
     """Persisted node registry and leader-side transfer lifecycle."""
 
     nodes: dict[str, Node]
+    removed_node_ids: set[str]
     selected_node_ids: dict[int, str]
     sessions: dict[str, Session]
     transfers: dict[str, SessionTransfer]
@@ -54,6 +55,20 @@ class NodeSessionStateMixin:
         self.save_state()
         return node
 
+    def set_node_enabled(self, node_id: str, enabled: bool) -> Node:
+        if node_id == "local":
+            raise ValueError("the local node cannot be disabled")
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise KeyError(f"Unknown node id: {node_id}")
+        node.enabled = enabled
+        if not enabled:
+            for user_id, selected in tuple(self.selected_node_ids.items()):
+                if selected == node_id:
+                    self.selected_node_ids[user_id] = "local"
+        self.save_state()
+        return node
+
     def remove_node(self, node_id: str) -> Node:
         """Remove a remote node from the leader registry, preserving sessions."""
         if node_id == "local":
@@ -61,6 +76,7 @@ class NodeSessionStateMixin:
         node = self.nodes.pop(node_id, None)
         if node is None:
             raise KeyError(f"Unknown node id: {node_id}")
+        self.removed_node_ids.add(node_id)
         user_ids = (
             set(self.selected_node_ids)
             | set(self.active_sessions_by_node)

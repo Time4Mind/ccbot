@@ -6,16 +6,18 @@ import asyncio
 import argparse
 import base64
 import hashlib
+import json
 import logging
 import os
 import secrets
 import shlex
 import ssl as ssl_module
 import platform
+import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Awaitable, Callable, Protocol, cast
 from urllib.parse import urlparse
 
 from . import tmux_input_transport
@@ -27,9 +29,56 @@ from .node_transport import (
 )
 from .node_pairing import PairingInvitation
 from .terminal_parser import parse_status_line
+from .transcript_parser import TranscriptParser
+from .utils import ccbot_dir
 
 logger = logging.getLogger(__name__)
 HEALTH_INTERVAL_SECONDS = 15.0
+
+
+class NodeCredentialStore:
+    """Private worker credential used only to reconnect after process restart."""
+
+    def __init__(self, path: str | Path):
+        self.path = Path(path).expanduser()
+
+    def load(self, *, node_id: str, leader_id: str, relay_url: str) -> str:
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return ""
+        if not isinstance(data, dict):
+            return ""
+        if (
+            data.get("node_id") != node_id
+            or data.get("leader_id") != leader_id
+            or data.get("relay_url") != relay_url
+        ):
+            return ""
+        return str(data.get("secret", ""))
+
+    def save(
+        self, *, node_id: str, leader_id: str, relay_url: str, secret: str
+    ) -> None:
+        if not secret:
+            raise ValueError("reconnect secret is required")
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.path.parent, 0o700)
+        temporary = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
+        temporary.write_text(
+            json.dumps(
+                {
+                    "node_id": node_id,
+                    "leader_id": leader_id,
+                    "relay_url": relay_url,
+                    "secret": secret,
+                }
+            ),
+            encoding="utf-8",
+        )
+        os.chmod(temporary, 0o600)
+        temporary.replace(self.path)
+        os.chmod(self.path, 0o600)
 
 
 class WorkerSessionExecutor(Protocol):
@@ -93,6 +142,7 @@ class NodeAgent:
     async def run(self) -> None:
         await self._send_health()
         heartbeat = asyncio.create_task(self._health_loop(), name="node-health")
+        events = asyncio.create_task(self._event_loop(), name="node-session-events")
         try:
             while True:
                 message = await self._transport.receive()
@@ -101,7 +151,8 @@ class NodeAgent:
                 await self._handle_command(message)
         finally:
             heartbeat.cancel()
-            await asyncio.gather(heartbeat, return_exceptions=True)
+            events.cancel()
+            await asyncio.gather(heartbeat, events, return_exceptions=True)
 
     async def _send_health(self) -> None:
         await self._transport.send(
@@ -131,6 +182,21 @@ class NodeAgent:
                 await self._send_health()
             except (ConnectionError, asyncio.CancelledError):
                 return
+
+    async def _event_loop(self) -> None:
+        poll_events = getattr(self._executor, "poll_events", None)
+        if not callable(poll_events):
+            return
+        typed_poll = cast(Callable[[], Awaitable[list[dict[str, Any]]]], poll_events)
+        while True:
+            await asyncio.sleep(0.5)
+            for payload in await typed_poll():
+                await self._transport.send(
+                    NodeEnvelope(
+                        kind="event",
+                        payload={"node_id": self._node_id, **payload},
+                    )
+                )
 
     async def _handle_command(self, message: NodeEnvelope) -> None:
         if not message.request_id:
@@ -310,6 +376,9 @@ class _TmuxWorkerSession:
     session_id: str
     window_id: str
     backend: str
+    transcript_path: Path | None = None
+    transcript_offset: int = 0
+    pending_tools: dict[str, Any] = field(default_factory=dict)
 
 
 class TmuxWorkerExecutor:
@@ -433,13 +502,22 @@ class TmuxWorkerExecutor:
         window_id = stdout.strip()
         if not window_id:
             raise RuntimeError("tmux did not return a window id")
+        session_id = str(uuid.uuid4())
+        for option, value in (
+            ("@ccbot_session_id", session_id),
+            ("@ccbot_backend", backend),
+        ):
+            code, _stdout, stderr = await self._run_tmux(
+                "set-option", "-w", "-t", window_id, option, value
+            )
+            if code != 0:
+                raise RuntimeError(stderr.strip() or "tmux session metadata failed")
         code, _stdout, stderr = await self._run_tmux(
             "send-keys", "-t", window_id, command, "C-m"
         )
         if code != 0:
             raise RuntimeError(stderr.strip() or "tmux send-keys failed")
         await self._wait_ready(window_id, backend)
-        session_id = str(uuid.uuid4())
         self._sessions[session_id] = _TmuxWorkerSession(
             session_id=session_id,
             window_id=window_id,
@@ -454,11 +532,113 @@ class TmuxWorkerExecutor:
     async def send_text(self, *, session_id: str, text: str) -> dict[str, Any]:
         session = self._sessions.get(session_id)
         if session is None:
+            await self._recover_sessions()
+            session = self._sessions.get(session_id)
+        if session is None:
             return {"ok": False, "error": "worker session not found"}
+        await self._bind_transcript(session)
         ok = await tmux_input_transport.send_literal_chunked(
             session.window_id, text, backend=session.backend
         )
         return {"ok": ok, "error": "" if ok else "tmux input failed"}
+
+    async def poll_events(self) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        for session in tuple(self._sessions.values()):
+            await self._bind_transcript(session)
+            path = session.transcript_path
+            if path is None:
+                continue
+            try:
+                content = await asyncio.to_thread(path.read_bytes)
+            except OSError:
+                continue
+            if len(content) < session.transcript_offset:
+                session.transcript_offset = 0
+            chunk = content[session.transcript_offset :]
+            if not chunk or not chunk.endswith(b"\n"):
+                continue
+            session.transcript_offset = len(content)
+            rows = []
+            for raw_line in chunk.decode("utf-8", errors="replace").splitlines():
+                row = TranscriptParser.parse_line(raw_line)
+                if row:
+                    rows.append(row)
+            parsed, remaining = TranscriptParser.parse_entries(
+                rows, pending_tools=session.pending_tools
+            )
+            session.pending_tools = remaining
+            for entry in parsed:
+                if entry.role != "assistant" or not entry.text:
+                    continue
+                events.append(
+                    {
+                        "event_type": "session_message",
+                        "session_id": session.session_id,
+                        "text": entry.text,
+                        "content_type": entry.content_type,
+                        "tool_use_id": entry.tool_use_id,
+                        "tool_name": entry.tool_name,
+                        "stop_reason": entry.stop_reason,
+                        "timestamp": entry.timestamp or "",
+                        "is_error": entry.is_error,
+                        "api_error": entry.api_error,
+                    }
+                )
+        return events
+
+    async def _bind_transcript(self, session: _TmuxWorkerSession) -> None:
+        if session.transcript_path is not None:
+            return
+
+        def lookup() -> Path | None:
+            path = ccbot_dir() / "session_map.json"
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                return None
+            if not isinstance(data, dict):
+                return None
+            suffix = f":{session.window_id}"
+            for key, value in data.items():
+                if not str(key).endswith(suffix) or not isinstance(value, dict):
+                    continue
+                transcript = Path(str(value.get("transcript_path", "")))
+                if transcript.is_file():
+                    return transcript
+            return None
+
+        path = await asyncio.to_thread(lookup)
+        if path is None:
+            return
+        session.transcript_path = path
+        try:
+            session.transcript_offset = path.stat().st_size
+        except OSError:
+            session.transcript_offset = 0
+
+    async def _recover_sessions(self) -> None:
+        code, stdout, _stderr = await self._run_tmux(
+            "list-windows",
+            "-t",
+            self._tmux_session,
+            "-F",
+            "#{window_id}\t#{@ccbot_session_id}\t#{@ccbot_backend}",
+        )
+        if code != 0:
+            return
+        for line in stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) != 3:
+                continue
+            window_id, session_id, backend = parts
+            if not window_id or not session_id or backend not in ("claude", "codex"):
+                continue
+            self._sessions[session_id] = _TmuxWorkerSession(
+                session_id=session_id,
+                window_id=window_id,
+                backend=backend,
+            )
 
     async def _ensure_tmux_session(self) -> None:
         code, _stdout, _stderr = await self._run_tmux(
@@ -597,6 +777,7 @@ async def _run_agent_forever(
     host, port, ssl_context = _relay_address(relay_url)
     node_id = (
         node_id_override.strip()
+        or (invitation.node_id if invitation is not None else "")
         or os.environ.get("CCBOT_NODE_ID", "").strip()
         or _default_node_id()
     )
@@ -610,6 +791,18 @@ async def _run_agent_forever(
         if invitation is not None
         else os.environ.get("CCBOT_NODE_LEADER_ID", "local").strip()
     )
+    credential_store = NodeCredentialStore(
+        os.environ.get(
+            "CCBOT_NODE_CREDENTIAL_FILE",
+            str(Path.home() / ".ccbot-worker" / "node-credential.json"),
+        )
+    )
+    stored_secret = credential_store.load(
+        node_id=node_id, leader_id=leader_id, relay_url=relay_url
+    )
+    using_pairing = invitation is not None and not stored_secret
+    if stored_secret:
+        secret = stored_secret
     if not node_id or not secret:
         raise RuntimeError("CCBOT_NODE_ID and CCBOT_NODE_SECRET are required")
     executor = TmuxWorkerExecutor(
@@ -651,11 +844,25 @@ async def _run_agent_forever(
                 secret=secret,
                 leader_id=leader_id,
                 ssl=ssl_context,
-                pairing_nonce=invitation.nonce if invitation is not None else "",
+                pairing_nonce=(
+                    invitation.nonce if invitation is not None and using_pairing else ""
+                ),
                 pairing_expires=(
-                    invitation.expires_at if invitation is not None else 0.0
+                    invitation.expires_at
+                    if invitation is not None and using_pairing
+                    else 0.0
                 ),
             )
+            if using_pairing and invitation is not None and transport.reconnect_secret:
+                secret = transport.reconnect_secret
+                credential_store.save(
+                    node_id=node_id,
+                    leader_id=leader_id,
+                    relay_url=relay_url,
+                    secret=secret,
+                )
+                invitation = None
+                using_pairing = False
             if not receipt_printed:
                 _print_connection_receipt(
                     node_id=node_id,
@@ -678,6 +885,18 @@ async def _run_agent_forever(
             await agent.run()
         except asyncio.CancelledError:
             raise
+        except PermissionError as exc:
+            if (
+                not using_pairing
+                and invitation is not None
+                and invitation.expires_at > time.time()
+            ):
+                logger.warning("stored node credential rejected; retrying pairing")
+                secret = invitation.secret
+                using_pairing = True
+                continue
+            logger.warning("node-agent relay authentication failed: %s", exc)
+            await asyncio.sleep(2.0)
         except Exception as exc:
             logger.warning("node-agent relay disconnected: %s", exc)
             await asyncio.sleep(2.0)
@@ -703,4 +922,10 @@ def main(argv: list[str] | None = None) -> None:
     )
 
 
-__all__ = ["NodeAgent", "TmuxWorkerExecutor", "WorkerSessionExecutor", "main"]
+__all__ = [
+    "NodeAgent",
+    "NodeCredentialStore",
+    "TmuxWorkerExecutor",
+    "WorkerSessionExecutor",
+    "main",
+]

@@ -28,6 +28,14 @@ RpcEventHandler = Callable[[NodeEnvelope], Awaitable[None]]
 TransportFactory = Callable[[], Awaitable[NodeTransport]]
 _leader_rpc: NodeRpcClient | None = None
 _remote_node_ids: set[str] = set()
+_remote_message_handler: Callable[[Any], Awaitable[None]] | None = None
+
+
+def set_remote_message_handler(
+    handler: Callable[[Any], Awaitable[None]] | None,
+) -> None:
+    global _remote_message_handler
+    _remote_message_handler = handler
 
 
 class NodeRpcClient:
@@ -359,6 +367,29 @@ async def connect_configured_remote_runtimes(
         from .node_models import Node
         from .session import session_manager
 
+        if node_id in session_manager.removed_node_ids:
+            return
+        if message.kind == "event" and payload.get("event_type") == "session_message":
+            if _remote_message_handler is not None:
+                from .session_monitor import NewMessage
+
+                await _remote_message_handler(
+                    NewMessage(
+                        session_id=str(payload.get("session_id", "")),
+                        text=str(payload.get("text", "")),
+                        is_complete=bool(payload.get("stop_reason")),
+                        content_type=str(payload.get("content_type", "text")),
+                        tool_use_id=payload.get("tool_use_id") or None,
+                        role="assistant",
+                        tool_name=payload.get("tool_name") or None,
+                        stop_reason=payload.get("stop_reason") or None,
+                        timestamp=str(payload.get("timestamp", "")),
+                        is_error=bool(payload.get("is_error", False)),
+                        api_error=str(payload.get("api_error", "")),
+                    )
+                )
+            return
+
         state = payload.get("state", "online")
         if state not in ("online", "ready", "offline", "pending"):
             state = "online"
@@ -379,7 +410,7 @@ async def connect_configured_remote_runtimes(
         }
         node.last_seen_at = time.time()
         session_manager.register_node(node)
-        if _leader_rpc is not None:
+        if _leader_rpc is not None and node.enabled:
             register_remote_runtime(node_id)
 
     _leader_rpc = await connect_leader_rpc(
@@ -413,6 +444,7 @@ async def shutdown_remote_runtimes() -> None:
     if _leader_rpc is not None:
         await _leader_rpc.close()
         _leader_rpc = None
+    set_remote_message_handler(None)
 
 
 __all__ = [
@@ -421,5 +453,6 @@ __all__ = [
     "connect_configured_remote_runtimes",
     "connect_leader_rpc",
     "register_remote_runtime",
+    "set_remote_message_handler",
     "shutdown_remote_runtimes",
 ]

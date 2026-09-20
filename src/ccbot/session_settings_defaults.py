@@ -67,6 +67,9 @@ DEFAULT_USER_SETTINGS: dict[str, Any] = {
     "bg_notify_finished": True,
     "bg_notify_error": True,
     "bg_notify_needs_action": True,
+    # Prolonged remote-node disconnect/recovery notifications. Off by default:
+    # short network interruptions are expected and should stay quiet.
+    "bg_notify_node_status": False,
     # Max page size in logical \n-delimited LINES. Values 30/50/70/100.
     # 30 keeps the card compact on phone; 100 is for power users who
     # scroll long bodies. Anchor (page top) chunking handles overflow

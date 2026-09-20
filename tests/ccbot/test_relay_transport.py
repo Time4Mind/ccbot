@@ -91,6 +91,7 @@ async def test_relay_accepts_signed_bootstrap_worker_without_static_credential()
     invitation = create_pairing_invitation(
         relay_url=f"127.0.0.1:{server.port}",
         leader_id="leader",
+        node_id="worker-from-hostname",
         signing_secret="leader-secret",
         ttl=600,
     )
@@ -129,6 +130,69 @@ async def test_relay_accepts_signed_bootstrap_worker_without_static_credential()
     await leader.close()
     await worker.close()
     await server.close()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_pairing_is_bound_and_single_use() -> None:
+    server = RelayServer(credentials={"leader": "leader-secret"}, leader_id="leader")
+    await server.start("127.0.0.1", 0)
+    invitation = create_pairing_invitation(
+        relay_url=f"127.0.0.1:{server.port}",
+        leader_id="leader",
+        node_id="worker-a",
+        signing_secret="leader-secret",
+        ttl=600,
+    )
+    try:
+        with pytest.raises(PermissionError, match="relay authentication failed"):
+            await connect_relay(
+                "127.0.0.1",
+                server.port,
+                node_id="worker-b",
+                role="worker",
+                secret=invitation.secret,
+                leader_id="leader",
+                pairing_nonce=invitation.nonce,
+                pairing_expires=invitation.expires_at,
+            )
+
+        worker = await connect_relay(
+            "127.0.0.1",
+            server.port,
+            node_id="worker-a",
+            role="worker",
+            secret=invitation.secret,
+            leader_id="leader",
+            pairing_nonce=invitation.nonce,
+            pairing_expires=invitation.expires_at,
+        )
+        reconnect_secret = worker.reconnect_secret
+        assert reconnect_secret
+        await worker.close()
+
+        with pytest.raises(PermissionError, match="relay authentication failed"):
+            await connect_relay(
+                "127.0.0.1",
+                server.port,
+                node_id="worker-a",
+                role="worker",
+                secret=invitation.secret,
+                leader_id="leader",
+                pairing_nonce=invitation.nonce,
+                pairing_expires=invitation.expires_at,
+            )
+
+        reconnected = await connect_relay(
+            "127.0.0.1",
+            server.port,
+            node_id="worker-a",
+            role="worker",
+            secret=reconnect_secret,
+            leader_id="leader",
+        )
+        await reconnected.close()
+    finally:
+        await server.close()
 
 
 @pytest.mark.asyncio

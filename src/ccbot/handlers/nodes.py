@@ -7,11 +7,18 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from ..i18n import t
 from ..node_models import Node
 from ..session import session_manager
-from .callback_data import CB_MM_BACK, CB_NODE_DELETE, CB_NODE_USE
+from .callback_data import (
+    CB_MM_BACK,
+    CB_NODE_DELETE,
+    CB_NODE_DISABLE,
+    CB_NODE_ENABLE,
+    CB_NODE_USE,
+)
 
 
 def _node_state_text(user_id: int, node: Node) -> str:
-    return t(user_id, f"nodes.state.{node.state}")
+    state = node.state if node.is_available() or node.id == "local" else "offline"
+    return t(user_id, f"nodes.state.{state}")
 
 
 def _node_backends(user_id: int, node: Node) -> tuple[str, ...]:
@@ -60,11 +67,21 @@ def build_nodes_keyboard(user_id: int) -> InlineKeyboardMarkup:
             if node.id != "local"
             else None
         )
-        if node.state in ("offline", "pending"):
+        if not node.is_available():
             row = [InlineKeyboardButton(f"⚪ {label}")]
         else:
             row = [InlineKeyboardButton(label, callback_data=f"{CB_NODE_USE}{node.id}")]
         if delete_button is not None:
+            row.append(
+                InlineKeyboardButton(
+                    t(user_id, "nodes.enable" if not node.enabled else "nodes.disable"),
+                    callback_data=(
+                        f"{CB_NODE_ENABLE}{node.id}"
+                        if not node.enabled
+                        else f"{CB_NODE_DISABLE}{node.id}"
+                    ),
+                )
+            )
             row.append(delete_button)
         rows.append(row)
     rows.append(

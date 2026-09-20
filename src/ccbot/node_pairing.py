@@ -15,12 +15,17 @@ DEFAULT_INVITATION_TTL = 10 * 60
 
 
 def pairing_signature(
-    signing_secret: str, *, leader_id: str, nonce: str, expires_at: float
+    signing_secret: str,
+    *,
+    leader_id: str,
+    node_id: str,
+    nonce: str,
+    expires_at: float,
 ) -> str:
     """Create the relay-verifiable signature carried by a bootstrap link."""
     if not signing_secret:
         raise ValueError("pairing signing secret is required")
-    payload = f"{leader_id}\0{nonce}\0{int(expires_at)}".encode("utf-8")
+    payload = f"{leader_id}\0{node_id}\0{nonce}\0{int(expires_at)}".encode("utf-8")
     return hmac.new(signing_secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
 
 
@@ -28,6 +33,7 @@ def pairing_signature(
 class PairingInvitation:
     relay_url: str
     leader_id: str
+    node_id: str
     nonce: str
     secret: str
     expires_at: float
@@ -39,6 +45,7 @@ class PairingInvitation:
                 {
                     'relay': self.relay_url,
                     'leader': self.leader_id,
+                    'node': self.node_id,
                     'nonce': self.nonce,
                     'secret': self.secret,
                     'expires': str(int(self.expires_at)),
@@ -66,6 +73,7 @@ class PairingInvitation:
         invitation = cls(
             relay_url=required("relay"),
             leader_id=required("leader"),
+            node_id=required("node"),
             nonce=required("nonce"),
             secret=required("secret"),
             expires_at=expires_at,
@@ -82,6 +90,7 @@ def create_pairing_invitation(
     *,
     relay_url: str,
     leader_id: str,
+    node_id: str,
     ttl: int = DEFAULT_INVITATION_TTL,
     signing_secret: str = "",
 ) -> PairingInvitation:
@@ -89,6 +98,8 @@ def create_pairing_invitation(
         raise ValueError("relay URL is required for node pairing")
     if not leader_id.strip():
         raise ValueError("leader id is required for node pairing")
+    if not node_id.strip():
+        raise ValueError("node id is required for node pairing")
     if ttl <= 0:
         raise ValueError("pairing TTL must be positive")
     now = time.time()
@@ -98,6 +109,7 @@ def create_pairing_invitation(
         pairing_signature(
             signing_secret,
             leader_id=leader_id.strip(),
+            node_id=node_id.strip(),
             nonce=nonce,
             expires_at=expires_at,
         )
@@ -107,6 +119,7 @@ def create_pairing_invitation(
     return PairingInvitation(
         relay_url=relay_url.strip().rstrip("/"),
         leader_id=leader_id.strip(),
+        node_id=node_id.strip(),
         nonce=nonce,
         secret=secret,
         expires_at=expires_at,

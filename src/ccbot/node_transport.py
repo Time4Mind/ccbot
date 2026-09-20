@@ -88,6 +88,7 @@ class StreamNodeTransport:
         self._reader = reader
         self._writer = writer
         self._send_lock = asyncio.Lock()
+        self.reconnect_secret = ""
 
     @classmethod
     async def connect(
@@ -143,6 +144,7 @@ class RelayServer:
         self.leader_id = leader_id
         self._server: asyncio.AbstractServer | None = None
         self._connections: dict[str, tuple[str, StreamNodeTransport]] = {}
+        self._consumed_pairing_nonces: set[str] = set()
 
     @property
     def port(self) -> int:
@@ -186,7 +188,7 @@ class RelayServer:
         node_id = ""
         try:
             handshake = await asyncio.wait_for(transport.receive(), timeout=10.0)
-            node_id, role = self._authenticate(handshake)
+            node_id, role, paired = self._authenticate(handshake)
             previous = self._connections.get(node_id)
             self._connections[node_id] = (role, transport)
             if previous is not None:
@@ -194,7 +196,13 @@ class RelayServer:
             await transport.send(
                 NodeEnvelope(
                     kind="handshake",
-                    payload={"ok": True, "leader_id": self.leader_id},
+                    payload={
+                        "ok": True,
+                        "leader_id": self.leader_id,
+                        "reconnect_secret": (
+                            self._worker_reconnect_secret(node_id) if paired else ""
+                        ),
+                    },
                 )
             )
             while True:
@@ -214,7 +222,7 @@ class RelayServer:
                 self._connections.pop(node_id, None)
             await transport.close()
 
-    def _authenticate(self, message: NodeEnvelope) -> tuple[str, str]:
+    def _authenticate(self, message: NodeEnvelope) -> tuple[str, str, bool]:
         if message.kind != "handshake":
             raise PermissionError("relay authentication failed")
         payload = message.payload or {}
@@ -223,7 +231,15 @@ class RelayServer:
         secret = str(payload.get("secret", ""))
         claimed_leader = str(payload.get("leader_id", ""))
         expected = self._credentials.get(node_id, "")
-        regular_credentials = bool(expected) and hmac.compare_digest(secret, expected)
+        derived_worker_secret = (
+            self._worker_reconnect_secret(node_id) if role == "worker" else ""
+        )
+        regular_credentials = (
+            bool(expected) and hmac.compare_digest(secret, expected)
+        ) or (
+            bool(derived_worker_secret)
+            and hmac.compare_digest(secret, derived_worker_secret)
+        )
         pairing_credentials = self._pairing_credentials_match(payload, secret)
         if (
             not node_id
@@ -234,18 +250,33 @@ class RelayServer:
             or not (regular_credentials or pairing_credentials)
         ):
             raise PermissionError("relay authentication failed")
-        return node_id, role
+        if pairing_credentials:
+            self._consumed_pairing_nonces.add(str(payload.get("pairing_nonce", "")))
+        return node_id, role, pairing_credentials
+
+    def _worker_reconnect_secret(self, node_id: str) -> str:
+        leader_secret = self._credentials.get(self.leader_id, "")
+        if not leader_secret or not node_id:
+            return ""
+        payload = f"ccbot-worker-reconnect\0{self.leader_id}\0{node_id}".encode()
+        return hmac.new(leader_secret.encode(), payload, "sha256").hexdigest()
 
     def _pairing_credentials_match(self, payload: dict[str, Any], secret: str) -> bool:
         """Accept an unknown worker with a leader-signed bootstrap token."""
         if str(payload.get("role", "")) != "worker":
             return False
         nonce = str(payload.get("pairing_nonce", ""))
+        node_id = str(payload.get("node_id", ""))
         try:
             expires_at = float(payload.get("pairing_expires", 0))
         except (TypeError, ValueError):
             return False
-        if not nonce or expires_at <= time.time():
+        if (
+            not nonce
+            or not node_id
+            or nonce in self._consumed_pairing_nonces
+            or expires_at <= time.time()
+        ):
             return False
         leader_secret = self._credentials.get(self.leader_id, "")
         if not leader_secret:
@@ -253,6 +284,7 @@ class RelayServer:
         expected = pairing_signature(
             leader_secret,
             leader_id=self.leader_id,
+            node_id=node_id,
             nonce=nonce,
             expires_at=expires_at,
         )
@@ -325,6 +357,9 @@ async def connect_relay(
     if response.kind != "handshake" or not (response.payload or {}).get("ok"):
         await transport.close()
         raise PermissionError("relay authentication failed")
+    transport.reconnect_secret = str(
+        (response.payload or {}).get("reconnect_secret", "")
+    )
     return transport
 
 

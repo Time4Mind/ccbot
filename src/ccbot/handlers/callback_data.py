@@ -100,6 +100,8 @@ CB_MM_BACK = "mm:back"  # back to default footer
 
 # Node menu
 CB_NODE_USE = "nd:use:"
+CB_NODE_DISABLE = "nd:off:"
+CB_NODE_ENABLE = "nd:on:"
 CB_NODE_DELETE = "nd:del:"
 CB_NODE_DELETE_CONFIRM = "nd:del:y:"
 CB_NODE_DELETE_CANCEL = "nd:del:n"

@@ -51,6 +51,7 @@ from ..handlers.typing import fire_typing
 from ..markdown_v2 import convert_markdown
 from ..naming import maybe_auto_name
 from ..i18n import t
+from ..remote_prompt_queue import remote_prompt_queue
 from ..session import session_manager
 from ..transfer_runtime import get_node_runtime
 from ..terminal_parser import (
@@ -297,6 +298,7 @@ async def _dispatch_text_to_active(
     text: str,
     *,
     input_kind: str = "text",
+    _from_remote_queue: bool = False,
 ) -> bool:
     """Send the user's text to ``wid``'s pane and run the post-send
     bookkeeping under the repost-intent bracket.
@@ -324,6 +326,43 @@ async def _dispatch_text_to_active(
 
     from .. import metrics
     from ..handlers import bg_status
+
+    initial_session = session_manager.find_session_by_window(wid)
+    initial_node_id = (
+        getattr(initial_session, "node_id", "local")
+        if initial_session is not None
+        else "local"
+    )
+    if (
+        not _from_remote_queue
+        and initial_session is not None
+        and isinstance(initial_node_id, str)
+        and initial_node_id != "local"
+    ):
+        node_id = initial_node_id
+        node = session_manager.get_node(node_id)
+        if remote_prompt_queue.has_pending(initial_session.id) or (
+            node is None or not node.is_available()
+        ):
+
+            async def deliver() -> bool:
+                return await _dispatch_text_to_active(
+                    update,
+                    context,
+                    user_id,
+                    wid,
+                    text,
+                    input_kind=input_kind,
+                    _from_remote_queue=True,
+                )
+
+            return await remote_prompt_queue.admit(
+                original_message=update.message,
+                session_id=initial_session.id,
+                node_id=node_id,
+                node_name=node.display_name if node is not None else node_id,
+                deliver=deliver,
+            )
 
     prepared_dispatch = await prepare_request_for_dispatch(
         update,

@@ -427,7 +427,7 @@ async def test_tmux_executor_recovers_managed_session_after_process_restart(
 
     monkeypatch.setattr(executor, "_run_tmux", fake_tmux)
     monkeypatch.setattr(
-        "ccbot.node_agent.tmux_input_transport.send_literal_chunked", fake_send
+        "ccbot.node_worker.tmux_input_transport.send_literal_chunked", fake_send
     )
 
     result = await executor.send_text(session_id="agent-7", text="continue")
@@ -489,7 +489,7 @@ async def test_worker_emits_assistant_transcript_events_for_remote_card(
     monkeypatch.setattr(executor, "_run_tmux", fake_tmux)
     monkeypatch.setattr(executor, "_wait_ready", AsyncMock())
     monkeypatch.setattr(
-        "ccbot.node_agent.tmux_input_transport.send_literal_chunked",
+        "ccbot.node_worker.tmux_input_transport.send_literal_chunked",
         AsyncMock(return_value=True),
     )
     created = await executor.create_session(

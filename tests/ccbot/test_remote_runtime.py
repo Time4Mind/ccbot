@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -107,6 +108,7 @@ async def test_remote_runtime_uses_target_node_for_directory_and_session_operati
         "path": "/srv/project",
         "backend": "claude",
         "name": "Task",
+        "startup_id": rpc.calls[2][1]["startup_id"],
     }
     assert rpc.calls[3][1] == {
         "target_node_id": "worker-a",
@@ -137,3 +139,38 @@ async def test_remote_runtime_controls_and_terminates_worker_session():
         for _operation, payload in rpc.calls[:3]
     )
     assert all(options == {"retries": 0, "timeout": 5.0} for options in rpc.options)
+
+
+@pytest.mark.asyncio
+async def test_cancelling_remote_creation_requests_worker_cleanup() -> None:
+    started = asyncio.Event()
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class Rpc:
+        async def request(
+            self,
+            target_node_id: str,
+            operation: str,
+            payload: dict[str, object],
+            **_kwargs: object,
+        ) -> dict[str, object]:
+            calls.append((operation, dict(payload)))
+            if operation == "create_session":
+                started.set()
+                await asyncio.Event().wait()
+            return {"ok": True}
+
+    runtime = RemoteNodeRuntime(Rpc())
+    task = asyncio.create_task(
+        runtime.create_session("worker-a", "/srv/project", "codex", "Task")
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert [operation for operation, _payload in calls] == [
+        "create_session",
+        "cancel_session_start",
+    ]
+    assert calls[1][1]["startup_id"] == calls[0][1]["startup_id"]

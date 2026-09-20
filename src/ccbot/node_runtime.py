@@ -6,6 +6,7 @@ import asyncio
 import base64
 import hashlib
 import logging
+import secrets
 import ssl
 import time
 from pathlib import Path
@@ -289,11 +290,35 @@ class RemoteNodeRuntime:
     async def create_session(
         self, target_node_id: str, path: str, backend: str, name: str
     ) -> dict[str, Any]:
-        result = await self._request(
-            target_node_id,
-            "create_session",
-            {"path": path, "backend": backend, "name": name},
-        )
+        startup_id = secrets.token_urlsafe(12)
+        try:
+            result = await self._request(
+                target_node_id,
+                "create_session",
+                {
+                    "path": path,
+                    "backend": backend,
+                    "name": name,
+                    "startup_id": startup_id,
+                },
+            )
+        except BaseException:
+            try:
+                await asyncio.shield(
+                    self._request(
+                        target_node_id,
+                        "cancel_session_start",
+                        {"startup_id": startup_id},
+                    )
+                )
+            except BaseException as cleanup_error:
+                logger.warning(
+                    "Could not cancel remote session startup node=%s startup=%s: %s",
+                    target_node_id,
+                    startup_id,
+                    cleanup_error,
+                )
+            raise
         self._require_ok(result)
         return result
 
@@ -407,6 +432,7 @@ class RemoteNodeRuntime:
             "send_key",
             "capture_session",
             "terminate_session",
+            "cancel_session_start",
             "revoke_node",
         }:
             return await self._rpc.request(

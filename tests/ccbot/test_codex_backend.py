@@ -124,19 +124,25 @@ def test_codex_ready_prompt_is_not_auto_confirmed(
     assert TmuxManager._accept_codex_directory_trust(Pane()) is False
 
 
-def test_codex_update_prompt_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_local_codex_update_relaunches_the_exact_startup_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     screens = iter(
         [
             [
-                "Update available! 0.146.0 -> 0.146.1",
-                "› 1. Update now (runs npm install)",
+                "Update available! 0.147.0 -> 0.151.0",
+                "› 1. Update now",
                 "  2. Skip",
                 "  3. Skip until next version",
                 "Press enter to continue",
             ],
-            ["OpenAI Codex", "›"],
+            ["Installing update"],
+            ["shell"],
+            ["OpenAI Codex", "› Ask anything", "gpt-5.6 medium · ~/project"],
         ]
     )
+    processes = iter(["codex", "npm", "zsh", "codex"])
 
     class Pane:
         def __init__(self) -> None:
@@ -145,14 +151,22 @@ def test_codex_update_prompt_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None
         def capture_pane(self) -> list[str]:
             return next(screens)
 
+        @property
+        def pane_current_command(self) -> str:
+            return next(processes)
+
         def send_keys(self, value: str, enter: bool = True) -> None:
             self.sent.append((value, enter))
 
     pane = Pane()
-    monkeypatch.setattr("ccbot.tmux_manager.time.sleep", lambda _delay: None)
+    command = "env CCBOT_INTERFACE=telegram codex --no-alt-screen resume abc"
 
-    assert TmuxManager._accept_codex_directory_trust(pane) is True
-    assert pane.sent == [("Down", False), ("", True)]
+    updated = await TmuxManager._watch_codex_startup_screens(
+        pane, command=command, poll_interval=0
+    )
+
+    assert updated is True
+    assert pane.sent == [("", True), (command, True)]
 
 
 def test_codex_resume_uses_selected_current_directory(
@@ -1177,7 +1191,7 @@ async def test_tmux_builds_codex_resume_command(
     mgr = TmuxManager()
     monkeypatch.setattr(mgr, "get_or_create_session", lambda: Session())
 
-    async def wait_for_trust(_pane: object) -> bool:
+    async def wait_for_trust(_pane: object, **_kwargs: object) -> bool:
         trust_started.set()
         await asyncio.to_thread(release_trust.wait, 2.0)
         return True
@@ -1217,6 +1231,59 @@ async def test_tmux_builds_codex_resume_command(
     assert not startup_tasks[0].done()
     release_trust.set()
     await asyncio.gather(*startup_tasks)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_local_codex_startup_rolls_back_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = asyncio.Event()
+
+    class Pane:
+        def send_keys(self, _value: str, enter: bool = True) -> None:
+            pass
+
+    class Window:
+        window_id = "@31"
+        active_pane = Pane()
+
+        def __init__(self) -> None:
+            self.killed = False
+
+        def set_window_option(self, _name: str, _value: str) -> None:
+            pass
+
+        def kill(self) -> None:
+            self.killed = True
+
+    window = Window()
+
+    class Session:
+        def new_window(self, **_kwargs):
+            return window
+
+    mgr = TmuxManager()
+    monkeypatch.setattr(mgr, "get_or_create_session", lambda: Session())
+    monkeypatch.setattr(mgr, "find_window_by_name", AsyncMock(return_value=None))
+
+    async def wait_forever(_pane: object, **_kwargs: object) -> bool:
+        started.set()
+        await asyncio.Event().wait()
+        return False
+
+    monkeypatch.setattr(mgr, "_watch_codex_startup_screens", wait_forever)
+    task = asyncio.create_task(
+        mgr.create_window(
+            str(tmp_path), backend="codex", wait_for_codex_ready=True
+        )
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0)
+
+    assert window.killed is True
 
 
 @pytest.mark.asyncio

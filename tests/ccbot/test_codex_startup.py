@@ -1,0 +1,153 @@
+from __future__ import annotations
+
+import pytest
+
+from ccbot.codex_startup import (
+    CodexStartupError,
+    drive_codex_startup,
+    is_codex_ready,
+)
+
+
+UPDATE_PROMPT = """Update available! 0.147.0 -> 0.151.0
+› 1. Update now
+  2. Skip
+  3. Skip until next version
+Press enter to continue
+"""
+
+READY_PROMPT = """OpenAI Codex
+
+› Ask anything
+
+gpt-5.6 medium · ~/project
+"""
+
+
+@pytest.mark.asyncio
+async def test_update_is_installed_then_exact_command_is_relaunched() -> None:
+    screens = iter([UPDATE_PROMPT, UPDATE_PROMPT, "shell", READY_PROMPT])
+    processes = iter(["codex", "npm", "zsh", "codex"])
+    keys: list[str] = []
+    relaunched: list[str] = []
+
+    async def capture() -> str:
+        return next(screens)
+
+    async def current_process() -> str:
+        return next(processes)
+
+    async def send_key(key: str) -> None:
+        keys.append(key)
+
+    async def relaunch(command: str) -> None:
+        relaunched.append(command)
+
+    result = await drive_codex_startup(
+        command="env CCBOT_INTERFACE=telegram codex --no-alt-screen resume abc",
+        capture=capture,
+        current_process=current_process,
+        send_key=send_key,
+        relaunch=relaunch,
+        timeout=1,
+        poll_interval=0,
+    )
+
+    assert result.updated is True
+    assert keys == ["ENTER"]
+    assert relaunched == [
+        "env CCBOT_INTERFACE=telegram codex --no-alt-screen resume abc"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_repeated_update_prompt_after_relaunch_is_bounded_failure() -> None:
+    screens = iter([UPDATE_PROMPT, "shell", UPDATE_PROMPT])
+    processes = iter(["codex", "zsh", "codex"])
+
+    with pytest.raises(CodexStartupError, match="repeated update prompt"):
+        await drive_codex_startup(
+            command="codex",
+            capture=lambda: _next(screens),
+            current_process=lambda: _next(processes),
+            send_key=lambda _key: _done(),
+            relaunch=lambda _command: _done(),
+            timeout=1,
+            poll_interval=0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_trust_and_resume_directory_prompts_use_the_same_lifecycle() -> None:
+    screens = iter(
+        [
+            "Do you trust the contents of this directory?\n› 1. Yes, continue",
+            "Choose working directory to resume this session\n"
+            "› 1. Use session directory\n"
+            "  2. Use current directory\n"
+            "Press enter to continue",
+            READY_PROMPT,
+        ]
+    )
+    keys: list[str] = []
+
+    result = await drive_codex_startup(
+        command="codex resume abc",
+        capture=lambda: _next(screens),
+        current_process=lambda: _value("codex"),
+        send_key=lambda key: _append(keys, key),
+        relaunch=lambda _command: _done(),
+        timeout=1,
+        poll_interval=0,
+    )
+
+    assert result.updated is False
+    assert keys == ["ENTER", "DOWN", "ENTER"]
+
+
+@pytest.mark.asyncio
+async def test_initial_shell_render_race_does_not_fail_startup() -> None:
+    screens = iter(["shell", READY_PROMPT])
+    processes = iter(["zsh", "codex"])
+
+    result = await drive_codex_startup(
+        command="codex",
+        capture=lambda: _next(screens),
+        current_process=lambda: _next(processes),
+        send_key=lambda _key: _done(),
+        relaunch=lambda _command: _done(),
+        timeout=1,
+        poll_interval=0,
+    )
+
+    assert result.updated is False
+
+
+def test_modal_selector_is_not_codex_readiness() -> None:
+    assert is_codex_ready(UPDATE_PROMPT) is False
+    assert (
+        is_codex_ready(
+            "Choose working directory to resume this session\n"
+            "› 1. Use session directory\n"
+            "  2. Use current directory\n"
+            "Press enter to continue"
+        )
+        is False
+    )
+    assert is_codex_ready(READY_PROMPT) is True
+
+
+async def _next(iterator):
+    return next(iterator)
+
+
+async def _done() -> None:
+    return None
+
+
+async def _value(value):
+    return value
+
+
+async def _append(values, value) -> None:
+    values.append(value)

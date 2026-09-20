@@ -23,6 +23,7 @@ from typing import Any, Awaitable, Callable, Coroutine, Protocol, cast
 from urllib.parse import urlparse
 
 from . import tmux_input_transport
+from .codex_startup import CodexStartupError, drive_codex_startup
 from .node_transport import (
     NodeEnvelope,
     NodeTransport,
@@ -31,13 +32,19 @@ from .node_transport import (
 )
 from .node_pairing import PairingInvitation
 from .node_update import GitNodeUpdater, current_git_revision
-from .terminal_parser import parse_status_line
 from .transcript_parser import TranscriptParser
 from .utils import ccbot_dir
 
 logger = logging.getLogger(__name__)
 HEALTH_INTERVAL_SECONDS = 15.0
-_CONTROL_OPERATIONS = {"send_key", "capture_session", "terminate_session", "health"}
+_CONTROL_OPERATIONS = {
+    "send_key",
+    "capture_session",
+    "terminate_session",
+    "cancel_session_start",
+    "health",
+}
+_STARTUP_OPERATIONS = {"create_session", "transfer_context_finish"}
 _COMMAND_QUEUE_SIZE = 256
 
 
@@ -92,7 +99,11 @@ class WorkerSessionExecutor(Protocol):
     async def create_directory(self, *, path: str, name: str) -> dict[str, Any]: ...
 
     async def create_session(
-        self, *, path: str, backend: str, name: str
+        self, *, path: str, backend: str, name: str, startup_id: str = ""
+    ) -> dict[str, Any]: ...
+
+    async def cancel_session_start(
+        self, *, startup_id: str
     ) -> dict[str, Any]: ...
 
     async def start_context_session(
@@ -165,6 +176,7 @@ class NodeAgent:
         self._runtime_updater = runtime_updater or GitNodeUpdater()
         self._restart_callback = restart_callback or _restart_current_process
         self._ssh_access = dict(ssh_access or {})
+        self._startup_tasks: set[asyncio.Task[None]] = set()
 
     def attach_transport(self, transport: NodeTransport) -> None:
         """Attach a reconnected relay while retaining receipts and context."""
@@ -193,22 +205,34 @@ class NodeAgent:
                 if message.kind != "command":
                     continue
                 operation = str((message.payload or {}).get("operation", ""))
-                queue = (
-                    control_commands
-                    if operation in _CONTROL_OPERATIONS
-                    else regular_commands
-                )
+                if operation in _CONTROL_OPERATIONS:
+                    queue = control_commands
+                else:
+                    queue = regular_commands
                 await queue.put(message)
         finally:
             for task in background:
                 task.cancel()
             await asyncio.gather(*background, return_exceptions=True)
+            startup_tasks = tuple(self._startup_tasks)
+            for task in startup_tasks:
+                task.cancel()
+            await asyncio.gather(*startup_tasks, return_exceptions=True)
 
     async def _command_worker(self, queue: asyncio.Queue[NodeEnvelope]) -> None:
         while True:
             message = await queue.get()
             try:
-                await self._handle_command(message)
+                operation = str((message.payload or {}).get("operation", ""))
+                if operation in _STARTUP_OPERATIONS:
+                    task = asyncio.create_task(
+                        self._handle_command(message),
+                        name=f"node-startup:{message.request_id}",
+                    )
+                    self._startup_tasks.add(task)
+                    task.add_done_callback(self._startup_tasks.discard)
+                else:
+                    await self._handle_command(message)
             finally:
                 queue.task_done()
 
@@ -287,6 +311,14 @@ class NodeAgent:
             return
         try:
             result = await self._dispatch(message.payload or {})
+        except asyncio.CancelledError:
+            # Preserve an idempotent terminal receipt across relay reconnects.
+            # The executor's cancellation path has already removed any window.
+            self._ledger.complete(
+                message.request_id,
+                {"ok": False, "error": "worker command cancelled after disconnect"},
+            )
+            raise
         except Exception as exc:
             logger.exception(
                 "node command failed operation=%s",
@@ -324,6 +356,11 @@ class NodeAgent:
                 path=str(payload.get("path", "")),
                 backend=str(payload.get("backend", "")),
                 name=str(payload.get("name", "")),
+                startup_id=str(payload.get("startup_id", "")),
+            )
+        if operation == "cancel_session_start":
+            return await self._executor.cancel_session_start(
+                startup_id=str(payload.get("startup_id", ""))
             )
         if operation == "send_text":
             session_id = str(payload.get("session_id", ""))
@@ -482,8 +519,8 @@ class TmuxWorkerExecutor:
         codex_flags: str = "",
         ready_timeout: float = 120.0,
         context_limit_bytes: int = 0,
-        max_sessions: int = 8,
         reconcile_interval: float = 10.0,
+        codex_poll_interval: float = 0.25,
     ):
         self._workdir = Path(workdir).expanduser().resolve()
         self._tmux_session = tmux_session
@@ -493,15 +530,19 @@ class TmuxWorkerExecutor:
         self._codex_flags = codex_flags
         self._ready_timeout = ready_timeout
         self._context_limit_bytes = max(0, context_limit_bytes)
-        self._max_sessions = max(0, max_sessions)
         self._reconcile_interval = max(0.0, reconcile_interval)
+        self._codex_poll_interval = max(0.0, codex_poll_interval)
         self._last_reconcile_at = time.monotonic()
         self._sessions: dict[str, _TmuxWorkerSession] = {}
+        self._startup_windows: dict[str, str] = {}
+        self._startup_sessions: dict[str, str] = {}
+        self._cancelled_startups: set[str] = set()
 
     def capacity_snapshot(self) -> dict[str, int]:
         return {
             "active_sessions": len(self._sessions),
-            "max_sessions": self._max_sessions,
+            # Zero is the wire-level representation for no ccbot-imposed cap.
+            "max_sessions": 0,
         }
 
     async def list_directories(self, *, path: str) -> dict[str, Any]:
@@ -540,7 +581,7 @@ class TmuxWorkerExecutor:
         return result
 
     async def create_session(
-        self, *, path: str, backend: str, name: str
+        self, *, path: str, backend: str, name: str, startup_id: str = ""
     ) -> dict[str, Any]:
         directory = self._resolve_directory(path)
         if backend not in ("claude", "codex"):
@@ -550,6 +591,7 @@ class TmuxWorkerExecutor:
             backend=backend,
             name=name,
             command=self._agent_command(backend),
+            startup_id=startup_id,
         )
 
     async def start_context_session(
@@ -575,15 +617,22 @@ class TmuxWorkerExecutor:
         return result
 
     async def _start_tmux_agent(
-        self, *, workdir: Path, backend: str, name: str, command: str
+        self,
+        *,
+        workdir: Path,
+        backend: str,
+        name: str,
+        command: str,
+        startup_id: str = "",
     ) -> dict[str, Any]:
         if backend not in ("claude", "codex"):
             raise ValueError(f"unsupported backend: {backend}")
         if not self._workdir.is_dir():
             raise ValueError(f"worker workdir does not exist: {self._workdir}")
+        if startup_id and startup_id in self._cancelled_startups:
+            self._cancelled_startups.discard(startup_id)
+            raise RuntimeError("worker session startup was cancelled")
         await self._recover_sessions(reconcile=True)
-        if self._max_sessions and len(self._sessions) >= self._max_sessions:
-            raise RuntimeError(f"worker session capacity reached ({self._max_sessions})")
         await self._ensure_tmux_session()
         window_name = self._safe_window_name(name)
         code, stdout, stderr = await self._run_tmux(
@@ -603,27 +652,59 @@ class TmuxWorkerExecutor:
         window_id = stdout.strip()
         if not window_id:
             raise RuntimeError("tmux did not return a window id")
+        if startup_id:
+            self._startup_windows[startup_id] = window_id
         session_id = str(uuid.uuid4())
-        for option, value in (
-            ("@ccbot_session_id", session_id),
-            ("@ccbot_backend", backend),
-        ):
+        try:
+            if startup_id and startup_id in self._cancelled_startups:
+                raise RuntimeError("worker session startup was cancelled")
+            for option, value in (
+                ("@ccbot_session_id", session_id),
+                ("@ccbot_backend", backend),
+            ):
+                code, _stdout, stderr = await self._run_tmux(
+                    "set-option", "-w", "-t", window_id, option, value
+                )
+                if code != 0:
+                    raise RuntimeError(stderr.strip() or "tmux session metadata failed")
             code, _stdout, stderr = await self._run_tmux(
-                "set-option", "-w", "-t", window_id, option, value
+                "send-keys", "-t", window_id, command, "C-m"
             )
             if code != 0:
-                raise RuntimeError(stderr.strip() or "tmux session metadata failed")
-        code, _stdout, stderr = await self._run_tmux(
-            "send-keys", "-t", window_id, command, "C-m"
-        )
-        if code != 0:
-            raise RuntimeError(stderr.strip() or "tmux send-keys failed")
-        await self._wait_ready(window_id, backend)
+                raise RuntimeError(stderr.strip() or "tmux send-keys failed")
+            await self._wait_ready(window_id, backend, command=command)
+            if startup_id and startup_id in self._cancelled_startups:
+                raise RuntimeError("worker session startup was cancelled")
+        except BaseException:
+            self._sessions.pop(session_id, None)
+            try:
+                cleanup_code, _stdout, cleanup_stderr = await self._run_tmux(
+                    "kill-window", "-t", window_id
+                )
+                if cleanup_code != 0:
+                    logger.error(
+                        "Failed to roll back worker window %s: %s",
+                        window_id,
+                        cleanup_stderr.strip() or "tmux kill-window failed",
+                    )
+            except BaseException as cleanup_error:
+                logger.error(
+                    "Failed to roll back worker window %s: %s",
+                    window_id,
+                    cleanup_error,
+                )
+            raise
+        finally:
+            if startup_id:
+                self._startup_windows.pop(startup_id, None)
+                self._cancelled_startups.discard(startup_id)
         self._sessions[session_id] = _TmuxWorkerSession(
             session_id=session_id,
             window_id=window_id,
             backend=backend,
         )
+        if startup_id:
+            self._startup_sessions[startup_id] = session_id
         return {
             "target_window_id": window_id,
             "target_workdir": str(workdir),
@@ -671,7 +752,24 @@ class TmuxWorkerExecutor:
         )
         if code == 0:
             self._sessions.pop(session_id, None)
+            for startup_id, created_session_id in tuple(
+                self._startup_sessions.items()
+            ):
+                if created_session_id == session_id:
+                    self._startup_sessions.pop(startup_id, None)
         return {"ok": code == 0, "error": "" if code == 0 else stderr.strip()}
+
+    async def cancel_session_start(self, *, startup_id: str) -> dict[str, Any]:
+        if not startup_id:
+            raise ValueError("startup_id is required")
+        session_id = self._startup_sessions.pop(startup_id, "")
+        if session_id:
+            return await self.terminate_session(session_id=session_id)
+        self._cancelled_startups.add(startup_id)
+        window_id = self._startup_windows.get(startup_id, "")
+        if window_id:
+            await self._run_tmux("kill-window", "-t", window_id)
+        return {"ok": True}
 
     async def _find_session(self, session_id: str) -> _TmuxWorkerSession | None:
         session = self._sessions.get(session_id)
@@ -859,17 +957,72 @@ class TmuxWorkerExecutor:
             raise ValueError(f"directory does not exist: {directory}")
         return directory
 
-    async def _wait_ready(self, window_id: str, backend: str) -> None:
-        del backend
+    async def _wait_ready(
+        self, window_id: str, backend: str, *, command: str = ""
+    ) -> None:
+        if backend == "codex":
+            if not command:
+                raise ValueError("Codex startup requires its relaunch command")
+
+            async def capture() -> str:
+                code, stdout, stderr = await self._run_tmux(
+                    "capture-pane", "-p", "-t", window_id
+                )
+                if code != 0:
+                    raise CodexStartupError(
+                        stderr.strip() or "worker Codex pane disappeared"
+                    )
+                return stdout
+
+            async def current_process() -> str:
+                code, stdout, stderr = await self._run_tmux(
+                    "display-message",
+                    "-p",
+                    "-t",
+                    window_id,
+                    "#{pane_current_command}",
+                )
+                if code != 0:
+                    raise CodexStartupError(
+                        stderr.strip() or "worker Codex pane disappeared"
+                    )
+                return stdout.strip()
+
+            async def send_key(key: str) -> None:
+                tmux_key = "C-m" if key == "ENTER" else "Down"
+                code, _stdout, stderr = await self._run_tmux(
+                    "send-keys", "-t", window_id, tmux_key
+                )
+                if code != 0:
+                    raise CodexStartupError(stderr.strip() or "tmux send-keys failed")
+
+            async def relaunch(exact_command: str) -> None:
+                code, _stdout, stderr = await self._run_tmux(
+                    "send-keys", "-t", window_id, exact_command, "C-m"
+                )
+                if code != 0:
+                    raise CodexStartupError(stderr.strip() or "Codex relaunch failed")
+
+            await drive_codex_startup(
+                command=command,
+                capture=capture,
+                current_process=current_process,
+                send_key=send_key,
+                relaunch=relaunch,
+                timeout=self._ready_timeout,
+                poll_interval=self._codex_poll_interval,
+            )
+            return
+
         deadline = asyncio.get_running_loop().time() + self._ready_timeout
         while asyncio.get_running_loop().time() < deadline:
             code, stdout, _stderr = await self._run_tmux(
                 "capture-pane", "-p", "-t", window_id
             )
             pane = stdout if code == 0 else ""
-            if pane and parse_status_line(pane) is None:
+            if pane:
                 tail = pane.splitlines()[-8:]
-                if any(line.lstrip().startswith((">", "›", "❯")) for line in tail):
+                if any(line.lstrip().startswith((">", "❯")) for line in tail):
                     return
             await asyncio.sleep(1.0)
         raise TimeoutError("worker agent did not become ready")
@@ -1004,7 +1157,6 @@ async def _run_agent_forever(
         context_limit_bytes=int(
             os.environ.get("CCBOT_WORKER_CONTEXT_LIMIT_BYTES", "0")
         ),
-        max_sessions=int(os.environ.get("CCBOT_WORKER_MAX_SESSIONS", "8")),
     )
     context_dir = os.environ.get(
         "CCBOT_NODE_CONTEXT_DIR", str(Path.home() / ".ccbot-worker" / "contexts")

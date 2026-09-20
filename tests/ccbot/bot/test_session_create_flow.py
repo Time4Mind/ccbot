@@ -10,6 +10,102 @@ from telegram import CallbackQuery, User
 from ccbot.bot import _session_create
 from ccbot.handlers.card_model import CardState
 from ccbot.handlers.card_registry import _cards
+from ccbot.startup_queue import begin_startup_queue, has_startup_queue
+
+
+@pytest.mark.asyncio
+async def test_slow_remote_creation_returns_control_to_telegram_immediately(
+    monkeypatch,
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    received: list[tuple[object, ...]] = []
+    new_session = SimpleNamespace(id="remote-session", claude_session_id=None)
+
+    async def create_session(*_args, **_kwargs):
+        received.append(_args)
+        entered.set()
+        await release.wait()
+        return {
+            "ok": True,
+            "target_window_id": "@8",
+            "target_workdir": "/worker/project",
+            "target_agent_session_id": "agent-8",
+        }
+
+    runtime = SimpleNamespace(create_session=create_session)
+    fake_manager = SimpleNamespace(
+        agent_backend="claude",
+        get_active_session=lambda _uid: None,
+        create_session=MagicMock(return_value=new_session),
+        set_session_claude_id=MagicMock(),
+        set_active_session=MagicMock(),
+        save_state=MagicMock(),
+    )
+    query = MagicMock(spec=CallbackQuery)
+    query.message = None
+    query.answer = AsyncMock()
+    user = MagicMock(spec=User)
+    user.id = 42
+    context = SimpleNamespace(
+        user_data={
+            "_new_session_backend": "claude",
+            "_pending_session_name": "Original task",
+        },
+        bot=object(),
+    )
+    monkeypatch.setattr(_session_create, "session_manager", fake_manager)
+    monkeypatch.setattr(_session_create, "get_node_runtime", lambda _node_id: runtime)
+    monkeypatch.setattr(
+        "ccbot.startup_queue.bind_startup_queue", lambda _uid, _wid: None
+    )
+
+    await asyncio.wait_for(
+        _session_create.create_and_activate_session(
+            query, context, user, "/worker/project", node_id="worker-a"
+        ),
+        timeout=0.1,
+    )
+    context.user_data["_new_session_backend"] = "codex"
+    context.user_data["_pending_session_name"] = "Changed later"
+    await asyncio.wait_for(entered.wait(), timeout=0.1)
+    assert fake_manager.create_session.call_count == 0
+
+    release.set()
+    await _session_create.wait_for_session_creation(user.id)
+    assert fake_manager.create_session.call_count == 1
+    assert received == [
+        ("worker-a", "/worker/project", "claude", "Original task")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_failed_remote_creation_closes_its_startup_queue(monkeypatch) -> None:
+    user_id = 43
+    runtime = SimpleNamespace(
+        create_session=AsyncMock(side_effect=RuntimeError("worker startup failed"))
+    )
+    fake_manager = SimpleNamespace(
+        agent_backend="claude",
+        get_active_session=lambda _uid: SimpleNamespace(id="old"),
+    )
+    query = MagicMock(spec=CallbackQuery)
+    query.message = None
+    query.answer = AsyncMock()
+    user = MagicMock(spec=User)
+    user.id = user_id
+    context = SimpleNamespace(user_data={}, bot=object())
+    monkeypatch.setattr(_session_create, "session_manager", fake_manager)
+    monkeypatch.setattr(_session_create, "get_node_runtime", lambda _node_id: runtime)
+    monkeypatch.setattr(_session_create, "safe_edit", AsyncMock())
+    begin_startup_queue(user_id)
+
+    await _session_create.create_and_activate_session(
+        query, context, user, "/worker/project", node_id="worker-a"
+    )
+    await _session_create.wait_for_session_creation(user_id)
+
+    assert has_startup_queue(user_id) is False
 
 
 @pytest.mark.asyncio
@@ -71,22 +167,19 @@ async def test_old_card_stays_background_until_atomic_new_session_handoff(
         "ccbot.startup_queue.bind_startup_queue", lambda _uid, _wid: None
     )
 
-    task = asyncio.create_task(
-        _session_create.create_and_activate_session(
-            query, context, user, "/tmp/project"
-        )
+    await _session_create.create_and_activate_session(
+        query, context, user, "/tmp/project"
     )
     try:
         await asyncio.wait_for(entered_create.wait(), timeout=1)
         assert old_state.in_menu_view is True
         assert old_state.msg_id == carrier_id
         release_create.set()
-        await asyncio.wait_for(task, timeout=1)
+        await asyncio.wait_for(
+            _session_create.wait_for_session_creation(user.id), timeout=1
+        )
     finally:
         release_create.set()
-        if not task.done():
-            task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
         _cards.pop((user_id, old_session.id), None)
 
     assert transitions == ["handoff", "paint"]
@@ -133,6 +226,7 @@ async def test_new_session_is_created_on_selected_remote_node(monkeypatch):
     await _session_create.create_and_activate_session(
         query, context, user, "/worker/project", node_id="worker-a"
     )
+    await _session_create.wait_for_session_creation(user.id)
 
     runtime.create_session.assert_awaited_once_with(
         "worker-a", "/worker/project", "claude", "Task"

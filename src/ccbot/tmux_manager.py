@@ -123,14 +123,20 @@ class TmuxManager:
         )
 
     @classmethod
-    async def _watch_codex_startup_screens(cls, pane: object) -> bool:
+    async def _watch_codex_startup_screens(
+        cls,
+        pane: object,
+        *,
+        command: str,
+        poll_interval: float = 0.25,
+    ) -> bool:
         """Cancellation-safe long watcher for cold Codex launches."""
         return await _tmux_window.watch_codex_startup_screens(
             pane,
+            command=command,
             timeout=config.resume_settle_timeout,
-            sleep=asyncio.sleep,
             to_thread=asyncio.to_thread,
-            handler=cls._handle_codex_startup_screen,
+            poll_interval=poll_interval,
         )
 
     @property
@@ -769,6 +775,7 @@ class TmuxManager:
         resume_session_id: str | None = None,
         backend: str | None = None,
         initial_prompt: str | None = None,
+        wait_for_codex_ready: bool = False,
     ) -> tuple[bool, str, str, str]:
         """Create a tmux window and optionally start the configured agent."""
         return await _tmux_window.create_window(
@@ -779,6 +786,7 @@ class TmuxManager:
             resume_session_id=resume_session_id,
             backend=backend,
             initial_prompt=initial_prompt,
+            wait_for_codex_ready=wait_for_codex_ready,
             config_obj=config,
             logger_obj=logger,
         )

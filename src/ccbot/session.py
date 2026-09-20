@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from telegram import Bot
 
 from .config import config
+from .codex_startup import is_codex_ready
 from .node_models import Node
 from .session_defaults import DEFAULT_IDLE_ARCHIVE_HOURS, IDLE_ARCHIVE_HOUR_CHOICES
 from .session_keys import key_matches_window
@@ -553,53 +554,12 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
     @staticmethod
     def _pane_has_ready_input(pane: str, backend: str) -> bool:
         """Whether the visible pane ends in the agent's real input box."""
+        if backend == "codex":
+            return is_codex_ready(pane)
         if not pane or is_interactive_ui(pane) or parse_status_line(pane) is not None:
             return False
-        lower = pane.lower()
-        if backend == "codex" and (
-            "do you trust the contents of this directory?" in lower
-            or "choose working directory to resume this session" in lower
-            or "sign in with chatgpt" in lower
-            or "sign in with device code" in lower
-            or "provide your own api key" in lower
-            or "update available!" in lower
-        ):
-            return False
-        marker = "›" if backend == "codex" else "❯"
+        marker = "❯"
         lines = pane.strip().splitlines()
-        if backend == "codex" and "openai codex" not in lower:
-            # A fresh pane exposes the OpenAI Codex header, but a resumed long
-            # transcript scrolls that header out of capture-pane before the
-            # input becomes ready.  Its bottom status row is still stable:
-            # ``<model> <effort> · <cwd>``.  Accept that as Codex evidence so
-            # resume cannot remain gated forever, while still rejecting
-            # Artem's shell prompt (which also starts with ``›``).
-            # Codex 0.147 renders the configured/default reasoning choice as
-            # ``default`` in the footer instead of an explicit effort level.
-            efforts = {
-                "default",
-                "low",
-                "medium",
-                "high",
-                "xhigh",
-                "max",
-                "ultra",
-            }
-            has_codex_footer = False
-            for line in lines[-8:]:
-                parts = [part.strip() for part in line.split("·")]
-                if len(parts) < 2:
-                    continue
-                model_effort = parts[0].split()
-                if not model_effort or model_effort[-1].lower() not in efforts:
-                    continue
-                if any(
-                    part == "~" or part.startswith(("~/", "/")) for part in parts[1:]
-                ):
-                    has_codex_footer = True
-                    break
-            if not has_codex_footer:
-                return False
         # The live input row is pinned near the bottom. Restricting detection
         # to the tail avoids mistaking a historical user row for readiness
         # while a resumed transcript is still being restored.

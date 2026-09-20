@@ -176,11 +176,18 @@ Remote-сессии используют тот же Telegram control surface: E
 RPC. Перенос контекста создаёт и выбирает новую сессию, но не архивирует
 исходную - пользователь закрывает её отдельно.
 
-Worker по умолчанию допускает не более 8 одновременно живых управляемых
-сессий. Лимит можно изменить через `CCBOT_WORKER_MAX_SESSIONS`; значение `0`
-отключает ограничение. При достижении лимита новая сессия не создаётся, а
-пользователь получает ошибку capacity. Worker сообщает leader текущие
-`active_sessions` и `max_sessions` в health payload.
+Worker не вводит собственного лимита на число сессий. Новые сессии
+создаются, пока это позволяют реальные ресурсы операционной системы. Worker
+по-прежнему сообщает `active_sessions` в health payload; `max_sessions: 0`
+означает отсутствие лимита ccbot.
+
+При запуске Codex leader и worker используют один startup lifecycle. Если Codex
+показывает update prompt, ccbot выбирает `Update now`, дожидается выхода
+updater и один раз повторяет исходную команду с теми же flags,
+directory, resume/context intent и session name. Повторный update prompt,
+timeout, cancellation
+или ошибка startup завершаются контролируемо: созданное tmux-окно
+удаляется и не считается живой сессией.
 
 ## Автообновление worker
 

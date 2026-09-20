@@ -13,6 +13,8 @@ import shlex
 from pathlib import Path
 from typing import Any
 
+from .codex_startup import drive_codex_startup
+
 
 _CODEX_STARTUP_POLL_SECONDS = 0.25
 
@@ -52,17 +54,6 @@ def handle_codex_startup_screen(
         send_keys("", enter=True)
         logger_obj.info("Selected current directory for Codex resume")
         return True, False
-    if (
-        "Update available!" in text
-        and "1. Update now" in text
-        and "2. Skip" in text
-        and "Press enter to continue" in text
-    ):
-        # Never mutate the host toolchain from a Telegram session.
-        send_keys("Down", enter=False)
-        send_keys("", enter=True)
-        logger_obj.info("Skipped Codex CLI update prompt")
-        return True, False
     return False, "OpenAI Codex" in text and "›" in text
 
 
@@ -94,21 +85,43 @@ def accept_codex_directory_trust(
 async def watch_codex_startup_screens(
     pane: object,
     *,
+    command: str,
     timeout: float,
-    sleep: Any,
     to_thread: Any,
-    handler: Any,
+    poll_interval: float = _CODEX_STARTUP_POLL_SECONDS,
 ) -> bool:
-    """Cancellation-safe long watcher for cold Codex launches."""
-    accepted = False
-    attempts = max(18, int(max(timeout, 4.5) / _CODEX_STARTUP_POLL_SECONDS))
-    for _ in range(attempts):
-        await sleep(_CODEX_STARTUP_POLL_SECONDS)
-        acted, terminal = await to_thread(handler, pane)
-        accepted = accepted or acted
-        if terminal:
-            return accepted
-    return accepted
+    """Drive the same bounded Codex lifecycle used by remote workers."""
+    capture_pane = getattr(pane, "capture_pane", None)
+    send_keys = getattr(pane, "send_keys", None)
+    if not callable(capture_pane) or not callable(send_keys):
+        raise RuntimeError("Codex pane cannot be inspected or controlled")
+
+    async def capture() -> str:
+        lines = await to_thread(capture_pane)
+        return "\n".join(lines) if isinstance(lines, list) else str(lines)
+
+    async def current_process() -> str:
+        return str(await to_thread(lambda: getattr(pane, "pane_current_command", "")))
+
+    async def send_key(key: str) -> None:
+        if key == "DOWN":
+            await to_thread(send_keys, "Down", enter=False)
+        else:
+            await to_thread(send_keys, "", enter=True)
+
+    async def relaunch(exact_command: str) -> None:
+        await to_thread(send_keys, exact_command, enter=True)
+
+    result = await drive_codex_startup(
+        command=command,
+        capture=capture,
+        current_process=current_process,
+        send_key=send_key,
+        relaunch=relaunch,
+        timeout=timeout,
+        poll_interval=poll_interval,
+    )
+    return result.updated
 
 
 async def create_window(
@@ -119,6 +132,7 @@ async def create_window(
     resume_session_id: str | None = None,
     backend: str | None = None,
     initial_prompt: str | None = None,
+    wait_for_codex_ready: bool = False,
     *,
     config_obj: Any,
     logger_obj: logging.Logger,
@@ -155,9 +169,11 @@ async def create_window(
 
     # Create window in thread
     created_pane: object | None = None
+    created_window: Any | None = None
+    created_command = ""
 
     def _create_and_start() -> tuple[bool, str, str, str]:
-        nonlocal created_pane
+        nonlocal created_command, created_pane, created_window
         session = manager.get_or_create_session()
         window: Any | None = None
         try:
@@ -168,6 +184,7 @@ async def create_window(
             )
             if window is None:
                 raise RuntimeError("tmux did not return the created window")
+            created_window = window
 
             wid = window.window_id or ""
 
@@ -214,6 +231,7 @@ async def create_window(
                         cmd = f"IS_SANDBOX=1 {env_prefix} {cmd}"
                     else:
                         cmd = f"{env_prefix} {cmd}"
+                    created_command = cmd
                     pane.send_keys(cmd, enter=True)
 
             logger_obj.info(
@@ -251,11 +269,25 @@ async def create_window(
 
     result = await asyncio.to_thread(_create_and_start)
     if result[0] and selected_backend == "codex" and created_pane is not None:
-        # Do not hold the Telegram callback open while the Node wrapper
-        # draws its startup UI. The background task accepts only the two
-        # known directory prompts; normal input is never confirmed.
+        async def _drive_and_rollback_on_failure() -> bool:
+            try:
+                return await manager._watch_codex_startup_screens(
+                    created_pane, command=created_command
+                )
+            except BaseException:
+                if created_window is not None:
+                    try:
+                        await asyncio.to_thread(created_window.kill)
+                    except Exception as cleanup_error:
+                        logger_obj.error(
+                            "Failed to roll back Codex window %s: %s",
+                            result[3],
+                            cleanup_error,
+                        )
+                raise
+
         task = asyncio.create_task(
-            manager._watch_codex_startup_screens(created_pane),
+            _drive_and_rollback_on_failure(),
             name=f"codex-startup-trust:{result[3]}",
         )
         manager._startup_tasks.add(task)
@@ -270,4 +302,13 @@ async def create_window(
                 logger_obj.warning("Codex startup prompt handler failed: %s", e)
 
         task.add_done_callback(_finish_startup_task)
+        if wait_for_codex_ready:
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                raise
+            except Exception as exc:
+                return False, f"Failed to start Codex: {exc}", "", ""
     return result

@@ -15,11 +15,13 @@ from ccbot.startup_queue import (
     _replay,
     begin_startup_queue,
     bind_startup_queue,
+    cancel_startup_queue,
     capture_startup_message,
     enqueue_startup_message,
     has_startup_queue,
     pending_startup_count,
     reset_startup_queues_for_test,
+    track_startup_operation,
 )
 
 
@@ -49,6 +51,24 @@ def _clean_queue() -> None:
     reset_startup_queues_for_test()
     yield
     reset_startup_queues_for_test()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_flow_cancels_its_tracked_creation_operation() -> None:
+    started = asyncio.Event()
+
+    async def operation() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    begin_startup_queue(42)
+    task = asyncio.create_task(operation())
+    track_startup_operation(42, task)
+    await started.wait()
+
+    assert cancel_startup_queue(42) == 0
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from telegram.ext import ContextTypes
 
@@ -27,6 +28,7 @@ from ..tmux_manager import tmux_manager
 from ..transfer_runtime import get_node_runtime
 
 logger = logging.getLogger(__name__)
+_session_creation_tasks: dict[int, asyncio.Task[None]] = {}
 
 
 async def create_and_activate_session(
@@ -37,13 +39,22 @@ async def create_and_activate_session(
     resume_session_id: str | None = None,
     node_id: str = "local",
 ) -> None:
-    """Create a session and atomically replace the browser with its live card."""
+    """Acknowledge Telegram and track session creation outside its handler."""
     from telegram import CallbackQuery, User
 
     assert isinstance(query, CallbackQuery)
     assert isinstance(user, User)
 
-    previous_active = session_manager.get_active_session(user.id)
+    try:
+        await query.answer()
+    except Exception as e:
+        logger.debug("Early query.answer failed: %s", e)
+
+    existing = _session_creation_tasks.get(user.id)
+    if existing is not None and not existing.done():
+        logger.info("Session creation already running for user=%d", user.id)
+        return
+
     selected_backend = (
         context.user_data.pop("_new_session_backend", None)
         if context.user_data is not None
@@ -55,22 +66,79 @@ async def create_and_activate_session(
         else session_manager.agent_backend
     )
     pending_name = (
-        context.user_data.pop("_pending_session_name", "") if context.user_data else ""
+        context.user_data.pop("_pending_session_name", "")
+        if context.user_data
+        else ""
     )
+    previous_active = session_manager.get_active_session(user.id)
 
-    # Acknowledge the callback up-front so Telegram's 15-second
-    # ``answer_callback_query`` deadline doesn't expire under slow
-    # claude startup (Android Doze can stretch it to 30s+). All the
-    # status feedback happens via ``safe_edit`` on the message itself.
-    try:
-        await query.answer()
-    except Exception as e:
-        logger.debug("Early query.answer failed: %s", e)
+    task = asyncio.create_task(
+        _create_and_activate_session(
+            query,
+            context,
+            user,
+            selected_path,
+            resume_session_id=resume_session_id,
+            node_id=node_id,
+            backend=backend,
+            pending_name=pending_name,
+            previous_active=previous_active,
+        ),
+        name=f"session-create:{user.id}:{node_id}",
+    )
+    _session_creation_tasks[user.id] = task
+    from ..startup_queue import track_startup_operation
+
+    track_startup_operation(user.id, task)
+
+    def _finish(done: asyncio.Task[None]) -> None:
+        if _session_creation_tasks.get(user.id) is done:
+            _session_creation_tasks.pop(user.id, None)
+        try:
+            done.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("Background session creation failed for user=%d", user.id)
+
+    task.add_done_callback(_finish)
+
+
+async def wait_for_session_creation(user_id: int) -> None:
+    """Wait for one tracked creation operation (test and shutdown seam)."""
+    task = _session_creation_tasks.get(user_id)
+    if task is not None:
+        await asyncio.shield(task)
+
+
+async def _create_and_activate_session(
+    query: object,
+    context: ContextTypes.DEFAULT_TYPE,
+    user: object,
+    selected_path: str,
+    resume_session_id: str | None = None,
+    node_id: str = "local",
+    *,
+    backend: str,
+    pending_name: str,
+    previous_active: Any,
+) -> None:
+    """Create a session and atomically replace the browser with its live card."""
+    from telegram import CallbackQuery, User
+
+    assert isinstance(query, CallbackQuery)
+    assert isinstance(user, User)
+
+    def cancel_pending_flow() -> int:
+        from ..startup_queue import cancel_startup_queue
+
+        return cancel_startup_queue(user.id)
 
     if backend == "codex":
         from .commands.auth import ensure_codex_authenticated
 
         if not await ensure_codex_authenticated(context.bot, user.id, backend=backend):
+            cancel_pending_flow()
             await safe_edit(
                 query,
                 t(user.id, "auth.codex.required"),
@@ -83,16 +151,20 @@ async def create_and_activate_session(
             selected_path,
             resume_session_id=resume_session_id,
             backend=backend,
+            wait_for_codex_ready=True,
         )
         if not success:
+            cancel_pending_flow()
             await safe_edit(query, f"❌ {message}")
             return
     else:
         runtime = get_node_runtime(node_id)
         if runtime is None:
+            cancel_pending_flow()
             await safe_edit(query, f"❌ Node is not connected: {node_id}")
             return
         if resume_session_id:
+            cancel_pending_flow()
             await safe_edit(
                 query,
                 "❌ Resuming an existing directory session on a remote node "
@@ -108,11 +180,14 @@ async def create_and_activate_session(
             )
         except Exception as exc:
             logger.exception("Remote session creation failed on node %s", node_id)
-            await safe_edit(query, f"❌ {exc}")
+            unsent = cancel_pending_flow()
+            suffix = f"; {unsent} queued message(s) not sent" if unsent else ""
+            await safe_edit(query, f"❌ {exc}{suffix}")
             return
         raw_window_id = str(result.get("target_window_id", ""))
         agent_session_id = str(result.get("target_agent_session_id", ""))
         if not raw_window_id or not agent_session_id:
+            cancel_pending_flow()
             await safe_edit(query, "❌ Worker did not return a ready session")
             return
         created_wid = f"{node_id}::{raw_window_id}"

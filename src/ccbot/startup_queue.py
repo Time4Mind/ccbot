@@ -37,6 +37,7 @@ class StartupFlow:
     next_sequence: int = 1
     window_id: str | None = None
     drain_task: asyncio.Task[None] | None = None
+    operation_task: asyncio.Task[None] | None = None
 
 
 _flows: dict[int, StartupFlow] = {}
@@ -68,9 +69,23 @@ def cancel_startup_queue(user_id: int) -> int:
         return 0
     if flow.drain_task is not None and not flow.drain_task.done():
         flow.drain_task.cancel()
+    current = asyncio.current_task()
+    if (
+        flow.operation_task is not None
+        and flow.operation_task is not current
+        and not flow.operation_task.done()
+    ):
+        flow.operation_task.cancel()
     count = len(flow.entries)
     logger.info("startup queue cancelled user=%d pending=%d", user_id, count)
     return count
+
+
+def track_startup_operation(user_id: int, task: asyncio.Task[None]) -> None:
+    """Attach cancellable session creation work to the user's open flow."""
+    flow = _flows.get(user_id)
+    if flow is not None:
+        flow.operation_task = task
 
 
 async def capture_startup_message(
@@ -284,6 +299,8 @@ def reset_startup_queues_for_test() -> None:
     for flow in _flows.values():
         if flow.drain_task is not None and not flow.drain_task.done():
             flow.drain_task.cancel()
+        if flow.operation_task is not None and not flow.operation_task.done():
+            flow.operation_task.cancel()
     _flows.clear()
 
 
@@ -295,4 +312,5 @@ __all__ = [
     "enqueue_startup_message",
     "has_startup_queue",
     "pending_startup_count",
+    "track_startup_operation",
 ]

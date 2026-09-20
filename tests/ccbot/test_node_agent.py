@@ -25,6 +25,15 @@ class FakeTransport:
         return None
 
 
+class QueueTransport(FakeTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.incoming: asyncio.Queue[NodeEnvelope] = asyncio.Queue()
+
+    async def receive(self) -> NodeEnvelope:
+        return await self.incoming.get()
+
+
 class FakeExecutor:
     def __init__(self) -> None:
         self.started: list[dict[str, str]] = []
@@ -49,7 +58,9 @@ class FakeExecutor:
     async def create_directory(self, *, path: str, name: str):
         return {"ok": True, "path": f"{path}/{name}", "directories": []}
 
-    async def create_session(self, *, path: str, backend: str, name: str):
+    async def create_session(
+        self, *, path: str, backend: str, name: str, startup_id: str = ""
+    ):
         return {
             "ok": True,
             "target_window_id": "@8",
@@ -57,6 +68,67 @@ class FakeExecutor:
             "target_agent_session_id": f"agent-{name}",
             "backend": backend,
         }
+
+    async def cancel_session_start(self, *, startup_id: str):
+        return {"ok": bool(startup_id)}
+
+
+@pytest.mark.asyncio
+async def test_slow_worker_startup_does_not_block_other_worker_commands(tmp_path):
+    transport = QueueTransport()
+    startup_entered = asyncio.Event()
+    release_startup = asyncio.Event()
+
+    class Executor(FakeExecutor):
+        async def create_session(self, **_kwargs):
+            startup_entered.set()
+            await release_startup.wait()
+            return {"ok": True}
+
+    agent = NodeAgent(transport, Executor(), context_dir=tmp_path)
+    run_task = asyncio.create_task(agent.run())
+    await transport.incoming.put(
+        NodeEnvelope(
+            kind="command",
+            request_id="start",
+            payload={
+                "operation": "create_session",
+                "path": "/worker",
+                "backend": "codex",
+                "name": "slow",
+                "startup_id": "startup-1",
+            },
+        )
+    )
+    await startup_entered.wait()
+    await transport.incoming.put(
+        NodeEnvelope(
+            kind="command",
+            request_id="dirs",
+            payload={"operation": "list_directories", "path": "/worker"},
+        )
+    )
+
+    for _ in range(20):
+        if any(
+            message.kind == "result" and message.request_id == "dirs"
+            for message in transport.sent
+        ):
+            break
+        await asyncio.sleep(0)
+    else:
+        pytest.fail("ordinary worker command remained blocked behind startup")
+
+    release_startup.set()
+    for _ in range(20):
+        if any(
+            message.kind == "result" and message.request_id == "start"
+            for message in transport.sent
+        ):
+            break
+        await asyncio.sleep(0)
+    run_task.cancel()
+    await asyncio.gather(run_task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -494,23 +566,204 @@ async def test_worker_reads_only_appended_transcript_bytes(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_worker_rejects_session_creation_when_capacity_is_full(
-    tmp_path, monkeypatch
-):
-    executor = TmuxWorkerExecutor(workdir=tmp_path, max_sessions=1)
-    executor._sessions["existing"] = SimpleNamespace(window_id="@1")
+async def test_worker_accepts_more_than_eight_sessions(tmp_path, monkeypatch):
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+    for index in range(8):
+        executor._sessions[f"existing-{index}"] = SimpleNamespace(
+            session_id=f"existing-{index}",
+            window_id=f"@{index + 1}",
+            backend="codex",
+        )
+    calls: list[tuple[str, ...]] = []
 
     async def fake_tmux(*args: str):
+        calls.append(args)
         if args[0] == "list-windows":
-            return 0, "@1\texisting\tcodex\n", ""
-        raise AssertionError("capacity rejection must happen before creating a window")
+            rows = [
+                f"@{index + 1}\texisting-{index}\tcodex"
+                for index in range(8)
+            ]
+            return 0, "\n".join(rows) + "\n", ""
+        if args[0] == "new-window":
+            return 0, "@9\n", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(executor, "_run_tmux", fake_tmux)
+    monkeypatch.setattr(executor, "_wait_ready", AsyncMock())
+
+    result = await executor.create_session(
+        path=str(tmp_path), backend="codex", name="ninth"
+    )
+
+    assert result["target_window_id"] == "@9"
+    assert any(call[0] == "new-window" for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_worker_cleans_up_window_when_startup_fails(tmp_path, monkeypatch):
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_tmux(*args: str):
+        calls.append(args)
+        if args[0] == "list-windows":
+            return 1, "", ""
+        if args[0] == "has-session":
+            return 0, "", ""
+        if args[0] == "new-window":
+            return 0, "@9\n", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(executor, "_run_tmux", fake_tmux)
+    monkeypatch.setattr(
+        executor, "_wait_ready", AsyncMock(side_effect=TimeoutError("not ready"))
+    )
+
+    with pytest.raises(TimeoutError, match="not ready"):
+        await executor.create_session(
+            path=str(tmp_path), backend="codex", name="broken"
+        )
+
+    assert ("kill-window", "-t", "@9") in calls
+
+
+@pytest.mark.asyncio
+async def test_worker_cleans_up_window_when_startup_is_cancelled(
+    tmp_path, monkeypatch
+):
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+    calls: list[tuple[str, ...]] = []
+    startup_entered = asyncio.Event()
+
+    async def fake_tmux(*args: str):
+        calls.append(args)
+        if args[0] == "list-windows":
+            return 1, "", ""
+        if args[0] == "has-session":
+            return 0, "", ""
+        if args[0] == "new-window":
+            return 0, "@9\n", ""
+        return 0, "", ""
+
+    async def wait_forever(*_args, **_kwargs):
+        startup_entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(executor, "_run_tmux", fake_tmux)
+    monkeypatch.setattr(executor, "_wait_ready", wait_forever)
+
+    task = asyncio.create_task(
+        executor.create_session(path=str(tmp_path), backend="codex", name="cancelled")
+    )
+    await asyncio.wait_for(startup_entered.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert ("kill-window", "-t", "@9") in calls
+
+
+@pytest.mark.asyncio
+async def test_worker_control_command_cancels_inflight_session_start(
+    tmp_path, monkeypatch
+):
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+    calls: list[tuple[str, ...]] = []
+    startup_entered = asyncio.Event()
+    window_killed = asyncio.Event()
+
+    async def fake_tmux(*args: str):
+        calls.append(args)
+        if args[0] == "list-windows":
+            return 1, "", ""
+        if args[0] == "has-session":
+            return 0, "", ""
+        if args[0] == "new-window":
+            return 0, "@9\n", ""
+        if args[0] == "kill-window":
+            window_killed.set()
+        return 0, "", ""
+
+    async def wait_forever(*_args, **_kwargs):
+        startup_entered.set()
+        await window_killed.wait()
+
+    monkeypatch.setattr(executor, "_run_tmux", fake_tmux)
+    monkeypatch.setattr(executor, "_wait_ready", wait_forever)
+
+    task = asyncio.create_task(
+        executor.create_session(
+            path=str(tmp_path),
+            backend="codex",
+            name="cancelled",
+            startup_id="startup-1",
+        )
+    )
+    await startup_entered.wait()
+    result = await executor.cancel_session_start(startup_id="startup-1")
+    with pytest.raises(RuntimeError, match="cancelled"):
+        await task
+
+    assert result == {"ok": True}
+    assert ("kill-window", "-t", "@9") in calls
+    assert executor.capacity_snapshot()["active_sessions"] == 0
+
+
+@pytest.mark.asyncio
+async def test_worker_installs_codex_update_and_relaunches_exact_command(
+    tmp_path, monkeypatch
+):
+    executor = TmuxWorkerExecutor(
+        workdir=tmp_path,
+        codex_flags="--no-alt-screen",
+        ready_timeout=1,
+        codex_poll_interval=0,
+    )
+    screens = iter(
+        [
+            "Update available! 0.147.0 -> 0.151.0\n"
+            "› 1. Update now\n  2. Skip\n  3. Skip until next version\n"
+            "Press enter to continue",
+            "Installing update",
+            "shell",
+            "OpenAI Codex\n\n› Ask anything\n\ngpt-5.6 medium · ~/project",
+        ]
+    )
+    processes = iter(["codex", "npm", "zsh", "codex"])
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_tmux(*args: str):
+        calls.append(args)
+        if args[0] == "list-windows":
+            return 1, "", ""
+        if args[0] == "has-session":
+            return 0, "", ""
+        if args[0] == "new-window":
+            return 0, "@9\n", ""
+        if args[0] == "capture-pane":
+            return 0, next(screens), ""
+        if args[0] == "display-message":
+            return 0, next(processes), ""
+        return 0, "", ""
 
     monkeypatch.setattr(executor, "_run_tmux", fake_tmux)
 
-    with pytest.raises(RuntimeError, match="capacity"):
-        await executor.create_session(
-            path=str(tmp_path), backend="codex", name="overflow"
-        )
+    result = await executor.create_session(
+        path=str(tmp_path), backend="codex", name="updated"
+    )
+
+    command = "codex --no-alt-screen"
+    command_sends = [
+        call
+        for call in calls
+        if call[:3] == ("send-keys", "-t", "@9") and command in call
+    ]
+    assert result["target_window_id"] == "@9"
+    assert command_sends == [
+        ("send-keys", "-t", "@9", command, "C-m"),
+        ("send-keys", "-t", "@9", command, "C-m"),
+    ]
+    assert ("send-keys", "-t", "@9", "C-m") in calls
 
 
 @pytest.mark.asyncio

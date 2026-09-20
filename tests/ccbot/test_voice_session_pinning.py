@@ -490,6 +490,62 @@ class TestVoiceTranscriptConfirmation:
 
 class TestVoiceSessionPinning:
     @pytest.mark.asyncio
+    async def test_remote_voice_is_transcribed_on_leader_without_local_tmux_lookup(
+        self,
+    ):
+        update = _make_voice_update()
+        context = _make_context()
+        remote_session = MagicMock(id="remote-session", node_id="worker-a")
+        mock_sm = MagicMock()
+        mock_sm.find_session_by_window.return_value = remote_session
+        mock_tmux = MagicMock()
+        mock_tmux.find_window_by_id = AsyncMock(return_value=None)
+        dispatch = AsyncMock(return_value=True)
+        download = AsyncMock(return_value=b"ogg-bytes")
+        transcribe = AsyncMock(return_value="remote voice text")
+
+        with (
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.resolve_voice_backend", return_value="whisper"),
+            patch("ccbot.bot.messages.session_manager", mock_sm),
+            patch("ccbot.bot.messages.tmux_manager", mock_tmux),
+            patch("ccbot.bot.messages.get_card_state", return_value=None),
+            patch("ccbot.bot.messages.is_active_for_user", return_value=False),
+            patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
+            patch("ccbot.bot.messages._download_voice_bytes", new=download),
+            patch("ccbot.bot.messages.transcribe_voice", new=transcribe),
+            patch(
+                "ccbot.bot.messages._intercept_if_pending_ui",
+                new=AsyncMock(return_value=False),
+            ),
+            patch("ccbot.bot.messages._dispatch_text_to_active", new=dispatch),
+        ):
+            from ccbot.bot.messages import _process_voice
+
+            delivered = await _process_voice(
+                update, context, pinned_wid="worker-a::@1"
+            )
+
+        assert delivered is True
+        mock_tmux.find_window_by_id.assert_not_awaited()
+        download.assert_awaited_once_with(
+            update.message.voice,
+            user_id=update.effective_user.id,
+            wid="worker-a::@1",
+        )
+        transcribe.assert_awaited_once_with(
+            b"ogg-bytes", user_id=update.effective_user.id
+        )
+        dispatch.assert_awaited_once_with(
+            update,
+            context,
+            update.effective_user.id,
+            "worker-a::@1",
+            "remote voice text",
+            input_kind="voice",
+        )
+
+    @pytest.mark.asyncio
     async def test_switch_during_transcription_does_not_redirect_voice(self):
         """Active session flips mid-transcription — voice still goes to
         the window that was active when the message was received."""

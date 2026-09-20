@@ -14,6 +14,7 @@ def test_node_round_trip_preserves_runtime_capabilities() -> None:
         arch="arm64",
         backends=["claude", "codex"],
         capabilities={"screenshot": True, "directory_browser": True},
+        capacity={"active_sessions": 2, "max_sessions": 8},
         protocol_version="1",
         ccbot_version="0.2.0",
         last_seen_at=123.5,

@@ -30,6 +30,17 @@ def test_receipt_ledger_deduplicates_retries() -> None:
     assert ledger.accept("request-1") == completed
 
 
+def test_receipt_ledger_evicts_old_results_at_capacity() -> None:
+    ledger = RequestReceiptLedger(max_entries=2)
+    for request_id in ("request-1", "request-2", "request-3"):
+        ledger.accept(request_id)
+        ledger.complete(request_id, {"request_id": request_id})
+
+    with pytest.raises(KeyError, match="unknown request id"):
+        ledger.complete("request-1", {})
+    assert ledger.accept("request-3").result == {"request_id": "request-3"}
+
+
 def test_event_sequence_ignores_replay_and_rejects_gap() -> None:
     cursor = EventSequence()
     first = NodeEnvelope(kind="event", sequence=1)

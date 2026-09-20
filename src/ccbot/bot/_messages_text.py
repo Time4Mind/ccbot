@@ -299,6 +299,7 @@ async def _dispatch_text_to_active(
     *,
     input_kind: str = "text",
     _from_remote_queue: bool = False,
+    _prepared_dispatch: Any = None,
 ) -> bool:
     """Send the user's text to ``wid``'s pane and run the post-send
     bookkeeping under the repost-intent bracket.
@@ -344,8 +345,20 @@ async def _dispatch_text_to_active(
         if remote_prompt_queue.has_pending(initial_session.id) or (
             node is None or not node.is_available()
         ):
+            queued_prepared_dispatch: Any = None
 
             async def deliver() -> bool:
+                nonlocal queued_prepared_dispatch
+                if queued_prepared_dispatch is None:
+                    queued_prepared_dispatch = await prepare_request_for_dispatch(
+                        update,
+                        context,
+                        user_id,
+                        wid,
+                        text,
+                        input_kind=input_kind,
+                        persist_recovery=False,
+                    )
                 return await _dispatch_text_to_active(
                     update,
                     context,
@@ -354,6 +367,7 @@ async def _dispatch_text_to_active(
                     text,
                     input_kind=input_kind,
                     _from_remote_queue=True,
+                    _prepared_dispatch=queued_prepared_dispatch,
                 )
 
             return await remote_prompt_queue.admit(
@@ -364,14 +378,16 @@ async def _dispatch_text_to_active(
                 deliver=deliver,
             )
 
-    prepared_dispatch = await prepare_request_for_dispatch(
-        update,
-        context,
-        user_id,
-        wid,
-        text,
-        input_kind=input_kind,
-    )
+    prepared_dispatch = _prepared_dispatch
+    if prepared_dispatch is None:
+        prepared_dispatch = await prepare_request_for_dispatch(
+            update,
+            context,
+            user_id,
+            wid,
+            text,
+            input_kind=input_kind,
+        )
     text = prepared_dispatch.text
 
     # Navigation is authoritative. A session keeps accepting its pinned

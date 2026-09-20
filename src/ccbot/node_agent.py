@@ -34,6 +34,8 @@ from .utils import ccbot_dir
 
 logger = logging.getLogger(__name__)
 HEALTH_INTERVAL_SECONDS = 15.0
+_CONTROL_OPERATIONS = {"send_key", "capture_session", "terminate_session", "health"}
+_COMMAND_QUEUE_SIZE = 256
 
 
 class NodeCredentialStore:
@@ -147,20 +149,49 @@ class NodeAgent:
 
     async def run(self) -> None:
         await self._send_health()
+        regular_commands: asyncio.Queue[NodeEnvelope] = asyncio.Queue(
+            maxsize=_COMMAND_QUEUE_SIZE
+        )
+        control_commands: asyncio.Queue[NodeEnvelope] = asyncio.Queue(
+            maxsize=_COMMAND_QUEUE_SIZE
+        )
         heartbeat = asyncio.create_task(self._health_loop(), name="node-health")
         events = asyncio.create_task(self._event_loop(), name="node-session-events")
+        regular_worker = asyncio.create_task(
+            self._command_worker(regular_commands), name="node-regular-commands"
+        )
+        control_worker = asyncio.create_task(
+            self._command_worker(control_commands), name="node-control-commands"
+        )
+        background = (heartbeat, events, regular_worker, control_worker)
         try:
             while True:
                 message = await self._transport.receive()
                 if message.kind != "command":
                     continue
-                await self._handle_command(message)
+                operation = str((message.payload or {}).get("operation", ""))
+                queue = (
+                    control_commands
+                    if operation in _CONTROL_OPERATIONS
+                    else regular_commands
+                )
+                await queue.put(message)
         finally:
-            heartbeat.cancel()
-            events.cancel()
-            await asyncio.gather(heartbeat, events, return_exceptions=True)
+            for task in background:
+                task.cancel()
+            await asyncio.gather(*background, return_exceptions=True)
+
+    async def _command_worker(self, queue: asyncio.Queue[NodeEnvelope]) -> None:
+        while True:
+            message = await queue.get()
+            try:
+                await self._handle_command(message)
+            finally:
+                queue.task_done()
 
     async def _send_health(self) -> None:
+        capacity_snapshot = getattr(self._executor, "capacity_snapshot", None)
+        capacity = capacity_snapshot() if callable(capacity_snapshot) else {}
         await self._transport.send(
             NodeEnvelope(
                 kind="health",
@@ -177,6 +208,7 @@ class NodeAgent:
                         "context_transfer": True,
                         "send_text": True,
                     },
+                    "capacity": capacity,
                 },
             )
         )
@@ -208,12 +240,13 @@ class NodeAgent:
         if not message.request_id:
             await self._send_error(message, "request_id is required")
             return
-        receipt = self._ledger.accept(message.request_id)
+        existing = self._ledger.get(message.request_id)
+        receipt = existing or self._ledger.accept(message.request_id)
         await self._transport.send(
             NodeEnvelope(
                 kind="ack",
                 request_id=message.request_id,
-                payload={"accepted": receipt.accepted},
+                payload={"accepted": existing is None},
             )
         )
         if receipt.result is not None:
@@ -224,6 +257,8 @@ class NodeAgent:
                     payload=receipt.result,
                 )
             )
+            return
+        if existing is not None:
             return
         try:
             result = await self._dispatch(message.payload or {})
@@ -414,6 +449,8 @@ class TmuxWorkerExecutor:
         codex_flags: str = "",
         ready_timeout: float = 120.0,
         context_limit_bytes: int = 0,
+        max_sessions: int = 8,
+        reconcile_interval: float = 10.0,
     ):
         self._workdir = Path(workdir).expanduser().resolve()
         self._tmux_session = tmux_session
@@ -423,7 +460,16 @@ class TmuxWorkerExecutor:
         self._codex_flags = codex_flags
         self._ready_timeout = ready_timeout
         self._context_limit_bytes = max(0, context_limit_bytes)
+        self._max_sessions = max(0, max_sessions)
+        self._reconcile_interval = max(0.0, reconcile_interval)
+        self._last_reconcile_at = time.monotonic()
         self._sessions: dict[str, _TmuxWorkerSession] = {}
+
+    def capacity_snapshot(self) -> dict[str, int]:
+        return {
+            "active_sessions": len(self._sessions),
+            "max_sessions": self._max_sessions,
+        }
 
     async def list_directories(self, *, path: str) -> dict[str, Any]:
         directory = self._resolve_directory(path)
@@ -502,6 +548,9 @@ class TmuxWorkerExecutor:
             raise ValueError(f"unsupported backend: {backend}")
         if not self._workdir.is_dir():
             raise ValueError(f"worker workdir does not exist: {self._workdir}")
+        await self._recover_sessions(reconcile=True)
+        if self._max_sessions and len(self._sessions) >= self._max_sessions:
+            raise RuntimeError(f"worker session capacity reached ({self._max_sessions})")
         await self._ensure_tmux_session()
         window_name = self._safe_window_name(name)
         code, stdout, stderr = await self._run_tmux(
@@ -599,6 +648,13 @@ class TmuxWorkerExecutor:
         return session
 
     async def poll_events(self) -> list[dict[str, Any]]:
+        now = time.monotonic()
+        if (
+            self._reconcile_interval == 0
+            or now - self._last_reconcile_at >= self._reconcile_interval
+        ):
+            await self._recover_sessions(reconcile=True)
+            self._last_reconcile_at = now
         events: list[dict[str, Any]] = []
         for session in tuple(self._sessions.values()):
             await self._bind_transcript(session)
@@ -606,15 +662,14 @@ class TmuxWorkerExecutor:
             if path is None:
                 continue
             try:
-                content = await asyncio.to_thread(path.read_bytes)
+                chunk, end_offset = await asyncio.to_thread(
+                    self._read_transcript_tail, path, session.transcript_offset
+                )
             except OSError:
                 continue
-            if len(content) < session.transcript_offset:
-                session.transcript_offset = 0
-            chunk = content[session.transcript_offset :]
             if not chunk or not chunk.endswith(b"\n"):
                 continue
-            session.transcript_offset = len(content)
+            session.transcript_offset = end_offset
             rows = []
             for raw_line in chunk.decode("utf-8", errors="replace").splitlines():
                 row = TranscriptParser.parse_line(raw_line)
@@ -642,6 +697,17 @@ class TmuxWorkerExecutor:
                     }
                 )
         return events
+
+    @staticmethod
+    def _read_transcript_tail(path: Path, offset: int) -> tuple[bytes, int]:
+        size = path.stat().st_size
+        start = offset if size >= offset else 0
+        if size == start:
+            return b"", start
+        with path.open("rb") as stream:
+            stream.seek(start)
+            chunk = stream.read()
+        return chunk, start + len(chunk)
 
     async def _bind_transcript(self, session: _TmuxWorkerSession) -> None:
         if session.transcript_path is not None:
@@ -673,7 +739,7 @@ class TmuxWorkerExecutor:
         except OSError:
             session.transcript_offset = 0
 
-    async def _recover_sessions(self) -> None:
+    async def _recover_sessions(self, *, reconcile: bool = False) -> None:
         code, stdout, _stderr = await self._run_tmux(
             "list-windows",
             "-t",
@@ -682,7 +748,10 @@ class TmuxWorkerExecutor:
             "#{window_id}\t#{@ccbot_session_id}\t#{@ccbot_backend}",
         )
         if code != 0:
+            if reconcile:
+                self._sessions.clear()
             return
+        recovered: dict[str, _TmuxWorkerSession] = {}
         for line in stdout.splitlines():
             parts = line.split("\t")
             if len(parts) != 3:
@@ -690,11 +759,16 @@ class TmuxWorkerExecutor:
             window_id, session_id, backend = parts
             if not window_id or not session_id or backend not in ("claude", "codex"):
                 continue
-            self._sessions[session_id] = _TmuxWorkerSession(
+            existing = self._sessions.get(session_id)
+            recovered[session_id] = existing or _TmuxWorkerSession(
                 session_id=session_id,
                 window_id=window_id,
                 backend=backend,
             )
+        if reconcile:
+            self._sessions = recovered
+        else:
+            self._sessions.update(recovered)
 
     async def _ensure_tmux_session(self) -> None:
         code, _stdout, _stderr = await self._run_tmux(
@@ -877,6 +951,7 @@ async def _run_agent_forever(
         context_limit_bytes=int(
             os.environ.get("CCBOT_WORKER_CONTEXT_LIMIT_BYTES", "0")
         ),
+        max_sessions=int(os.environ.get("CCBOT_WORKER_MAX_SESSIONS", "8")),
     )
     context_dir = os.environ.get(
         "CCBOT_NODE_CONTEXT_DIR", str(Path.home() / ".ccbot-worker" / "contexts")

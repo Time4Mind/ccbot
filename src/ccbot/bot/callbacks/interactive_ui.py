@@ -100,6 +100,7 @@ async def handle(
             await query.answer()
             return True
         target = int(target_raw)
+        await query.answer()
         pane = await capture_window(window_id)
         if pane is not None:
             content = extract_interactive_content(pane or "")
@@ -116,22 +117,22 @@ async def handle(
                 await _send_window_key(window_id, "Enter")
                 await asyncio.sleep(0.5)
                 await _refresh_after_key(context.bot, user.id, window_id)
-        await query.answer()
         return True
 
     for prefix, tmux_key, toast in _NAV:
         if data.startswith(prefix):
             window_id = data[len(prefix) :]
-            if await _send_window_key(window_id, tmux_key):
-                await asyncio.sleep(0.5)
-                await _refresh_after_key(context.bot, user.id, window_id)
             await query.answer(
                 toast if prefix in (CB_ASK_ENTER, CB_ASK_SPACE, CB_ASK_TAB) else ""
             )
+            if await _send_window_key(window_id, tmux_key):
+                await asyncio.sleep(0.5)
+                await _refresh_after_key(context.bot, user.id, window_id)
             return True
 
     if data.startswith(CB_ASK_ESC):
         window_id = data[len(CB_ASK_ESC) :]
+        await query.answer("⎋ Esc")
         if await _send_window_key(window_id, "Escape"):
             # Floating-msg flow tracks an explicit msg-per-window;
             # card-based kb-mode is cleared by exit_kb_mode. Cover both.
@@ -141,13 +142,12 @@ async def handle(
                 has_prompt, in_kb = has_pending_kb(user.id, sess.id)
                 if has_prompt or in_kb:
                     await exit_kb_mode(context.bot, user.id, sess, clear_pending=True)
-        await query.answer("⎋ Esc")
         return True
 
     if data.startswith(CB_ASK_REFRESH):
         window_id = data[len(CB_ASK_REFRESH) :]
-        await _refresh_after_key(context.bot, user.id, window_id)
         await query.answer("🔄")
+        await _refresh_after_key(context.bot, user.id, window_id)
         return True
 
     return False

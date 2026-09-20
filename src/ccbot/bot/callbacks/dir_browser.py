@@ -379,6 +379,7 @@ async def handle(
             else "local"
         )
         clear_browse_state(context.user_data)
+        await query.answer()
         if node_id == "local":
             await create_and_activate_session(query, context, user, selected_path)
         else:
@@ -488,6 +489,7 @@ async def handle(
             context.user_data.pop("_selected_path", None)
 
         kwargs = {"node_id": node_id} if node_id != "local" else {}
+        await query.answer()
         await create_and_activate_session(
             query,
             context,
@@ -518,6 +520,7 @@ async def handle(
         if context.user_data is not None:
             context.user_data.pop("_selected_path", None)
 
+        await query.answer()
         if node_id == "local":
             await create_and_activate_session(query, context, user, selected_path)
         else:

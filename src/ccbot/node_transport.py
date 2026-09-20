@@ -13,6 +13,7 @@ import asyncio
 import hmac
 import secrets
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, Self
@@ -426,8 +427,19 @@ class RequestReceipt:
 class RequestReceiptLedger:
     """Make command retries idempotent across relay reconnects."""
 
-    def __init__(self) -> None:
-        self._receipts: dict[str, RequestReceipt] = {}
+    def __init__(
+        self,
+        *,
+        max_entries: int = 2048,
+        ttl_seconds: float = 60 * 60,
+        now: Any = time.monotonic,
+    ) -> None:
+        if max_entries < 1:
+            raise ValueError("receipt ledger capacity must be positive")
+        self._max_entries = max_entries
+        self._ttl_seconds = max(0.0, ttl_seconds)
+        self._now = now
+        self._receipts: OrderedDict[str, tuple[RequestReceipt, float]] = OrderedDict()
 
     def new_request_id(self) -> str:
         return secrets.token_urlsafe(12)
@@ -435,24 +447,59 @@ class RequestReceiptLedger:
     def accept(self, request_id: str) -> RequestReceipt:
         if not request_id:
             raise ValueError("request id cannot be empty")
-        existing = self._receipts.get(request_id)
+        self._prune()
+        stored = self._receipts.get(request_id)
+        existing = stored[0] if stored is not None else None
         if existing is not None:
             return existing
         receipt = RequestReceipt(request_id=request_id, accepted=True)
-        self._receipts[request_id] = receipt
+        self._receipts[request_id] = (receipt, self._now())
+        self._prune()
         return receipt
 
+    def get(self, request_id: str) -> RequestReceipt | None:
+        self._prune()
+        stored = self._receipts.get(request_id)
+        return stored[0] if stored is not None else None
+
     def complete(self, request_id: str, result: dict[str, Any]) -> RequestReceipt:
-        receipt = self._receipts.get(request_id)
-        if receipt is None:
+        stored = self._receipts.get(request_id)
+        if stored is None:
             raise KeyError(f"unknown request id: {request_id}")
+        receipt = stored[0]
         completed = RequestReceipt(
             request_id=request_id,
             accepted=receipt.accepted,
             result=dict(result),
         )
-        self._receipts[request_id] = completed
+        self._receipts[request_id] = (completed, self._now())
+        self._receipts.move_to_end(request_id)
+        self._prune()
         return completed
+
+    def _prune(self) -> None:
+        now = self._now()
+        if self._ttl_seconds:
+            expired = [
+                request_id
+                for request_id, (receipt, created_at) in self._receipts.items()
+                if receipt.result is not None
+                and now - created_at >= self._ttl_seconds
+            ]
+            for request_id in expired:
+                self._receipts.pop(request_id, None)
+        while len(self._receipts) > self._max_entries:
+            completed_id = next(
+                (
+                    request_id
+                    for request_id, (receipt, _created_at) in self._receipts.items()
+                    if receipt.result is not None
+                ),
+                None,
+            )
+            if completed_id is None:
+                break
+            self._receipts.pop(completed_id, None)
 
 
 class EventSequence:

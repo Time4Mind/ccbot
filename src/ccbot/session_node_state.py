@@ -48,11 +48,12 @@ class NodeSessionStateMixin:
     def get_node(self, node_id: str) -> Node | None:
         return self.nodes.get(node_id)
 
-    def register_node(self, node: Node) -> Node:
+    def register_node(self, node: Node, *, persist: bool = True) -> Node:
         if not node.id:
             raise ValueError("node id cannot be empty")
         self.nodes[node.id] = node
-        self.save_state()
+        if persist:
+            self.save_state()
         return node
 
     def set_node_enabled(self, node_id: str, enabled: bool) -> Node:

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import pytest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 import json
 
@@ -341,3 +344,142 @@ async def test_worker_emits_assistant_transcript_events_for_remote_card(
             "api_error": "",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_worker_reads_only_appended_transcript_bytes(tmp_path, monkeypatch):
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text("old transcript data\n", encoding="utf-8")
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+    session = SimpleNamespace(
+        session_id="agent-1",
+        window_id="@1",
+        backend="claude",
+        transcript_path=transcript,
+        transcript_offset=transcript.stat().st_size,
+        pending_tools={},
+    )
+    executor._sessions[session.session_id] = session
+
+    def reject_full_file_read(_path):
+        raise AssertionError("polling must not reread the complete transcript")
+
+    monkeypatch.setattr(Path, "read_bytes", reject_full_file_read)
+    with transcript.open("a", encoding="utf-8") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [{"type": "text", "text": "new answer"}],
+                        "stop_reason": "end_turn",
+                    },
+                }
+            )
+            + "\n"
+        )
+
+    events = await executor.poll_events()
+
+    assert [event["text"] for event in events] == ["new answer"]
+
+
+@pytest.mark.asyncio
+async def test_worker_rejects_session_creation_when_capacity_is_full(
+    tmp_path, monkeypatch
+):
+    executor = TmuxWorkerExecutor(workdir=tmp_path, max_sessions=1)
+    executor._sessions["existing"] = SimpleNamespace(window_id="@1")
+
+    async def fake_tmux(*args: str):
+        if args[0] == "list-windows":
+            return 0, "@1\texisting\tcodex\n", ""
+        raise AssertionError("capacity rejection must happen before creating a window")
+
+    monkeypatch.setattr(executor, "_run_tmux", fake_tmux)
+
+    with pytest.raises(RuntimeError, match="capacity"):
+        await executor.create_session(
+            path=str(tmp_path), backend="codex", name="overflow"
+        )
+
+
+@pytest.mark.asyncio
+async def test_worker_stops_polling_sessions_whose_tmux_windows_disappeared(
+    tmp_path, monkeypatch
+):
+    executor = TmuxWorkerExecutor(workdir=tmp_path, reconcile_interval=0)
+    executor._sessions["stale"] = SimpleNamespace(
+        session_id="stale",
+        window_id="@1",
+        backend="codex",
+        transcript_path=tmp_path / "stale.jsonl",
+        transcript_offset=0,
+        pending_tools={},
+    )
+
+    async def fake_tmux(*args: str):
+        assert args[0] == "list-windows"
+        return 0, "", ""
+
+    monkeypatch.setattr(executor, "_run_tmux", fake_tmux)
+
+    assert await executor.poll_events() == []
+    assert executor.capacity_snapshot()["active_sessions"] == 0
+
+
+@pytest.mark.asyncio
+async def test_control_command_is_not_blocked_by_slow_session_creation(tmp_path):
+    class QueueTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.incoming: asyncio.Queue[NodeEnvelope] = asyncio.Queue()
+
+        async def receive(self) -> NodeEnvelope:
+            return await self.incoming.get()
+
+    class BlockingExecutor(FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.create_started = asyncio.Event()
+            self.release_create = asyncio.Event()
+            self.key_sent = asyncio.Event()
+
+        async def create_session(self, **_kwargs):
+            self.create_started.set()
+            await self.release_create.wait()
+            return {"ok": True}
+
+        async def send_key(self, *, session_id: str, key: str):
+            self.key_sent.set()
+            return {"ok": True, "session_id": session_id, "key": key}
+
+    transport = QueueTransport()
+    executor = BlockingExecutor()
+    agent = NodeAgent(transport, executor, context_dir=tmp_path)
+    task = asyncio.create_task(agent.run())
+    await transport.incoming.put(
+        NodeEnvelope(
+            kind="command",
+            request_id="create",
+            payload={
+                "operation": "create_session",
+                "path": str(tmp_path),
+                "backend": "codex",
+                "name": "slow",
+            },
+        )
+    )
+    await asyncio.wait_for(executor.create_started.wait(), timeout=1)
+    await transport.incoming.put(
+        NodeEnvelope(
+            kind="command",
+            request_id="escape",
+            payload={"operation": "send_key", "session_id": "s1", "key": "Escape"},
+        )
+    )
+
+    await asyncio.wait_for(executor.key_sent.wait(), timeout=1)
+    executor.release_create.set()
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)

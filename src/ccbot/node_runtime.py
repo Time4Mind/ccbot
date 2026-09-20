@@ -60,9 +60,22 @@ class NodeRpcClient:
         self._ledger = RequestReceiptLedger()
         self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._reader_task: asyncio.Task[None] | None = None
+        self._event_task: asyncio.Task[None] | None = None
+        self._health_task: asyncio.Task[None] | None = None
+        self._event_queue: asyncio.Queue[NodeEnvelope] = asyncio.Queue(maxsize=1024)
+        self._health_queue: asyncio.Queue[NodeEnvelope] = asyncio.Queue(maxsize=256)
         self._reconnect_lock = asyncio.Lock()
 
     async def start(self) -> None:
+        if self._event_handler is not None:
+            if self._event_task is None or self._event_task.done():
+                self._event_task = asyncio.create_task(
+                    self._handle_events(self._event_queue), name="node-rpc-events"
+                )
+            if self._health_task is None or self._health_task.done():
+                self._health_task = asyncio.create_task(
+                    self._handle_events(self._health_queue), name="node-rpc-health"
+                )
         if self._reader_task is None or self._reader_task.done():
             self._reader_task = asyncio.create_task(
                 self._read_loop(), name="node-rpc-reader"
@@ -70,9 +83,15 @@ class NodeRpcClient:
 
     async def close(self) -> None:
         task, self._reader_task = self._reader_task, None
-        if task is not None and not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        background = [task, self._event_task, self._health_task]
+        self._event_task = None
+        self._health_task = None
+        for background_task in background:
+            if background_task is not None and not background_task.done():
+                background_task.cancel()
+        await asyncio.gather(
+            *(item for item in background if item is not None), return_exceptions=True
+        )
         await self._transport.close()
         self._fail_pending(ConnectionError("node RPC closed"))
 
@@ -83,6 +102,7 @@ class NodeRpcClient:
         payload: dict[str, Any] | None = None,
         *,
         retries: int = 1,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         if not target_node_id or not operation:
             raise ValueError("target node and operation are required")
@@ -94,7 +114,7 @@ class NodeRpcClient:
         last_error: Exception | None = None
         for attempt in range(attempts):
             try:
-                return await self._request_once(request_id, body)
+                return await self._request_once(request_id, body, timeout=timeout)
             except (ConnectionError, TimeoutError, asyncio.TimeoutError) as exc:
                 last_error = exc
                 if attempt + 1 >= attempts or self._reconnect is None:
@@ -103,7 +123,11 @@ class NodeRpcClient:
         raise last_error or RuntimeError("node RPC request failed")
 
     async def _request_once(
-        self, request_id: str, payload: dict[str, Any]
+        self,
+        request_id: str,
+        payload: dict[str, Any],
+        *,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[dict[str, Any]] = loop.create_future()
@@ -113,7 +137,8 @@ class NodeRpcClient:
                 NodeEnvelope(kind="command", request_id=request_id, payload=payload)
             )
             return await asyncio.wait_for(
-                asyncio.shield(future), timeout=self._request_timeout
+                asyncio.shield(future),
+                timeout=self._request_timeout if timeout is None else timeout,
             )
         finally:
             self._pending.pop(request_id, None)
@@ -150,13 +175,31 @@ class NodeRpcClient:
                     message.kind in ("event", "health")
                     and self._event_handler is not None
                 ):
-                    await self._event_handler(message)
+                    queue = (
+                        self._health_queue
+                        if message.kind == "health"
+                        else self._event_queue
+                    )
+                    await queue.put(message)
                 # Acks are deliberately not terminal: request completion is
                 # proven only by the matching result.
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             self._fail_pending(ConnectionError(str(exc)))
+
+    async def _handle_events(self, queue: asyncio.Queue[NodeEnvelope]) -> None:
+        while True:
+            message = await queue.get()
+            try:
+                if self._event_handler is not None:
+                    await self._event_handler(message)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Remote node event handling failed")
+            finally:
+                queue.task_done()
 
     def _fail_pending(self, error: Exception) -> None:
         for future in tuple(self._pending.values()):
@@ -308,6 +351,19 @@ class RemoteNodeRuntime:
     async def _request(
         self, target_node_id: str, operation: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
+        if operation in {
+            "send_key",
+            "capture_session",
+            "terminate_session",
+            "revoke_node",
+        }:
+            return await self._rpc.request(
+                target_node_id,
+                operation,
+                payload,
+                retries=0,
+                timeout=5.0,
+            )
         return await self._rpc.request(target_node_id, operation, payload, retries=2)
 
     @staticmethod
@@ -418,6 +474,18 @@ async def connect_configured_remote_runtimes(
         if state not in ("online", "ready", "offline", "pending"):
             state = "online"
         existing = session_manager.get_node(node_id)
+        durable_before = (
+            None
+            if existing is None
+            else (
+                existing.display_name,
+                existing.state,
+                existing.platform,
+                existing.arch,
+                tuple(existing.backends),
+                tuple(sorted(existing.capabilities.items())),
+            )
+        )
         node = existing or Node(node_id, node_id)
         node.display_name = str(payload.get("display_name", node.display_name))
         node.state = state
@@ -432,10 +500,28 @@ async def connect_configured_remote_runtimes(
             str(key): bool(value)
             for key, value in (payload.get("capabilities", {}) or {}).items()
         }
+        node.capacity = {
+            str(key): max(0, int(value))
+            for key, value in (payload.get("capacity", {}) or {}).items()
+            if isinstance(value, (int, float))
+        }
         node.last_seen_at = time.time()
-        session_manager.register_node(node)
-        if _leader_rpc is not None and node.enabled:
+        durable_after = (
+            node.display_name,
+            node.state,
+            node.platform,
+            node.arch,
+            tuple(node.backends),
+            tuple(sorted(node.capabilities.items())),
+        )
+        session_manager.register_node(node, persist=durable_before != durable_after)
+        if (
+            _leader_rpc is not None
+            and node.enabled
+            and node_id not in _remote_node_ids
+        ):
             register_remote_runtime(node_id)
+            _remote_node_ids.add(node_id)
 
     _leader_rpc = await connect_leader_rpc(
         host=host,

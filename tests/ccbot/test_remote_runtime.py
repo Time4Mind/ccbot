@@ -12,12 +12,14 @@ from ccbot.transfer_models import SessionTransfer
 class FakeRpc:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []
+        self.options: list[dict[str, object]] = []
 
     async def request(
-        self, target_node_id: str, operation: str, payload: dict, **_kwargs
+        self, target_node_id: str, operation: str, payload: dict, **kwargs
     ):
         payload = {"target_node_id": target_node_id, **payload}
         self.calls.append((operation, dict(payload)))
+        self.options.append(dict(kwargs))
         if operation == "transfer_context_begin":
             return {"transfer_id": "worker-transfer"}
         if operation == "transfer_context_finish":
@@ -134,3 +136,4 @@ async def test_remote_runtime_controls_and_terminates_worker_session():
         payload.get("session_id") == "worker-session"
         for _operation, payload in rpc.calls[:3]
     )
+    assert all(options == {"retries": 0, "timeout": 5.0} for options in rpc.options)

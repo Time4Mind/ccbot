@@ -147,15 +147,18 @@ async def _process_voice(
         )
         return False
 
-    w = await tmux_manager.find_window_by_id(wid)
-    if not w:
-        display = session_manager.get_display_name(wid)
-        await safe_reply(
-            update.message,
-            f"❌ Window '{display}' no longer exists.\n"
-            "Send a message to start a new session.",
-        )
-        return False
+    sess = session_manager.find_session_by_window(wid)
+    is_remote = sess is not None and getattr(sess, "node_id", "local") != "local"
+    if not is_remote:
+        w = await tmux_manager.find_window_by_id(wid)
+        if not w:
+            display = session_manager.get_display_name(wid)
+            await safe_reply(
+                update.message,
+                f"❌ Window '{display}' no longer exists.\n"
+                "Send a message to start a new session.",
+            )
+            return False
 
     # wid is pinned NOW, before the slow download/transcribe steps — a
     # switch afterwards can't redirect this voice message.
@@ -176,7 +179,6 @@ async def _process_voice(
     # per user and strips every other card's keyboard, so two reposts
     # can no longer desync which message carries the live switcher.
     # Skipped for an orphan window (no Session record).
-    sess = session_manager.find_session_by_window(wid)
     card_state = get_card_state(user.id, sess) if sess is not None else None
     if sess is not None and card_state is not None:
         card_state.voice_pending = True

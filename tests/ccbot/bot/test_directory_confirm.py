@@ -26,7 +26,7 @@ from ccbot.i18n import t
 async def test_confirm_starts_fresh_without_listing_sessions(
     monkeypatch, tmp_path
 ) -> None:
-    query = SimpleNamespace(data=CB_DIR_CONFIRM)
+    query = SimpleNamespace(data=CB_DIR_CONFIRM, answer=AsyncMock())
     context = SimpleNamespace(user_data={BROWSE_PATH_KEY: str(tmp_path)})
     user = SimpleNamespace(id=42)
     create = AsyncMock()
@@ -68,18 +68,23 @@ async def test_directory_browser_reads_selected_node_filesystem(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_remote_directory_confirm_passes_target_node(monkeypatch, tmp_path):
-    query = SimpleNamespace(data=CB_DIR_CONFIRM)
+    order = []
+    query = SimpleNamespace(
+        data=CB_DIR_CONFIRM,
+        answer=AsyncMock(side_effect=lambda: order.append("answer")),
+    )
     context = SimpleNamespace(
         user_data={BROWSE_PATH_KEY: "/worker/home", BROWSE_NODE_KEY: "worker-a"}
     )
     user = SimpleNamespace(id=42)
-    create = AsyncMock()
+    create = AsyncMock(side_effect=lambda *_args, **_kwargs: order.append("create"))
     monkeypatch.setattr(dir_browser, "create_and_activate_session", create)
 
     assert await dir_browser.handle(query, context, user)
     create.assert_awaited_once_with(
         query, context, user, "/worker/home", node_id="worker-a"
     )
+    assert order == ["answer", "create"]
 
 
 @pytest.mark.asyncio

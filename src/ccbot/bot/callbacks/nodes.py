@@ -76,22 +76,31 @@ async def handle(
                 t(user.id, "nodes.delete.revoke_failed"), show_alert=True
             )
             return True
+        await query.answer()
         try:
             result = await runtime.revoke_node(node_id)
         except Exception:
-            await query.answer(
-                t(user.id, "nodes.delete.revoke_failed"), show_alert=True
+            await safe_edit(
+                query,
+                t(user.id, "nodes.delete.revoke_failed"),
+                reply_markup=build_nodes_keyboard(user.id),
             )
             return True
         if result.get("ok") is not True:
-            await query.answer(
-                t(user.id, "nodes.delete.revoke_failed"), show_alert=True
+            await safe_edit(
+                query,
+                t(user.id, "nodes.delete.revoke_failed"),
+                reply_markup=build_nodes_keyboard(user.id),
             )
             return True
         try:
             session_manager.remove_node(node_id)
         except (KeyError, ValueError):
-            await query.answer(t(user.id, "nodes.delete.not_found"), show_alert=True)
+            await safe_edit(
+                query,
+                t(user.id, "nodes.delete.not_found"),
+                reply_markup=build_nodes_keyboard(user.id),
+            )
             return True
         unregister_node_runtime(node_id)
         await safe_edit(
@@ -99,7 +108,6 @@ async def handle(
             render_nodes_text(user.id),
             reply_markup=build_nodes_keyboard(user.id),
         )
-        await query.answer(t(user.id, "nodes.delete.done"))
         return True
     if data.startswith(CB_NODE_DELETE):
         node_id = data[len(CB_NODE_DELETE) :]

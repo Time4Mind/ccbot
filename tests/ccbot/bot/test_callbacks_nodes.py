@@ -12,10 +12,17 @@ from ccbot.node_models import Node
 
 @pytest.mark.asyncio
 async def test_delete_revokes_relay_credential_before_removing_node(monkeypatch):
+    order = []
     query = MagicMock(spec=CallbackQuery)
     query.data = "nd:del:y:worker-a"
-    query.answer = AsyncMock()
-    runtime = SimpleNamespace(revoke_node=AsyncMock(return_value={"ok": True}))
+    query.answer = AsyncMock(side_effect=lambda *_args, **_kwargs: order.append("answer"))
+    runtime = SimpleNamespace(
+        revoke_node=AsyncMock(
+            side_effect=lambda *_args, **_kwargs: (
+                order.append("revoke") or {"ok": True}
+            )
+        )
+    )
     manager = MagicMock()
     manager.get_node.return_value = Node("worker-a", "Worker A")
     monkeypatch.setattr(nodes, "session_manager", manager)
@@ -29,3 +36,4 @@ async def test_delete_revokes_relay_credential_before_removing_node(monkeypatch)
 
     runtime.revoke_node.assert_awaited_once_with("worker-a")
     manager.remove_node.assert_called_once_with("worker-a")
+    assert order[:2] == ["answer", "revoke"]

@@ -111,6 +111,35 @@ async def test_queue_rejects_eleventh_prompt(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_queue_enforces_global_limit_across_sessions(monkeypatch):
+    reply = AsyncMock(return_value=SimpleNamespace(message_id=1))
+    monkeypatch.setattr("ccbot.remote_prompt_queue.safe_reply", reply)
+    queue = RemotePromptQueue(
+        node_available=lambda _node_id: False,
+        autostart=False,
+        global_limit=2,
+    )
+
+    for session_id in ("session-1", "session-2"):
+        assert await queue.admit(
+            original_message=object(),
+            session_id=session_id,
+            node_id="worker-a",
+            node_name="Worker A",
+            deliver=AsyncMock(return_value=True),
+        )
+
+    assert not await queue.admit(
+        original_message=object(),
+        session_id="session-3",
+        node_id="worker-a",
+        node_name="Worker A",
+        deliver=AsyncMock(return_value=True),
+    )
+    assert "общая очередь" in reply.await_args.args[1].lower()
+
+
+@pytest.mark.asyncio
 async def test_shutdown_marks_every_waiting_prompt_as_not_sent(monkeypatch):
     receipts = [SimpleNamespace(message_id=1), SimpleNamespace(message_id=2)]
     monkeypatch.setattr(
@@ -179,3 +208,57 @@ async def test_remote_dispatch_queues_before_preprocessing(monkeypatch):
     queue.admit.assert_awaited_once()
     preprocess.assert_not_awaited()
     manager.send_to_window.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_queued_dispatch_reuses_preprocessing_after_delivery_retry(monkeypatch):
+    from ccbot.bot import messages
+
+    update = MagicMock()
+    update.message = MagicMock()
+    context = MagicMock()
+    session = SimpleNamespace(
+        id="session-1",
+        node_id="worker-a",
+        window_id="worker-a::@1",
+    )
+    manager = MagicMock()
+    manager.find_session_by_window.return_value = session
+    manager.get_node.return_value = Node(
+        id="worker-a",
+        display_name="Worker A",
+        state="ready",
+        last_seen_at=1.0,
+    )
+    queue = MagicMock()
+    queue.has_pending.return_value = True
+    queued: dict[str, object] = {}
+
+    async def admit(**kwargs):
+        queued["deliver"] = kwargs["deliver"]
+        return True
+
+    queue.admit = AsyncMock(side_effect=admit)
+    prepared = SimpleNamespace(text="prepared once", confirm_delivery=MagicMock())
+    preprocess = AsyncMock(return_value=prepared)
+    send = AsyncMock(return_value=(False, "offline"))
+    monkeypatch.setattr(messages, "session_manager", manager)
+    monkeypatch.setattr(messages, "remote_prompt_queue", queue, raising=False)
+    monkeypatch.setattr(messages, "prepare_request_for_dispatch", preprocess)
+    monkeypatch.setattr(messages, "_send_with_delivery_proof", send)
+    monkeypatch.setattr(messages, "safe_reply", AsyncMock())
+
+    assert await messages._dispatch_text_to_active(
+        update, context, 42, "worker-a::@1", "original"
+    )
+    delivery = queued["deliver"]
+    assert callable(delivery)
+    assert not await delivery()
+    assert not await delivery()
+
+    preprocess.assert_awaited_once()
+    assert preprocess.await_args.kwargs["persist_recovery"] is False
+    assert [call.args[1] for call in send.await_args_list] == [
+        "prepared once",
+        "prepared once",
+    ]

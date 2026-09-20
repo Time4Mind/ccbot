@@ -46,13 +46,17 @@ class PreparedDispatch:
 
     def confirm_delivery(self) -> None:
         """Persist completion only after delivery to the pinned pane."""
-        if self.record is None or self.session is None:
+        if self.session is None:
             return
         if self.preprocessed:
             self.session.remember_preprocessed_prompt(self.text)
-        if self.record in self.session.pending_preprocessing:
+        if (
+            self.record is not None
+            and self.record in self.session.pending_preprocessing
+        ):
             self.session.pending_preprocessing.remove(self.record)
-        session_manager.save_state()
+        if self.preprocessed or self.record is not None:
+            session_manager.save_state()
 
 
 async def prepare_request_for_dispatch(
@@ -63,6 +67,7 @@ async def prepare_request_for_dispatch(
     text: str,
     *,
     input_kind: str,
+    persist_recovery: bool = True,
 ) -> PreparedDispatch:
     """Rewrite an admitted request without ever re-resolving its target."""
     assert update.message is not None
@@ -76,24 +81,25 @@ async def prepare_request_for_dispatch(
     pending_prompt: PendingPrompt | None = None
     record: dict[str, Any] | None = None
     if pinned_session is not None:
-        request_id = f"{user_id}:{update.message.message_id}"
-        pinned_session.pending_preprocessing = [
-            item
-            for item in pinned_session.pending_preprocessing
-            if item.get("request_id") != request_id
-        ]
-        record = {
-            "request_id": request_id,
-            "user_id": user_id,
-            "original": text,
-            "prepared": "",
-            "instruction": str(settings.get("preprocessing_instruction", "")),
-            "input_kind": input_kind,
-            "state": "preprocessing",
-            "preprocessed": False,
-        }
-        pinned_session.pending_preprocessing.append(record)
-        session_manager.save_state()
+        if persist_recovery:
+            request_id = f"{user_id}:{update.message.message_id}"
+            pinned_session.pending_preprocessing = [
+                item
+                for item in pinned_session.pending_preprocessing
+                if item.get("request_id") != request_id
+            ]
+            record = {
+                "request_id": request_id,
+                "user_id": user_id,
+                "original": text,
+                "prepared": "",
+                "instruction": str(settings.get("preprocessing_instruction", "")),
+                "input_kind": input_kind,
+                "state": "preprocessing",
+                "preprocessed": False,
+            }
+            pinned_session.pending_preprocessing.append(record)
+            session_manager.save_state()
         pending_state = get_card_state(user_id, pinned_session)
         pending_prompt = next(
             (

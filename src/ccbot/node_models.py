@@ -28,6 +28,7 @@ class Node:
     arch: str = ""
     backends: list[str] = field(default_factory=list)
     capabilities: dict[str, bool] = field(default_factory=dict)
+    capacity: dict[str, int] = field(default_factory=dict)
     protocol_version: str = ""
     ccbot_version: str = ""
     last_seen_at: float = 0.0
@@ -65,6 +66,7 @@ class Node:
             "arch": self.arch,
             "backends": list(self.backends),
             "capabilities": dict(self.capabilities),
+            "capacity": dict(self.capacity),
             "protocol_version": self.protocol_version,
             "ccbot_version": self.ccbot_version,
             "last_seen_at": self.last_seen_at,
@@ -89,6 +91,16 @@ class Node:
             if isinstance(raw_capabilities, dict)
             else {}
         )
+        raw_capacity = data.get("capacity", {})
+        capacity = (
+            {
+                str(key): max(0, int(value))
+                for key, value in raw_capacity.items()
+                if isinstance(value, (int, float))
+            }
+            if isinstance(raw_capacity, dict)
+            else {}
+        )
         return cls(
             id=str(data.get("id", "")),
             display_name=str(data.get("display_name", "")),
@@ -97,6 +109,7 @@ class Node:
             arch=str(data.get("arch", "")),
             backends=backends,
             capabilities=capabilities,
+            capacity=capacity,
             protocol_version=str(data.get("protocol_version", "")),
             ccbot_version=str(data.get("ccbot_version", "")),
             last_seen_at=float(data.get("last_seen_at", 0.0)),

@@ -33,7 +33,6 @@ class RemotePromptFlow:
     node_id: str
     node_name: str
     entries: deque[QueuedRemotePrompt] = field(default_factory=deque)
-    task: asyncio.Task[None] | None = None
 
 
 def _default_node_available(node_id: str) -> bool:
@@ -53,12 +52,15 @@ class RemotePromptQueue:
         autostart: bool = True,
         now: Callable[[], float] = time.time,
         poll_interval: float = 2.0,
+        global_limit: int = 100,
     ) -> None:
         self._node_available = node_available
         self._autostart = autostart
         self._now = now
         self._poll_interval = poll_interval
+        self._global_limit = max(1, global_limit)
         self._flows: dict[str, RemotePromptFlow] = {}
+        self._task: asyncio.Task[None] | None = None
 
     def has_pending(self, session_id: str) -> bool:
         flow = self._flows.get(session_id)
@@ -88,6 +90,14 @@ class RemotePromptQueue:
                 "Дождись отправки хотя бы одного.",
             )
             return False
+        total_entries = sum(len(item.entries) for item in self._flows.values())
+        if total_entries >= self._global_limit:
+            await safe_reply(
+                original_message,
+                "⛔ Общая очередь удалённых нод заполнена. "
+                "Дождись отправки хотя бы одного запроса.",
+            )
+            return False
         position = len(flow.entries) + 1
         entry = QueuedRemotePrompt(
             session_id=session_id,
@@ -101,9 +111,9 @@ class RemotePromptQueue:
             original_message,
             f"⏳ В очереди на {node_name} · позиция {position} · ждём до 15 минут",
         )
-        if self._autostart and (flow.task is None or flow.task.done()):
-            flow.task = asyncio.create_task(
-                self._run(session_id), name=f"remote-prompt-queue:{session_id}"
+        if self._autostart and (self._task is None or self._task.done()):
+            self._task = asyncio.create_task(
+                self._run(), name="remote-prompt-queue"
             )
         return True
 
@@ -146,36 +156,30 @@ class RemotePromptQueue:
             self._flows.pop(session_id, None)
         return delivered
 
-    async def _run(self, session_id: str) -> None:
+    async def _run(self) -> None:
         try:
-            while self.has_pending(session_id):
-                await self.drain_once(session_id)
-                if self.has_pending(session_id):
+            while self._flows:
+                for session_id in tuple(self._flows):
+                    await self.drain_once(session_id)
+                if self._flows:
                     await asyncio.sleep(self._poll_interval)
         except asyncio.CancelledError:
             raise
         finally:
-            flow = self._flows.get(session_id)
-            if flow is not None:
-                flow.task = None
+            self._task = None
 
     def reset(self) -> None:
-        for flow in self._flows.values():
-            if flow.task is not None and not flow.task.done():
-                flow.task.cancel()
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+        self._task = None
         self._flows.clear()
 
     async def fail_all(self) -> None:
         """Mark every RAM-only prompt undelivered before a graceful restart."""
-        tasks = [
-            flow.task
-            for flow in self._flows.values()
-            if flow.task is not None and not flow.task.done()
-        ]
-        for task in tasks:
+        task, self._task = self._task, None
+        if task is not None and not task.done():
             task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(task, return_exceptions=True)
         entries = [entry for flow in self._flows.values() for entry in flow.entries]
         self._flows.clear()
         for entry in entries:

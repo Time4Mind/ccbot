@@ -269,6 +269,7 @@ async def create_window(
 
     result = await asyncio.to_thread(_create_and_start)
     if result[0] and selected_backend == "codex" and created_pane is not None:
+
         async def _drive_and_rollback_on_failure() -> bool:
             try:
                 return await manager._watch_codex_startup_screens(

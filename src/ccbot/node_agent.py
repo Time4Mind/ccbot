@@ -102,9 +102,7 @@ class WorkerSessionExecutor(Protocol):
         self, *, path: str, backend: str, name: str, startup_id: str = ""
     ) -> dict[str, Any]: ...
 
-    async def cancel_session_start(
-        self, *, startup_id: str
-    ) -> dict[str, Any]: ...
+    async def cancel_session_start(self, *, startup_id: str) -> dict[str, Any]: ...
 
     async def start_context_session(
         self, *, context_path: str, backend: str, name: str
@@ -330,9 +328,7 @@ class NodeAgent:
             NodeEnvelope(kind="result", request_id=message.request_id, payload=result)
         )
         if result.get("ok") and result.get("restart_required"):
-            asyncio.create_task(
-                self._restart_callback(), name="node-runtime-restart"
-            )
+            asyncio.create_task(self._restart_callback(), name="node-runtime-restart")
 
     async def _dispatch(self, payload: dict[str, Any]) -> dict[str, Any]:
         operation = str(payload.get("operation", ""))
@@ -384,9 +380,7 @@ class NodeAgent:
         if operation == "health":
             return {"ok": True}
         if operation == "update_runtime":
-            return await self._runtime_updater.update(
-                str(payload.get("revision", ""))
-            )
+            return await self._runtime_updater.update(str(payload.get("revision", "")))
         raise ValueError(f"unsupported node operation: {operation}")
 
     def _begin_context(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -752,9 +746,7 @@ class TmuxWorkerExecutor:
         )
         if code == 0:
             self._sessions.pop(session_id, None)
-            for startup_id, created_session_id in tuple(
-                self._startup_sessions.items()
-            ):
+            for startup_id, created_session_id in tuple(self._startup_sessions.items()):
                 if created_session_id == session_id:
                     self._startup_sessions.pop(startup_id, None)
         return {"ok": code == 0, "error": "" if code == 0 else stderr.strip()}

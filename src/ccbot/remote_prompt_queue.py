@@ -112,9 +112,7 @@ class RemotePromptQueue:
             f"⏳ В очереди на {node_name} · позиция {position} · ждём до 15 минут",
         )
         if self._autostart and (self._task is None or self._task.done()):
-            self._task = asyncio.create_task(
-                self._run(), name="remote-prompt-queue"
-            )
+            self._task = asyncio.create_task(self._run(), name="remote-prompt-queue")
         return True
 
     async def drain_once(self, session_id: str) -> int:

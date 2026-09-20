@@ -299,7 +299,9 @@ async def test_successful_runtime_update_restarts_only_after_result(tmp_path):
 async def test_failed_runtime_update_keeps_worker_running(tmp_path):
     transport = FakeTransport()
     updater = SimpleNamespace(
-        update=AsyncMock(side_effect=RuntimeError("worker checkout has tracked changes"))
+        update=AsyncMock(
+            side_effect=RuntimeError("worker checkout has tracked changes")
+        )
     )
     restart = AsyncMock()
     agent = NodeAgent(
@@ -579,10 +581,7 @@ async def test_worker_accepts_more_than_eight_sessions(tmp_path, monkeypatch):
     async def fake_tmux(*args: str):
         calls.append(args)
         if args[0] == "list-windows":
-            rows = [
-                f"@{index + 1}\texisting-{index}\tcodex"
-                for index in range(8)
-            ]
+            rows = [f"@{index + 1}\texisting-{index}\tcodex" for index in range(8)]
             return 0, "\n".join(rows) + "\n", ""
         if args[0] == "new-window":
             return 0, "@9\n", ""
@@ -628,9 +627,7 @@ async def test_worker_cleans_up_window_when_startup_fails(tmp_path, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_worker_cleans_up_window_when_startup_is_cancelled(
-    tmp_path, monkeypatch
-):
+async def test_worker_cleans_up_window_when_startup_is_cancelled(tmp_path, monkeypatch):
     executor = TmuxWorkerExecutor(workdir=tmp_path)
     calls: list[tuple[str, ...]] = []
     startup_entered = asyncio.Event()

@@ -102,7 +102,9 @@ async def test_worker_health_auto_registers_remote_node_and_runtime(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_health_mismatch_requests_exact_leader_revision_once(monkeypatch):
-    rpc = SimpleNamespace(close=AsyncMock(), request=AsyncMock(return_value={"ok": True}))
+    rpc = SimpleNamespace(
+        close=AsyncMock(), request=AsyncMock(return_value={"ok": True})
+    )
     captured: dict[str, object] = {}
 
     async def fake_connect_leader_rpc(**kwargs):
@@ -112,7 +114,9 @@ async def test_health_mismatch_requests_exact_leader_revision_once(monkeypatch):
     monkeypatch.setattr(node_runtime, "connect_leader_rpc", fake_connect_leader_rpc)
     monkeypatch.setattr(node_runtime, "current_git_revision", lambda: "b" * 40)
     monkeypatch.setattr(session_manager, "get_node", lambda _node_id: None)
-    monkeypatch.setattr(session_manager, "register_node", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        session_manager, "register_node", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(node_runtime, "register_node_runtime", lambda *_args: None)
     node_runtime._leader_rpc = None
     node_runtime._remote_node_ids.clear()
@@ -149,7 +153,9 @@ async def test_health_mismatch_requests_exact_leader_revision_once(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_matching_or_unknown_version_does_not_request_update(monkeypatch):
-    rpc = SimpleNamespace(close=AsyncMock(), request=AsyncMock(return_value={"ok": True}))
+    rpc = SimpleNamespace(
+        close=AsyncMock(), request=AsyncMock(return_value={"ok": True})
+    )
     captured: dict[str, object] = {}
 
     async def fake_connect_leader_rpc(**kwargs):
@@ -159,7 +165,9 @@ async def test_matching_or_unknown_version_does_not_request_update(monkeypatch):
     monkeypatch.setattr(node_runtime, "connect_leader_rpc", fake_connect_leader_rpc)
     monkeypatch.setattr(node_runtime, "current_git_revision", lambda: "b" * 40)
     monkeypatch.setattr(session_manager, "get_node", lambda _node_id: None)
-    monkeypatch.setattr(session_manager, "register_node", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        session_manager, "register_node", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(node_runtime, "register_node_runtime", lambda *_args: None)
     node_runtime._leader_rpc = None
     node_runtime._remote_node_ids.clear()

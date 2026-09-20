@@ -522,9 +522,7 @@ class TestVoiceSessionPinning:
         ):
             from ccbot.bot.messages import _process_voice
 
-            delivered = await _process_voice(
-                update, context, pinned_wid="worker-a::@1"
-            )
+            delivered = await _process_voice(update, context, pinned_wid="worker-a::@1")
 
         assert delivered is True
         mock_tmux.find_window_by_id.assert_not_awaited()

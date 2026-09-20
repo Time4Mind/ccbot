@@ -1273,9 +1273,7 @@ async def test_cancelled_local_codex_startup_rolls_back_window(
 
     monkeypatch.setattr(mgr, "_watch_codex_startup_screens", wait_forever)
     task = asyncio.create_task(
-        mgr.create_window(
-            str(tmp_path), backend="codex", wait_for_codex_ready=True
-        )
+        mgr.create_window(str(tmp_path), backend="codex", wait_for_codex_ready=True)
     )
     await started.wait()
     task.cancel()

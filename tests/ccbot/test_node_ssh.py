@@ -77,7 +77,9 @@ def test_ssh_cli_executes_exact_argv_from_node_registry(
         encoding="utf-8",
     )
     executed: list[list[str]] = []
-    monkeypatch.setattr("ccbot.node_ssh.os.execvp", lambda _program, argv: executed.append(argv))
+    monkeypatch.setattr(
+        "ccbot.node_ssh.os.execvp", lambda _program, argv: executed.append(argv)
+    )
 
     ssh_main(
         [
@@ -108,9 +110,7 @@ def test_ssh_cli_executes_exact_argv_from_node_registry(
 def test_ssh_cli_rejects_node_without_configured_endpoint(tmp_path: Path) -> None:
     state_file = tmp_path / "state.json"
     state_file.write_text(
-        json.dumps(
-            {"nodes": {"worker-a": Node("worker-a", "Worker A").to_dict()}}
-        ),
+        json.dumps({"nodes": {"worker-a": Node("worker-a", "Worker A").to_dict()}}),
         encoding="utf-8",
     )
 

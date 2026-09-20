@@ -483,8 +483,7 @@ class RequestReceiptLedger:
             expired = [
                 request_id
                 for request_id, (receipt, created_at) in self._receipts.items()
-                if receipt.result is not None
-                and now - created_at >= self._ttl_seconds
+                if receipt.result is not None and now - created_at >= self._ttl_seconds
             ]
             for request_id in expired:
                 self._receipts.pop(request_id, None)

@@ -601,8 +601,7 @@ async def connect_configured_remote_runtimes(
             raw_port = raw_ssh.get("port", 22)
             node.ssh_port = (
                 int(raw_port)
-                if isinstance(raw_port, (int, float, str))
-                and str(raw_port).isdigit()
+                if isinstance(raw_port, (int, float, str)) and str(raw_port).isdigit()
                 else 22
             )
             node.ssh_proxy_jump = str(raw_ssh.get("proxy_jump", ""))
@@ -621,11 +620,7 @@ async def connect_configured_remote_runtimes(
             node.ssh_proxy_jump,
         )
         session_manager.register_node(node, persist=durable_before != durable_after)
-        if (
-            _leader_rpc is not None
-            and node.enabled
-            and node_id not in _remote_node_ids
-        ):
+        if _leader_rpc is not None and node.enabled and node_id not in _remote_node_ids:
             register_remote_runtime(node_id)
             _remote_node_ids.add(node_id)
         if (

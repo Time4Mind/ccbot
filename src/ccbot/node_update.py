@@ -22,9 +22,7 @@ def runtime_repo_dir() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _invoke(
-    runner: Runner, command: list[str]
-) -> subprocess.CompletedProcess[str]:
+def _invoke(runner: Runner, command: list[str]) -> subprocess.CompletedProcess[str]:
     return runner(command, check=False, text=True, capture_output=True)
 
 
@@ -54,9 +52,11 @@ def current_git_revision(
         )
         if status.stdout.strip():
             return ""
-        revision = _checked(
-            runner, [*prefix, "rev-parse", "HEAD"], action="git revision"
-        ).stdout.strip().lower()
+        revision = (
+            _checked(runner, [*prefix, "rev-parse", "HEAD"], action="git revision")
+            .stdout.strip()
+            .lower()
+        )
     except (OSError, RuntimeError):
         return ""
     return revision if _COMMIT_RE.fullmatch(revision) else ""
@@ -86,9 +86,13 @@ class GitNodeUpdater:
 
     def _update_sync(self, target: str) -> dict[str, object]:
         prefix = ["git", "-C", str(self.repo_dir)]
-        previous = _checked(
-            self._runner, [*prefix, "rev-parse", "HEAD"], action="git revision"
-        ).stdout.strip().lower()
+        previous = (
+            _checked(
+                self._runner, [*prefix, "rev-parse", "HEAD"], action="git revision"
+            )
+            .stdout.strip()
+            .lower()
+        )
         if previous == target:
             return {
                 "ok": True,

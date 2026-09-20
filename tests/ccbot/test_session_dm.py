@@ -66,12 +66,8 @@ class TestActiveSessions:
         self, mgr: SessionManager
     ) -> None:
         prior = mgr.create_session(name="prior", window_id="@1", node_id="local")
-        closing = mgr.create_session(
-            name="closing", window_id="@2", node_id="local"
-        )
-        other_node = mgr.create_session(
-            name="remote", window_id="@3", node_id="office"
-        )
+        closing = mgr.create_session(name="closing", window_id="@2", node_id="local")
+        other_node = mgr.create_session(name="remote", window_id="@3", node_id="office")
         mgr.set_active_session(100, prior.id)
         mgr.set_active_session(100, closing.id)
         # A newer history entry for another node must neither be selected nor lost.

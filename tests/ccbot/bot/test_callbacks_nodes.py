@@ -32,12 +32,12 @@ async def test_delete_revokes_relay_credential_before_removing_node(monkeypatch)
     order = []
     query = MagicMock(spec=CallbackQuery)
     query.data = "nd:del:y:worker-a"
-    query.answer = AsyncMock(side_effect=lambda *_args, **_kwargs: order.append("answer"))
+    query.answer = AsyncMock(
+        side_effect=lambda *_args, **_kwargs: order.append("answer")
+    )
     runtime = SimpleNamespace(
         revoke_node=AsyncMock(
-            side_effect=lambda *_args, **_kwargs: (
-                order.append("revoke") or {"ok": True}
-            )
+            side_effect=lambda *_args, **_kwargs: order.append("revoke") or {"ok": True}
         )
     )
     manager = MagicMock()

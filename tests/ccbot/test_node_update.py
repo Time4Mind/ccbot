@@ -26,7 +26,9 @@ def test_current_git_revision_requires_a_clean_tracked_worktree(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_git_updater_checks_out_the_exact_fetched_revision(tmp_path: Path) -> None:
+async def test_git_updater_checks_out_the_exact_fetched_revision(
+    tmp_path: Path,
+) -> None:
     calls: list[tuple[str, ...]] = []
 
     def runner(command, **_kwargs):
@@ -97,7 +99,9 @@ async def test_git_updater_rolls_back_checkout_when_locked_sync_fails(
             return SimpleNamespace(stdout="uv.lock\n", returncode=0)
         return SimpleNamespace(stdout="", returncode=0)
 
-    monkeypatch.setattr("ccbot.node_update.shutil.which", lambda _name: "/usr/local/bin/uv")
+    monkeypatch.setattr(
+        "ccbot.node_update.shutil.which", lambda _name: "/usr/local/bin/uv"
+    )
 
     with pytest.raises(RuntimeError, match="dependency sync failed"):
         await GitNodeUpdater(tmp_path, runner=runner).update(TARGET)

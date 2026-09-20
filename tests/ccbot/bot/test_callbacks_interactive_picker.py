@@ -22,7 +22,7 @@ async def test_picker_button_moves_from_live_cursor_and_confirms(monkeypatch) ->
     tmux = SimpleNamespace(
         find_window_by_id=AsyncMock(return_value=window),
         capture_pane=AsyncMock(
-            side_effect=lambda *_args, **_kwargs: (order.append("capture") or prompt)
+            side_effect=lambda *_args, **_kwargs: order.append("capture") or prompt
         ),
         send_keys=AsyncMock(),
     )

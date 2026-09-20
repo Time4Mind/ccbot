@@ -33,8 +33,8 @@ def _session(session_id: str = "active") -> Session:
 def _manager(active: Session | None) -> MagicMock:
     manager = MagicMock()
     manager.get_active_session.return_value = active
-    manager.get_session.side_effect = (
-        lambda session_id: active if active and session_id == active.id else None
+    manager.get_session.side_effect = lambda session_id: (
+        active if active and session_id == active.id else None
     )
     return manager
 

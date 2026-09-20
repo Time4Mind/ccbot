@@ -66,9 +66,7 @@ async def create_and_activate_session(
         else session_manager.agent_backend
     )
     pending_name = (
-        context.user_data.pop("_pending_session_name", "")
-        if context.user_data
-        else ""
+        context.user_data.pop("_pending_session_name", "") if context.user_data else ""
     )
     previous_active = session_manager.get_active_session(user.id)
 

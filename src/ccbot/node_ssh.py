@@ -12,9 +12,7 @@ from .node_models import Node
 from .utils import ccbot_dir
 
 
-def build_ssh_command(
-    node: Node, remote_command: list[str] | None = None
-) -> list[str]:
+def build_ssh_command(node: Node, remote_command: list[str] | None = None) -> list[str]:
     """Build argv without a shell; SSH config/agent owns all credentials."""
     host = node.ssh_host.strip()
     user = node.ssh_user.strip()

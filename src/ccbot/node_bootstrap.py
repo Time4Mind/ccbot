@@ -72,16 +72,14 @@ def build_bootstrap_payload(
             command_parts.append(f"CCBOT_NODE_SSH_USER={resolved_ssh_user}")
         command_parts.append(f"CCBOT_NODE_SSH_PORT={ssh_port}")
         if resolved_proxy_jump:
-            command_parts.append(
-                f"CCBOT_NODE_SSH_PROXY_JUMP={resolved_proxy_jump}"
-            )
+            command_parts.append(f"CCBOT_NODE_SSH_PROXY_JUMP={resolved_proxy_jump}")
     command_parts.extend(
         [
-        "uv",
-        "run",
-        "ccbot-node-agent",
-        "--pairing",
-        invitation.to_link(),
+            "uv",
+            "run",
+            "ccbot-node-agent",
+            "--pairing",
+            invitation.to_link(),
         ]
     )
     command_parts.extend(("--node-id", resolved_node_id))

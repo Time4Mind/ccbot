@@ -74,9 +74,7 @@ async def test_slow_remote_creation_returns_control_to_telegram_immediately(
     release.set()
     await _session_create.wait_for_session_creation(user.id)
     assert fake_manager.create_session.call_count == 1
-    assert received == [
-        ("worker-a", "/worker/project", "claude", "Original task")
-    ]
+    assert received == [("worker-a", "/worker/project", "claude", "Original task")]
 
 
 @pytest.mark.asyncio

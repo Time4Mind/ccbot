@@ -165,6 +165,26 @@ class RemotePromptQueue:
                 flow.task.cancel()
         self._flows.clear()
 
+    async def fail_all(self) -> None:
+        """Mark every RAM-only prompt undelivered before a graceful restart."""
+        tasks = [
+            flow.task
+            for flow in self._flows.values()
+            if flow.task is not None and not flow.task.done()
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        entries = [entry for flow in self._flows.values() for entry in flow.entries]
+        self._flows.clear()
+        for entry in entries:
+            if entry.receipt is not None:
+                await safe_edit(
+                    entry.receipt,
+                    "❌ Не отправлено в сессию: ccbot перезапущен",
+                )
+
 
 remote_prompt_queue = RemotePromptQueue()
 

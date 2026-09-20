@@ -443,7 +443,7 @@ async def post_shutdown(
     await shutdown_remote_runtimes()
     from ..remote_prompt_queue import remote_prompt_queue
 
-    remote_prompt_queue.reset()
+    await remote_prompt_queue.fail_all()
     from ..default_session import shutdown_default_session_tasks
 
     await shutdown_default_session_tasks()

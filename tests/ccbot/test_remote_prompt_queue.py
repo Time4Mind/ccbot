@@ -111,6 +111,39 @@ async def test_queue_rejects_eleventh_prompt(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_shutdown_marks_every_waiting_prompt_as_not_sent(monkeypatch):
+    receipts = [SimpleNamespace(message_id=1), SimpleNamespace(message_id=2)]
+    monkeypatch.setattr(
+        "ccbot.remote_prompt_queue.safe_reply", AsyncMock(side_effect=receipts)
+    )
+    edit = AsyncMock()
+    monkeypatch.setattr("ccbot.remote_prompt_queue.safe_edit", edit)
+    queue = RemotePromptQueue(
+        node_available=lambda _node_id: False,
+        autostart=False,
+    )
+    deliveries = [AsyncMock(return_value=True), AsyncMock(return_value=True)]
+    for delivery in deliveries:
+        assert await queue.admit(
+            original_message=object(),
+            session_id="session-1",
+            node_id="worker-a",
+            node_name="Worker A",
+            deliver=delivery,
+        )
+
+    await queue.fail_all()
+
+    assert not queue.has_pending("session-1")
+    assert edit.await_count == 2
+    assert all(
+        call.args[1] == "❌ Не отправлено в сессию: ccbot перезапущен"
+        for call in edit.await_args_list
+    )
+    assert all(delivery.await_count == 0 for delivery in deliveries)
+
+
+@pytest.mark.asyncio
 async def test_remote_dispatch_queues_before_preprocessing(monkeypatch):
     from ccbot.bot import messages
 

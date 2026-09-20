@@ -38,6 +38,21 @@ class FakeExecutor:
         self.sent.append((session_id, text))
         return {"ok": True}
 
+    async def list_directories(self, *, path: str):
+        return {"ok": True, "path": path or "/worker", "directories": ["project"]}
+
+    async def create_directory(self, *, path: str, name: str):
+        return {"ok": True, "path": f"{path}/{name}", "directories": []}
+
+    async def create_session(self, *, path: str, backend: str, name: str):
+        return {
+            "ok": True,
+            "target_window_id": "@8",
+            "target_workdir": path,
+            "target_agent_session_id": f"agent-{name}",
+            "backend": backend,
+        }
+
 
 @pytest.mark.asyncio
 async def test_node_agent_accepts_context_chunks_and_deduplicates_commands(tmp_path):
@@ -124,3 +139,56 @@ async def test_node_agent_routes_send_text_to_executor(tmp_path):
     assert executor.sent == [("agent-7", "next")]
     assert transport.sent[-1].kind == "result"
     assert transport.sent[-1].payload["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_node_agent_routes_directory_and_new_session_commands(tmp_path):
+    transport = FakeTransport()
+    executor = FakeExecutor()
+    agent = NodeAgent(transport, executor, context_dir=tmp_path)
+
+    await agent._handle_command(
+        NodeEnvelope(
+            kind="command",
+            request_id="dirs",
+            payload={"operation": "list_directories", "path": "/worker"},
+        )
+    )
+    await agent._handle_command(
+        NodeEnvelope(
+            kind="command",
+            request_id="mkdir",
+            payload={
+                "operation": "create_directory",
+                "path": "/worker",
+                "name": "project",
+            },
+        )
+    )
+    await agent._handle_command(
+        NodeEnvelope(
+            kind="command",
+            request_id="session",
+            payload={
+                "operation": "create_session",
+                "path": "/worker/project",
+                "backend": "claude",
+                "name": "Task",
+            },
+        )
+    )
+
+    results = [
+        message.payload for message in transport.sent if message.kind == "result"
+    ]
+    assert results[-3:] == [
+        {"ok": True, "path": "/worker", "directories": ["project"]},
+        {"ok": True, "path": "/worker/project", "directories": []},
+        {
+            "ok": True,
+            "target_window_id": "@8",
+            "target_workdir": "/worker/project",
+            "target_agent_session_id": "agent-Task",
+            "backend": "claude",
+        },
+    ]

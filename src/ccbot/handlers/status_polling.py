@@ -544,6 +544,9 @@ async def update_status_message(
     carries its own header. The pane spinner ("…Esc to interrupt") is no
     longer shown in chat; it drives ``send_chat_action(TYPING)`` instead.
     """
+    sess = session_manager.find_session_by_window(window_id)
+    if sess is not None and getattr(sess, "node_id", "local") != "local":
+        return
     w = window or await tmux_manager.find_window_by_id(window_id)
     if not w:
         return
@@ -560,7 +563,6 @@ async def update_status_message(
     if should_check_new_ui is None:
         return
 
-    sess = session_manager.find_session_by_window(window_id)
     active = session_manager.get_active_session(user_id)
     # Treat orphan windows (no session record) as "active-like": there's
     # no bg-status row to flip, so falling through to the legacy handler
@@ -688,6 +690,15 @@ async def status_poll_loop(bot: Bot) -> None:
 
             for user_id, wid in pairs:
                 try:
+                    sess = session_manager.find_session_by_window(wid)
+                    if (
+                        sess is not None
+                        and getattr(sess, "node_id", "local") != "local"
+                    ):
+                        # Remote workers own their tmux windows; the leader's
+                        # local tmux inventory cannot be used as a liveness
+                        # probe for them.
+                        continue
                     # Reap tmux windows that vanished externally.
                     w = windows_by_id.get(wid)
                     if not w:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import posixpath
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from ...handlers.callback_data import (
 )
 from ...handlers.directory_browser import (
     BROWSE_DIRS_KEY,
+    BROWSE_NODE_KEY,
     BROWSE_PAGE_KEY,
     BROWSE_PATH_KEY,
     SESSIONS_KEY,
@@ -41,6 +43,7 @@ from ...handlers.message_sender import safe_edit
 from ...handlers.notifications import resume_card_view
 from ...i18n import t
 from ...session import session_manager
+from ...transfer_runtime import get_node_runtime
 from .._common import open_more_in_place
 from ..messages import create_and_activate_session
 
@@ -87,20 +90,60 @@ async def open_directory_browser(
     query: CallbackQuery,
     context: ContextTypes.DEFAULT_TYPE,
     user_id: int,
+    *,
+    node_id: str | None = None,
 ) -> None:
+    msg_text, keyboard, _subdirs = await initialize_directory_browser(
+        context, user_id, node_id=node_id
+    )
+    await safe_edit(query, msg_text, reply_markup=keyboard)
+
+
+async def _load_directory_browser(
+    *, node_id: str, current_path: str, page: int, user_id: int
+) -> tuple[str, InlineKeyboardMarkup, list[str], str]:
+    if node_id == "local":
+        path = current_path or str(Path.home())
+        text, keyboard, subdirs = await build_directory_browser(
+            path, page, user_id=user_id
+        )
+        return text, keyboard, subdirs, path
+    runtime = get_node_runtime(node_id)
+    if runtime is None:
+        raise RuntimeError(f"Node runtime is not connected: {node_id}")
+    result = await runtime.list_directories(node_id, current_path)
+    path = str(result.get("path") or current_path or "/")
+    subdirs = [str(name) for name in result.get("directories", [])]
+    text, keyboard, _ = await build_directory_browser(
+        path,
+        page,
+        user_id=user_id,
+        remote_subdirs=subdirs,
+        remote=True,
+    )
+    return text, keyboard, subdirs, path
+
+
+async def initialize_directory_browser(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    *,
+    node_id: str | None = None,
+) -> tuple[str, InlineKeyboardMarkup, list[str]]:
+    node_id = node_id or session_manager.get_selected_node_id(user_id)
     clear_browse_state(context.user_data)
     clear_session_picker_state(context.user_data)
     clear_window_picker_state(context.user_data)
-    start_path = str(Path.home())
-    msg_text, keyboard, subdirs = await build_directory_browser(
-        start_path, user_id=user_id
+    msg_text, keyboard, subdirs, start_path = await _load_directory_browser(
+        node_id=node_id, current_path="", page=0, user_id=user_id
     )
     if context.user_data is not None:
         context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
         context.user_data[BROWSE_PATH_KEY] = start_path
+        context.user_data[BROWSE_NODE_KEY] = node_id
         context.user_data[BROWSE_PAGE_KEY] = 0
         context.user_data[BROWSE_DIRS_KEY] = subdirs
-    await safe_edit(query, msg_text, reply_markup=keyboard)
+    return msg_text, keyboard, subdirs
 
 
 async def resolve_session_summaries(
@@ -185,20 +228,28 @@ async def handle(
             if context.user_data
             else default_path
         )
-        new_path = (Path(current_path) / subdir_name).resolve()
-        if not new_path.exists() or not new_path.is_dir():
-            await query.answer("Directory not found", show_alert=True)
-            return True
-
-        new_path_str = str(new_path)
+        node_id = (
+            context.user_data.get(BROWSE_NODE_KEY, "local")
+            if context.user_data
+            else "local"
+        )
+        if node_id == "local":
+            new_path = (Path(current_path) / subdir_name).resolve()
+            if not new_path.exists() or not new_path.is_dir():
+                await query.answer("Directory not found", show_alert=True)
+                return True
+            new_path_str = str(new_path)
+        else:
+            new_path_str = posixpath.join(current_path, subdir_name)
         if context.user_data is not None:
             context.user_data[BROWSE_PATH_KEY] = new_path_str
             context.user_data[BROWSE_PAGE_KEY] = 0
 
-        msg_text, keyboard, subdirs = await build_directory_browser(
-            new_path_str, user_id=user.id
+        msg_text, keyboard, subdirs, resolved_path = await _load_directory_browser(
+            node_id=node_id, current_path=new_path_str, page=0, user_id=user.id
         )
         if context.user_data is not None:
+            context.user_data[BROWSE_PATH_KEY] = resolved_path
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
         await query.answer()
@@ -211,15 +262,25 @@ async def handle(
             if context.user_data
             else default_path
         )
-        parent_path = str(Path(current_path).resolve().parent)
+        node_id = (
+            context.user_data.get(BROWSE_NODE_KEY, "local")
+            if context.user_data
+            else "local"
+        )
+        parent_path = (
+            str(Path(current_path).resolve().parent)
+            if node_id == "local"
+            else posixpath.dirname(current_path)
+        )
         if context.user_data is not None:
             context.user_data[BROWSE_PATH_KEY] = parent_path
             context.user_data[BROWSE_PAGE_KEY] = 0
 
-        msg_text, keyboard, subdirs = await build_directory_browser(
-            parent_path, user_id=user.id
+        msg_text, keyboard, subdirs, resolved_path = await _load_directory_browser(
+            node_id=node_id, current_path=parent_path, page=0, user_id=user.id
         )
         if context.user_data is not None:
+            context.user_data[BROWSE_PATH_KEY] = resolved_path
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
         await query.answer()
@@ -237,14 +298,20 @@ async def handle(
             if context.user_data
             else default_path
         )
+        node_id = (
+            context.user_data.get(BROWSE_NODE_KEY, "local")
+            if context.user_data
+            else "local"
+        )
         if context.user_data is not None:
             context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
             context.user_data[BROWSE_PAGE_KEY] = pg
 
-        msg_text, keyboard, subdirs = await build_directory_browser(
-            current_path, pg, user_id=user.id
+        msg_text, keyboard, subdirs, resolved_path = await _load_directory_browser(
+            node_id=node_id, current_path=current_path, page=pg, user_id=user.id
         )
         if context.user_data is not None:
+            context.user_data[BROWSE_PATH_KEY] = resolved_path
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
         await query.answer()
@@ -272,6 +339,7 @@ async def handle(
             if context.user_data is not None:
                 context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
                 context.user_data[BROWSE_PATH_KEY] = start_path
+                context.user_data[BROWSE_NODE_KEY] = "local"
                 context.user_data[BROWSE_PAGE_KEY] = 0
                 context.user_data[BROWSE_DIRS_KEY] = subdirs
             await safe_edit(query, msg_text, reply_markup=keyboard)
@@ -305,8 +373,18 @@ async def handle(
             asyncio.create_task(ensure_default_session(context.bot, user.id))
             return True
 
+        node_id = (
+            context.user_data.get(BROWSE_NODE_KEY, "local")
+            if context.user_data
+            else "local"
+        )
         clear_browse_state(context.user_data)
-        await create_and_activate_session(query, context, user, selected_path)
+        if node_id == "local":
+            await create_and_activate_session(query, context, user, selected_path)
+        else:
+            await create_and_activate_session(
+                query, context, user, selected_path, node_id=node_id
+            )
         return True
 
     if data == CB_DIR_CREATE:
@@ -401,11 +479,22 @@ async def handle(
             clear_session_picker_state(context.user_data)
             return True
         clear_session_picker_state(context.user_data)
+        node_id = (
+            context.user_data.get(BROWSE_NODE_KEY, "local")
+            if context.user_data
+            else "local"
+        )
         if context.user_data is not None:
             context.user_data.pop("_selected_path", None)
 
+        kwargs = {"node_id": node_id} if node_id != "local" else {}
         await create_and_activate_session(
-            query, context, user, selected_path, resume_session_id=session.session_id
+            query,
+            context,
+            user,
+            selected_path,
+            resume_session_id=session.session_id,
+            **kwargs,
         )
         return True
 
@@ -421,10 +510,20 @@ async def handle(
             clear_session_picker_state(context.user_data)
             return True
         clear_session_picker_state(context.user_data)
+        node_id = (
+            context.user_data.get(BROWSE_NODE_KEY, "local")
+            if context.user_data
+            else "local"
+        )
         if context.user_data is not None:
             context.user_data.pop("_selected_path", None)
 
-        await create_and_activate_session(query, context, user, selected_path)
+        if node_id == "local":
+            await create_and_activate_session(query, context, user, selected_path)
+        else:
+            await create_and_activate_session(
+                query, context, user, selected_path, node_id=node_id
+            )
         return True
 
     if data == CB_SESSION_CANCEL:
@@ -449,17 +548,23 @@ async def handle(
             if context.user_data
             else str(Path.home())
         )
+        node_id = (
+            context.user_data.get(BROWSE_NODE_KEY, "local")
+            if context.user_data
+            else "local"
+        )
         clear_session_picker_state(context.user_data)
         if context.user_data is not None:
             context.user_data.pop("_selected_path", None)
             context.user_data.pop(SESSIONS_PAGE_KEY, None)
 
-        msg_text, keyboard, subdirs = await build_directory_browser(
-            selected_path, user_id=user.id
+        msg_text, keyboard, subdirs, resolved_path = await _load_directory_browser(
+            node_id=node_id, current_path=selected_path, page=0, user_id=user.id
         )
         if context.user_data is not None:
             context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
-            context.user_data[BROWSE_PATH_KEY] = selected_path
+            context.user_data[BROWSE_PATH_KEY] = resolved_path
+            context.user_data[BROWSE_NODE_KEY] = node_id
             context.user_data[BROWSE_PAGE_KEY] = 0
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)

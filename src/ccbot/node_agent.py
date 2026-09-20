@@ -33,6 +33,14 @@ HEALTH_INTERVAL_SECONDS = 15.0
 
 
 class WorkerSessionExecutor(Protocol):
+    async def list_directories(self, *, path: str) -> dict[str, Any]: ...
+
+    async def create_directory(self, *, path: str, name: str) -> dict[str, Any]: ...
+
+    async def create_session(
+        self, *, path: str, backend: str, name: str
+    ) -> dict[str, Any]: ...
+
     async def start_context_session(
         self, *, context_path: str, backend: str, name: str
     ) -> dict[str, Any]: ...
@@ -106,7 +114,12 @@ class NodeAgent:
                     "platform": platform.system(),
                     "arch": platform.machine(),
                     "backends": list(self._backends),
-                    "capabilities": {"context_transfer": True, "send_text": True},
+                    "capabilities": {
+                        "directory_browser": True,
+                        "create_session": True,
+                        "context_transfer": True,
+                        "send_text": True,
+                    },
                 },
             )
         )
@@ -161,6 +174,21 @@ class NodeAgent:
             return self._append_context(payload)
         if operation == "transfer_context_finish":
             return await self._finish_context(payload)
+        if operation == "list_directories":
+            return await self._executor.list_directories(
+                path=str(payload.get("path", ""))
+            )
+        if operation == "create_directory":
+            return await self._executor.create_directory(
+                path=str(payload.get("path", "")),
+                name=str(payload.get("name", "")),
+            )
+        if operation == "create_session":
+            return await self._executor.create_session(
+                path=str(payload.get("path", "")),
+                backend=str(payload.get("backend", "")),
+                name=str(payload.get("name", "")),
+            )
         if operation == "send_text":
             session_id = str(payload.get("session_id", ""))
             text = str(payload.get("text", ""))
@@ -309,8 +337,78 @@ class TmuxWorkerExecutor:
         self._context_limit_bytes = max(0, context_limit_bytes)
         self._sessions: dict[str, _TmuxWorkerSession] = {}
 
+    async def list_directories(self, *, path: str) -> dict[str, Any]:
+        directory = self._resolve_directory(path)
+        try:
+            entries = await asyncio.to_thread(
+                lambda: [
+                    entry.name
+                    for entry in directory.iterdir()
+                    if entry.is_dir()
+                    and (not entry.name.startswith(".") or self._show_hidden_dirs())
+                ]
+            )
+        except (OSError, PermissionError) as exc:
+            raise ValueError(f"cannot list directory: {directory}") from exc
+        entries.sort(key=str.casefold)
+        return {"ok": True, "path": str(directory), "directories": entries}
+
+    async def create_directory(self, *, path: str, name: str) -> dict[str, Any]:
+        if not self._valid_directory_name(name):
+            raise ValueError("invalid directory name")
+        parent = self._resolve_directory(path)
+        target = (parent / name).resolve()
+        if target.parent != parent:
+            raise ValueError("directory must remain under the selected path")
+        existed = target.exists()
+        try:
+            await asyncio.to_thread(target.mkdir)
+        except FileExistsError:
+            if not target.is_dir():
+                raise ValueError("path exists and is not a directory") from None
+        except OSError as exc:
+            raise ValueError(f"cannot create directory: {target}") from exc
+        result = await self.list_directories(path=str(target))
+        result["existed"] = existed
+        return result
+
+    async def create_session(
+        self, *, path: str, backend: str, name: str
+    ) -> dict[str, Any]:
+        directory = self._resolve_directory(path)
+        if backend not in ("claude", "codex"):
+            raise ValueError(f"unsupported backend: {backend}")
+        return await self._start_tmux_agent(
+            workdir=directory,
+            backend=backend,
+            name=name,
+            command=self._agent_command(backend),
+        )
+
     async def start_context_session(
         self, *, context_path: str, backend: str, name: str
+    ) -> dict[str, Any]:
+        result = await self._start_tmux_agent(
+            workdir=self._workdir,
+            backend=backend,
+            name=name,
+            command=self._agent_command(backend, context_path),
+        )
+        result.update(
+            {
+                "context_path": context_path,
+                "context_error": (
+                    "The transferred context exceeds the worker provider limit"
+                    if self._context_limit_bytes
+                    and Path(context_path).stat().st_size > self._context_limit_bytes
+                    else ""
+                ),
+            }
+        )
+        return result
+
+    async def _start_tmux_agent(
+        self, *, workdir: Path, backend: str, name: str, command: str
     ) -> dict[str, Any]:
         if backend not in ("claude", "codex"):
             raise ValueError(f"unsupported backend: {backend}")
@@ -328,14 +426,13 @@ class TmuxWorkerExecutor:
             "-n",
             window_name,
             "-c",
-            str(self._workdir),
+            str(workdir),
         )
         if code != 0:
             raise RuntimeError(stderr.strip() or "tmux new-window failed")
         window_id = stdout.strip()
         if not window_id:
             raise RuntimeError("tmux did not return a window id")
-        command = self._agent_command(backend, context_path)
         code, _stdout, stderr = await self._run_tmux(
             "send-keys", "-t", window_id, command, "C-m"
         )
@@ -350,15 +447,8 @@ class TmuxWorkerExecutor:
         )
         return {
             "target_window_id": window_id,
-            "target_workdir": str(self._workdir),
+            "target_workdir": str(workdir),
             "target_agent_session_id": session_id,
-            "context_path": context_path,
-            "context_error": (
-                "The transferred context exceeds the worker provider limit"
-                if self._context_limit_bytes
-                and Path(context_path).stat().st_size > self._context_limit_bytes
-                else ""
-            ),
         }
 
     async def send_text(self, *, session_id: str, text: str) -> dict[str, Any]:
@@ -387,22 +477,44 @@ class TmuxWorkerExecutor:
         if code != 0:
             raise RuntimeError(stderr.strip() or "tmux new-session failed")
 
-    def _agent_command(self, backend: str, context_path: str) -> str:
+    def _agent_command(self, backend: str, context_path: str = "") -> str:
         if backend == "codex":
             command = self._codex_command
             flags = self._codex_flags
         else:
             command = self._claude_command
             flags = self._claude_flags
-        prompt = (
-            "Read the complete transferred session context from "
-            f"{context_path}. Continue the conversation from that context."
-        )
         parts = [command]
         if flags:
             parts.append(flags)
-        parts.append(shlex.quote(prompt))
+        if context_path:
+            prompt = (
+                "Read the complete transferred session context from "
+                f"{context_path}. Continue the conversation from that context."
+            )
+            parts.append(shlex.quote(prompt))
         return " ".join(parts)
+
+    @staticmethod
+    def _valid_directory_name(name: str) -> bool:
+        return bool(
+            name
+            and name not in (".", "..")
+            and "/" not in name
+            and "\\" not in name
+            and "\x00" not in name
+        )
+
+    @staticmethod
+    def _show_hidden_dirs() -> bool:
+        return os.environ.get("CCBOT_SHOW_HIDDEN_DIRS", "").lower() == "true"
+
+    @staticmethod
+    def _resolve_directory(path: str) -> Path:
+        directory = Path(path).expanduser().resolve() if path else Path.home().resolve()
+        if not directory.exists() or not directory.is_dir():
+            raise ValueError(f"directory does not exist: {directory}")
+        return directory
 
     async def _wait_ready(self, window_id: str, backend: str) -> None:
         del backend

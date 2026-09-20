@@ -28,6 +28,22 @@ class TransferRuntimeResult:
 
 
 class NodeRuntime(Protocol):
+    async def list_directories(
+        self, target_node_id: str, path: str = ""
+    ) -> dict[str, Any]: ...
+
+    async def create_directory(
+        self, target_node_id: str, path: str, name: str
+    ) -> dict[str, Any]: ...
+
+    async def create_session(
+        self, target_node_id: str, path: str, backend: str, name: str
+    ) -> dict[str, Any]: ...
+
+    async def send_text(
+        self, target_node_id: str, session_id: str, text: str
+    ) -> dict[str, Any]: ...
+
     async def start_context_transfer(
         self,
         *,

@@ -245,6 +245,8 @@ async def _send_with_delivery_proof(
         return False, message or "Delivery was not acknowledged"
     if message.startswith("Queued for "):
         return True, message
+    if sess is not None and getattr(sess, "node_id", "local") != "local":
+        return True, message
     if sess is None or sess.backend != "codex":
         return True, message
     if not await tmux_manager.ensure_codex_prompt_submitted(wid, text):

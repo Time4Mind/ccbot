@@ -204,7 +204,12 @@ async def _drain(user_id: int, window_id: str) -> None:
     if flow is None:
         return
     try:
-        ready = await session_manager.wait_for_window_ready(window_id)
+        session = session_manager.find_session_by_window(window_id)
+        if session is not None and getattr(session, "node_id", "local") != "local":
+            # The worker RPC only returns after its agent prompt is ready.
+            ready = True
+        else:
+            ready = await session_manager.wait_for_window_ready(window_id)
         if not ready:
             logger.error(
                 "startup queue kept closed: window never became ready "

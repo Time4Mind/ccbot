@@ -382,7 +382,7 @@ async def handle(
         if context.user_data is not None:
             clear_browse_state(context.user_data)
             context.user_data["_directory_selection_target"] = "default_session"
-        await open_directory_browser(query, context, user.id)
+        await open_directory_browser(query, context, user.id, node_id="local")
         await query.answer()
         return True
     elif data.startswith(CB_ST_LAG):

@@ -706,6 +706,18 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
             display,
             len(text),
         )
+        sess = self.find_session_by_window(window_id)
+        if sess is not None and getattr(sess, "node_id", "local") != "local":
+            from .transfer_runtime import get_node_runtime
+
+            node_id = getattr(sess, "node_id", "local")
+            runtime = get_node_runtime(node_id)
+            if runtime is None or not getattr(sess, "claude_session_id", ""):
+                return False, "Remote node session is not available"
+            result = await runtime.send_text(node_id, sess.claude_session_id, text)
+            if result.get("ok", True):
+                return True, f"Sent to {display}"
+            return False, str(result.get("error", "Failed to send to remote node"))
         window = await tmux_manager.find_window_by_id(window_id)
         if not window:
             return False, "Window not found (may have been closed)"
@@ -720,7 +732,6 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                 len(text),
             )
             return True, f"Queued for {display} (session starting)"
-        sess = self.find_session_by_window(window_id)
         backend = sess.backend if sess is not None else ""
         success = await tmux_manager.send_keys(window.window_id, text, backend=backend)
         if success:

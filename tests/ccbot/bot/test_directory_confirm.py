@@ -11,6 +11,8 @@ from ccbot.handlers.callback_data import CB_DIR_CONFIRM
 from ccbot.handlers.callback_data import CB_DIR_CANCEL
 from ccbot.handlers.callback_data import CB_DIR_CREATE
 from ccbot.handlers.directory_browser import (
+    BROWSE_DIRS_KEY,
+    BROWSE_NODE_KEY,
     BROWSE_PAGE_KEY,
     BROWSE_PATH_KEY,
     STATE_KEY,
@@ -32,6 +34,52 @@ async def test_confirm_starts_fresh_without_listing_sessions(
 
     assert await dir_browser.handle(query, context, user)
     create.assert_awaited_once_with(query, context, user, str(tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_directory_browser_reads_selected_node_filesystem(monkeypatch):
+    runtime = SimpleNamespace(
+        list_directories=AsyncMock(
+            return_value={
+                "ok": True,
+                "path": "/worker/home",
+                "directories": ["project", "notes"],
+            }
+        )
+    )
+    monkeypatch.setattr(
+        dir_browser,
+        "session_manager",
+        SimpleNamespace(get_selected_node_id=lambda _uid: "worker-a"),
+    )
+    monkeypatch.setattr(dir_browser, "get_node_runtime", lambda _node_id: runtime)
+    edit = AsyncMock()
+    monkeypatch.setattr(dir_browser, "safe_edit", edit)
+
+    context = SimpleNamespace(user_data={})
+    await dir_browser.open_directory_browser(SimpleNamespace(), context, user_id=42)
+
+    runtime.list_directories.assert_awaited_once_with("worker-a", "")
+    assert context.user_data[BROWSE_NODE_KEY] == "worker-a"
+    assert context.user_data[BROWSE_PATH_KEY] == "/worker/home"
+    assert context.user_data[BROWSE_DIRS_KEY] == ["project", "notes"]
+    assert "~" not in edit.await_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_remote_directory_confirm_passes_target_node(monkeypatch, tmp_path):
+    query = SimpleNamespace(data=CB_DIR_CONFIRM)
+    context = SimpleNamespace(
+        user_data={BROWSE_PATH_KEY: "/worker/home", BROWSE_NODE_KEY: "worker-a"}
+    )
+    user = SimpleNamespace(id=42)
+    create = AsyncMock()
+    monkeypatch.setattr(dir_browser, "create_and_activate_session", create)
+
+    assert await dir_browser.handle(query, context, user)
+    create.assert_awaited_once_with(
+        query, context, user, "/worker/home", node_id="worker-a"
+    )
 
 
 @pytest.mark.asyncio

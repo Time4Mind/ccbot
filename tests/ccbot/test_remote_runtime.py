@@ -69,3 +69,45 @@ async def test_remote_runtime_streams_context_and_returns_prompt_delivery(tmp_pa
     assert await result.delivery(update, SimpleNamespace())
     assert rpc.calls[-1][0] == "send_text"
     assert rpc.calls[-1][1]["text"] == "next prompt"
+
+
+@pytest.mark.asyncio
+async def test_remote_runtime_uses_target_node_for_directory_and_session_operations():
+    rpc = FakeRpc()
+    runtime = RemoteNodeRuntime(rpc)
+
+    directories = await runtime.list_directories("worker-a", "/srv")
+    created = await runtime.create_directory("worker-a", "/srv", "project")
+    session = await runtime.create_session("worker-a", "/srv/project", "claude", "Task")
+    sent = await runtime.send_text("worker-a", "worker-session", "hello")
+
+    assert directories == {"ok": True}
+    assert created == {"ok": True}
+    assert session == {"ok": True}
+    assert sent == {"ok": True}
+    assert [operation for operation, _payload in rpc.calls] == [
+        "list_directories",
+        "create_directory",
+        "create_session",
+        "send_text",
+    ]
+    assert rpc.calls[0][1] == {
+        "target_node_id": "worker-a",
+        "path": "/srv",
+    }
+    assert rpc.calls[1][1] == {
+        "target_node_id": "worker-a",
+        "path": "/srv",
+        "name": "project",
+    }
+    assert rpc.calls[2][1] == {
+        "target_node_id": "worker-a",
+        "path": "/srv/project",
+        "backend": "claude",
+        "name": "Task",
+    }
+    assert rpc.calls[3][1] == {
+        "target_node_id": "worker-a",
+        "session_id": "worker-session",
+        "text": "hello",
+    }

@@ -20,15 +20,6 @@ from ...handlers.callback_data import (
 )
 from ...handlers.cleanup import teardown_session_runtime
 from ...session_models import reserve_owner
-from ...handlers.directory_browser import (
-    BROWSE_DIRS_KEY,
-    BROWSE_PAGE_KEY,
-    BROWSE_PATH_KEY,
-    STATE_BROWSING_DIRECTORY,
-    STATE_KEY,
-    build_directory_browser,
-    clear_browse_state,
-)
 from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_reply
 from ...i18n import t
@@ -131,16 +122,10 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     if context.user_data is not None:
         context.user_data["_new_session_backend"] = only_backend
-    clear_browse_state(context.user_data)
-    start_path = str(Path.home())
-    msg_text, keyboard, subdirs = await build_directory_browser(
-        start_path, user_id=user.id
-    )
+    from ..callbacks.dir_browser import initialize_directory_browser
+
+    msg_text, keyboard, _subdirs = await initialize_directory_browser(context, user.id)
     if context.user_data is not None:
-        context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
-        context.user_data[BROWSE_PATH_KEY] = start_path
-        context.user_data[BROWSE_PAGE_KEY] = 0
-        context.user_data[BROWSE_DIRS_KEY] = subdirs
         context.user_data["menu_origin"] = "main"
     await safe_reply(update.message, msg_text, reply_markup=keyboard)
 

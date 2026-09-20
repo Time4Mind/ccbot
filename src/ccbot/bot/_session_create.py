@@ -24,6 +24,7 @@ from ..handlers.notifications import (
 from ..i18n import t
 from ..session import session_manager
 from ..tmux_manager import tmux_manager
+from ..transfer_runtime import get_node_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ async def create_and_activate_session(
     user: object,
     selected_path: str,
     resume_session_id: str | None = None,
+    node_id: str = "local",
 ) -> None:
     """Create a session and atomically replace the browser with its live card."""
     from telegram import CallbackQuery, User
@@ -51,6 +53,9 @@ async def create_and_activate_session(
         selected_backend
         if selected_backend in ("claude", "codex")
         else session_manager.agent_backend
+    )
+    pending_name = (
+        context.user_data.pop("_pending_session_name", "") if context.user_data else ""
     )
 
     # Acknowledge the callback up-front so Telegram's 15-second
@@ -72,14 +77,47 @@ async def create_and_activate_session(
             )
             return
 
-    success, message, created_wname, created_wid = await tmux_manager.create_window(
-        selected_path,
-        resume_session_id=resume_session_id,
-        backend=backend,
-    )
-    if not success:
-        await safe_edit(query, f"❌ {message}")
-        return
+    agent_session_id = ""
+    if node_id == "local":
+        success, message, created_wname, created_wid = await tmux_manager.create_window(
+            selected_path,
+            resume_session_id=resume_session_id,
+            backend=backend,
+        )
+        if not success:
+            await safe_edit(query, f"❌ {message}")
+            return
+    else:
+        runtime = get_node_runtime(node_id)
+        if runtime is None:
+            await safe_edit(query, f"❌ Node is not connected: {node_id}")
+            return
+        if resume_session_id:
+            await safe_edit(
+                query,
+                "❌ Resuming an existing directory session on a remote node "
+                "is not supported yet.",
+            )
+            return
+        try:
+            result = await runtime.create_session(
+                node_id,
+                selected_path,
+                backend,
+                pending_name or "session",
+            )
+        except Exception as exc:
+            logger.exception("Remote session creation failed on node %s", node_id)
+            await safe_edit(query, f"❌ {exc}")
+            return
+        raw_window_id = str(result.get("target_window_id", ""))
+        agent_session_id = str(result.get("target_agent_session_id", ""))
+        if not raw_window_id or not agent_session_id:
+            await safe_edit(query, "❌ Worker did not return a ready session")
+            return
+        created_wid = f"{node_id}::{raw_window_id}"
+        created_wname = pending_name or raw_window_id
+        message = "Remote session created"
 
     logger.info(
         "Window created: %s (id=%s) at %s (user=%d, resume=%s)",
@@ -93,18 +131,19 @@ async def create_and_activate_session(
     # pane. Every send is queued until the real TUI input prompt appears.
     # This covers fresh starts, normal resumes, and long resume compaction
     # with one ordering-preserving gate.
-    session_manager.mark_window_starting(
-        created_wid,
-        backend=backend,
-        resume=resume_session_id is not None,
-        bot=context.bot,
-        user_id=user.id,
-    )
+    if node_id == "local":
+        session_manager.mark_window_starting(
+            created_wid,
+            backend=backend,
+            resume=resume_session_id is not None,
+            bot=context.bot,
+            user_id=user.id,
+        )
 
     # A resumed transcript id is already authoritative. Bind it before paint
     # instead of waiting up to 15 seconds for a lifecycle hook; the hook is
     # reconciled in the background below.
-    if resume_session_id:
+    if node_id == "local" and resume_session_id:
         ws = session_manager.get_window_state(created_wid)
         ws.session_id = resume_session_id
         ws.cwd = str(selected_path)
@@ -113,18 +152,19 @@ async def create_and_activate_session(
         session_manager.save_state()
 
     # Register Session record and make it active. Honor /new <name> if any.
-    pending_name = (
-        context.user_data.pop("_pending_session_name", "") if context.user_data else ""
-    )
     sess = session_manager.create_session(
         name=pending_name or created_wname or "",
         window_id=created_wid,
         workdir=selected_path,
         backend=backend,
+        node_id=node_id,
     )
-    ws = session_manager.get_window_state(created_wid)
-    if ws.session_id:
-        session_manager.set_session_claude_id(sess.id, ws.session_id)
+    if node_id == "local":
+        ws = session_manager.get_window_state(created_wid)
+        if ws.session_id:
+            session_manager.set_session_claude_id(sess.id, ws.session_id)
+    else:
+        session_manager.set_session_claude_id(sess.id, agent_session_id)
     if query.message is not None:
         await activate_card_on_carrier(
             user.id,
@@ -181,6 +221,7 @@ async def create_and_activate_session(
                 e,
             )
 
-    asyncio.create_task(
-        _bind_lifecycle_in_background(), name=f"session-bind:{created_wid}"
-    )
+    if node_id == "local":
+        asyncio.create_task(
+            _bind_lifecycle_in_background(), name=f"session-bind:{created_wid}"
+        )

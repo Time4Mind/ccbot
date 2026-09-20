@@ -165,6 +165,44 @@ class RemoteNodeRuntime:
         self._rpc = rpc
         self._chunk_size = chunk_size
 
+    async def list_directories(
+        self, target_node_id: str, path: str = ""
+    ) -> dict[str, Any]:
+        result = await self._request(target_node_id, "list_directories", {"path": path})
+        self._require_ok(result)
+        return result
+
+    async def create_directory(
+        self, target_node_id: str, path: str, name: str
+    ) -> dict[str, Any]:
+        result = await self._request(
+            target_node_id,
+            "create_directory",
+            {"path": path, "name": name},
+        )
+        self._require_ok(result)
+        return result
+
+    async def create_session(
+        self, target_node_id: str, path: str, backend: str, name: str
+    ) -> dict[str, Any]:
+        result = await self._request(
+            target_node_id,
+            "create_session",
+            {"path": path, "backend": backend, "name": name},
+        )
+        self._require_ok(result)
+        return result
+
+    async def send_text(
+        self, target_node_id: str, session_id: str, text: str
+    ) -> dict[str, Any]:
+        return await self._request(
+            target_node_id,
+            "send_text",
+            {"session_id": session_id, "text": text},
+        )
+
     async def start_context_transfer(
         self,
         *,
@@ -221,10 +259,8 @@ class RemoteNodeRuntime:
             text = getattr(message, "text", None) if message is not None else None
             if not text:
                 return False
-            result = await self._request(
-                transfer.target_node_id,
-                "send_text",
-                {"session_id": target_session_id, "text": str(text)},
+            result = await self.send_text(
+                transfer.target_node_id, target_session_id, str(text)
             )
             return bool(result.get("ok", True))
 

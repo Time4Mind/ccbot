@@ -90,3 +90,60 @@ async def test_old_card_stays_background_until_atomic_new_session_handoff(
         _cards.pop((user_id, old_session.id), None)
 
     assert transitions == ["handoff", "paint"]
+
+
+@pytest.mark.asyncio
+async def test_new_session_is_created_on_selected_remote_node(monkeypatch):
+    user_id = 42
+    new_session = SimpleNamespace(id="remote-session", claude_session_id=None)
+    runtime = SimpleNamespace(
+        create_session=AsyncMock(
+            return_value={
+                "ok": True,
+                "target_window_id": "@8",
+                "target_workdir": "/worker/project",
+                "target_agent_session_id": "agent-8",
+            }
+        )
+    )
+    fake_manager = SimpleNamespace(
+        agent_backend="claude",
+        get_active_session=lambda _uid: None,
+        create_session=MagicMock(return_value=new_session),
+        set_session_claude_id=MagicMock(),
+        set_active_session=MagicMock(),
+        save_state=MagicMock(),
+    )
+    query = MagicMock(spec=CallbackQuery)
+    query.message = None
+    query.answer = AsyncMock()
+    user = MagicMock(spec=User)
+    user.id = user_id
+    context = SimpleNamespace(
+        user_data={"_new_session_backend": "claude", "_pending_session_name": "Task"},
+        bot=object(),
+    )
+
+    monkeypatch.setattr(_session_create, "session_manager", fake_manager)
+    monkeypatch.setattr(_session_create, "get_node_runtime", lambda _node_id: runtime)
+    monkeypatch.setattr(
+        "ccbot.startup_queue.bind_startup_queue", lambda _uid, _wid: None
+    )
+
+    await _session_create.create_and_activate_session(
+        query, context, user, "/worker/project", node_id="worker-a"
+    )
+
+    runtime.create_session.assert_awaited_once_with(
+        "worker-a", "/worker/project", "claude", "Task"
+    )
+    fake_manager.create_session.assert_called_once_with(
+        name="Task",
+        window_id="worker-a::@8",
+        workdir="/worker/project",
+        backend="claude",
+        node_id="worker-a",
+    )
+    fake_manager.set_session_claude_id.assert_called_once_with(
+        "remote-session", "agent-8"
+    )

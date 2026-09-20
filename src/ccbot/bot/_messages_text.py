@@ -15,6 +15,7 @@ from telegram.ext import ContextTypes
 from ..handlers.cleanup import clear_session_state
 from ..handlers.directory_browser import (
     BROWSE_DIRS_KEY,
+    BROWSE_NODE_KEY,
     BROWSE_PAGE_KEY,
     BROWSE_PATH_KEY,
     STATE_BROWSING_DIRECTORY,
@@ -51,6 +52,7 @@ from ..markdown_v2 import convert_markdown
 from ..naming import maybe_auto_name
 from ..i18n import t
 from ..session import session_manager
+from ..transfer_runtime import get_node_runtime
 from ..terminal_parser import (
     extract_bash_output,
 )
@@ -240,17 +242,20 @@ async def _resolve_active_window(
         begin_startup_queue(user_id)
         enqueue_startup_message(update, context)
         logger.info("No active session: showing directory browser (user=%d)", user_id)
-        start_path = str(Path.home())
-        msg_text, keyboard, subdirs = await build_directory_browser(
-            start_path, user_id=user_id
+        from .callbacks.dir_browser import initialize_directory_browser
+
+        msg_text, keyboard, _subdirs = await initialize_directory_browser(
+            context, user_id
         )
-        if context.user_data is not None:
-            context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
-            context.user_data[BROWSE_PATH_KEY] = start_path
-            context.user_data[BROWSE_PAGE_KEY] = 0
-            context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_reply(update.message, msg_text, reply_markup=keyboard)
         return None
+
+    sess = session_manager.find_session_by_window(wid)
+    if sess is not None and getattr(sess, "node_id", "local") != "local":
+        if get_node_runtime(getattr(sess, "node_id", "local")) is None:
+            await safe_reply(update.message, "❌ Remote node is not connected.")
+            return None
+        return wid
 
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
@@ -275,6 +280,9 @@ def _maybe_start_bash_capture(bot: Bot, user_id: int, wid: str, text: str) -> No
     """Spawn the background ``!cmd`` pane-capture task for a ``!`` prefixed
     message. No-op for normal text. Records the task so a follow-up message
     can cancel it via :func:`cancel_bash_capture`."""
+    session = session_manager.find_session_by_window(wid)
+    if session is not None and getattr(session, "node_id", "local") != "local":
+        return
     if text.startswith("!") and len(text) > 1:
         bash_cmd = text[1:]
         task = asyncio.create_task(_capture_bash_output(bot, user_id, wid, bash_cmd))
@@ -518,6 +526,49 @@ async def text_handler(
         ):
             await safe_reply(
                 update.message, "Некорректное имя папки. Введите одно имя без слешей."
+            )
+            return True
+        node_id = (
+            context.user_data.get(BROWSE_NODE_KEY, "local")
+            if context.user_data
+            else "local"
+        )
+        if node_id != "local":
+            runtime = get_node_runtime(node_id)
+            if runtime is None:
+                await safe_reply(update.message, "❌ Remote node is not connected.")
+                return True
+            try:
+                result = await runtime.create_directory(node_id, current_path, name)
+            except Exception as exc:
+                logger.exception("Remote directory creation failed on node %s", node_id)
+                await safe_reply(update.message, f"❌ {exc}")
+                return True
+            target_path = str(result.get("path", ""))
+            subdirs = [str(value) for value in result.get("directories", [])]
+            if not target_path:
+                await safe_reply(update.message, t(user.id, "dir.create.failed"))
+                return True
+            msg_text, keyboard, _ = await build_directory_browser(
+                target_path,
+                user_id=user.id,
+                remote_subdirs=subdirs,
+                remote=True,
+            )
+            if context.user_data is not None:
+                context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
+                context.user_data[BROWSE_PATH_KEY] = target_path
+                context.user_data[BROWSE_PAGE_KEY] = 0
+                context.user_data[BROWSE_DIRS_KEY] = subdirs
+            notice_key = (
+                "dir.create.exists"
+                if result.get("existed", False)
+                else "dir.create.created"
+            )
+            await safe_reply(
+                update.message,
+                f"{t(user.id, notice_key)}\n\n{msg_text}",
+                reply_markup=keyboard,
             )
             return True
         target = (Path(current_path) / name).resolve()

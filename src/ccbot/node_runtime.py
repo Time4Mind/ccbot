@@ -68,7 +68,8 @@ def _schedule_node_update(node_id: str, revision: str) -> None:
     active = _node_update_tasks.get(node_id)
     if active is not None and not active.done():
         return
-    if now - _node_update_attempts.get(node_id, 0.0) < _NODE_UPDATE_RETRY_SECONDS:
+    last_attempt = _node_update_attempts.get(node_id)
+    if last_attempt is not None and now - last_attempt < _NODE_UPDATE_RETRY_SECONDS:
         return
     _node_update_attempts[node_id] = now
     task = asyncio.create_task(

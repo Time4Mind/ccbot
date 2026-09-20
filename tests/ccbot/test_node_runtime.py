@@ -113,6 +113,7 @@ async def test_health_mismatch_requests_exact_leader_revision_once(monkeypatch):
 
     monkeypatch.setattr(node_runtime, "connect_leader_rpc", fake_connect_leader_rpc)
     monkeypatch.setattr(node_runtime, "current_git_revision", lambda: "b" * 40)
+    monkeypatch.setattr(node_runtime.time, "monotonic", lambda: 1.0)
     monkeypatch.setattr(session_manager, "get_node", lambda _node_id: None)
     monkeypatch.setattr(
         session_manager, "register_node", lambda *_args, **_kwargs: None

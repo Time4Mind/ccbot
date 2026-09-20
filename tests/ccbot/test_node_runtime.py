@@ -120,6 +120,10 @@ async def test_health_mismatch_requests_exact_leader_revision_once(monkeypatch):
     monkeypatch.setattr(node_runtime, "register_node_runtime", lambda *_args: None)
     node_runtime._leader_rpc = None
     node_runtime._remote_node_ids.clear()
+    for task in node_runtime._node_update_tasks.values():
+        task.cancel()
+    node_runtime._node_update_tasks.clear()
+    node_runtime._node_update_attempts.clear()
 
     await node_runtime.connect_configured_remote_runtimes(
         relay_url="relay.example.test:8765",

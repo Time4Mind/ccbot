@@ -6,6 +6,7 @@ import asyncio
 import argparse
 import base64
 import hashlib
+import getpass
 import json
 import logging
 import os
@@ -146,6 +147,7 @@ class NodeAgent:
         runtime_revision: str | None = None,
         runtime_updater: RuntimeUpdater | None = None,
         restart_callback: Callable[[], Coroutine[Any, Any, None]] | None = None,
+        ssh_access: dict[str, Any] | None = None,
     ):
         self._transport = transport
         self._executor = executor
@@ -162,6 +164,7 @@ class NodeAgent:
         )
         self._runtime_updater = runtime_updater or GitNodeUpdater()
         self._restart_callback = restart_callback or _restart_current_process
+        self._ssh_access = dict(ssh_access or {})
 
     def attach_transport(self, transport: NodeTransport) -> None:
         """Attach a reconnected relay while retaining receipts and context."""
@@ -230,6 +233,7 @@ class NodeAgent:
                     },
                     "capacity": capacity,
                     "ccbot_version": self._runtime_revision,
+                    "ssh": dict(self._ssh_access),
                 },
             )
         )
@@ -913,6 +917,26 @@ def _default_node_id() -> str:
     return value
 
 
+def _ssh_access_from_environment() -> dict[str, Any]:
+    """Read public connection metadata; authentication stays in OpenSSH."""
+    host = os.environ.get("CCBOT_NODE_SSH_HOST", "").strip()
+    if not host:
+        return {}
+    user = os.environ.get("CCBOT_NODE_SSH_USER", "").strip() or getpass.getuser()
+    try:
+        port = int(os.environ.get("CCBOT_NODE_SSH_PORT", "22"))
+    except ValueError as exc:
+        raise RuntimeError("CCBOT_NODE_SSH_PORT must be an integer") from exc
+    if not 1 <= port <= 65535:
+        raise RuntimeError("CCBOT_NODE_SSH_PORT must be between 1 and 65535")
+    return {
+        "host": host,
+        "user": user,
+        "port": port,
+        "proxy_jump": os.environ.get("CCBOT_NODE_SSH_PROXY_JUMP", "").strip(),
+    }
+
+
 def _print_connection_receipt(
     *, node_id: str, display_name: str, leader_id: str, relay_url: str
 ) -> None:
@@ -997,6 +1021,7 @@ async def _run_agent_forever(
         or os.environ.get("CCBOT_NODE_NAME", node_id).strip()
         or node_id
     )
+    ssh_access = _ssh_access_from_environment()
     agent: NodeAgent | None = None
     receipt_printed = False
     while True:
@@ -1044,6 +1069,7 @@ async def _run_agent_forever(
                     node_id=node_id,
                     display_name=display_name,
                     backends=backends,
+                    ssh_access=ssh_access,
                 )
             else:
                 agent.attach_transport(transport)

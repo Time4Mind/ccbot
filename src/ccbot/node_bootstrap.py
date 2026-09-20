@@ -34,6 +34,10 @@ def build_bootstrap_payload(
     node_id: str = "",
     display_name: str = "",
     ttl: int = DEFAULT_INVITATION_TTL,
+    ssh_host: str = "",
+    ssh_user: str = "",
+    ssh_port: int = 22,
+    ssh_proxy_jump: str = "",
 ) -> dict[str, Any]:
     """Build the safe machine-readable handoff for a remote worker agent."""
     if not relay_url.strip():
@@ -42,6 +46,13 @@ def build_bootstrap_payload(
         raise ValueError("CCBOT_NODE_SECRET is required")
     resolved_node_id = node_id.strip() or f"worker-{secrets.token_hex(4)}"
     resolved_display_name = display_name.strip() or resolved_node_id
+    resolved_ssh_host = ssh_host.strip()
+    resolved_ssh_user = ssh_user.strip()
+    resolved_proxy_jump = ssh_proxy_jump.strip()
+    if not 1 <= ssh_port <= 65535:
+        raise ValueError("SSH port must be between 1 and 65535")
+    if not resolved_ssh_host and (resolved_ssh_user or resolved_proxy_jump):
+        raise ValueError("--ssh-host is required for SSH route options")
     invitation = create_pairing_invitation(
         relay_url=relay_url,
         leader_id=leader_id,
@@ -49,17 +60,34 @@ def build_bootstrap_payload(
         ttl=ttl,
         signing_secret=signing_secret,
     )
-    command_parts = [
+    command_parts: list[str] = []
+    if resolved_ssh_host:
+        command_parts.extend(
+            (
+                "env",
+                f"CCBOT_NODE_SSH_HOST={resolved_ssh_host}",
+            )
+        )
+        if resolved_ssh_user:
+            command_parts.append(f"CCBOT_NODE_SSH_USER={resolved_ssh_user}")
+        command_parts.append(f"CCBOT_NODE_SSH_PORT={ssh_port}")
+        if resolved_proxy_jump:
+            command_parts.append(
+                f"CCBOT_NODE_SSH_PROXY_JUMP={resolved_proxy_jump}"
+            )
+    command_parts.extend(
+        [
         "uv",
         "run",
         "ccbot-node-agent",
         "--pairing",
         invitation.to_link(),
-    ]
+        ]
+    )
     command_parts.extend(("--node-id", resolved_node_id))
     command_parts.extend(("--name", resolved_display_name))
     command_parts.append("--install-service")
-    return {
+    payload: dict[str, Any] = {
         "command": shlex.join(command_parts),
         "node_id": resolved_node_id,
         "display_name": resolved_display_name,
@@ -67,6 +95,14 @@ def build_bootstrap_payload(
         "relay_url": invitation.relay_url,
         "expires_at": int(invitation.expires_at),
     }
+    if resolved_ssh_host:
+        payload["ssh"] = {
+            "host": resolved_ssh_host,
+            "user": resolved_ssh_user,
+            "port": ssh_port,
+            "proxy_jump": resolved_proxy_jump,
+        }
+    return payload
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -87,6 +123,10 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--node-id", default="", help="stable worker id")
     parser.add_argument("--name", dest="display_name", default="")
+    parser.add_argument("--ssh-host", default="")
+    parser.add_argument("--ssh-user", default="")
+    parser.add_argument("--ssh-port", type=int, default=22)
+    parser.add_argument("--ssh-proxy-jump", default="")
     parser.add_argument(
         "--ttl",
         type=int,
@@ -117,6 +157,10 @@ def main(argv: list[str] | None = None) -> None:
             node_id=args.node_id,
             display_name=args.display_name,
             ttl=ttl,
+            ssh_host=args.ssh_host,
+            ssh_user=args.ssh_user,
+            ssh_port=args.ssh_port,
+            ssh_proxy_jump=args.ssh_proxy_jump,
         )
     except ValueError as exc:
         parser.error(str(exc))

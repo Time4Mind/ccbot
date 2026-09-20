@@ -31,6 +31,10 @@ class Node:
     capacity: dict[str, int] = field(default_factory=dict)
     protocol_version: str = ""
     ccbot_version: str = ""
+    ssh_host: str = ""
+    ssh_user: str = ""
+    ssh_port: int = 22
+    ssh_proxy_jump: str = ""
     last_seen_at: float = 0.0
     health_reason: str = ""
     enabled: bool = True
@@ -69,6 +73,10 @@ class Node:
             "capacity": dict(self.capacity),
             "protocol_version": self.protocol_version,
             "ccbot_version": self.ccbot_version,
+            "ssh_host": self.ssh_host,
+            "ssh_user": self.ssh_user,
+            "ssh_port": self.ssh_port,
+            "ssh_proxy_jump": self.ssh_proxy_jump,
             "last_seen_at": self.last_seen_at,
             "health_reason": self.health_reason,
             "enabled": self.enabled,
@@ -112,6 +120,10 @@ class Node:
             capacity=capacity,
             protocol_version=str(data.get("protocol_version", "")),
             ccbot_version=str(data.get("ccbot_version", "")),
+            ssh_host=str(data.get("ssh_host", "")),
+            ssh_user=str(data.get("ssh_user", "")),
+            ssh_port=int(data.get("ssh_port", 22)),
+            ssh_proxy_jump=str(data.get("ssh_proxy_jump", "")),
             last_seen_at=float(data.get("last_seen_at", 0.0)),
             health_reason=str(data.get("health_reason", "")),
             enabled=bool(data.get("enabled", True)),

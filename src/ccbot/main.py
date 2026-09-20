@@ -102,6 +102,12 @@ def release_singleton_lock() -> None:
 
 def main() -> None:
     """Main entry point."""
+    if len(sys.argv) > 2 and sys.argv[1:3] == ["node", "ssh"]:
+        from .node_ssh import main as node_ssh_main
+
+        node_ssh_main(sys.argv[3:])
+        return
+
     if len(sys.argv) > 2 and sys.argv[1:3] == ["node", "bootstrap"]:
         from .node_bootstrap import main as node_bootstrap_main
 

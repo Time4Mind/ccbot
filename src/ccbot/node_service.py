@@ -38,6 +38,10 @@ def _service_environment(
         "CCBOT_CODEX_FLAGS",
         "CCBOT_NODE_BACKENDS",
         "CCBOT_NODE_CONTEXT_DIR",
+        "CCBOT_NODE_SSH_HOST",
+        "CCBOT_NODE_SSH_USER",
+        "CCBOT_NODE_SSH_PORT",
+        "CCBOT_NODE_SSH_PROXY_JUMP",
     ):
         if value := os.environ.get(key):
             environment[key] = value

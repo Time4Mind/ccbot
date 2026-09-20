@@ -162,6 +162,31 @@ async def test_worker_health_reports_exact_runtime_revision(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_worker_health_advertises_configured_same_user_ssh_access(tmp_path):
+    transport = FakeTransport()
+    agent = NodeAgent(
+        transport,
+        FakeExecutor(),
+        context_dir=tmp_path,
+        ssh_access={
+            "host": "127.0.0.1",
+            "user": "artem",
+            "port": 22041,
+            "proxy_jump": "bastion",
+        },
+    )
+
+    await agent._send_health()
+
+    assert transport.sent[-1].payload["ssh"] == {
+        "host": "127.0.0.1",
+        "user": "artem",
+        "port": 22041,
+        "proxy_jump": "bastion",
+    }
+
+
+@pytest.mark.asyncio
 async def test_successful_runtime_update_restarts_only_after_result(tmp_path):
     transport = FakeTransport()
     updater = SimpleNamespace(

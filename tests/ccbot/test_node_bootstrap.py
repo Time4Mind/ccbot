@@ -48,6 +48,38 @@ def test_bootstrap_assigns_and_binds_generated_node_id() -> None:
     assert invitation.node_id == payload["node_id"]
 
 
+def test_bootstrap_can_persist_self_hosted_ssh_route_in_worker_service() -> None:
+    payload = build_bootstrap_payload(
+        relay_url="relay.example.test:8765",
+        leader_id="local",
+        signing_secret="leader-secret",
+        node_id="worker1",
+        ssh_host="127.0.0.1",
+        ssh_user="worker",
+        ssh_port=22041,
+        ssh_proxy_jump="ccbot-bastion",
+    )
+
+    command = shlex.split(payload["command"])
+    assert command[:9] == [
+        "env",
+        "CCBOT_NODE_SSH_HOST=127.0.0.1",
+        "CCBOT_NODE_SSH_USER=worker",
+        "CCBOT_NODE_SSH_PORT=22041",
+        "CCBOT_NODE_SSH_PROXY_JUMP=ccbot-bastion",
+        "uv",
+        "run",
+        "ccbot-node-agent",
+        "--pairing",
+    ]
+    assert payload["ssh"] == {
+        "host": "127.0.0.1",
+        "user": "worker",
+        "port": 22041,
+        "proxy_jump": "ccbot-bastion",
+    }
+
+
 def test_ccbot_node_bootstrap_does_not_require_telegram_configuration(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

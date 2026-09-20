@@ -542,6 +542,10 @@ async def connect_configured_remote_runtimes(
                 tuple(existing.backends),
                 tuple(sorted(existing.capabilities.items())),
                 existing.ccbot_version,
+                existing.ssh_host,
+                existing.ssh_user,
+                existing.ssh_port,
+                existing.ssh_proxy_jump,
             )
         )
         node = existing or Node(node_id, node_id)
@@ -564,6 +568,18 @@ async def connect_configured_remote_runtimes(
             if isinstance(value, (int, float))
         }
         node.ccbot_version = str(payload.get("ccbot_version", node.ccbot_version))
+        raw_ssh = payload.get("ssh")
+        if isinstance(raw_ssh, dict):
+            node.ssh_host = str(raw_ssh.get("host", ""))
+            node.ssh_user = str(raw_ssh.get("user", ""))
+            raw_port = raw_ssh.get("port", 22)
+            node.ssh_port = (
+                int(raw_port)
+                if isinstance(raw_port, (int, float, str))
+                and str(raw_port).isdigit()
+                else 22
+            )
+            node.ssh_proxy_jump = str(raw_ssh.get("proxy_jump", ""))
         node.last_seen_at = time.time()
         durable_after = (
             node.display_name,
@@ -573,6 +589,10 @@ async def connect_configured_remote_runtimes(
             tuple(node.backends),
             tuple(sorted(node.capabilities.items())),
             node.ccbot_version,
+            node.ssh_host,
+            node.ssh_user,
+            node.ssh_port,
+            node.ssh_proxy_jump,
         )
         session_manager.register_node(node, persist=durable_before != durable_after)
         if (

@@ -17,6 +17,10 @@ def test_node_round_trip_preserves_runtime_capabilities() -> None:
         capacity={"active_sessions": 2, "max_sessions": 8},
         protocol_version="1",
         ccbot_version="0.2.0",
+        ssh_host="127.0.0.1",
+        ssh_user="artem",
+        ssh_port=22041,
+        ssh_proxy_jump="bastion",
         last_seen_at=123.5,
         health_reason="",
     )

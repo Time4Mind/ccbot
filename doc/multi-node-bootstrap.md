@@ -202,6 +202,83 @@ worker имеет локальные изменения отслеживаемы
 автоматически не переразрешаются. Для нестандартного расположения checkout
 можно задать `CCBOT_NODE_REPO_DIR`.
 
+## Полный SSH-доступ с leader
+
+Для административных и агентских задач используется штатный OpenSSH, а не
+shell-RPC внутри ccbot relay. Подключение выполняется под тем же OS-пользователем,
+который запускает `ccbot-node-agent`: доступны его файлы, процессы и команды.
+Если этому пользователю уже разрешён `sudo`, он работает и через SSH; ccbot не
+добавляет привилегии и не меняет `sudoers`.
+
+Worker публикует в health только несекретный маршрут:
+
+```bash
+CCBOT_NODE_SSH_HOST=127.0.0.1
+CCBOT_NODE_SSH_USER=worker-user
+CCBOT_NODE_SSH_PORT=22041
+CCBOT_NODE_SSH_PROXY_JUMP=ccbot-bastion
+```
+
+Эти переменные нужно задать при установке node-agent service. Leader сохраняет
+их в реестре нод, после чего локальный агент может открыть интерактивную сессию
+или выполнить команду:
+
+```bash
+ccbot node ssh worker1
+ccbot node ssh worker1 -- id
+ccbot node ssh worker1 -- sudo systemctl status ccbot-node-agent
+```
+
+Чтобы маршрут сразу попал в одноразовую bootstrap-команду и затем в service
+environment worker:
+
+```bash
+ccbot node bootstrap \
+  --node-id worker1 \
+  --name "Worker 1" \
+  --ssh-host 127.0.0.1 \
+  --ssh-user worker-user \
+  --ssh-port 22041 \
+  --ssh-proxy-jump ccbot-bastion
+```
+
+Команда запускает системный `ssh` без shell-прослойки. Приватные ключи,
+пароли и SSH-agent sockets не передаются через relay и не записываются в
+`state.json`; их продолжает обслуживать обычный `~/.ssh/config`/SSH agent
+leader-машины.
+
+### Worker без входящего публичного адреса
+
+Минимальный полностью self-hosted вариант - обратный SSH-туннель через свой
+bastion (им может быть сервер рядом с ccbot relay). Worker устанавливает
+исходящее соединение:
+
+```bash
+ssh -NT \
+  -o BatchMode=yes \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -R 127.0.0.1:22041:127.0.0.1:22 \
+  ccbot-tunnel@bastion.example
+```
+
+Порт привязывается только к loopback bastion, поэтому в интернет не
+публикуется. На leader в `~/.ssh/config` создаётся alias `ccbot-bastion`, а в
+worker service задаются четыре переменные выше. Для каждой ноды нужен отдельный
+reverse port. Туннель следует запускать отдельным `systemd --user`/launchd
+service с restart policy; его жизненный цикл не зависит от Telegram и relay.
+
+На worker публичный ключ leader добавляется в `authorized_keys` именно того
+пользователя, под которым должен работать удалённый агент. Отдельный ключ
+worker→bastion рекомендуется ограничить на bastion только TCP-forwarding и
+конкретным reverse port. Проверку host key отключать нельзя: fingerprints
+bastion и worker предварительно заносятся в `known_hosts` leader/worker.
+
+Если уже есть собственный WireGuard/VPN, reverse tunnel не нужен:
+`CCBOT_NODE_SSH_HOST` указывает на приватный VPN-адрес worker,
+`CCBOT_NODE_SSH_PORT=22`, а `CCBOT_NODE_SSH_PROXY_JUMP` остаётся пустым.
+
 Если worker receipt есть, а нода не стала `ready`, не объявляй подключение
 завершённым: проверь health payload, наличие `claude`/`codex` в PATH и запуск
 tmux. Если receipt нет, проверь relay address/port, TLS, срок действия payload
@@ -258,6 +335,7 @@ Telegram-карточках или обычных логах.
 - не устанавливает Python, `uv`, tmux, Claude/Codex и VPN на target;
 - не выдаёт worker Telegram token;
 - не открывает произвольный shell через node API;
+- не устанавливает и не настраивает sshd, WireGuard или bastion автоматически;
 - не переносит файлы рабочей директории автоматически;
 - не является доказательством готовности сессии: нужен health и проверка backend;
 - не меняет `main`: разработка и проверка выполняются на

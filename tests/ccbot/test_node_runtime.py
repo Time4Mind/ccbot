@@ -67,12 +67,22 @@ async def test_worker_health_auto_registers_remote_node_and_runtime(monkeypatch)
                 "state": "ready",
                 "backends": ["codex"],
                 "capabilities": {"context_transfer": True},
+                "ssh": {
+                    "host": "127.0.0.1",
+                    "user": "worker",
+                    "port": 22041,
+                    "proxy_jump": "bastion",
+                },
             },
         )
     )
 
     assert registered_nodes[0].id == "worker-a"
     assert registered_nodes[0].state == "ready"
+    assert registered_nodes[0].ssh_host == "127.0.0.1"
+    assert registered_nodes[0].ssh_user == "worker"
+    assert registered_nodes[0].ssh_port == 22041
+    assert registered_nodes[0].ssh_proxy_jump == "bastion"
     await handler(
         NodeEnvelope(
             kind="health",

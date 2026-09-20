@@ -12,10 +12,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-PRODUCTION_STATE = Path("/Users/a-s-nosko/.ccbot/state.json")
-PRODUCTION_CODEX_HOME = Path("/Users/a-s-nosko/.codex")
-STAGING_DIR = Path("/Users/a-s-nosko/.ccbot-staging")
-STAGING_CODEX_HOME = Path("/Users/a-s-nosko/.codex-staging")
+PRODUCTION_DIR = Path.home() / ".ccbot"
+PRODUCTION_STATE = PRODUCTION_DIR / "state.json"
+PRODUCTION_CODEX_HOME = Path.home() / ".codex"
+STAGING_DIR = Path.home() / ".ccbot-staging"
+STAGING_CODEX_HOME = Path.home() / ".codex-staging"
 STAGING_WORKSPACES = STAGING_DIR / "workspaces" / "imported"
 
 
@@ -124,9 +125,9 @@ def import_snapshots(
     staging_dir: Path = STAGING_DIR,
     staging_codex_home: Path = STAGING_CODEX_HOME,
 ) -> list[tuple[str, str, int]]:
-    if staging_dir.resolve() == Path("/Users/a-s-nosko/.ccbot").resolve():
+    if staging_dir.resolve() == PRODUCTION_DIR.resolve():
         raise RuntimeError("staging dir resolves to production")
-    if staging_codex_home.resolve() == Path("/Users/a-s-nosko/.codex").resolve():
+    if staging_codex_home.resolve() == PRODUCTION_CODEX_HOME.resolve():
         raise RuntimeError("staging CODEX_HOME resolves to production")
 
     lock_path = staging_dir / "ccbot.lock"

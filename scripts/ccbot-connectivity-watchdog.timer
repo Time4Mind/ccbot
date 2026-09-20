@@ -1,5 +1,5 @@
 [Unit]
-Description=Check ccbot KVN proxy connectivity every minute
+Description=Check ccbot proxy connectivity every minute
 
 [Timer]
 OnBootSec=2min

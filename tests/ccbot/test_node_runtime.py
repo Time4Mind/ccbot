@@ -143,7 +143,7 @@ async def test_health_mismatch_requests_exact_leader_revision_once(monkeypatch):
     )
     await handler(health)
     await handler(health)
-    await asyncio.sleep(0)
+    await asyncio.gather(*tuple(node_runtime._node_update_tasks.values()))
 
     rpc.request.assert_awaited_once_with(
         "worker-a",

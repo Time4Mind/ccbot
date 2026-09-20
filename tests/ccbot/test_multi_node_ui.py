@@ -3,7 +3,13 @@ from __future__ import annotations
 from telegram import InlineKeyboardMarkup
 
 from ccbot.handlers import menu
-from ccbot.handlers.callback_data import CB_FT_TRANSFER, CB_MM_NODES, CB_SW_NEW
+from ccbot.handlers.callback_data import (
+    CB_FT_TRANSFER,
+    CB_MM_NEW,
+    CB_MM_NODES,
+    CB_MM_SETTINGS,
+    CB_SW_NEW,
+)
 
 
 def _callbacks(keyboard: InlineKeyboardMarkup) -> list[list[str | None]]:
@@ -19,6 +25,18 @@ def test_nodes_button_is_in_main_menu_only_with_multiple_nodes(monkeypatch) -> N
 
     assert keyboard is not None
     assert CB_MM_NODES in {callback for row in _callbacks(keyboard) for callback in row}
+
+
+def test_single_node_menu_keeps_settings_but_omits_nodes_and_new(monkeypatch) -> None:
+    monkeypatch.setattr(menu, "_has_multiple_nodes", lambda: False)
+
+    keyboard = menu.build_footer_keyboard(42, screen="more")
+
+    assert keyboard is not None
+    callbacks = {callback for row in _callbacks(keyboard) for callback in row}
+    assert CB_MM_SETTINGS in callbacks
+    assert CB_MM_NODES not in callbacks
+    assert CB_MM_NEW not in callbacks
 
 
 def test_sessions_bottom_row_places_nodes_between_new_and_menu(monkeypatch) -> None:

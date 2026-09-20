@@ -20,6 +20,7 @@ from ccbot.handlers.callback_data import (
     CB_MM_ARCHIVE,
     CB_MM_LIST,
     CB_MM_NEW,
+    CB_MM_NODES,
     CB_MM_SETTINGS,
     CB_MM_STATUS,
     CB_SW_NEW,
@@ -30,8 +31,9 @@ from ccbot.session import session_manager
 SCREENSHOT_CB = "ft:shot"
 
 
-def test_main_menu_has_four_buttons_and_no_status_button(monkeypatch) -> None:
+def test_main_menu_replaces_new_with_nodes_and_moves_settings(monkeypatch) -> None:
     monkeypatch.setattr(menu, "_has_active_session", lambda _uid: True)
+    monkeypatch.setattr(menu, "_has_multiple_nodes", lambda: True)
 
     keyboard = menu.build_footer_keyboard(42, screen="more")
 
@@ -41,9 +43,11 @@ def test_main_menu_has_four_buttons_and_no_status_button(monkeypatch) -> None:
     ]
     assert callbacks == [
         [CB_MM_LIST, CB_MM_ARCHIVE],
-        [CB_MM_NEW, CB_MM_SETTINGS],
+        [CB_MM_NODES, CB_MM_SETTINGS],
     ]
-    assert CB_MM_STATUS not in {value for row in callbacks for value in row}
+    flattened = {value for row in callbacks for value in row}
+    assert CB_MM_NEW not in flattened
+    assert CB_MM_STATUS not in flattened
 
 
 def test_page_size_choices_are_line_limits_30_50_70_100(monkeypatch) -> None:

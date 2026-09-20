@@ -23,7 +23,6 @@ from .callback_data import (
     CB_MM_ARCHIVE,
     CB_MM_BACK,
     CB_MM_LIST,
-    CB_MM_NEW,
     CB_MM_NODES,
     CB_MM_SETTINGS,
     CB_PG_JUMP,
@@ -290,7 +289,6 @@ def _footer_options_row(
 _MM_BUTTONS: tuple[tuple[str, str, str], ...] = (
     ("sessions", "mm.sessions", CB_MM_LIST),
     ("archive", "mm.archive", CB_MM_ARCHIVE),
-    ("new", "mm.new", CB_MM_NEW),
     ("nodes", "mm.nodes", CB_MM_NODES),
     ("settings", "mm.settings", CB_MM_SETTINGS),
 )

@@ -108,6 +108,41 @@ token принимает только этот `node_id`. После receipt
 (`systemd --user` на Linux или LaunchAgent на macOS). Bootstrap не устанавливает
 ОС-пакеты и требует уже установленный ccbot.
 
+### Обязательный автозапуск worker
+
+Automation-агент обязан установить worker как автоматически запускаемый сервис.
+Запуск `ccbot-node-agent` только в foreground, временном SSH-сеансе или tmux не
+считается завершённой установкой. Нельзя удалять `--install-service` из выданной
+bootstrap-команды.
+
+На Linux installer выполняет `systemctl --user enable --now
+ccbot-node-agent.service`. Агент должен проверить оба состояния:
+
+```bash
+systemctl --user is-enabled ccbot-node-agent.service
+systemctl --user is-active ccbot-node-agent.service
+```
+
+Для headless worker user-manager должен запускаться при загрузке без
+интерактивного входа пользователя. Если это не обеспечено политикой системы,
+агент включает linger для пользователя worker и повторяет проверку:
+
+```bash
+loginctl enable-linger "$(id -un)"
+```
+
+На macOS installer создаёт LaunchAgent с `RunAtLoad=true` и `KeepAlive=true`.
+Агент проверяет его через:
+
+```bash
+launchctl print "gui/$(id -u)/com.ccbot.node-agent"
+```
+
+Установка не считается завершённой, пока сервис одновременно не запущен и не
+включён для последующих входов/загрузок ОС. Если у агента нет прав включить
+linger или зарегистрировать LaunchAgent, он должен явно сообщить блокировку, а
+не оставлять foreground-процесс как замену автозапуска.
+
 При рестарте `ccbot-node-agent` использует сохранённый reconnect-credential.
 Созданные им tmux-окна содержат только служебные `@ccbot_session_id` и
 `@ccbot_backend`, поэтому управление такими сессиями восстанавливается без
@@ -137,12 +172,15 @@ relay_url=relay.example.net:8765
    link и не извлекай секрет из логов.
 4. Проверь `expires_at` и передай ровно значение `command` на целевой сервер.
    Не печатай его в отчёты, chat или постоянные логи.
-5. Запусти команду на worker и дождись строки
-   `ccbot-node-agent: connected`.
-6. Дождись health-события на leader. В `state.json` должна появиться нода с
+5. Запусти команду на worker, не удаляя `--install-service`, и дождись строки
+   `ccbot-node-agent: service active`.
+6. Проверь, что service supervisor показывает worker одновременно активным и
+   включённым в автозапуск. На headless Linux также проверь или включи linger
+   для пользователя worker. Foreground-процесс не принимается.
+7. Дождись health-события на leader. В `state.json` должна появиться нода с
    тем же `node_id`; её состояние должно перейти в `ready`, когда worker
    сообщил хотя бы один доступный backend.
-7. Проверь фактический сценарий: нода видна в меню нод, доступен нужный
+8. Проверь фактический сценарий: нода видна в меню нод, доступен нужный
    backend, на ней можно создать/выбрать сессию. Только это является
    завершением подключения.
 

@@ -27,6 +27,7 @@ def test_bootstrap_payload_is_machine_readable_and_contains_worker_command() -> 
     assert payload["relay_url"] == "relay.example.test:8765"
     command = shlex.split(payload["command"])
     assert command[:3] == ["uv", "run", "ccbot-node-agent"]
+    assert "--install-service" in command
     invitation = PairingInvitation.from_link(command[command.index("--pairing") + 1])
     assert invitation.leader_id == "local"
     assert invitation.relay_url == "relay.example.test:8765"

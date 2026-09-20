@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import ssl
+from pathlib import Path
 
 from .node_transport import RelayServer
 
@@ -39,7 +40,15 @@ async def _run() -> None:
     host = os.environ.get("CCBOT_RELAY_HOST", "0.0.0.0")
     port = int(os.environ.get("CCBOT_RELAY_PORT", "8765"))
     leader_id = os.environ.get("CCBOT_NODE_LEADER_ID", "local").strip() or "local"
-    server = RelayServer(credentials=_credentials(), leader_id=leader_id)
+    revocations_path = os.environ.get(
+        "CCBOT_RELAY_REVOCATIONS_FILE",
+        str(Path.home() / ".ccbot-relay" / "revoked-nodes.json"),
+    )
+    server = RelayServer(
+        credentials=_credentials(),
+        leader_id=leader_id,
+        revocations_path=revocations_path,
+    )
     await server.start(host, port, ssl=_ssl_context())
     await server.serve_forever()
 

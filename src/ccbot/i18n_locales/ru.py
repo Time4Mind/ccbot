@@ -404,6 +404,7 @@ RU: dict[str, str] = {
     ),
     "nodes.delete.done": "Нода удалена из реестра ccbot.",
     "nodes.delete.not_found": "Нода не найдена или уже удалена.",
+    "nodes.delete.revoke_failed": "Не удалось отозвать доступ ноды. Удаление отменено.",
     "transfer.choose_node": "*Перенос сессии*\n\nСессия: *{session}*\n\nВыбери целевую ноду.",
     "transfer.choose_backend": "*Выбери бэкенд*\n\nЦелевая нода: *{node}*",
     "transfer.confirm": (

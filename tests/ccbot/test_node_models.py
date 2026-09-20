@@ -112,7 +112,7 @@ def test_archiving_remote_session_clears_node_scoped_active_pointer(
     assert manager.get_active_session(42) is None
 
 
-def test_context_transfer_creates_independent_target_and_archives_source(
+def test_context_transfer_creates_independent_target_and_keeps_source_live(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
@@ -146,7 +146,7 @@ def test_context_transfer_creates_independent_target_and_archives_source(
     assert target.node_id == "office"
     assert target.context_path == "/target/imports/full.md"
     assert target.context_error == "Context window is smaller"
-    assert source.state == "archived"
+    assert source.state in ("active", "idle")
     assert manager.get_active_session(42) is target
 
 

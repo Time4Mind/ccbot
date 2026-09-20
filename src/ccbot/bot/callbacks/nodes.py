@@ -20,6 +20,7 @@ from ...handlers.nodes import build_nodes_keyboard, render_nodes_text
 from ...i18n import t
 from ...session import session_manager
 from ...transfer_runtime import unregister_node_runtime
+from ...transfer_runtime import get_node_runtime
 from .._common import open_sessions_in_place
 
 
@@ -68,6 +69,24 @@ async def handle(
         node = session_manager.get_node(node_id)
         if node is None or node_id == "local":
             await query.answer(t(user.id, "nodes.delete.not_found"), show_alert=True)
+            return True
+        runtime = get_node_runtime(node_id)
+        if runtime is None:
+            await query.answer(
+                t(user.id, "nodes.delete.revoke_failed"), show_alert=True
+            )
+            return True
+        try:
+            result = await runtime.revoke_node(node_id)
+        except Exception:
+            await query.answer(
+                t(user.id, "nodes.delete.revoke_failed"), show_alert=True
+            )
+            return True
+        if result.get("ok") is not True:
+            await query.answer(
+                t(user.id, "nodes.delete.revoke_failed"), show_alert=True
+            )
             return True
         try:
             session_manager.remove_node(node_id)

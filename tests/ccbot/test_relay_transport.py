@@ -196,6 +196,61 @@ async def test_bootstrap_pairing_is_bound_and_single_use() -> None:
 
 
 @pytest.mark.asyncio
+async def test_relay_revokes_worker_credential_durably(tmp_path) -> None:
+    revoked = tmp_path / "revoked.json"
+    credentials = {"leader": "leader-secret", "worker-a": "worker-secret"}
+    server = RelayServer(
+        credentials=credentials, leader_id="leader", revocations_path=revoked
+    )
+    await server.start("127.0.0.1", 0)
+    leader = await connect_relay(
+        "127.0.0.1",
+        server.port,
+        node_id="leader",
+        role="leader",
+        secret="leader-secret",
+        leader_id="leader",
+    )
+    worker = await connect_relay(
+        "127.0.0.1",
+        server.port,
+        node_id="worker-a",
+        role="worker",
+        secret="worker-secret",
+        leader_id="leader",
+    )
+    await leader.send(
+        NodeEnvelope(
+            kind="command",
+            request_id="revoke-1",
+            payload={"target_node_id": "worker-a", "operation": "revoke_node"},
+        )
+    )
+    result = await asyncio.wait_for(leader.receive(), timeout=1)
+    assert result.payload == {"ok": True, "revoked_node_id": "worker-a"}
+    await worker.close()
+    await leader.close()
+    await server.close()
+
+    restarted = RelayServer(
+        credentials=credentials, leader_id="leader", revocations_path=revoked
+    )
+    await restarted.start("127.0.0.1", 0)
+    try:
+        with pytest.raises(PermissionError, match="relay authentication failed"):
+            await connect_relay(
+                "127.0.0.1",
+                restarted.port,
+                node_id="worker-a",
+                role="worker",
+                secret="worker-secret",
+                leader_id="leader",
+            )
+    finally:
+        await restarted.close()
+
+
+@pytest.mark.asyncio
 async def test_stream_transport_round_trips_json_lines() -> None:
     received: list[NodeEnvelope] = []
 

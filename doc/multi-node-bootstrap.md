@@ -65,7 +65,7 @@ ccbot node bootstrap --node-id worker1 --name "Worker 1"
 
 ```json
 {
-  "command": "uv run ccbot-node-agent --pairing '<one-time-pairing-link>' --node-id worker1 --name 'Worker 1'",
+  "command": "uv run ccbot-node-agent --pairing '<one-time-pairing-link>' --node-id worker1 --name 'Worker 1' --install-service",
   "display_name": "Worker 1",
   "expires_at": 0,
   "leader_id": "local",
@@ -79,9 +79,11 @@ ccbot node bootstrap --node-id worker1 --name "Worker 1"
 конкретным `node_id`. После первого подключения relay выдаёт процессу worker
 отдельный node-specific credential для reconnect; он не печатается в receipt и
 сохраняется на worker в `~/.ccbot-worker/node-credential.json` с правами `0600`.
-Путь можно изменить через `CCBOT_NODE_CREDENTIAL_FILE`.
-Агент
-может разобрать JSON и выполнить только это поле на worker. Для режима, где
+Путь можно изменить через `CCBOT_NODE_CREDENTIAL_FILE`. Команда по умолчанию
+включает `--install-service`: она обменивает token на reconnect-credential,
+устанавливает user-service через launchd/systemd, запускает его и проверяет
+supervisor status. Pairing token в service-файл не попадает. Агент может
+разобрать JSON и выполнить только это поле на worker. Для режима, где
 нужен только shell command:
 
 ```bash
@@ -97,14 +99,14 @@ command. Это ещё не означает, что worker подключён.
 где доступны `uv` и зависимости проекта:
 
 ```bash
-uv run ccbot-node-agent --pairing '<one-time-pairing-link>' --node-id worker1 --name 'Worker 1'
+uv run ccbot-node-agent --pairing '<one-time-pairing-link>' --node-id worker1 --name 'Worker 1' --install-service
 ```
 
 Если в payload уже есть `--node-id` и `--name`, их нельзя переписывать: pairing
-token принимает только этот `node_id`. Процесс должен оставаться запущенным; для
-постоянной работы агент размещает его под уже принятой на сервере supervisor-
-схемой (`systemd`, launchd, tmux или эквивалент). Сам bootstrap не устанавливает
-ОС-пакеты и не создаёт service unit.
+token принимает только этот `node_id`. После receipt
+`ccbot-node-agent: service active` процесс находится под user-level supervisor
+(`systemd --user` на Linux или LaunchAgent на macOS). Bootstrap не устанавливает
+ОС-пакеты и требует уже установленный ccbot.
 
 При рестарте `ccbot-node-agent` использует сохранённый reconnect-credential.
 Созданные им tmux-окна содержат только служебные `@ccbot_session_id` и
@@ -164,8 +166,14 @@ relay_url=relay.example.net:8765
 
 В меню Nodes действие «Отключить» запрещает новые запросы и выбор ноды, но
 сохраняет ноду, её сессии и историю; её можно подключить обратно. «Удалить»
-убирает ноду из реестра окончательно, сохраняет историю сессий и игнорирует
-последующие health-сообщения от старого worker id.
+сначала отзывает credential на relay и разрывает соединение, затем убирает ноду
+из реестра. Сессии и история сохраняются. Revocation хранится relay в
+`~/.ccbot-relay/revoked-nodes.json` или `CCBOT_RELAY_REVOCATIONS_FILE`.
+
+Remote-сессии используют тот же Telegram control surface: Escape, завершение
+сессии, capture интерактивного prompt и navigation keys передаются worker через
+RPC. Перенос контекста создаёт и выбирает новую сессию, но не архивирует
+исходную - пользователь закрывает её отдельно.
 
 Если worker receipt есть, а нода не стала `ready`, не объявляй подключение
 завершённым: проверь health payload, наличие `claude`/`codex` в PATH и запуск

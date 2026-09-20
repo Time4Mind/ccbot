@@ -111,3 +111,26 @@ async def test_remote_runtime_uses_target_node_for_directory_and_session_operati
         "session_id": "worker-session",
         "text": "hello",
     }
+
+
+@pytest.mark.asyncio
+async def test_remote_runtime_controls_and_terminates_worker_session():
+    rpc = FakeRpc()
+    runtime = RemoteNodeRuntime(rpc)
+
+    await runtime.send_key("worker-a", "worker-session", "Escape")
+    await runtime.capture_session("worker-a", "worker-session")
+    await runtime.terminate_session("worker-a", "worker-session")
+    await runtime.revoke_node("worker-a")
+
+    assert [operation for operation, _payload in rpc.calls] == [
+        "send_key",
+        "capture_session",
+        "terminate_session",
+        "revoke_node",
+    ]
+    assert rpc.calls[0][1]["key"] == "Escape"
+    assert all(
+        payload.get("session_id") == "worker-session"
+        for _operation, payload in rpc.calls[:3]
+    )

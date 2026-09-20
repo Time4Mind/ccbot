@@ -421,6 +421,7 @@ EN: dict[str, str] = {
     ),
     "nodes.delete.done": "Node removed from the ccbot registry.",
     "nodes.delete.not_found": "Node not found or already removed.",
+    "nodes.delete.revoke_failed": "Could not revoke node access. Removal was cancelled.",
     "transfer.choose_node": "*Session transfer*\n\nSession: *{session}*\n\nChoose the target node.",
     "transfer.choose_backend": "*Choose a backend*\n\nTarget node: *{node}*",
     "transfer.confirm": (

@@ -96,6 +96,12 @@ class WorkerSessionExecutor(Protocol):
 
     async def send_text(self, *, session_id: str, text: str) -> dict[str, Any]: ...
 
+    async def send_key(self, *, session_id: str, key: str) -> dict[str, Any]: ...
+
+    async def capture_session(self, *, session_id: str) -> dict[str, Any]: ...
+
+    async def terminate_session(self, *, session_id: str) -> dict[str, Any]: ...
+
 
 @dataclass
 class _PendingContext:
@@ -261,6 +267,19 @@ class NodeAgent:
             if not session_id or not text:
                 raise ValueError("session_id and text are required")
             return await self._executor.send_text(session_id=session_id, text=text)
+        if operation == "send_key":
+            return await self._executor.send_key(
+                session_id=str(payload.get("session_id", "")),
+                key=str(payload.get("key", "")),
+            )
+        if operation == "capture_session":
+            return await self._executor.capture_session(
+                session_id=str(payload.get("session_id", ""))
+            )
+        if operation == "terminate_session":
+            return await self._executor.terminate_session(
+                session_id=str(payload.get("session_id", ""))
+            )
         if operation == "health":
             return {"ok": True}
         raise ValueError(f"unsupported node operation: {operation}")
@@ -530,10 +549,7 @@ class TmuxWorkerExecutor:
         }
 
     async def send_text(self, *, session_id: str, text: str) -> dict[str, Any]:
-        session = self._sessions.get(session_id)
-        if session is None:
-            await self._recover_sessions()
-            session = self._sessions.get(session_id)
+        session = await self._find_session(session_id)
         if session is None:
             return {"ok": False, "error": "worker session not found"}
         await self._bind_transcript(session)
@@ -541,6 +557,46 @@ class TmuxWorkerExecutor:
             session.window_id, text, backend=session.backend
         )
         return {"ok": ok, "error": "" if ok else "tmux input failed"}
+
+    async def send_key(self, *, session_id: str, key: str) -> dict[str, Any]:
+        session = await self._find_session(session_id)
+        if session is None or not key:
+            return {"ok": False, "error": "worker session not found"}
+        code, _stdout, stderr = await self._run_tmux(
+            "send-keys", "-t", session.window_id, key
+        )
+        return {"ok": code == 0, "error": "" if code == 0 else stderr.strip()}
+
+    async def capture_session(self, *, session_id: str) -> dict[str, Any]:
+        session = await self._find_session(session_id)
+        if session is None:
+            return {"ok": False, "error": "worker session not found"}
+        code, stdout, stderr = await self._run_tmux(
+            "capture-pane", "-p", "-t", session.window_id
+        )
+        return {
+            "ok": code == 0,
+            "pane": stdout if code == 0 else "",
+            "error": "" if code == 0 else stderr.strip(),
+        }
+
+    async def terminate_session(self, *, session_id: str) -> dict[str, Any]:
+        session = await self._find_session(session_id)
+        if session is None:
+            return {"ok": True}
+        code, _stdout, stderr = await self._run_tmux(
+            "kill-window", "-t", session.window_id
+        )
+        if code == 0:
+            self._sessions.pop(session_id, None)
+        return {"ok": code == 0, "error": "" if code == 0 else stderr.strip()}
+
+    async def _find_session(self, session_id: str) -> _TmuxWorkerSession | None:
+        session = self._sessions.get(session_id)
+        if session is None:
+            await self._recover_sessions()
+            session = self._sessions.get(session_id)
+        return session
 
     async def poll_events(self) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
@@ -766,7 +822,11 @@ def _print_connection_receipt(
 
 
 async def _run_agent_forever(
-    *, pairing_link: str = "", node_id_override: str = "", name_override: str = ""
+    *,
+    pairing_link: str = "",
+    node_id_override: str = "",
+    name_override: str = "",
+    credential_file_override: str = "",
 ) -> None:
     invitation = PairingInvitation.from_link(pairing_link) if pairing_link else None
     relay_url = (
@@ -792,7 +852,8 @@ async def _run_agent_forever(
         else os.environ.get("CCBOT_NODE_LEADER_ID", "local").strip()
     )
     credential_store = NodeCredentialStore(
-        os.environ.get(
+        credential_file_override
+        or os.environ.get(
             "CCBOT_NODE_CREDENTIAL_FILE",
             str(Path.home() / ".ccbot-worker" / "node-credential.json"),
         )
@@ -902,6 +963,75 @@ async def _run_agent_forever(
             await asyncio.sleep(2.0)
 
 
+async def _install_service_from_invitation(
+    *,
+    pairing_link: str,
+    node_id_override: str,
+    name_override: str,
+    credential_file: str,
+) -> Path:
+    invitation = PairingInvitation.from_link(pairing_link)
+    node_id = node_id_override.strip() or invitation.node_id
+    display_name = name_override.strip() or node_id
+    host, port, ssl_context = _relay_address(invitation.relay_url)
+    path = Path(
+        credential_file or Path.home() / ".ccbot-worker" / "node-credential.json"
+    ).expanduser()
+    store = NodeCredentialStore(path)
+    stored_secret = store.load(
+        node_id=node_id,
+        leader_id=invitation.leader_id,
+        relay_url=invitation.relay_url,
+    )
+    transport = None
+    if stored_secret:
+        try:
+            transport = await connect_relay(
+                host,
+                port,
+                node_id=node_id,
+                role="worker",
+                secret=stored_secret,
+                leader_id=invitation.leader_id,
+                ssl=ssl_context,
+            )
+        except PermissionError:
+            transport = None
+    if transport is None:
+        transport = await connect_relay(
+            host,
+            port,
+            node_id=node_id,
+            role="worker",
+            secret=invitation.secret,
+            leader_id=invitation.leader_id,
+            ssl=ssl_context,
+            pairing_nonce=invitation.nonce,
+            pairing_expires=invitation.expires_at,
+        )
+    try:
+        if transport.reconnect_secret:
+            store.save(
+                node_id=node_id,
+                leader_id=invitation.leader_id,
+                relay_url=invitation.relay_url,
+                secret=transport.reconnect_secret,
+            )
+        elif not stored_secret:
+            raise RuntimeError("relay did not issue a reconnect credential")
+    finally:
+        await transport.close()
+    from .node_service import install_node_service
+
+    return install_node_service(
+        node_id=node_id,
+        display_name=display_name,
+        relay_url=invitation.relay_url,
+        leader_id=invitation.leader_id,
+        credential_file=path,
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     """Run the Telegram-free worker process or bootstrap it from a link."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -912,12 +1042,29 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--node-id", default="", help="stable worker node id")
     parser.add_argument("--name", default="", help="worker display name")
+    parser.add_argument("--credential-file", default="")
+    parser.add_argument("--install-service", action="store_true")
     args = parser.parse_args(argv)
+    if args.install_service:
+        if not args.pairing_link:
+            parser.error("--install-service requires --pairing")
+        path = asyncio.run(
+            _install_service_from_invitation(
+                pairing_link=args.pairing_link,
+                node_id_override=args.node_id,
+                name_override=args.name,
+                credential_file=args.credential_file,
+            )
+        )
+        print("ccbot-node-agent: service active", flush=True)
+        print(f"service_file={path}", flush=True)
+        return
     asyncio.run(
         _run_agent_forever(
             pairing_link=args.pairing_link or "",
             node_id_override=args.node_id,
             name_override=args.name,
+            credential_file_override=args.credential_file,
         )
     )
 

@@ -196,6 +196,26 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not wid:
         await safe_reply(update.message, "❌ No active session.")
         return
+    sess = session_manager.find_session_by_window(wid)
+    if sess is not None and sess.node_id != "local":
+        from ...transfer_runtime import get_node_runtime
+
+        runtime = get_node_runtime(sess.node_id)
+        if runtime is None or not sess.claude_session_id:
+            await safe_reply(update.message, "❌ Remote session is unavailable.")
+            return
+        try:
+            result = await runtime.send_key(
+                sess.node_id, sess.claude_session_id, "Escape"
+            )
+        except Exception:
+            logger.exception("Remote stop failed for session %s", sess.id)
+            result = {"ok": False}
+        await safe_reply(
+            update.message,
+            "⎋ Sent Escape" if result.get("ok") else "❌ Failed to send Escape",
+        )
+        return
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
         display = session_manager.get_display_name(wid)

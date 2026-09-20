@@ -186,7 +186,7 @@ class NodeSessionStateMixin:
         target_agent_session_id: str = "",
         target_context_path: str = "",
     ) -> Session:
-        """Create the independent target session and archive the source."""
+        """Create and select an independent target while preserving the source."""
         transfer = self.transfers.get(transfer_id)
         if transfer is None:
             raise KeyError(f"Unknown transfer: {transfer_id}")
@@ -217,6 +217,5 @@ class NodeSessionStateMixin:
         transfer.error = context_error
         self.set_selected_node(user_id, transfer.target_node_id)
         self.set_active_session(user_id, target.id)
-        self.mark_session_archived(source.id)
         self.save_state()
         return target

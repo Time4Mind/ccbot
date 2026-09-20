@@ -58,6 +58,7 @@ def build_bootstrap_payload(
     ]
     command_parts.extend(("--node-id", resolved_node_id))
     command_parts.extend(("--name", resolved_display_name))
+    command_parts.append("--install-service")
     return {
         "command": shlex.join(command_parts),
         "node_id": resolved_node_id,

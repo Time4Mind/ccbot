@@ -14,6 +14,7 @@ import hmac
 import secrets
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol, Self
 
 from .node_pairing import pairing_signature
@@ -139,12 +140,48 @@ class RelayServer:
     envelopes; it does not persist Telegram state or provider context.
     """
 
-    def __init__(self, *, credentials: dict[str, str], leader_id: str):
+    def __init__(
+        self,
+        *,
+        credentials: dict[str, str],
+        leader_id: str,
+        revocations_path: str | Path | None = None,
+    ):
         self._credentials = dict(credentials)
         self.leader_id = leader_id
         self._server: asyncio.AbstractServer | None = None
         self._connections: dict[str, tuple[str, StreamNodeTransport]] = {}
         self._consumed_pairing_nonces: set[str] = set()
+        self._revocations_path = (
+            Path(revocations_path).expanduser() if revocations_path else None
+        )
+        self._revoked_node_ids = self._load_revocations()
+
+    def _load_revocations(self) -> set[str]:
+        if self._revocations_path is None:
+            return set()
+        try:
+            values = json.loads(self._revocations_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return set()
+        return (
+            {str(value) for value in values if str(value)}
+            if isinstance(values, list)
+            else set()
+        )
+
+    def _save_revocations(self) -> None:
+        if self._revocations_path is None:
+            return
+        path = self._revocations_path
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.parent.chmod(0o700)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(
+            json.dumps(sorted(self._revoked_node_ids)), encoding="utf-8"
+        )
+        temporary.chmod(0o600)
+        temporary.replace(path)
 
     @property
     def port(self) -> int:
@@ -231,6 +268,8 @@ class RelayServer:
         secret = str(payload.get("secret", ""))
         claimed_leader = str(payload.get("leader_id", ""))
         expected = self._credentials.get(node_id, "")
+        if role == "worker" and node_id in self._revoked_node_ids:
+            raise PermissionError("relay authentication failed")
         derived_worker_secret = (
             self._worker_reconnect_secret(node_id) if role == "worker" else ""
         )
@@ -308,6 +347,20 @@ class RelayServer:
                         payload={"error": "target_node_id is required"},
                     )
                 )
+                return
+            if payload.get("operation") == "revoke_node":
+                self._revoked_node_ids.add(target_id)
+                self._save_revocations()
+                await sender.send(
+                    NodeEnvelope(
+                        kind="result",
+                        request_id=message.request_id,
+                        payload={"ok": True, "revoked_node_id": target_id},
+                    )
+                )
+                target = self._connections.get(target_id)
+                if target is not None:
+                    await target[1].close()
                 return
         else:
             target_id = self.leader_id

@@ -50,6 +50,44 @@ _NAV = (
 )
 
 
+async def capture_window(window_id: str) -> str | None:
+    sess = session_manager.find_session_by_window(window_id)
+    if sess is not None and sess.node_id != "local":
+        from ...transfer_runtime import get_node_runtime
+
+        runtime = get_node_runtime(sess.node_id)
+        if runtime is None or not sess.claude_session_id:
+            return None
+        try:
+            result = await runtime.capture_session(sess.node_id, sess.claude_session_id)
+        except Exception:
+            logger.exception("Remote pane capture failed for %s", sess.id)
+            return None
+        return str(result.get("pane", "")) if result.get("ok") else None
+    w = await tmux_manager.find_window_by_id(window_id)
+    return await tmux_manager.capture_pane(w.window_id) if w is not None else None
+
+
+async def _send_window_key(window_id: str, key: str) -> bool:
+    sess = session_manager.find_session_by_window(window_id)
+    if sess is not None and sess.node_id != "local":
+        from ...transfer_runtime import get_node_runtime
+
+        runtime = get_node_runtime(sess.node_id)
+        if runtime is None or not sess.claude_session_id:
+            return False
+        try:
+            result = await runtime.send_key(sess.node_id, sess.claude_session_id, key)
+        except Exception:
+            logger.exception("Remote key delivery failed for %s", sess.id)
+            return False
+        return bool(result.get("ok"))
+    w = await tmux_manager.find_window_by_id(window_id)
+    if w is None:
+        return False
+    return await tmux_manager.send_keys(w.window_id, key, enter=False, literal=False)
+
+
 async def handle(
     query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
 ) -> bool:
@@ -62,9 +100,8 @@ async def handle(
             await query.answer()
             return True
         target = int(target_raw)
-        w = await tmux_manager.find_window_by_id(window_id)
-        if w is not None:
-            pane = await tmux_manager.capture_pane(w.window_id)
+        pane = await capture_window(window_id)
+        if pane is not None:
             content = extract_interactive_content(pane or "")
             picker = (
                 parse_picker_menu(content.content, content.name)
@@ -75,12 +112,8 @@ async def handle(
                 delta = target - picker.cursor_index
                 key = "Down" if delta > 0 else "Up"
                 for _ in range(abs(delta)):
-                    await tmux_manager.send_keys(
-                        w.window_id, key, enter=False, literal=False
-                    )
-                await tmux_manager.send_keys(
-                    w.window_id, "Enter", enter=False, literal=False
-                )
+                    await _send_window_key(window_id, key)
+                await _send_window_key(window_id, "Enter")
                 await asyncio.sleep(0.5)
                 await _refresh_after_key(context.bot, user.id, window_id)
         await query.answer()
@@ -89,11 +122,7 @@ async def handle(
     for prefix, tmux_key, toast in _NAV:
         if data.startswith(prefix):
             window_id = data[len(prefix) :]
-            w = await tmux_manager.find_window_by_id(window_id)
-            if w:
-                await tmux_manager.send_keys(
-                    w.window_id, tmux_key, enter=False, literal=False
-                )
+            if await _send_window_key(window_id, tmux_key):
                 await asyncio.sleep(0.5)
                 await _refresh_after_key(context.bot, user.id, window_id)
             await query.answer(
@@ -103,11 +132,7 @@ async def handle(
 
     if data.startswith(CB_ASK_ESC):
         window_id = data[len(CB_ASK_ESC) :]
-        w = await tmux_manager.find_window_by_id(window_id)
-        if w:
-            await tmux_manager.send_keys(
-                w.window_id, "Escape", enter=False, literal=False
-            )
+        if await _send_window_key(window_id, "Escape"):
             # Floating-msg flow tracks an explicit msg-per-window;
             # card-based kb-mode is cleared by exit_kb_mode. Cover both.
             await clear_interactive_msg(user.id, context.bot, window_id)
@@ -143,10 +168,7 @@ async def _refresh_after_key(bot: Any, user_id: int, window_id: str) -> None:
     if active is not None and active.id == sess.id:
         # Card-based kb-mode for the active session: capture pane, if
         # the UI is still up re-enter; if it cleared, drop kb-mode.
-        w = await tmux_manager.find_window_by_id(window_id)
-        if w is None:
-            return
-        pane = await tmux_manager.capture_pane(w.window_id)
+        pane = await capture_window(window_id)
         if pane and is_interactive_ui(pane):
             content_obj = extract_interactive_content(pane)
             if content_obj is not None:

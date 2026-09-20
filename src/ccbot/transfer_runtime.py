@@ -44,6 +44,20 @@ class NodeRuntime(Protocol):
         self, target_node_id: str, session_id: str, text: str
     ) -> dict[str, Any]: ...
 
+    async def send_key(
+        self, target_node_id: str, session_id: str, key: str
+    ) -> dict[str, Any]: ...
+
+    async def capture_session(
+        self, target_node_id: str, session_id: str
+    ) -> dict[str, Any]: ...
+
+    async def terminate_session(
+        self, target_node_id: str, session_id: str
+    ) -> dict[str, Any]: ...
+
+    async def revoke_node(self, target_node_id: str) -> dict[str, Any]: ...
+
     async def start_context_transfer(
         self,
         *,

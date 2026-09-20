@@ -338,6 +338,7 @@ ZH: dict[str, str] = {
     ),
     "nodes.delete.done": "节点已从 ccbot 注册表移除。",
     "nodes.delete.not_found": "节点不存在或已被移除。",
+    "nodes.delete.revoke_failed": "无法撤销节点访问权限，已取消删除。",
     "transfer.choose_node": "*转移会话*\n\n会话：*{session}*\n\n选择目标节点。",
     "transfer.choose_backend": "*选择后端*\n\n目标节点：*{node}*",
     "transfer.confirm": (

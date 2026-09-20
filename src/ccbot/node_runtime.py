@@ -211,6 +211,30 @@ class RemoteNodeRuntime:
             {"session_id": session_id, "text": text},
         )
 
+    async def send_key(
+        self, target_node_id: str, session_id: str, key: str
+    ) -> dict[str, Any]:
+        return await self._request(
+            target_node_id, "send_key", {"session_id": session_id, "key": key}
+        )
+
+    async def capture_session(
+        self, target_node_id: str, session_id: str
+    ) -> dict[str, Any]:
+        return await self._request(
+            target_node_id, "capture_session", {"session_id": session_id}
+        )
+
+    async def terminate_session(
+        self, target_node_id: str, session_id: str
+    ) -> dict[str, Any]:
+        return await self._request(
+            target_node_id, "terminate_session", {"session_id": session_id}
+        )
+
+    async def revoke_node(self, target_node_id: str) -> dict[str, Any]:
+        return await self._request(target_node_id, "revoke_node", {})
+
     async def start_context_transfer(
         self,
         *,

@@ -160,14 +160,20 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 # The switcher-tap handler renders the snapshot when the
                 # user opens the session.
                 await asyncio.sleep(0.3)
-                w = await tmux_manager.find_window_by_id(wid)
                 ui_tuple: tuple[str, str] | None = None
-                if w:
-                    pane_text = await tmux_manager.capture_pane(w.window_id)
-                    if pane_text:
-                        ui = extract_interactive_content(pane_text)
-                        if ui is not None:
-                            ui_tuple = (ui.content, ui.name)
+                if sess.node_id != "local":
+                    from .callbacks.interactive_ui import capture_window
+
+                    pane_text = await capture_window(wid)
+                else:
+                    w = await tmux_manager.find_window_by_id(wid)
+                    pane_text = (
+                        await tmux_manager.capture_pane(w.window_id) if w else None
+                    )
+                if pane_text:
+                    ui = extract_interactive_content(pane_text)
+                    if ui is not None:
+                        ui_tuple = (ui.content, ui.name)
                 if bg_status.update_status(
                     user_id, sess.id, "needs_action", interactive_ui=ui_tuple
                 ):
@@ -197,20 +203,24 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             from ..handlers.notifications import enter_kb_mode
 
             await asyncio.sleep(0.3)
-            w = await tmux_manager.find_window_by_id(wid)
-            if w:
-                pane_text = await tmux_manager.capture_pane(w.window_id)
-                if pane_text:
-                    ui = extract_interactive_content(pane_text)
-                    if ui is not None:
-                        bg_status.update_status(
-                            user_id,
-                            sess.id,
-                            "needs_action",
-                            interactive_ui=(ui.content, ui.name),
-                        )
-                        await enter_kb_mode(bot, user_id, sess, ui.content, ui.name)
-                        continue
+            if sess.node_id != "local":
+                from .callbacks.interactive_ui import capture_window
+
+                pane_text = await capture_window(wid)
+            else:
+                w = await tmux_manager.find_window_by_id(wid)
+                pane_text = await tmux_manager.capture_pane(w.window_id) if w else None
+            if pane_text:
+                ui = extract_interactive_content(pane_text)
+                if ui is not None:
+                    bg_status.update_status(
+                        user_id,
+                        sess.id,
+                        "needs_action",
+                        interactive_ui=(ui.content, ui.name),
+                    )
+                    await enter_kb_mode(bot, user_id, sess, ui.content, ui.name)
+                    continue
             # Pane parse failed — fall through to regular card update.
 
         # Transcript growth does not prove that the terminal prompt is gone:

@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from telegram import Bot
 
 from .config import config
-from .codex_startup import is_codex_ready
+from .codex_startup import CODEX_READY_SETTLE_SECONDS, is_codex_ready
 from .node_models import Node
 from .session_defaults import DEFAULT_IDLE_ARCHIVE_HOURS, IDLE_ARCHIVE_HOUR_CHOICES
 from .session_keys import key_matches_window
@@ -623,11 +623,19 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                 saw_busy = True
                 idle_since = None
             else:
-                # Fresh sessions and Codex resumes are ready the moment the
-                # actual input box appears. Claude resume keeps the historical
-                # grace/stability rule because compaction may start shortly
-                # after an initially-idle frame.
-                if ready and (not resume or backend == "codex"):
+                # Codex can draw its composer before a delayed startup modal.
+                # Keep the input gate closed until that composer remains
+                # continuously stable; the Telegram card is already visible.
+                if ready and backend == "codex":
+                    if idle_since is None:
+                        idle_since = now
+                    if now - idle_since >= CODEX_READY_SETTLE_SECONDS:
+                        return True
+                    await asyncio.sleep(_RESUME_SETTLE_POLL)
+                    continue
+                # Fresh Claude sessions are ready as soon as their real input
+                # prompt appears. Claude resume keeps the historical grace.
+                if ready and not resume:
                     return True
                 if not ready:
                     idle_since = None

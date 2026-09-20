@@ -141,20 +141,7 @@ def enqueue_startup_message(
     flow.next_sequence += 1
     flow.entries.append(entry)
     if flow.window_id is not None:
-        # During a slow first voice replay, later captured messages must still
-        # get the same visual receipt as normal intake: the session card moves
-        # below them, with no separate "accepted" notification.
-        from .handlers.notifications import schedule_card_after_message
-        from .session import session_manager
-
-        sess = session_manager.find_session_by_window(flow.window_id)
-        if sess is not None:
-            schedule_card_after_message(
-                context.bot,
-                user.id,
-                sess,
-                update.message.message_id,
-            )
+        _surface_startup_entry(entry, flow.window_id)
     logger.info(
         "startup queue captured user=%d seq=%d message_id=%s pending=%d",
         user.id,
@@ -163,6 +150,66 @@ def enqueue_startup_message(
         len(flow.entries),
     )
     return entry
+
+
+def _surface_startup_entry(entry: QueuedInbound, window_id: str) -> None:
+    """Render an immediate card receipt while delivery waits for readiness."""
+    from .handlers.card_types import PendingPrompt
+    from .handlers.notifications import get_card_state, schedule_card_after_message
+    from .session import session_manager
+
+    message = entry.update.message
+    user = entry.update.effective_user
+    if message is None or user is None:
+        return
+    sess = session_manager.find_session_by_window(window_id)
+    if sess is None:
+        return
+    state = get_card_state(user.id, sess)
+    message_id = message.message_id
+    text = message.text or ""
+    if text and not text.startswith("/"):
+        request_id = str(message_id)
+        if not any(row.request_id == request_id for row in state.pending_prompts):
+            state.pending_prompts.append(
+                PendingPrompt(request_id=request_id, text=text, user_icon="👤")
+            )
+        if not any(mid == message_id for mid, _seq in state.pending_request_sequences):
+            state.next_request_sequence += 1
+            state.pending_request_sequences.append(
+                (message_id, state.next_request_sequence)
+            )
+    state.current_page_idx = None
+    schedule_card_after_message(
+        entry.context.bot,
+        user.id,
+        sess,
+        message_id,
+    )
+
+
+def _discard_startup_receipt(entry: QueuedInbound, window_id: str) -> None:
+    """Remove a synthetic prompt when its queued delivery fails."""
+    from .handlers.notifications import get_card_state
+    from .session import session_manager
+
+    message = entry.update.message
+    if message is None:
+        return
+    sess = session_manager.find_session_by_window(window_id)
+    if sess is None:
+        return
+    user = entry.update.effective_user
+    if user is None:
+        return
+    state = get_card_state(user.id, sess)
+    message_id = message.message_id
+    state.pending_prompts = [
+        row for row in state.pending_prompts if row.request_id != str(message_id)
+    ]
+    state.pending_request_sequences = [
+        item for item in state.pending_request_sequences if item[0] != message_id
+    ]
 
 
 async def _replay(entry: QueuedInbound, window_id: str | None = None) -> bool:
@@ -248,6 +295,7 @@ async def _drain(user_id: int, window_id: str) -> None:
                     entry.sequence,
                     exc,
                 )
+                _discard_startup_receipt(entry, window_id)
                 flow.entries.popleft()
                 continue
             if not delivered:
@@ -259,6 +307,7 @@ async def _drain(user_id: int, window_id: str) -> None:
                     entry.sequence,
                     len(flow.entries),
                 )
+                _discard_startup_receipt(entry, window_id)
                 flow.entries.popleft()
                 continue
             flow.entries.popleft()
@@ -286,6 +335,8 @@ def bind_startup_queue(user_id: int, window_id: str) -> asyncio.Task[None] | Non
     if flow is None:
         return None
     flow.window_id = window_id
+    for entry in flow.entries:
+        _surface_startup_entry(entry, window_id)
     if flow.drain_task is not None and not flow.drain_task.done():
         return flow.drain_task
     flow.drain_task = asyncio.create_task(

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from telegram.ext import ApplicationHandlerStop
 
+from ccbot.handlers.card_model import CardState
 from ccbot.session import SessionManager
 from ccbot.session_models import Session, WindowState
 from ccbot.startup_queue import (
@@ -161,6 +162,44 @@ async def test_queued_directory_flow_voice_replays_into_created_session() -> Non
 
 
 @pytest.mark.asyncio
+async def test_queued_text_is_visible_as_soon_as_new_card_is_bound() -> None:
+    context = MagicMock()
+    begin_startup_queue(42)
+    enqueue_startup_message(_update(10, text="first prompt"), context)
+    sess = SimpleNamespace(id="fresh")
+    state = CardState()
+    readiness = asyncio.Event()
+
+    async def wait_for_ready(_window_id: str) -> bool:
+        await readiness.wait()
+        return True
+
+    with (
+        patch(
+            "ccbot.session.session_manager.wait_for_window_ready",
+            side_effect=wait_for_ready,
+        ),
+        patch(
+            "ccbot.session.session_manager.find_session_by_window",
+            return_value=sess,
+        ),
+        patch("ccbot.handlers.notifications.get_card_state", return_value=state),
+        patch("ccbot.handlers.notifications.schedule_card_after_message") as surface,
+    ):
+        task = bind_startup_queue(42, "@new")
+        assert task is not None
+        await asyncio.sleep(0)
+
+        assert [
+            (row.request_id, row.text, row.user_icon) for row in state.pending_prompts
+        ] == [("10", "first prompt", "👤")]
+        surface.assert_called_once_with(context.bot, 42, sess, 10)
+
+        readiness.set()
+        await task
+
+
+@pytest.mark.asyncio
 async def test_first_queued_message_waits_for_settled_readiness() -> None:
     context = MagicMock()
     begin_startup_queue(42)
@@ -241,7 +280,10 @@ async def test_drain_includes_messages_arriving_while_window_becomes_ready() -> 
         await task
 
     assert seen == [1, 2]
-    surface.assert_called_once_with(context.bot, 42, sess, 2)
+    assert surface.call_args_list == [
+        ((context.bot, 42, sess, 1), {}),
+        ((context.bot, 42, sess, 2), {}),
+    ]
     assert not has_startup_queue(42)
 
 

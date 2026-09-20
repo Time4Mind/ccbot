@@ -131,7 +131,7 @@ async def test_text_intake_focuses_latest_before_delayed_monitor_event() -> None
     context = _context()
     text = _update(12, text="next request")
     sess = SimpleNamespace(id="s1")
-    state = SimpleNamespace(voice_pending=False, current_page_idx=3)
+    state = CardState(current_page_idx=3)
     observed: list[object] = []
 
     def surface(_bot, _uid, _sess, _message_id):
@@ -151,6 +151,9 @@ async def test_text_intake_focuses_latest_before_delayed_monitor_event() -> None
         assert await text_intake_handler(text, context)
 
     assert observed == [None]
+    assert [
+        (row.request_id, row.text, row.user_icon) for row in state.pending_prompts
+    ] == [("12", "next request", "👤")]
 
 
 @pytest.mark.asyncio
@@ -237,6 +240,7 @@ async def test_failed_intake_drops_only_its_focus_receipt() -> None:
         await asyncio.sleep(0)
 
     assert state.pending_request_sequences == []
+    assert state.pending_prompts == []
 
 
 @pytest.mark.asyncio

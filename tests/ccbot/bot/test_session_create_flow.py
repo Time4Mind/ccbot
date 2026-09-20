@@ -119,7 +119,10 @@ async def test_old_card_stays_background_until_atomic_new_session_handoff(
     release_create = asyncio.Event()
     transitions: list[str] = []
 
-    async def create_window(*_args, **_kwargs):
+    create_kwargs: dict[str, object] = {}
+
+    async def create_window(*_args, **kwargs):
+        create_kwargs.update(kwargs)
         entered_create.set()
         await release_create.wait()
         return True, "created", "project", "@2"
@@ -181,6 +184,7 @@ async def test_old_card_stays_background_until_atomic_new_session_handoff(
         _cards.pop((user_id, old_session.id), None)
 
     assert transitions == ["handoff", "paint"]
+    assert create_kwargs["wait_for_codex_ready"] is False
 
 
 @pytest.mark.asyncio

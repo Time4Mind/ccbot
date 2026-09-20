@@ -6,6 +6,7 @@ those tests live in `doc/legacy/topic-architecture.md` for reference
 only.
 """
 
+import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock
 
@@ -331,6 +332,7 @@ class TestResumeSettleGate:
         monkeypatch.setattr("ccbot.session._RESUME_SETTLE_BUSY_GRACE", 0.1)
         monkeypatch.setattr("ccbot.session._RESUME_SETTLE_IDLE_STABLE", 0.05)
         monkeypatch.setattr("ccbot.session._RESUME_SETTLE_POLL", 0.02)
+        monkeypatch.setattr("ccbot.session.CODEX_READY_SETTLE_SECONDS", 0.05)
         monkeypatch.setattr(config, "resume_settle_timeout", 5.0)
 
     def _mock_tmux(self, monkeypatch, capture_side_effect) -> MagicMock:
@@ -349,7 +351,17 @@ class TestResumeSettleGate:
         """A message sent immediately after window creation is held until
         Codex has drawn its input box, then submitted exactly once."""
         panes = iter([_CODEX_STARTING_PANE, _CODEX_READY_PANE])
-        mock_tmux = self._mock_tmux(monkeypatch, lambda _w: next(panes))
+        last = _CODEX_STARTING_PANE
+
+        def capture(_wid: str) -> str:
+            nonlocal last
+            try:
+                last = next(panes)
+            except StopIteration:
+                pass
+            return last
+
+        mock_tmux = self._mock_tmux(monkeypatch, capture)
         mgr.mark_window_starting("@1", backend="codex", resume=False)
 
         ok, message = await mgr.send_to_window("@1", "fix startup")
@@ -364,6 +376,33 @@ class TestResumeSettleGate:
         )
         mock_tmux.ensure_codex_prompt_submitted.assert_awaited_once_with(
             "@1", "fix startup"
+        )
+
+    @pytest.mark.asyncio
+    async def test_fresh_codex_prompt_must_remain_stable_before_drain(
+        self, mgr: SessionManager, monkeypatch, fast_gate
+    ) -> None:
+        panes = iter([_CODEX_READY_PANE, _CODEX_STARTING_PANE, _CODEX_READY_PANE])
+        last = _CODEX_READY_PANE
+
+        def capture(_wid: str) -> str:
+            nonlocal last
+            try:
+                last = next(panes)
+            except StopIteration:
+                pass
+            return last
+
+        mock_tmux = self._mock_tmux(monkeypatch, capture)
+        mgr.mark_window_starting("@1", backend="codex", resume=False)
+        ok, _ = await mgr.send_to_window("@1", "after modal")
+
+        assert ok is True
+        await asyncio.sleep(0.04)
+        mock_tmux.send_keys.assert_not_awaited()
+        await mgr._resume_settle_tasks["@1"]
+        mock_tmux.send_keys.assert_awaited_once_with(
+            "@1", "after modal", backend="codex"
         )
 
     @pytest.mark.asyncio

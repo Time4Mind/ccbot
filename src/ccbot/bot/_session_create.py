@@ -149,7 +149,7 @@ async def _create_and_activate_session(
             selected_path,
             resume_session_id=resume_session_id,
             backend=backend,
-            wait_for_codex_ready=True,
+            wait_for_codex_ready=False,
         )
         if not success:
             cancel_pending_flow()
@@ -248,13 +248,6 @@ async def _create_and_activate_session(
     else:
         session_manager.set_active_session(user.id, sess.id)
 
-    # Every inbound captured since the user pressed Start is now owned by
-    # this window. The drain waits for proven TUI readiness and replays the
-    # original Telegram updates in order.
-    from ..startup_queue import bind_startup_queue
-
-    bind_startup_queue(user.id, created_wid)
-
     # Transition the carrier from dir-browser to the new session's
     # empty live card in place. No separate "Created. Send messages
     # here." notice — that was a dead-end stub; the live card itself
@@ -270,6 +263,15 @@ async def _create_and_activate_session(
             # Fallback: a minimal notice so the user isn't staring at
             # the stale dir-browser body when paint fails.
             await safe_edit(query, f"✅ {message}")
+
+    # Every inbound captured since the user pressed Start is now owned by
+    # this window. Binding happens after the initial paint so a queued user's
+    # visual receipt can move the finished card below that Telegram message
+    # without racing the directory-browser handoff. Delivery itself remains
+    # gated on proven TUI readiness.
+    from ..startup_queue import bind_startup_queue
+
+    bind_startup_queue(user.id, created_wid)
 
     async def _bind_lifecycle_in_background() -> None:
         """Attach the hook-written session id without delaying Telegram UI."""

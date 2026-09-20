@@ -19,6 +19,7 @@ from ..handlers.notifications import (
     lookup_session_for_message,
     schedule_card_after_message,
 )
+from ..handlers.card_types import PendingPrompt
 from ..handlers.directory_browser import (
     STATE_KEY,
     STATE_NAMING_DIRECTORY,
@@ -140,10 +141,28 @@ def _enqueue(
                     for item in state.pending_request_sequences
                     if item != (message_id, request_sequence)
                 ]
+                pending_prompts = getattr(state, "pending_prompts", [])
+                state.pending_prompts = [
+                    row for row in pending_prompts if row.request_id != str(message_id)
+                ]
 
             completion = getattr(receipt, "completion", None)
             if completion is not None:
                 completion.add_done_callback(_discard_failed_request)
+        if kind == "text" and update.message.text:
+            request_id = str(message_id)
+            pending_prompts = getattr(state, "pending_prompts", None)
+            if pending_prompts is None:
+                pending_prompts = []
+                state.pending_prompts = pending_prompts
+            if not any(row.request_id == request_id for row in pending_prompts):
+                pending_prompts.append(
+                    PendingPrompt(
+                        request_id=request_id,
+                        text=update.message.text,
+                        user_icon="👤",
+                    )
+                )
         state.current_page_idx = None
         if kind == "voice":
             state.voice_pending = True

@@ -33,6 +33,7 @@ class _TmuxWorkerSession:
     transcript_path: Path | None = None
     transcript_offset: int = 0
     pending_tools: dict[str, Any] = field(default_factory=dict)
+    recovered: bool = False
 
 
 class TmuxWorkerExecutor:
@@ -318,27 +319,37 @@ class TmuxWorkerExecutor:
             self._last_reconcile_at = now
         events: list[dict[str, Any]] = []
         for session in tuple(self._sessions.values()):
-            await self._bind_transcript(session)
-            path = session.transcript_path
-            if path is None:
-                continue
             try:
+                await self._bind_transcript(session)
+                path = session.transcript_path
+                if path is None:
+                    continue
                 chunk, end_offset = await asyncio.to_thread(
                     self._read_transcript_tail, path, session.transcript_offset
                 )
-            except OSError:
+                if not chunk or not chunk.endswith(b"\n"):
+                    continue
+                rows = []
+                for raw_line in chunk.decode("utf-8", errors="replace").splitlines():
+                    row = TranscriptParser.parse_line(raw_line)
+                    if row:
+                        rows.append(row)
+                parsed, remaining = TranscriptParser.parse_entries(
+                    rows, pending_tools=session.pending_tools
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "worker event poll failed session=%s window=%s transcript=%s",
+                    session.session_id,
+                    session.window_id,
+                    getattr(session, "transcript_path", None),
+                )
                 continue
-            if not chunk or not chunk.endswith(b"\n"):
-                continue
+            # Commit parser state only after the complete chunk was accepted.
+            # A transient read/parser failure therefore retries the same bytes.
             session.transcript_offset = end_offset
-            rows = []
-            for raw_line in chunk.decode("utf-8", errors="replace").splitlines():
-                row = TranscriptParser.parse_line(raw_line)
-                if row:
-                    rows.append(row)
-            parsed, remaining = TranscriptParser.parse_entries(
-                rows, pending_tools=session.pending_tools
-            )
             session.pending_tools = remaining
             for entry in parsed:
                 if entry.role != "assistant" or not entry.text:
@@ -396,9 +407,22 @@ class TmuxWorkerExecutor:
             return
         session.transcript_path = path
         try:
-            session.transcript_offset = path.stat().st_size
+            # A newly-created Codex session can publish session_map only after
+            # its first response is already in the rollout. Read that rollout
+            # from byte zero. Recovered tmux sessions tail their existing file
+            # to avoid replaying already-delivered history after agent restart.
+            session.transcript_offset = (
+                path.stat().st_size if getattr(session, "recovered", False) else 0
+            )
         except OSError:
             session.transcript_offset = 0
+        logger.info(
+            "worker transcript bound session=%s window=%s offset=%d recovered=%s",
+            session.session_id,
+            session.window_id,
+            session.transcript_offset,
+            getattr(session, "recovered", False),
+        )
 
     async def _recover_sessions(self, *, reconcile: bool = False) -> None:
         code, stdout, _stderr = await self._run_tmux(
@@ -425,6 +449,7 @@ class TmuxWorkerExecutor:
                 session_id=session_id,
                 window_id=window_id,
                 backend=backend,
+                recovered=True,
             )
         if reconcile:
             self._sessions = recovered

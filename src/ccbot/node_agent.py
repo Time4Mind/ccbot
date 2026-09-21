@@ -27,6 +27,7 @@ from .node_transport import (
     connect_relay,
 )
 from .node_pairing import PairingInvitation
+from .node_event_pump import NodeEventPump
 from .node_update import GitNodeUpdater, current_git_revision
 from .node_worker import TmuxWorkerExecutor
 
@@ -170,6 +171,9 @@ class NodeAgent:
         self._restart_callback = restart_callback or _restart_current_process
         self._ssh_access = dict(ssh_access or {})
         self._startup_tasks: set[asyncio.Task[None]] = set()
+        self._event_pump = NodeEventPump(
+            node_id, available=callable(getattr(executor, "poll_events", None))
+        )
 
     def attach_transport(self, transport: NodeTransport) -> None:
         """Attach a reconnected relay while retaining receipts and context."""
@@ -238,7 +242,11 @@ class NodeAgent:
                 payload={
                     "node_id": self._node_id,
                     "display_name": self._display_name,
-                    "state": "ready" if self._backends else "online",
+                    "state": (
+                        "ready"
+                        if self._backends and self._event_pump.healthy
+                        else "online"
+                    ),
                     "platform": platform.system(),
                     "arch": platform.machine(),
                     "backends": list(self._backends),
@@ -247,6 +255,7 @@ class NodeAgent:
                         "create_session": True,
                         "context_transfer": True,
                         "send_text": True,
+                        "event_stream": self._event_pump.healthy,
                     },
                     "capacity": capacity,
                     "ccbot_version": self._runtime_revision,
@@ -267,16 +276,11 @@ class NodeAgent:
         poll_events = getattr(self._executor, "poll_events", None)
         if not callable(poll_events):
             return
-        typed_poll = cast(Callable[[], Awaitable[list[dict[str, Any]]]], poll_events)
-        while True:
-            await asyncio.sleep(0.5)
-            for payload in await typed_poll():
-                await self._transport.send(
-                    NodeEnvelope(
-                        kind="event",
-                        payload={"node_id": self._node_id, **payload},
-                    )
-                )
+        await self._event_pump.run(
+            cast(Callable[[], Awaitable[list[dict[str, Any]]]], poll_events),
+            transport=lambda: self._transport,
+            publish_health=self._send_health,
+        )
 
     async def _handle_command(self, message: NodeEnvelope) -> None:
         if not message.request_id:

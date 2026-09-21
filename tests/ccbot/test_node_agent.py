@@ -530,6 +530,151 @@ async def test_worker_emits_assistant_transcript_events_for_remote_card(
 
 
 @pytest.mark.asyncio
+async def test_remote_codex_delayed_binding_emits_both_turns_once(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    monkeypatch.setenv("CCBOT_DIR", str(state_dir))
+    transcript = tmp_path / "rollout.jsonl"
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+
+    async def fake_tmux(*args: str):
+        if args[0] == "new-window":
+            return 0, "@9\n", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(executor, "_run_tmux", fake_tmux)
+    monkeypatch.setattr(executor, "_wait_ready", AsyncMock())
+    monkeypatch.setattr(
+        "ccbot.node_worker.tmux_input_transport.send_literal_chunked",
+        AsyncMock(return_value=True),
+    )
+    created = await executor.create_session(
+        path=str(tmp_path), backend="codex", name="Task"
+    )
+    session_id = created["target_agent_session_id"]
+
+    # Codex publishes session_map only after accepting the first prompt.
+    await executor.send_text(session_id=session_id, text="first")
+    transcript.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-09-21T00:00:01Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "agent_message",
+                    "message": "first answer",
+                    "phase": "final_answer",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (state_dir / "session_map.json").write_text(
+        json.dumps(
+            {
+                "ccbot-worker:@9": {
+                    "session_id": "provider-session",
+                    "transcript_path": str(transcript),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    first_events = await executor.poll_events()
+    with transcript.open("a", encoding="utf-8") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "timestamp": "2026-09-21T00:00:02Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "agent_message",
+                        "message": "second answer",
+                        "phase": "final_answer",
+                    },
+                }
+            )
+            + "\n"
+        )
+    second_events = await executor.poll_events()
+
+    assert [event["text"] for event in first_events] == ["first answer"]
+    assert [event["text"] for event in second_events] == ["second answer"]
+    assert await executor.poll_events() == []
+
+
+@pytest.mark.asyncio
+async def test_event_pump_retries_after_transient_send_failure(tmp_path):
+    delivered = asyncio.Event()
+
+    class FlakyEventTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed_once = False
+            self.wait_forever = asyncio.Event()
+
+        async def send(self, message: NodeEnvelope) -> None:
+            if message.kind == "event" and not self.failed_once:
+                self.failed_once = True
+                raise ConnectionError("relay reset")
+            await super().send(message)
+            if message.kind == "event":
+                delivered.set()
+
+        async def receive(self) -> NodeEnvelope:
+            await self.wait_forever.wait()
+            raise AssertionError("unreachable")
+
+    class EventExecutor(FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.poll_count = 0
+
+        async def poll_events(self):
+            self.poll_count += 1
+            if self.poll_count == 1:
+                return [
+                    {
+                        "event_type": "session_message",
+                        "session_id": "agent-7",
+                        "text": "survives relay reset",
+                    }
+                ]
+            return []
+
+    transport = FlakyEventTransport()
+    agent = NodeAgent(
+        transport,
+        EventExecutor(),
+        context_dir=tmp_path,
+        node_id="worker-a",
+        backends=("codex",),
+    )
+    task = asyncio.create_task(agent.run())
+    try:
+        await asyncio.wait_for(delivered.wait(), timeout=1.5)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    events = [message for message in transport.sent if message.kind == "event"]
+    assert len(events) == 1
+    assert events[0].payload["text"] == "survives relay reset"
+    health = [message for message in transport.sent if message.kind == "health"]
+    assert any(
+        message.payload["state"] == "online"
+        and message.payload["capabilities"]["event_stream"] is False
+        for message in health
+    )
+    assert health[-1].payload["state"] == "ready"
+    assert health[-1].payload["capabilities"]["event_stream"] is True
+
+
+@pytest.mark.asyncio
 async def test_worker_reads_only_appended_transcript_bytes(tmp_path, monkeypatch):
     transcript = tmp_path / "session.jsonl"
     transcript.write_text("old transcript data\n", encoding="utf-8")

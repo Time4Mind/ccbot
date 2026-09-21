@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -138,6 +139,16 @@ async def test_context_transfer_crosses_real_relay_and_worker_agent(tmp_path: Pa
             "name": "result.zip",
             "content": b"worker-output",
         }
+        streamed = io.BytesIO()
+        stream_result = await runtime.download_session_file_to(
+            "worker-a",
+            "worker-session",
+            str(artifact),
+            streamed,
+            expected_size=len(b"worker-output"),
+        )
+        assert stream_result["name"] == "result.zip"
+        assert streamed.getvalue() == b"worker-output"
 
         executor.transcript_path = executor.workdir / "session.jsonl"
         executor.transcript_path.write_text(

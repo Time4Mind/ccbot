@@ -8,7 +8,7 @@ to a different node when a target runtime is unavailable.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, BinaryIO, Protocol
 
 from .session_models import Session
 from .transfer_models import SessionTransfer
@@ -74,6 +74,17 @@ class NodeRuntime(Protocol):
 
     async def download_session_file(
         self, target_node_id: str, session_id: str, path: str
+    ) -> dict[str, Any]: ...
+
+    async def download_session_file_to(
+        self,
+        target_node_id: str,
+        session_id: str,
+        path: str,
+        destination: BinaryIO,
+        *,
+        expected_size: int,
+        expected_version: str = "",
     ) -> dict[str, Any]: ...
 
     async def seed_session_history(

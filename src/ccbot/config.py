@@ -188,6 +188,20 @@ class Config:
         except ValueError:
             self.card_edit_lag = 2.0
 
+        try:
+            file_concurrency = int(os.getenv("CCBOT_FILE_DELIVERY_CONCURRENCY", "3"))
+        except ValueError:
+            file_concurrency = 3
+        self.file_delivery_concurrency: int = min(16, max(1, file_concurrency))
+        self.file_delivery_worker_timeout: float = max(
+            1.0,
+            _parse_duration(os.getenv("CCBOT_FILE_WORKER_TIMEOUT", "2m"), 120.0),
+        )
+        self.file_delivery_telegram_timeout: float = max(
+            1.0,
+            _parse_duration(os.getenv("CCBOT_FILE_TELEGRAM_TIMEOUT", "2m"), 120.0),
+        )
+
         # Background-session status panel: max badges shown at the end of the
         # active card. Older entries collapse to a "+N more" tail.
         try:

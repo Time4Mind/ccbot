@@ -99,6 +99,7 @@ async def test_post_shutdown_stops_persistent_tmux_control_process(
         "shutdown_auth_flows",
         "shutdown_inbound_queues",
         "shutdown_card_surface_tasks",
+        "shutdown_file_deliveries",
     ):
         monkeypatch.setattr(_app_lifecycle, name, AsyncMock())
     monkeypatch.setattr(
@@ -120,6 +121,7 @@ async def test_post_shutdown_stops_persistent_tmux_control_process(
 
     assert process.terminated
     assert tmux_manager._control_client.proc is None
+    _app_lifecycle.shutdown_file_deliveries.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -141,6 +143,7 @@ async def test_post_shutdown_releases_lock_before_directory_worker_cleanup(
         "shutdown_auth_flows",
         "shutdown_inbound_queues",
         "shutdown_card_surface_tasks",
+        "shutdown_file_deliveries",
     ):
         monkeypatch.setattr(_app_lifecycle, name, AsyncMock())
     monkeypatch.setattr(
@@ -177,3 +180,11 @@ def test_removed_commands_have_no_dedicated_routes(monkeypatch) -> None:
     }
 
     assert not {"history", "done", "memory", "compact", "effort"} & registered
+
+
+def test_bot_keeps_global_update_processing_sequential(monkeypatch) -> None:
+    monkeypatch.setattr(config, "telegram_bot_token", "123456:ABCDEF")
+
+    application = create_bot()
+
+    assert application.update_processor.max_concurrent_updates == 1

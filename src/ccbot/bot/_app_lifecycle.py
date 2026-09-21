@@ -17,6 +17,7 @@ from telegram.ext import (
 )
 
 from ..inbound_queue import shutdown_inbound_queues
+from ..file_delivery import file_delivery_manager, shutdown_file_deliveries
 
 from ..config import config
 from ..handlers.quota_alerts import quota_alerts_loop
@@ -100,6 +101,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     # Reachable from ``_error_handler`` for the sustained-Conflict exit
     # path (Conflict updates carry no chat, so ``update`` is not an Update).
     _conflict_app = application
+    file_delivery_manager.start()
 
     # Warm the directory browser's recursive index off the startup path. The
     # picker itself always paints from cache/shallow metadata and never waits
@@ -438,6 +440,7 @@ async def post_shutdown(
         _node_notifications_task.cancel()
         await asyncio.gather(_node_notifications_task, return_exceptions=True)
         _node_notifications_task = None
+    await shutdown_file_deliveries()
     from ..node_runtime import shutdown_remote_runtimes
 
     await shutdown_remote_runtimes()

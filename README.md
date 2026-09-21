@@ -136,6 +136,9 @@ Most-frequently-tweaked optionals:
 | `WHISPER_THREADS`           | `6`          | threads for `whisper-cli` (its own default is 4) |
 | `BG_STATUS_MAX`             | `4`          | max badges in the bg-status panel; older entries collapse to `+N more` |
 | `CARD_EDIT_LAG`             | `2.0`        | coalescing window for live-card edits (seconds) |
+| `CCBOT_FILE_DELIVERY_CONCURRENCY` | `3` | global background file-delivery limit; one active delivery per user |
+| `CCBOT_FILE_WORKER_TIMEOUT` | `2m` | timeout for fetching one worker file |
+| `CCBOT_FILE_TELEGRAM_TIMEOUT` | `2m` | timeout for one Telegram document upload |
 | `CCBOT_RICH_MESSAGES`       | `on`         | `off` disables Bot API 10.3 rich messages (MarkdownV2 only) |
 | `CCBOT_HOST`                | hostname     | deployment label exported to sessions as `CCBOT_HOST` |
 | `TG_PROXY_URL`              | _(unset)_    | outbound proxy for the Bot API (`socks5://…` or `http://…`) |

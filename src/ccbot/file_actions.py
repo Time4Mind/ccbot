@@ -31,6 +31,7 @@ class RemoteFileReference:
     path: str
     name: str
     size: int
+    version: str = ""
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,8 @@ def _token_for_reference(reference: FileReference) -> str:
         identity = (
             f"remote\0{reference.node_id}\0{reference.session_id}\0{reference.path}"
         )
+        if reference.version:
+            identity += f"\0{reference.version}"
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
 
 
@@ -100,6 +103,7 @@ def _load_registry() -> None:
                     path=str(raw_reference["path"]),
                     name=str(raw_reference["name"]),
                     size=int(raw_reference["size"]),
+                    version=str(raw_reference.get("version", "")),
                 )
             except (KeyError, TypeError, ValueError):
                 continue
@@ -220,6 +224,7 @@ async def file_button_context_for_session(
                     path=str(result["path"]),
                     name=str(result["name"]),
                     size=int(result["size"]),
+                    version=str(result.get("version", "")),
                 )
             else:
                 reason = str(result.get("error", reason))

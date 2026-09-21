@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from ccbot.node_runtime import RemoteNodeRuntime
+from ccbot.node_inbox import MAX_SESSION_FILE_BYTES
 from ccbot.session_models import Session
 from ccbot.transfer_models import SessionTransfer
 
@@ -164,6 +168,100 @@ async def test_remote_runtime_controls_and_terminates_worker_session():
         for _operation, payload in rpc.calls[:3]
     )
     assert all(options == {"retries": 0, "timeout": 5.0} for options in rpc.options)
+
+
+@pytest.mark.asyncio
+async def test_remote_runtime_streams_pinned_file_chunks_without_buffering() -> None:
+    payload = b"exact-worker-bytes"
+
+    class Rpc:
+        async def request(
+            self, _node: str, operation: str, request: dict, **_kwargs
+        ) -> dict:
+            if operation == "stat_session_file":
+                return {
+                    "ok": True,
+                    "path": "/worker/result.zip",
+                    "name": "result.zip",
+                    "size": len(payload),
+                    "version": f"{len(payload)}:42",
+                }
+            assert operation == "read_session_file"
+            offset = request["offset"]
+            chunk = payload[offset : offset + request["limit"]]
+            return {
+                "ok": True,
+                "offset": offset,
+                "data": base64.b64encode(chunk).decode("ascii"),
+            }
+
+    runtime = RemoteNodeRuntime(Rpc(), chunk_size=4)
+    destination = io.BytesIO()
+
+    result = await runtime.download_session_file_to(
+        "worker-a",
+        "routing-1",
+        "/worker/result.zip",
+        destination,
+        expected_size=len(payload),
+        expected_version=f"{len(payload)}:42",
+    )
+
+    assert destination.getvalue() == payload
+    assert result["name"] == "result.zip"
+
+
+@pytest.mark.asyncio
+async def test_remote_runtime_rejects_changed_file_before_streaming() -> None:
+    rpc = AsyncMock()
+    rpc.request.return_value = {
+        "ok": True,
+        "path": "/worker/result.zip",
+        "name": "result.zip",
+        "size": 8,
+        "version": "8:new",
+    }
+    runtime = RemoteNodeRuntime(rpc)
+    destination = io.BytesIO()
+
+    with pytest.raises(ValueError, match="changed before transfer"):
+        await runtime.download_session_file_to(
+            "worker-a",
+            "routing-1",
+            "/worker/result.zip",
+            destination,
+            expected_size=7,
+            expected_version="7:old",
+        )
+
+    assert destination.getvalue() == b""
+
+
+@pytest.mark.asyncio
+async def test_remote_runtime_rejects_oversized_file_before_streaming() -> None:
+    size = MAX_SESSION_FILE_BYTES + 1
+    rpc = AsyncMock()
+    rpc.request.return_value = {
+        "ok": True,
+        "path": "/worker/huge.zip",
+        "name": "huge.zip",
+        "size": size,
+        "version": f"{size}:1",
+    }
+    runtime = RemoteNodeRuntime(rpc)
+    destination = io.BytesIO()
+
+    with pytest.raises(ValueError, match="exceeds transfer limit"):
+        await runtime.download_session_file_to(
+            "worker-a",
+            "routing-1",
+            "/worker/huge.zip",
+            destination,
+            expected_size=size,
+            expected_version=f"{size}:1",
+        )
+
+    assert destination.getvalue() == b""
 
 
 @pytest.mark.asyncio

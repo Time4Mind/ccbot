@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -9,6 +10,7 @@ import pytest
 from ccbot import file_actions, rich
 from ccbot.bot.callbacks import file_buttons
 from ccbot.file_actions import RemoteFileButtonContext, RemoteFileReference
+from ccbot.file_delivery import FileDeliveryManager
 from ccbot.handlers import card_transport, message_sender
 from ccbot.node_worker import TmuxWorkerExecutor
 from ccbot.handlers.card_model import CardState
@@ -127,7 +129,7 @@ async def test_remote_card_edit_keeps_worker_file_button(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_remote_file_button_downloads_exact_bytes(monkeypatch) -> None:
+async def test_remote_file_button_downloads_exact_bytes(monkeypatch, tmp_path) -> None:
     reference = RemoteFileReference(
         node_id="worker-a",
         session_id="routing-1",
@@ -141,13 +143,25 @@ async def test_remote_file_button_downloads_exact_bytes(monkeypatch) -> None:
     )
     match = re.search(r'data="file:([0-9a-f]+)"', rendered)
     assert match is not None
+    order: list[str] = []
+
+    async def answer(*_args, **_kwargs):
+        order.append("ack")
+
+    async def download_to(_node, _session, _path, destination, **_kwargs):
+        order.append("fetch")
+        destination.write(b"payload")
+        return {"ok": True, "name": "report.zip", "size": 7, "version": "7:1"}
+
     runtime = SimpleNamespace(
-        download_session_file=AsyncMock(
-            return_value={"ok": True, "name": "report.zip", "content": b"payload"}
-        )
+        download_session_file_to=AsyncMock(side_effect=download_to)
     )
-    monkeypatch.setattr(file_buttons, "get_node_runtime", lambda _node: runtime)
-    query = SimpleNamespace(data=f"file:{match.group(1)}", answer=AsyncMock())
+    monkeypatch.setattr("ccbot.file_delivery.get_node_runtime", lambda _node: runtime)
+    manager = FileDeliveryManager(staging_dir=tmp_path / "staging")
+    monkeypatch.setattr(file_buttons, "file_delivery_manager", manager)
+    query = SimpleNamespace(
+        data=f"file:{match.group(1)}", answer=AsyncMock(side_effect=answer)
+    )
     delivered: list[bytes] = []
 
     async def send_document(**kwargs):
@@ -160,15 +174,15 @@ async def test_remote_file_button_downloads_exact_bytes(monkeypatch) -> None:
     assert await file_buttons.handle(
         query, SimpleNamespace(bot=bot), SimpleNamespace(id=42)
     )
-    runtime.download_session_file.assert_awaited_once_with(
-        "worker-a", "routing-1", reference.path
-    )
+    await manager.wait_for_idle()
+    assert order[:2] == ["ack", "fetch"]
+    runtime.download_session_file_to.assert_awaited_once()
     assert bot.send_document.await_args.kwargs["filename"] == "report.zip"
     assert delivered == [b"payload"]
 
 
 @pytest.mark.asyncio
-async def test_remote_file_button_reports_offline_worker(monkeypatch) -> None:
+async def test_remote_file_button_reports_offline_worker(monkeypatch, tmp_path) -> None:
     reference = RemoteFileReference(
         node_id="worker-a",
         session_id="routing-1",
@@ -182,15 +196,65 @@ async def test_remote_file_button_reports_offline_worker(monkeypatch) -> None:
     )
     token = re.search(r'data="file:([0-9a-f]+)"', rendered)
     assert token is not None
-    monkeypatch.setattr(file_buttons, "get_node_runtime", lambda _node: None)
+    monkeypatch.setattr("ccbot.file_delivery.get_node_runtime", lambda _node: None)
+    manager = FileDeliveryManager(staging_dir=tmp_path / "staging")
+    monkeypatch.setattr(file_buttons, "file_delivery_manager", manager)
     query = SimpleNamespace(data=f"file:{token.group(1)}", answer=AsyncMock())
     bot = SimpleNamespace(send_document=AsyncMock(), send_message=AsyncMock())
 
     assert await file_buttons.handle(
         query, SimpleNamespace(bot=bot), SimpleNamespace(id=42)
     )
-    query.answer.assert_awaited_once_with("Файл больше недоступен", show_alert=True)
+    await manager.wait_for_idle()
+    query.answer.assert_awaited_once_with()
     bot.send_document.assert_not_awaited()
+    bot.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_remote_callback_returns_while_worker_fetch_is_blocked(
+    monkeypatch, tmp_path
+) -> None:
+    reference = RemoteFileReference(
+        node_id="worker-a",
+        session_id="routing-1",
+        path="/worker/report.zip",
+        name="report.zip",
+        size=7,
+    )
+    rendered = rich.to_rich_markdown(
+        reference.path,
+        file_base_dir=RemoteFileButtonContext({reference.path: reference}),
+    )
+    token = re.search(r'data="file:([0-9a-f]+)"', rendered)
+    assert token is not None
+    fetch_started = asyncio.Event()
+    release_fetch = asyncio.Event()
+
+    async def download_to(_node, _session, _path, destination, **_kwargs):
+        fetch_started.set()
+        await release_fetch.wait()
+        destination.write(b"payload")
+        return {"ok": True, "name": "report.zip", "size": 7}
+
+    runtime = SimpleNamespace(download_session_file_to=download_to)
+    monkeypatch.setattr("ccbot.file_delivery.get_node_runtime", lambda _node: runtime)
+    manager = FileDeliveryManager(staging_dir=tmp_path / "staging")
+    monkeypatch.setattr(file_buttons, "file_delivery_manager", manager)
+    query = SimpleNamespace(data=f"file:{token.group(1)}", answer=AsyncMock())
+    bot = SimpleNamespace(send_document=AsyncMock(), send_message=AsyncMock())
+
+    callback = asyncio.create_task(
+        file_buttons.handle(query, SimpleNamespace(bot=bot), SimpleNamespace(id=42))
+    )
+    await fetch_started.wait()
+    try:
+        query.answer.assert_awaited_once_with()
+        assert callback.done()
+    finally:
+        release_fetch.set()
+        await callback
+        await manager.wait_for_idle()
 
 
 def test_remote_file_token_survives_registry_reload(monkeypatch, tmp_path) -> None:
@@ -218,6 +282,37 @@ def test_remote_file_token_survives_registry_reload(monkeypatch, tmp_path) -> No
 
     assert isinstance(restored, RemoteFileReference)
     assert restored == reference
+
+
+def test_remote_file_token_changes_with_pinned_version(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(file_actions, "_REGISTRY_FILE", tmp_path / "buttons.json")
+    monkeypatch.setattr(file_actions, "_file_paths", {})
+    monkeypatch.setattr(file_actions, "_registry_loaded", True)
+    path = "/worker/report.zip"
+
+    def reference(version: str) -> RemoteFileReference:
+        return RemoteFileReference(
+            node_id="worker-a",
+            session_id="routing-1",
+            path=path,
+            name="report.zip",
+            size=7,
+            version=version,
+        )
+
+    first_rendered = rich.to_rich_markdown(
+        path,
+        file_base_dir=RemoteFileButtonContext({path: reference("7:1")}),
+    )
+    second_rendered = rich.to_rich_markdown(
+        path,
+        file_base_dir=RemoteFileButtonContext({path: reference("7:2")}),
+    )
+    first = re.search(r'data="file:([0-9a-f]+)"', first_rendered)
+    second = re.search(r'data="file:([0-9a-f]+)"', second_rendered)
+
+    assert first is not None and second is not None
+    assert first.group(1) != second.group(1)
 
 
 @pytest.mark.asyncio

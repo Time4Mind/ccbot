@@ -10,7 +10,7 @@ import re
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, BinaryIO, cast
 
 
 MAX_INBOX_BYTES = 20 * 1024 * 1024
@@ -152,6 +152,58 @@ class RemoteInboxMixin:
             "ok": True,
             "name": str(metadata.get("name", "file")),
             "content": bytes(content),
+        }
+
+    async def download_session_file_to(
+        self,
+        target_node_id: str,
+        session_id: str,
+        path: str,
+        destination: BinaryIO,
+        *,
+        expected_size: int,
+        expected_version: str = "",
+    ) -> dict[str, Any]:
+        owner = cast(Any, self)
+        metadata = await self.stat_session_file(target_node_id, session_id, path)
+        owner._require_ok(metadata)
+        total_size = int(metadata.get("size", -1))
+        version = str(metadata.get("version", ""))
+        if total_size != expected_size or (
+            expected_version and version != expected_version
+        ):
+            raise ValueError("worker file changed before transfer")
+        if total_size < 0 or total_size > MAX_SESSION_FILE_BYTES:
+            raise ValueError("worker file exceeds transfer limit")
+        canonical_path = str(metadata.get("path", ""))
+        offset = 0
+        while offset < total_size:
+            result = await owner._request(
+                target_node_id,
+                "read_session_file",
+                {
+                    "session_id": session_id,
+                    "path": canonical_path,
+                    "offset": offset,
+                    "limit": min(owner._chunk_size, MAX_SESSION_FILE_CHUNK),
+                    "version": version,
+                },
+            )
+            owner._require_ok(result)
+            if int(result.get("offset", -1)) != offset:
+                raise ValueError("worker file chunk offset mismatch")
+            chunk = base64.b64decode(str(result.get("data", "")), validate=True)
+            if not chunk:
+                raise ValueError("worker file transfer ended early")
+            destination.write(chunk)
+            offset += len(chunk)
+            if offset > total_size:
+                raise ValueError("worker file transfer exceeded declared size")
+        return {
+            "ok": True,
+            "name": str(metadata.get("name", "file")),
+            "size": total_size,
+            "version": version,
         }
 
 

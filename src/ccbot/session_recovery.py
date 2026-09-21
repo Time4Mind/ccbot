@@ -171,15 +171,23 @@ async def resolve_stale_window_ids(mgr: "SessionManager") -> None:
 
 async def reconcile_remote_sessions(
     mgr: "SessionManager", node_id: str, runtime: object
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     """Rebind live worker sessions and lose only authoritative misses."""
     rebound = 0
     lost = 0
+    deferred = 0
     for sess in tuple(mgr.sessions.values()):
         if sess.node_id != node_id or sess.state not in ("active", "idle", "lost"):
             continue
         routing_id = sess.worker_session_id or sess.claude_session_id
         if not routing_id:
+            logger.warning(
+                "Remote session reconcile deferred node=%s session=%s: "
+                "worker routing id is missing",
+                node_id,
+                sess.id,
+            )
+            deferred += 1
             continue
         try:
             result = await runtime.inspect_session(node_id, routing_id)  # type: ignore[attr-defined]
@@ -190,15 +198,40 @@ async def reconcile_remote_sessions(
                 sess.id,
                 exc,
             )
+            deferred += 1
             continue
         if result.get("ok", True) is False:
+            logger.warning(
+                "Remote session reconcile deferred node=%s session=%s: %s",
+                node_id,
+                sess.id,
+                str(result.get("error", "worker inspect was rejected")),
+            )
+            deferred += 1
             continue
-        if result.get("found") is False:
+        found = result.get("found")
+        if found is False:
             mgr.mark_session_lost(sess.id)
             lost += 1
             continue
+        if found is not True:
+            logger.warning(
+                "Remote session reconcile deferred node=%s session=%s: "
+                "worker inspect omitted found state",
+                node_id,
+                sess.id,
+            )
+            deferred += 1
+            continue
         raw_window_id = str(result.get("window_id", ""))
         if not raw_window_id:
+            logger.warning(
+                "Remote session reconcile deferred node=%s session=%s: "
+                "live worker session omitted window_id",
+                node_id,
+                sess.id,
+            )
+            deferred += 1
             continue
         new_window_id = f"{node_id}::{raw_window_id}"
         old_window_id = sess.window_id
@@ -219,7 +252,7 @@ async def reconcile_remote_sessions(
         if sess.state == "lost":
             sess.state = "active"
         mgr.save_state()
-    return rebound, lost
+    return rebound, lost, deferred
 
 
 # Reserved utility windows that aren't tracked as Sessions and must not

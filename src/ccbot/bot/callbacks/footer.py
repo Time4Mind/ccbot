@@ -279,6 +279,12 @@ async def handle(
         if sess is None or not sess.window_id:
             await query.answer(t(user.id, "toast.no_session"), show_alert=False)
             return True
+        if getattr(sess, "node_id", "local") != "local":
+            await query.answer(
+                "Terminal is available only for sessions on this machine.",
+                show_alert=True,
+            )
+            return True
         await open_terminal_for_window(sess.window_id, user_id=user.id)
         await query.answer(t(user.id, "toast.term_opened"))
         # Refresh the footer keyboard on the current message so the Term

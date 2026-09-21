@@ -146,9 +146,6 @@ def _maybe_start_bash_capture(bot: Bot, user_id: int, wid: str, text: str) -> No
     """Spawn the background ``!cmd`` pane-capture task for a ``!`` prefixed
     message. No-op for normal text. Records the task so a follow-up message
     can cancel it via :func:`cancel_bash_capture`."""
-    session = session_manager.find_session_by_window(wid)
-    if session is not None and getattr(session, "node_id", "local") != "local":
-        return
     if text.startswith("!") and len(text) > 1:
         bash_cmd = text[1:]
         task = asyncio.create_task(_capture_bash_output(bot, user_id, wid, bash_cmd))

@@ -64,6 +64,10 @@ class NodeRuntime(Protocol):
         self, target_node_id: str, session_id: str
     ) -> dict[str, Any]: ...
 
+    async def reset_session_binding(
+        self, target_node_id: str, session_id: str
+    ) -> dict[str, Any]: ...
+
     async def send_key(
         self, target_node_id: str, session_id: str, key: str
     ) -> dict[str, Any]: ...

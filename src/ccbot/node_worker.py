@@ -40,6 +40,7 @@ class _TmuxWorkerSession:
     provider_session_id: str = ""
     provider_transcript_path: str = ""
     binding_announced: bool = False
+    ignored_provider_session_id: str = ""
 
 
 class TmuxWorkerExecutor(WorkerInboxMixin):
@@ -516,6 +517,9 @@ class TmuxWorkerExecutor(WorkerInboxMixin):
         if binding is None:
             return
         provider_session_id, path = binding
+        if provider_session_id == session.ignored_provider_session_id:
+            return
+        session.ignored_provider_session_id = ""
         session.transcript_path = path
         session.provider_session_id = provider_session_id
         session.provider_transcript_path = str(path)

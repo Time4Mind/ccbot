@@ -18,6 +18,12 @@ from ..markdown_v2 import convert_markdown
 from ..session import session_manager
 from ..terminal_parser import extract_bash_output
 from ..tmux_manager import tmux_manager
+from ..transfer_runtime import get_node_runtime
+from ..terminal_runtime import (
+    PaneCaptureError,
+    capture_window_pane,
+    session_is_reachable,
+)
 
 
 # Active bash capture tasks: (user_id, window_id) → asyncio.Task
@@ -47,8 +53,14 @@ async def capture_bash_output(
         last_output: str = ""
 
         for _ in range(30):
-            raw = await tmux_manager.capture_pane(window_id)
-            if raw is None:
+            try:
+                raw = await capture_window_pane(
+                    window_id,
+                    manager=session_manager,
+                    tmux=tmux_manager,
+                    runtime_getter=get_node_runtime,
+                )
+            except PaneCaptureError:
                 return
 
             output = extract_bash_output(raw, command)
@@ -123,8 +135,9 @@ async def route_reply_quote(update: Update, user_id: int, text: str) -> bool:
         and target.state in ("active", "idle")
         and not same_as_active
     ):
-        tw = await tmux_manager.find_window_by_id(target.window_id)
-        if tw:
+        if await session_is_reachable(
+            target, tmux=tmux_manager, runtime_getter=get_node_runtime
+        ):
             ok, sm = await session_manager.send_to_window(target.window_id, text)
             if ok:
                 session_manager.touch_session(target.id)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -389,6 +390,95 @@ async def test_authenticated_agent_dispatches_worker_upload(
     assert transport.sent[-1].payload == {"ok": True, "upload_id": "upload-1"}
 
 
+@pytest.mark.asyncio
+async def test_worker_clear_resets_provider_binding_but_keeps_routing(
+    monkeypatch, tmp_path: Path
+) -> None:
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+    session = SimpleNamespace(
+        session_id="routing-1",
+        window_id="@1",
+        backend="claude",
+        workdir=tmp_path,
+        provider_session_id="provider-old",
+        provider_transcript_path="/worker/old.jsonl",
+        transcript_path=tmp_path / "old.jsonl",
+        transcript_offset=123,
+        pending_tools={"tool": object()},
+        binding_announced=True,
+        ignored_provider_session_id="",
+    )
+    monkeypatch.setattr(executor, "_find_session", AsyncMock(return_value=session))
+
+    result = await executor.reset_session_binding(session_id="routing-1")
+
+    assert result == {"ok": True}
+    assert session.session_id == "routing-1"
+    assert session.window_id == "@1"
+    assert session.ignored_provider_session_id == "provider-old"
+    assert session.provider_session_id == ""
+    assert session.transcript_path is None
+    assert session.pending_tools == {}
+
+
+@pytest.mark.asyncio
+async def test_worker_clear_ignores_old_transcript_then_binds_new_provider(
+    monkeypatch, tmp_path: Path
+) -> None:
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+    old_transcript = tmp_path / "old.jsonl"
+    new_transcript = tmp_path / "new.jsonl"
+    old_transcript.write_text("old", encoding="utf-8")
+    new_transcript.write_text("new", encoding="utf-8")
+    session = SimpleNamespace(
+        session_id="routing-1",
+        window_id="@1",
+        provider_session_id="provider-old",
+        provider_transcript_path=str(old_transcript),
+        transcript_path=old_transcript,
+        transcript_offset=3,
+        pending_tools={},
+        binding_announced=True,
+        ignored_provider_session_id="",
+        recovered=False,
+    )
+    monkeypatch.setattr(executor, "_find_session", AsyncMock(return_value=session))
+    monkeypatch.setattr("ccbot.node_worker.ccbot_dir", lambda: tmp_path)
+
+    await executor.reset_session_binding(session_id="routing-1")
+    session_map = tmp_path / "session_map.json"
+    session_map.write_text(
+        json.dumps(
+            {
+                "claude:@1": {
+                    "session_id": "provider-old",
+                    "transcript_path": str(old_transcript),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    await executor._bind_transcript(session)
+    assert session.provider_session_id == ""
+
+    session_map.write_text(
+        json.dumps(
+            {
+                "claude:@1": {
+                    "session_id": "provider-new",
+                    "transcript_path": str(new_transcript),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    await executor._bind_transcript(session)
+
+    assert session.provider_session_id == "provider-new"
+    assert session.provider_transcript_path == str(new_transcript)
+    assert session.ignored_provider_session_id == ""
+
+
 @pytest.fixture
 def manager(monkeypatch) -> SessionManager:
     monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
@@ -514,4 +604,47 @@ async def test_worker_boot_change_reconciles_once_per_process(
 
     assert runtime.inspect_session.await_count == 2
     assert session.window_id == "worker-a::@20"
+    await shutdown_remote_reconcile()
+
+
+@pytest.mark.asyncio
+async def test_preupdate_unsupported_inspect_does_not_consume_worker_boot(
+    manager: SessionManager, monkeypatch, caplog
+) -> None:
+    from ccbot import node_reconcile
+
+    session = manager.create_session(
+        name="Remote",
+        window_id="worker-a::@18",
+        workdir="/worker/project",
+        node_id="worker-a",
+        worker_session_id="routing-1",
+    )
+    session.state = "lost"
+    runtime = SimpleNamespace(
+        inspect_session=AsyncMock(
+            side_effect=[
+                {"ok": False, "error": "unsupported node operation: inspect_session"},
+                {
+                    "ok": True,
+                    "found": True,
+                    "window_id": "@18",
+                    "workdir": "/worker/project",
+                },
+            ]
+        )
+    )
+    monkeypatch.setattr(
+        "ccbot.transfer_runtime.get_node_runtime", lambda _node_id: runtime
+    )
+
+    schedule_remote_reconcile(manager, "worker-a", "updated-boot")
+    await node_reconcile._tasks["worker-a"]
+    assert session.state == "lost"
+    schedule_remote_reconcile(manager, "worker-a", "updated-boot")
+    await node_reconcile._tasks["worker-a"]
+
+    assert runtime.inspect_session.await_count == 2
+    assert session.state == "active"
+    assert "unsupported node operation" in caplog.text
     await shutdown_remote_reconcile()

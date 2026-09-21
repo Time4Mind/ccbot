@@ -22,6 +22,7 @@ from telegram.error import BadRequest
 
 from ..terminal_parser import extract_interactive_content, is_interactive_ui
 from ..tmux_manager import tmux_manager
+from ..terminal_runtime import PaneCaptureError, capture_window_pane
 from .callback_data import (
     CB_ASK_DOWN,
     CB_ASK_ENTER,
@@ -136,12 +137,10 @@ async def handle_interactive_ui(
     """
     chat_id = user_id
     ikey = (user_id, window_id)
-    w = await tmux_manager.find_window_by_id(window_id)
-    if not w:
+    try:
+        pane_text = await capture_window_pane(window_id, tmux=tmux_manager)
+    except PaneCaptureError:
         return False
-
-    # Capture plain text (no ANSI colors)
-    pane_text = await tmux_manager.capture_pane(w.window_id)
     if not pane_text:
         logger.debug("No pane text captured for window_id %s", window_id)
         return False

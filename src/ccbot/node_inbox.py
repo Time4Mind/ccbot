@@ -84,6 +84,13 @@ class RemoteInboxMixin:
             target_node_id, "inspect_session", {"session_id": session_id}
         )
 
+    async def reset_session_binding(
+        self, target_node_id: str, session_id: str
+    ) -> dict[str, Any]:
+        return await cast(Any, self)._request(
+            target_node_id, "reset_session_binding", {"session_id": session_id}
+        )
+
 
 @dataclass
 class _PendingUpload:
@@ -115,6 +122,19 @@ class WorkerInboxMixin:
             "workdir": str(session.workdir),
             "backend": session.backend,
         }
+
+    async def reset_session_binding(self, *, session_id: str) -> dict[str, Any]:
+        session = await cast(Any, self)._find_session(session_id)
+        if session is None:
+            return {"ok": False, "error": "worker session not found"}
+        session.ignored_provider_session_id = session.provider_session_id
+        session.provider_session_id = ""
+        session.provider_transcript_path = ""
+        session.transcript_path = None
+        session.transcript_offset = 0
+        session.pending_tools.clear()
+        session.binding_announced = False
+        return {"ok": True}
 
     async def upload_inbox_begin(self, **payload: Any) -> dict[str, Any]:
         upload_id = str(payload.get("upload_id", ""))
@@ -210,6 +230,7 @@ async def dispatch_inbox_operation(
     operation = str(payload.get("operation", ""))
     if operation not in {
         "inspect_session",
+        "reset_session_binding",
         "upload_inbox_begin",
         "upload_inbox_chunk",
         "upload_inbox_finish",
@@ -217,5 +238,9 @@ async def dispatch_inbox_operation(
     }:
         raise ValueError(f"unsupported inbox operation: {operation}")
     method = getattr(executor, operation)
-    kwargs = {key: value for key, value in payload.items() if key != "operation"}
+    kwargs = {
+        key: value
+        for key, value in payload.items()
+        if key not in ("operation", "target_node_id")
+    }
     return await method(**kwargs)

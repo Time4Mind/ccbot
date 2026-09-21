@@ -10,15 +10,12 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from telegram import Bot, Update
 from telegram.error import BadRequest, NetworkError
 from telegram.ext import ContextTypes
 
-from ..handlers.interactive_ui import (
-    handle_interactive_ui,
-)
 from ..handlers.message_sender import (
     safe_reply,
 )
@@ -26,7 +23,6 @@ from ..handlers.notifications import (
     begin_repost_intent,
     clear_card,
     end_repost_intent,
-    enter_kb_mode,
     get_card_state,
     is_active_for_user,
     repost_card,
@@ -37,11 +33,12 @@ from ..handlers.typing import fire_typing
 from ..i18n import t
 from ..session_models import Session, WindowState
 from ..session import session_manager
-from ..terminal_parser import (
-    extract_interactive_content,
-    is_interactive_ui,
+from ..terminal_runtime import (
+    reset_session_binding,
+    session_is_reachable,
 )
 from ..tmux_manager import tmux_manager
+from ..transfer_runtime import get_node_runtime
 from ._common import active_window, is_user_allowed
 
 __all__ = [
@@ -66,12 +63,13 @@ __all__ = [
     "_is_file_too_big",
     "_RepostHandle",
     "_card_repost_bracket",
-    "_pane_has_interactive_ui",
-    "_intercept_if_pending_ui",
     "forward_command_handler",
 ]
 
 logger = logging.getLogger(__name__)
+
+# Injected by the compatibility facade before delegated handlers run.
+_intercept_if_pending_ui = cast(Any, None)
 
 # The tail of the voice-message chain for each session window.  Voice
 # transcription runs in a non-blocking PTB handler, so later updates can enter
@@ -404,103 +402,6 @@ async def _card_repost_bracket(
         end_repost_intent(user_id, sess.id)
 
 
-async def _pane_has_interactive_ui(wid: str) -> bool:
-    """True iff the window's pane is currently showing an interactive prompt.
-
-    Cheap capture-and-classify used by the voice path to verify delivery —
-    a transcription typed into a pane that is showing a Yes/No prompt gets
-    consumed as menu navigation and lost, so the caller needs to know.
-    """
-    w = await tmux_manager.find_window_by_id(wid)
-    if not w:
-        return False
-    pane_text = await tmux_manager.capture_pane(w.window_id)
-    return bool(pane_text) and is_interactive_ui(pane_text)
-
-
-async def _intercept_if_pending_ui(
-    bot: Bot,
-    user_id: int,
-    wid: str,
-    reply_to: Any,
-    wasnt_sent_notice: str | None = None,
-    *,
-    wait_until_clear: bool = False,
-) -> bool:
-    """If the pane has a pending interactive UI, surface it and intercept.
-
-    The AskUserQuestion / ExitPlanMode / Permission prompt on the pane would
-    otherwise consume the user's text as menu keystrokes. A queued caller can
-    set ``wait_until_clear`` and keep ownership of its FIFO entry until the
-    prompt disappears; other callers receive the legacy notice and True.
-
-    ``wasnt_sent_notice`` overrides the "your message wasn't sent" reply —
-    the voice path passes a resend-oriented line since a transcription, unlike
-    typed text, can't just be retyped.
-
-    Surface preference:
-      - Active session (sess matches ``get_active_session``) → kb-mode
-        card via ``enter_kb_mode``. Idempotent: a no-op if the card is
-        already in kb-mode for the same prompt.
-      - Orphan window or bg session → legacy floating msg via
-        ``handle_interactive_ui``.
-    """
-    surfaced = False
-    while True:
-        w = await tmux_manager.find_window_by_id(wid)
-        if not w:
-            return False
-        pane_text = await tmux_manager.capture_pane(w.window_id)
-        if not pane_text or not is_interactive_ui(pane_text):
-            if surfaced and wait_until_clear:
-                logger.info(
-                    "pending_ui_cleared_resuming_inbound user=%d wid=%s",
-                    user_id,
-                    wid,
-                )
-            return False
-        if not surfaced:
-            sess = session_manager.find_session_by_window(wid)
-            active = session_manager.get_active_session(user_id)
-            is_active = sess is not None and active is not None and active.id == sess.id
-            if is_active and sess is not None:
-                content_obj = extract_interactive_content(pane_text)
-                if content_obj is not None:
-                    await enter_kb_mode(
-                        bot, user_id, sess, content_obj.content, content_obj.name
-                    )
-                    surfaced = True
-            if not surfaced:
-                await handle_interactive_ui(bot, user_id, wid)
-                surfaced = True
-        if wait_until_clear:
-            await asyncio.sleep(0.25)
-            continue
-        break
-    logger.info(
-        "intercepted_user_msg_pending_ui user=%d wid=%s",
-        user_id,
-        wid,
-        extra={
-            "event": "intercepted_user_msg_pending_ui",
-            "user_id": user_id,
-            "window_id": wid,
-        },
-    )
-    try:
-        await safe_reply(
-            reply_to,
-            wasnt_sent_notice
-            or (
-                "⏳ Pending prompt above — answer it via the keyboard first. "
-                "Your message wasn't sent."
-            ),
-        )
-    except Exception:
-        pass
-    return True
-
-
 # --- forward_command — any /command that has no dedicated handler goes here ---
 
 _REMOVED_COMMANDS = frozenset({"history", "done", "memory", "compact", "effort"})
@@ -534,8 +435,14 @@ async def forward_command_handler(
     if pinned_wid is None and not await _await_prior_voice(user.id, wid):
         return False
 
-    w = await tmux_manager.find_window_by_id(wid)
-    if not w:
+    sess = session_manager.find_session_by_window(wid)
+    locally_live = sess is None and await tmux_manager.find_window_by_id(wid)
+    if not locally_live and (
+        sess is None
+        or not await session_is_reachable(
+            sess, tmux=tmux_manager, runtime_getter=get_node_runtime
+        )
+    ):
         display = session_manager.get_display_name(wid)
         await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
         return False
@@ -553,7 +460,6 @@ async def forward_command_handler(
         wait_until_clear=pinned_wid is not None,
     ):
         return False
-    sess = session_manager.find_session_by_window(wid)
     async with _card_repost_bracket(context.bot, user.id, sess) as repost:
         success, message = await _send_with_delivery_proof(wid, cc_slash, sess)
         if success:
@@ -561,6 +467,12 @@ async def forward_command_handler(
             # new session id is written by the next user message.
             if cc_slash.strip().lower() == "/clear":
                 logger.info("Clearing session for window %s after /clear", display)
+                if sess is not None and not await reset_session_binding(sess):
+                    await safe_reply(
+                        update.message,
+                        "❌ Context cleared, but session rebinding was not confirmed.",
+                    )
+                    return False
                 session_manager.clear_window_session(wid)
                 if sess is not None:
                     await clear_card(context.bot, user.id, sess)

@@ -25,7 +25,6 @@ from . import (
     file_buttons,
     footer,
     help as help_callbacks,
-    history_pagination,
     interactive_ui,
     more_menu,
     nodes,
@@ -74,7 +73,6 @@ async def _repaint_acknowledged_marker(
 
 # Order matters only for prefix overlap; in practice the prefixes are disjoint.
 _HANDLERS = (
-    history_pagination.handle,
     auth_callbacks.handle,
     dir_browser.handle,
     file_buttons.handle,

@@ -125,3 +125,81 @@ async def test_context_transfer_crosses_real_relay_and_worker_agent(tmp_path: Pa
             worker_task.cancel()
             await asyncio.gather(worker_task, return_exceptions=True)
         await server.close()
+
+
+@pytest.mark.asyncio
+async def test_inspect_retries_after_legacy_worker_is_replaced(tmp_path: Path):
+    server = RelayServer(
+        credentials={"leader": "leader-secret", "worker-a": "worker-secret"},
+        leader_id="leader",
+    )
+    await server.start("127.0.0.1", 0)
+    leader_rpc = await connect_leader_rpc(
+        host="127.0.0.1",
+        port=server.port,
+        leader_id="leader",
+        secret="leader-secret",
+    )
+    runtime = RemoteNodeRuntime(leader_rpc)
+    worker_transport = None
+    worker_task = None
+    try:
+        worker_transport = await connect_relay(
+            "127.0.0.1",
+            server.port,
+            node_id="worker-a",
+            role="worker",
+            secret="worker-secret",
+            leader_id="leader",
+        )
+        legacy = SimpleNamespace()
+        legacy_agent = NodeAgent(
+            worker_transport,
+            legacy,
+            context_dir=tmp_path / "legacy-contexts",
+            node_id="worker-a",
+        )
+        worker_task = asyncio.create_task(legacy_agent.run())
+
+        unsupported = await runtime.inspect_session("worker-a", "worker-session")
+        assert unsupported["ok"] is False
+        assert "inspect_session" in unsupported["error"]
+
+        await worker_transport.close()
+        worker_task.cancel()
+        await asyncio.gather(worker_task, return_exceptions=True)
+
+        worker_transport = await connect_relay(
+            "127.0.0.1",
+            server.port,
+            node_id="worker-a",
+            role="worker",
+            secret="worker-secret",
+            leader_id="leader",
+        )
+        executor = RecordingExecutor(tmp_path / "worker-project")
+        executor.workdir.mkdir()
+        updated_agent = NodeAgent(
+            worker_transport,
+            executor,
+            context_dir=tmp_path / "updated-contexts",
+            node_id="worker-a",
+        )
+        worker_task = asyncio.create_task(updated_agent.run())
+
+        inspected = await runtime.inspect_session("worker-a", "worker-session")
+        assert inspected == {
+            "ok": True,
+            "found": True,
+            "window_id": "@1",
+            "workdir": str(executor.workdir),
+            "backend": "codex",
+        }
+    finally:
+        await leader_rpc.close()
+        if worker_transport is not None:
+            await worker_transport.close()
+        if worker_task is not None and not worker_task.done():
+            worker_task.cancel()
+            await asyncio.gather(worker_task, return_exceptions=True)
+        await server.close()

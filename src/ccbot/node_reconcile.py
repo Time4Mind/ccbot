@@ -9,16 +9,19 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _boot_ids: dict[str, str] = {}
+_inflight_boot_ids: dict[str, str] = {}
 _tasks: dict[str, asyncio.Task[None]] = {}
 
 
 def schedule_remote_reconcile(manager: Any, node_id: str, boot_id: str) -> None:
     if not boot_id or _boot_ids.get(node_id) == boot_id:
         return
-    _boot_ids[node_id] = boot_id
     active = _tasks.get(node_id)
     if active is not None and not active.done():
+        if _inflight_boot_ids.get(node_id) == boot_id:
+            return
         active.cancel()
+    _inflight_boot_ids[node_id] = boot_id
 
     async def run() -> None:
         from .session_recovery import reconcile_remote_sessions
@@ -28,13 +31,19 @@ def schedule_remote_reconcile(manager: Any, node_id: str, boot_id: str) -> None:
         if runtime is None:
             return
         try:
-            rebound, lost = await reconcile_remote_sessions(manager, node_id, runtime)
+            rebound, lost, deferred = await reconcile_remote_sessions(
+                manager, node_id, runtime
+            )
             logger.info(
-                "Remote session reconcile complete node=%s rebound=%d lost=%d",
+                "Remote session reconcile complete node=%s rebound=%d lost=%d "
+                "deferred=%d",
                 node_id,
                 rebound,
                 lost,
+                deferred,
             )
+            if deferred == 0:
+                _boot_ids[node_id] = boot_id
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -43,7 +52,14 @@ def schedule_remote_reconcile(manager: Any, node_id: str, boot_id: str) -> None:
     task = asyncio.create_task(run(), name=f"node-reconcile-{node_id}")
     _tasks[node_id] = task
     task.add_done_callback(
-        lambda done: _tasks.pop(node_id, None) if _tasks.get(node_id) is done else None
+        lambda done: (
+            (
+                _tasks.pop(node_id, None),
+                _inflight_boot_ids.pop(node_id, None),
+            )
+            if _tasks.get(node_id) is done
+            else None
+        )
     )
 
 
@@ -51,6 +67,7 @@ async def shutdown_remote_reconcile() -> None:
     tasks = list(_tasks.values())
     _tasks.clear()
     _boot_ids.clear()
+    _inflight_boot_ids.clear()
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)

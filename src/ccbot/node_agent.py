@@ -42,6 +42,7 @@ _CONTROL_OPERATIONS = {
     "health",
 }
 _STARTUP_OPERATIONS = {"create_session", "transfer_context_finish"}
+_INBOX_OPERATIONS = {"inspect_session", "reset_session_binding"}
 _COMMAND_QUEUE_SIZE = 256
 
 
@@ -120,7 +121,6 @@ class RuntimeUpdater(Protocol):
 
 
 async def _restart_current_process() -> None:
-    """Replace the agent process after its update result reaches the leader."""
     await asyncio.sleep(0.2)
     os.execv(sys.executable, [sys.executable, *sys.argv])
 
@@ -339,7 +339,7 @@ class NodeAgent:
             return self._append_context(payload)
         if operation == "transfer_context_finish":
             return await self._finish_context(payload)
-        if operation == "inspect_session" or operation.startswith("upload_inbox_"):
+        if operation in _INBOX_OPERATIONS or operation.startswith("upload_inbox_"):
             return await dispatch_inbox_operation(self._executor, payload)
         if operation == "list_directories":
             return await self._executor.list_directories(

@@ -162,6 +162,8 @@ def can_offer_terminal(user_id: int) -> bool:
     sess = session_manager.get_active_session(user_id)
     if sess is None or not sess.window_id:
         return False
+    if getattr(sess, "node_id", "local") != "local":
+        return False
     settings = session_manager.get_user_settings(user_id)
     if not settings.get("option_button_terminal", False):
         return False

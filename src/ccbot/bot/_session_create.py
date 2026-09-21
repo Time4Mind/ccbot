@@ -15,7 +15,7 @@ import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, cast
 
 from telegram.ext import ContextTypes
 
@@ -78,11 +78,31 @@ async def create_and_activate_session(
         if context.user_data is not None
         else None
     )
+    flow_node_id = (
+        context.user_data.pop("_new_session_node_id", None)
+        if context.user_data is not None
+        else None
+    )
     backend = (
         selected_backend
         if selected_backend in ("claude", "codex")
         else session_manager.agent_backend
     )
+    effective_backends = getattr(session_manager, "get_effective_backends", None)
+    if flow_node_id is not None and flow_node_id != node_id:
+        from ..startup_queue import cancel_startup_queue
+
+        cancel_startup_queue(user.id)
+        await safe_edit(query, "❌ Node selection expired - start again")
+        return
+    if callable(effective_backends) and backend not in cast(
+        Callable[[int, str], tuple[str, ...]], effective_backends
+    )(user.id, node_id):
+        from ..startup_queue import cancel_startup_queue
+
+        cancel_startup_queue(user.id)
+        await safe_edit(query, "❌ Backend is no longer available on this node")
+        return
     pending_name = (
         context.user_data.pop("_pending_session_name", "") if context.user_data else ""
     )
@@ -210,7 +230,7 @@ async def _create_and_activate_session(
             lines.append(t(user.id, "startup.prompt_not_sent", prompt=label))
         return "\n".join(lines)
 
-    if backend == "codex":
+    if node_id == "local" and backend == "codex":
         from .commands.auth import ensure_codex_authenticated
 
         authenticated = await ensure_codex_authenticated(

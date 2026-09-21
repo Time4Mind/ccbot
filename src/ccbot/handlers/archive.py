@@ -453,11 +453,13 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
         return False, "No workdir on session record — cannot restore"
 
     source_backend = sess.backend
-    enabled_backends = session_manager.get_enabled_backends(user_id)
+    enabled_backends = session_manager.get_effective_backends(user_id, sess.node_id)
+    if not enabled_backends:
+        return False, f"Node has no available backend: {sess.node_id}"
     target_backend = (
         source_backend
         if source_backend in enabled_backends
-        else session_manager.get_default_backend(user_id)
+        else enabled_backends[0]
     )
     cross_backend = source_backend != target_backend
     resume_session_id = sess.claude_session_id or None

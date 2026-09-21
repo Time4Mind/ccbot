@@ -56,23 +56,29 @@ async def open_new_session_flow(
     origin: str,
 ) -> None:
     """Choose a backend when needed, then open the directory browser."""
-    enabled = session_manager.get_enabled_backends(user_id)
+    node_id = session_manager.get_selected_node_id(user_id)
+    enabled = session_manager.get_effective_backends(user_id, node_id)
     if context.user_data is not None:
         context.user_data["menu_origin"] = origin
+        context.user_data["_new_session_node_id"] = node_id
     only_backend = next(iter(enabled), None)
     if only_backend is None:
-        raise RuntimeError("No enabled backend")
+        await safe_edit(query, f"❌ Node {node_id} has no available backend")
+        return
     if len(enabled) > 1:
-        keyboard = build_backend_picker(user_id)
+        keyboard = build_backend_picker(user_id, node_id=node_id)
         await safe_edit(query, t(user_id, "backend.choose"), reply_markup=keyboard)
         return
     if context.user_data is not None:
         context.user_data["_new_session_backend"] = only_backend
-    await open_directory_browser(query, context, user_id)
+    await open_directory_browser(query, context, user_id, node_id=node_id)
 
 
-def build_backend_picker(user_id: int) -> InlineKeyboardMarkup:
-    enabled = session_manager.get_enabled_backends(user_id)
+def build_backend_picker(
+    user_id: int, *, node_id: str | None = None
+) -> InlineKeyboardMarkup:
+    node_id = node_id or session_manager.get_selected_node_id(user_id)
+    enabled = session_manager.get_effective_backends(user_id, node_id)
     return InlineKeyboardMarkup(
         [
             [
@@ -196,12 +202,20 @@ async def handle(
 
     if data.startswith(CB_NEW_BACKEND):
         backend = data[len(CB_NEW_BACKEND) :]
-        if backend not in session_manager.get_enabled_backends(user.id):
-            await query.answer("Backend is no longer enabled", show_alert=True)
+        flow_node_id = (context.user_data or {}).get("_new_session_node_id")
+        if (
+            not flow_node_id
+            or flow_node_id != session_manager.get_selected_node_id(user.id)
+            or backend
+            not in session_manager.get_effective_backends(user.id, flow_node_id)
+        ):
+            await query.answer("Backend is no longer available", show_alert=True)
             return True
         if context.user_data is not None:
             context.user_data["_new_session_backend"] = backend
-        await open_directory_browser(query, context, user.id)
+        await open_directory_browser(
+            query, context, user.id, node_id=str(flow_node_id)
+        )
         await query.answer()
         return True
 

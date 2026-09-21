@@ -27,6 +27,8 @@ class Node:
     platform: str = ""
     arch: str = ""
     backends: list[str] = field(default_factory=list)
+    configured_backends: list[str] = field(default_factory=list)
+    backend_status: dict[str, str] = field(default_factory=dict)
     capabilities: dict[str, bool] = field(default_factory=dict)
     capacity: dict[str, int] = field(default_factory=dict)
     protocol_version: str = ""
@@ -69,6 +71,8 @@ class Node:
             "platform": self.platform,
             "arch": self.arch,
             "backends": list(self.backends),
+            "configured_backends": list(self.configured_backends),
+            "backend_status": dict(self.backend_status),
             "capabilities": dict(self.capabilities),
             "capacity": dict(self.capacity),
             "protocol_version": self.protocol_version,
@@ -100,6 +104,18 @@ class Node:
             else {}
         )
         raw_capacity = data.get("capacity", {})
+        raw_configured_backends = data.get("configured_backends", [])
+        configured_backends = (
+            list(dict.fromkeys(str(value) for value in raw_configured_backends))
+            if isinstance(raw_configured_backends, list)
+            else []
+        )
+        raw_backend_status = data.get("backend_status", {})
+        backend_status = (
+            {str(key): str(value) for key, value in raw_backend_status.items()}
+            if isinstance(raw_backend_status, dict)
+            else {}
+        )
         capacity = (
             {
                 str(key): max(0, int(value))
@@ -116,6 +132,8 @@ class Node:
             platform=str(data.get("platform", "")),
             arch=str(data.get("arch", "")),
             backends=backends,
+            configured_backends=configured_backends,
+            backend_status=backend_status,
             capabilities=capabilities,
             capacity=capacity,
             protocol_version=str(data.get("protocol_version", "")),

@@ -19,6 +19,39 @@ from ccbot.startup_queue import (
 
 
 @pytest.mark.asyncio
+async def test_create_revalidates_node_backend_after_directory_selection(
+    monkeypatch,
+) -> None:
+    query = MagicMock(spec=CallbackQuery)
+    query.answer = AsyncMock()
+    user = MagicMock(spec=User)
+    user.id = 40
+    context = SimpleNamespace(
+        user_data={
+            "_new_session_node_id": "worker-a",
+            "_new_session_backend": "codex",
+        },
+        bot=object(),
+    )
+    manager = SimpleNamespace(
+        agent_backend="claude",
+        get_effective_backends=lambda _uid, _node_id: (),
+        get_active_session=lambda _uid: None,
+        create_session=MagicMock(),
+    )
+    edit = AsyncMock()
+    monkeypatch.setattr(_session_create, "session_manager", manager)
+    monkeypatch.setattr(_session_create, "safe_edit", edit)
+
+    await _session_create.create_and_activate_session(
+        query, context, user, "/worker/project", node_id="worker-a"
+    )
+
+    manager.create_session.assert_not_called()
+    assert "no longer available" in edit.await_args.args[1]
+
+
+@pytest.mark.asyncio
 async def test_codex_card_is_published_before_auth_and_process_start(
     monkeypatch,
 ) -> None:

@@ -26,14 +26,7 @@ def _settings(user_id: int) -> dict[str, Any]:
 def _backend(user_id: int, settings: dict[str, Any]) -> str | None:
     from .session import session_manager
 
-    raw = settings.get("enabled_backends")
-    enabled = (
-        [value for value in raw if value in ("claude", "codex")]
-        if isinstance(raw, list)
-        else []
-    )
-    if not enabled:
-        enabled = [session_manager.agent_backend]
+    enabled = list(session_manager.get_effective_backends(user_id, "local"))
     selected = str(settings.get("default_session_backend") or "")
     return selected if selected in enabled else enabled[0] if enabled else None
 

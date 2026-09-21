@@ -42,9 +42,15 @@ _tasks: set[asyncio.Task[None]] = set()
 
 
 def _available_backends(user_id: int, node: Any) -> tuple[str, ...]:
+    if not node.is_available():
+        return ()
     if node.id == "local":
-        return session_manager.get_enabled_backends(user_id)
-    return tuple(dict.fromkeys(node.backends))
+        return session_manager.get_effective_backends(user_id, node.id)
+    return tuple(
+        dict.fromkeys(
+            backend for backend in node.backends if backend in ("claude", "codex")
+        )
+    )
 
 
 def _source_from_context(context: ContextTypes.DEFAULT_TYPE) -> Any | None:
@@ -377,6 +383,7 @@ async def handle(
                 target_node_id=target_node_id,
                 target_backend=target_backend,
                 context_path="",
+                user_id=user.id,
             )
         except (OSError, ValueError, KeyError) as exc:
             await query.answer(str(exc), show_alert=True)

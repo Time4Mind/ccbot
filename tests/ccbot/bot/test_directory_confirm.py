@@ -10,6 +10,8 @@ from ccbot.bot import _messages_text
 from ccbot.handlers.callback_data import CB_DIR_CONFIRM
 from ccbot.handlers.callback_data import CB_DIR_CANCEL
 from ccbot.handlers.callback_data import CB_DIR_CREATE
+from ccbot.handlers.callback_data import CB_NEW_BACKEND
+from ccbot.node_models import Node
 from ccbot.handlers.directory_browser import (
     BROWSE_DIRS_KEY,
     BROWSE_NODE_KEY,
@@ -64,6 +66,76 @@ async def test_directory_browser_reads_selected_node_filesystem(monkeypatch):
     assert context.user_data[BROWSE_PATH_KEY] == "/worker/home"
     assert context.user_data[BROWSE_DIRS_KEY] == ["project", "notes"]
     assert "~" not in edit.await_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_new_session_uses_selected_worker_backend_not_leader_default(monkeypatch):
+    worker = Node(
+        id="worker-a", display_name="Worker A", state="ready", backends=["codex"]
+    )
+    manager = SimpleNamespace(
+        get_selected_node_id=lambda _uid: "worker-a",
+        get_node=lambda _node_id: worker,
+        get_effective_backends=lambda _uid, _node_id: ("codex",),
+    )
+    context = SimpleNamespace(user_data={})
+    query = SimpleNamespace()
+    open_browser = AsyncMock()
+    monkeypatch.setattr(dir_browser, "session_manager", manager)
+    monkeypatch.setattr(dir_browser, "open_directory_browser", open_browser)
+
+    await dir_browser.open_new_session_flow(query, context, 42, origin="main")
+
+    assert context.user_data["_new_session_node_id"] == "worker-a"
+    assert context.user_data["_new_session_backend"] == "codex"
+    open_browser.assert_awaited_once_with(query, context, 42, node_id="worker-a")
+
+
+@pytest.mark.asyncio
+async def test_backend_callback_rejects_capability_lost_after_picker(monkeypatch):
+    query = SimpleNamespace(
+        data=f"{CB_NEW_BACKEND}codex",
+        answer=AsyncMock(),
+    )
+    context = SimpleNamespace(user_data={"_new_session_node_id": "worker-a"})
+    user = SimpleNamespace(id=42)
+    manager = SimpleNamespace(
+        get_selected_node_id=lambda _uid: "worker-a",
+        get_effective_backends=lambda _uid, _node_id: ("claude",),
+    )
+    open_browser = AsyncMock()
+    monkeypatch.setattr(dir_browser, "session_manager", manager)
+    monkeypatch.setattr(dir_browser, "open_directory_browser", open_browser)
+
+    assert await dir_browser.handle(query, context, user)
+
+    query.answer.assert_awaited_once_with(
+        "Backend is no longer available", show_alert=True
+    )
+    open_browser.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_new_session_reports_zero_ready_backends_without_opening_browser(
+    monkeypatch,
+):
+    context = SimpleNamespace(user_data={})
+    query = SimpleNamespace()
+    edit = AsyncMock()
+    open_browser = AsyncMock()
+    manager = SimpleNamespace(
+        get_selected_node_id=lambda _uid: "worker-a",
+        get_effective_backends=lambda _uid, _node_id: (),
+    )
+    monkeypatch.setattr(dir_browser, "session_manager", manager)
+    monkeypatch.setattr(dir_browser, "safe_edit", edit)
+    monkeypatch.setattr(dir_browser, "open_directory_browser", open_browser)
+
+    await dir_browser.open_new_session_flow(query, context, 42, origin="main")
+
+    assert "worker-a" in context.user_data["_new_session_node_id"]
+    assert "no available backend" in edit.await_args.args[1]
+    open_browser.assert_not_awaited()
 
 
 @pytest.mark.asyncio

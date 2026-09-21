@@ -24,6 +24,7 @@ class NodeSessionStateMixin:
     create_session: Any
     set_active_session: Any
     mark_session_archived: Any
+    get_enabled_backends: Any
 
     @property
     def registered_node_count(self) -> int:
@@ -111,6 +112,34 @@ class NodeSessionStateMixin:
     def get_selected_node(self, user_id: int) -> Node:
         return self.nodes[self.get_selected_node_id(user_id)]
 
+    def get_effective_backends(self, user_id: int, node_id: str) -> tuple[str, ...]:
+        """Return backends currently admissible on one concrete node.
+
+        Existing ``enabled_backends`` settings describe the local runtime.  A
+        remote worker is authoritative for its own ready backend set; applying
+        the leader's local setting there would hide worker-only providers.
+        """
+        node = self.nodes.get(node_id)
+        if node is None or not node.is_available():
+            return ()
+        if node_id == "local":
+            preferences = self.get_enabled_backends(user_id)
+            # Persisted legacy state has no local capability snapshot. Once a
+            # local readiness publisher fills ``Node.backends``, intersect it
+            # with the user's local preferences exactly like a remote node.
+            if node.backends:
+                return tuple(
+                    backend for backend in preferences if backend in node.backends
+                )
+            return tuple(preferences)
+        return tuple(
+            dict.fromkeys(
+                backend
+                for backend in node.backends
+                if backend in ("claude", "codex")
+            )
+        )
+
     def set_selected_node(self, user_id: int, node_id: str) -> None:
         if node_id not in self.nodes:
             raise KeyError(f"Unknown node id: {node_id}")
@@ -129,6 +158,7 @@ class NodeSessionStateMixin:
         target_node_id: str,
         target_backend: str,
         context_path: str,
+        user_id: int = 0,
     ) -> SessionTransfer:
         """Create an idempotent leader-side transfer record."""
         source = self.sessions.get(source_session_id)
@@ -139,13 +169,8 @@ class NodeSessionStateMixin:
             raise ValueError("Only a live session can be transferred")
         if target is None:
             raise KeyError(f"Unknown target node: {target_node_id}")
-        target_backends = target.backends
-        # The implicit local node predates capability registration. Its
-        # effective backend list is the user's enabled list at the UI gate;
-        # the concrete local runtime still performs the final readiness check.
-        if target_node_id == "local" and not target_backends:
-            target_backends = ["claude", "codex"]
-        if target.state != "ready" or target_backend not in target_backends:
+        target_backends = self.get_effective_backends(user_id, target_node_id)
+        if target_backend not in target_backends:
             raise ValueError("Target backend is unavailable on the target node")
         for transfer in self.transfers.values():
             if transfer.source_session_id == source_session_id and transfer.state in (

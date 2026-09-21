@@ -24,9 +24,7 @@ def _node_state_text(user_id: int, node: Node) -> str:
 
 
 def _node_backends(user_id: int, node: Node) -> tuple[str, ...]:
-    if node.id == "local" and not node.backends:
-        return session_manager.get_enabled_backends(user_id)
-    return tuple(node.backends)
+    return session_manager.get_effective_backends(user_id, node.id)
 
 
 def render_nodes_text(user_id: int) -> str:

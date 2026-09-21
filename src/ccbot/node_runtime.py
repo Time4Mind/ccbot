@@ -674,6 +674,8 @@ async def connect_configured_remote_runtimes(
                 existing.platform,
                 existing.arch,
                 tuple(existing.backends),
+                tuple(existing.configured_backends),
+                tuple(sorted(existing.backend_status.items())),
                 tuple(sorted(existing.capabilities.items())),
                 existing.ccbot_version,
                 existing.ssh_host,
@@ -692,6 +694,17 @@ async def connect_configured_remote_runtimes(
             for value in payload.get("backends", [])
             if value in ("claude", "codex")
         ]
+        node.configured_backends = [
+            str(value)
+            for value in payload.get("configured_backends", node.backends)
+            if str(value) in ("claude", "codex")
+        ]
+        raw_backend_status = payload.get("backend_status", {})
+        node.backend_status = (
+            {str(key): str(value) for key, value in raw_backend_status.items()}
+            if isinstance(raw_backend_status, dict)
+            else {}
+        )
         node.capabilities = {
             str(key): bool(value)
             for key, value in (payload.get("capabilities", {}) or {}).items()
@@ -720,6 +733,8 @@ async def connect_configured_remote_runtimes(
             node.platform,
             node.arch,
             tuple(node.backends),
+            tuple(node.configured_backends),
+            tuple(sorted(node.backend_status.items())),
             tuple(sorted(node.capabilities.items())),
             node.ccbot_version,
             node.ssh_host,

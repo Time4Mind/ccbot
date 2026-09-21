@@ -225,3 +225,51 @@ def test_transfer_rejects_backend_not_available_on_worker(monkeypatch) -> None:
         assert "unavailable" in str(exc)
     else:
         raise AssertionError("transfer admission must reject unavailable backend")
+
+
+def test_effective_backends_are_scoped_to_target_node(monkeypatch) -> None:
+    monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
+    monkeypatch.setattr(SessionManager, "save_state", lambda self: None)
+    manager = SessionManager()
+    manager.agent_backend = "claude"
+    manager.user_settings[42] = {"enabled_backends": ["claude"]}
+    manager.register_node(
+        Node(
+            id="worker-a",
+            display_name="Worker A",
+            state="ready",
+            backends=["codex"],
+        )
+    )
+
+    assert manager.get_effective_backends(42, "local") == ("claude",)
+    assert manager.get_effective_backends(42, "worker-a") == ("codex",)
+
+
+def test_heterogeneous_nodes_keep_independent_backend_sets(monkeypatch) -> None:
+    monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
+    monkeypatch.setattr(SessionManager, "save_state", lambda self: None)
+    manager = SessionManager()
+    manager.agent_backend = "claude"
+    manager.user_settings[42] = {"enabled_backends": ["claude"]}
+    manager.register_node(
+        Node("worker-a", "Worker A", state="ready", backends=["codex"])
+    )
+    manager.register_node(
+        Node(
+            "worker-b",
+            "Worker B",
+            state="ready",
+            backends=["claude", "codex"],
+        )
+    )
+
+    assert manager.get_effective_backends(42, "local") == ("claude",)
+    assert manager.get_effective_backends(42, "worker-a") == ("codex",)
+    assert manager.get_effective_backends(42, "worker-b") == ("claude", "codex")
+
+    manager.nodes["local"].backends = ["claude"]
+    manager.user_settings[42]["enabled_backends"] = ["codex"]
+    assert manager.get_effective_backends(42, "local") == ()
+    assert manager.get_effective_backends(42, "worker-a") == ("codex",)
+    assert manager.get_effective_backends(42, "worker-b") == ("claude", "codex")

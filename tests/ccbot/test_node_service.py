@@ -93,3 +93,23 @@ def test_service_preserves_provider_transcript_environment(
     assert "CCBOT_CODEX_SESSIONS_PATH=/srv/codex-current/sessions" in content
     assert "CLAUDE_CONFIG_DIR=/srv/claude-current" in content
     assert "CCBOT_CLAUDE_PROJECTS_PATH=/srv/claude-current/projects" in content
+
+
+def test_service_preserves_worker_backend_configuration(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(
+        "ccbot.node_service._agent_executable", lambda: "/opt/ccbot-node-agent"
+    )
+    monkeypatch.setenv("CCBOT_NODE_BACKENDS", "codex")
+
+    path = install_node_service(
+        node_id="worker-a",
+        display_name="Worker A",
+        relay_url="tls://relay:8765",
+        leader_id="leader",
+        credential_file=tmp_path / "worker/credential.json",
+        runner=lambda *_args, **_kwargs: SimpleNamespace(returncode=0),
+        system="Linux",
+    )
+
+    assert "CCBOT_NODE_BACKENDS=codex" in path.read_text(encoding="utf-8")

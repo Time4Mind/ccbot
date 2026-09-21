@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import json
 
 from ccbot.node_agent import NodeAgent, NodeCredentialStore, TmuxWorkerExecutor
+from ccbot import node_worker
 from ccbot.node_transport import NodeEnvelope
 from ccbot.config import config
 
@@ -217,6 +218,60 @@ async def test_node_agent_routes_send_text_to_executor(tmp_path):
     assert executor.sent == [("agent-7", "next")]
     assert transport.sent[-1].kind == "result"
     assert transport.sent[-1].payload["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_node_agent_rejects_create_for_unadvertised_backend(tmp_path):
+    transport = FakeTransport()
+    executor = FakeExecutor()
+    agent = NodeAgent(
+        transport, executor, context_dir=tmp_path, backends=("codex",)
+    )
+
+    await agent._handle_command(
+        NodeEnvelope(
+            kind="command",
+            request_id="wrong-backend",
+            payload={
+                "operation": "create_session",
+                "path": "/worker",
+                "backend": "claude",
+                "name": "must-not-start",
+            },
+        )
+    )
+
+    assert transport.sent[-1].payload["ok"] is False
+    assert "unavailable" in transport.sent[-1].payload["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_worker_advertises_only_cli_with_working_auth(tmp_path, monkeypatch):
+    class Process:
+        def __init__(self, return_code: int) -> None:
+            self.return_code = return_code
+
+        async def wait(self):
+            return self.return_code
+
+        def kill(self):
+            return None
+
+    async def create_process(executable, *args, **_kwargs):
+        assert args[-2:] in (("auth", "status"), ("login", "status"))
+        return Process(0 if executable.endswith("codex") else 1)
+
+    monkeypatch.setattr(
+        node_worker.shutil,
+        "which",
+        lambda name: f"/usr/local/bin/{name}" if name in ("claude", "codex") else None,
+    )
+    monkeypatch.setattr(node_worker.asyncio, "create_subprocess_exec", create_process)
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+
+    ready = await executor.ready_backends(("claude", "codex"), max_age=0.0)
+
+    assert ready == ("codex",)
 
 
 @pytest.mark.asyncio

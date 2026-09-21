@@ -58,10 +58,34 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     args = (update.message.text or "").split(maxsplit=2)
     name_arg = args[1] if len(args) > 1 else ""
     path_arg = args[2] if len(args) > 2 else ""
+    node_id = session_manager.get_selected_node_id(user.id)
+    enabled_backends = session_manager.get_effective_backends(user.id, node_id)
 
     if path_arg:
+        if node_id != "local":
+            from ...startup_queue import cancel_startup_queue
+
+            cancel_startup_queue(user.id)
+            await safe_reply(
+                update.message,
+                "❌ A path cannot be resolved on a remote node from this command. "
+                "Use /new and choose the directory on that node.",
+            )
+            return
+        if not enabled_backends:
+            from ...startup_queue import cancel_startup_queue
+
+            cancel_startup_queue(user.id)
+            await safe_reply(update.message, "❌ No available backend on local node")
+            return
+        preferred_backend = session_manager.get_default_backend(user.id)
+        backend = (
+            preferred_backend
+            if preferred_backend in enabled_backends
+            else enabled_backends[0]
+        )
         target_path = str(Path(path_arg).expanduser().resolve())
-        if session_manager.agent_backend == "codex":
+        if backend == "codex":
             from .auth import ensure_codex_authenticated
 
             if not await ensure_codex_authenticated(context.bot, user.id):
@@ -73,14 +97,14 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await safe_reply(update.message, f"⏳ Creating session at {target_path}…")
         success, message, created_wname, created_wid = await tmux_manager.create_window(
             target_path,
-            backend=session_manager.agent_backend,
+            backend=backend,
         )
         if not success:
             await safe_reply(update.message, f"❌ {message}")
             return
         session_manager.mark_window_starting(
             created_wid,
-            backend=session_manager.agent_backend,
+            backend=backend,
             resume=False,
             bot=context.bot,
             user_id=user.id,
@@ -89,6 +113,7 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             name=name_arg or created_wname or "",
             window_id=created_wid,
             workdir=target_path,
+            backend=backend,
         )
         ws = session_manager.get_window_state(created_wid)
         if ws.session_id:
@@ -104,7 +129,6 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # No path → directory browser.
     if name_arg and context.user_data is not None:
         context.user_data["_pending_session_name"] = name_arg
-    enabled_backends = session_manager.get_enabled_backends(user.id)
     only_backend = next(iter(enabled_backends), None)
     if only_backend is None:
         await safe_reply(update.message, "❌ No enabled backend")
@@ -114,17 +138,21 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         if context.user_data is not None:
             context.user_data["menu_origin"] = "main"
+            context.user_data["_new_session_node_id"] = node_id
         await safe_reply(
             update.message,
             t(user.id, "backend.choose"),
-            reply_markup=build_backend_picker(user.id),
+            reply_markup=build_backend_picker(user.id, node_id=node_id),
         )
         return
     if context.user_data is not None:
         context.user_data["_new_session_backend"] = only_backend
+        context.user_data["_new_session_node_id"] = node_id
     from ..callbacks.dir_browser import initialize_directory_browser
 
-    msg_text, keyboard, _subdirs = await initialize_directory_browser(context, user.id)
+    msg_text, keyboard, _subdirs = await initialize_directory_browser(
+        context, user.id, node_id=node_id
+    )
     if context.user_data is not None:
         context.user_data["menu_origin"] = "main"
     await safe_reply(update.message, msg_text, reply_markup=keyboard)

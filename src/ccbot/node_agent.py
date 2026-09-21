@@ -147,7 +147,9 @@ class NodeAgent:
         context_dir: str | Path,
         node_id: str = "",
         display_name: str = "",
-        backends: tuple[str, ...] = (),
+        backends: tuple[str, ...] = ("claude", "codex"),
+        configured_backends: tuple[str, ...] | None = None,
+        backend_probe: Callable[[], Awaitable[tuple[str, ...]]] | None = None,
         receipt_ledger: RequestReceiptLedger | None = None,
         max_context_bytes: int = 50 * 1024 * 1024,
         runtime_revision: str | None = None,
@@ -162,6 +164,8 @@ class NodeAgent:
         self._node_id = node_id
         self._display_name = display_name or node_id
         self._backends = tuple(backends)
+        self._configured_backends = tuple(configured_backends or backends)
+        self._backend_probe = backend_probe
         self._ledger = receipt_ledger or RequestReceiptLedger()
         self._max_context_bytes = max_context_bytes
         self._pending_contexts: dict[str, _PendingContext] = {}
@@ -235,6 +239,8 @@ class NodeAgent:
                 queue.task_done()
 
     async def _send_health(self) -> None:
+        if self._backend_probe is not None:
+            self._backends = tuple(await self._backend_probe())
         capacity_snapshot = getattr(self._executor, "capacity_snapshot", None)
         capacity = capacity_snapshot() if callable(capacity_snapshot) else {}
         await self._transport.send(
@@ -251,6 +257,14 @@ class NodeAgent:
                     "platform": platform.system(),
                     "arch": platform.machine(),
                     "backends": list(self._backends),
+                    "configured_backends": list(self._configured_backends),
+                    "ready_backends": list(self._backends),
+                    "backend_status": {
+                        backend: (
+                            "ready" if backend in self._backends else "unavailable"
+                        )
+                        for backend in self._configured_backends
+                    },
                     "capabilities": {
                         "directory_browser": True,
                         "create_session": True,
@@ -352,6 +366,11 @@ class NodeAgent:
                 name=str(payload.get("name", "")),
             )
         if operation in ("create_session", "restore_session"):
+            backend = str(payload.get("backend", ""))
+            if backend not in self._backends:
+                raise ValueError(
+                    f"Backend is unavailable on this worker: {backend or 'missing'}"
+                )
             return await dispatch_create_session(self._executor, payload)
         if operation == "resolve_provider_session":
             return await cast(Any, self._executor).resolve_provider_session(
@@ -390,6 +409,11 @@ class NodeAgent:
         raise ValueError(f"unsupported node operation: {operation}")
 
     def _begin_context(self, payload: dict[str, Any]) -> dict[str, Any]:
+        backend = str(payload.get("target_backend", ""))
+        if backend not in self._backends:
+            raise ValueError(
+                f"Backend is unavailable on this worker: {backend or 'missing'}"
+            )
         expected_bytes = int(payload.get("total_bytes", -1))
         expected_sha256 = str(payload.get("sha256", ""))
         if expected_bytes < 0 or expected_bytes > self._max_context_bytes:
@@ -404,7 +428,7 @@ class NodeAgent:
             path=path,
             expected_bytes=expected_bytes,
             expected_sha256=expected_sha256,
-            backend=str(payload.get("target_backend", "")),
+            backend=backend,
             name=str(payload.get("source_name", "session")),
         )
         return {"ok": True, "transfer_id": transfer_id}
@@ -434,6 +458,10 @@ class NodeAgent:
         pending = self._pending_contexts.pop(transfer_id, None)
         if pending is None:
             raise ValueError("unknown context transfer")
+        if pending.backend not in self._backends:
+            raise ValueError(
+                f"Backend is unavailable on this worker: {pending.backend}"
+            )
         content = await asyncio.to_thread(pending.path.read_bytes)
         if len(content) != pending.expected_bytes:
             raise ValueError("context byte count mismatch")
@@ -469,7 +497,7 @@ class NodeAgent:
         executor: WorkerSessionExecutor,
         context_dir: str | Path,
         display_name: str = "",
-        backends: tuple[str, ...] = (),
+        backends: tuple[str, ...] = ("claude", "codex"),
         ssl: Any = None,
         pairing_nonce: str = "",
         pairing_expires: float = 0.0,
@@ -608,13 +636,14 @@ async def _run_agent_forever(
     context_dir = os.environ.get(
         "CCBOT_NODE_CONTEXT_DIR", str(Path.home() / ".ccbot-worker" / "contexts")
     )
-    backends = tuple(
+    configured_backends = tuple(
         value.strip()
         for value in os.environ.get("CCBOT_NODE_BACKENDS", "").split(",")
         if value.strip() in ("claude", "codex")
     )
-    if not backends:
-        backends = ("claude", "codex")
+    if not configured_backends:
+        configured_backends = ("claude", "codex")
+    backends = await executor.ready_backends(configured_backends, max_age=0.0)
     display_name = (
         name_override.strip()
         or os.environ.get("CCBOT_NODE_NAME", node_id).strip()
@@ -668,6 +697,8 @@ async def _run_agent_forever(
                     node_id=node_id,
                     display_name=display_name,
                     backends=backends,
+                    configured_backends=configured_backends,
+                    backend_probe=lambda: executor.ready_backends(configured_backends),
                     ssh_access=ssh_access,
                 )
             else:

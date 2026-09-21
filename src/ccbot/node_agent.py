@@ -29,10 +29,11 @@ from .node_transport import (
 from .node_pairing import PairingInvitation
 from .node_event_pump import NodeEventPump
 from .node_update import GitNodeUpdater, current_git_revision
-from .node_worker import TmuxWorkerExecutor, dispatch_create_session
+from .node_inbox import dispatch_inbox_operation
+from .node_session_start import dispatch_create_session
+from .node_worker import TmuxWorkerExecutor
 
 logger = logging.getLogger(__name__)
-HEALTH_INTERVAL_SECONDS = 15.0
 _CONTROL_OPERATIONS = {
     "send_key",
     "capture_session",
@@ -93,7 +94,6 @@ class WorkerSessionExecutor(Protocol):
     async def list_directories(self, *, path: str) -> dict[str, Any]: ...
 
     async def create_directory(self, *, path: str, name: str) -> dict[str, Any]: ...
-
     async def create_session(
         self,
         *,
@@ -106,17 +106,12 @@ class WorkerSessionExecutor(Protocol):
         provider_transcript_path: str = "",
     ) -> dict[str, Any]: ...
     async def cancel_session_start(self, *, startup_id: str) -> dict[str, Any]: ...
-
     async def start_context_session(
         self, *, context_path: str, backend: str, name: str
     ) -> dict[str, Any]: ...
-
     async def send_text(self, *, session_id: str, text: str) -> dict[str, Any]: ...
-
     async def send_key(self, *, session_id: str, key: str) -> dict[str, Any]: ...
-
     async def capture_session(self, *, session_id: str) -> dict[str, Any]: ...
-
     async def terminate_session(self, *, session_id: str) -> dict[str, Any]: ...
 
 
@@ -177,6 +172,7 @@ class NodeAgent:
         self._runtime_updater = runtime_updater or GitNodeUpdater()
         self._restart_callback = restart_callback or _restart_current_process
         self._ssh_access = dict(ssh_access or {})
+        self._boot_id = secrets.token_urlsafe(12)
         self._startup_tasks: set[asyncio.Task[None]] = set()
         self._event_pump = NodeEventPump(
             node_id, available=callable(getattr(executor, "poll_events", None))
@@ -261,10 +257,12 @@ class NodeAgent:
                         "create_session": True,
                         "context_transfer": True,
                         "send_text": True,
+                        "inbox_upload": True,
                         "event_stream": self._event_pump.healthy,
                     },
                     "capacity": capacity,
                     "ccbot_version": self._runtime_revision,
+                    "boot_id": self._boot_id,
                     "ssh": dict(self._ssh_access),
                 },
             )
@@ -272,7 +270,7 @@ class NodeAgent:
 
     async def _health_loop(self) -> None:
         while True:
-            await asyncio.sleep(HEALTH_INTERVAL_SECONDS)
+            await asyncio.sleep(15.0)
             try:
                 await self._send_health()
             except (ConnectionError, asyncio.CancelledError):
@@ -341,6 +339,8 @@ class NodeAgent:
             return self._append_context(payload)
         if operation == "transfer_context_finish":
             return await self._finish_context(payload)
+        if operation == "inspect_session" or operation.startswith("upload_inbox_"):
+            return await dispatch_inbox_operation(self._executor, payload)
         if operation == "list_directories":
             return await self._executor.list_directories(
                 path=str(payload.get("path", ""))

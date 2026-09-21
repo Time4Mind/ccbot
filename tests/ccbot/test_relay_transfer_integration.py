@@ -7,16 +7,23 @@ from types import SimpleNamespace
 import pytest
 
 from ccbot.node_agent import NodeAgent
+from ccbot.node_inbox import WorkerInboxMixin
 from ccbot.node_runtime import RemoteNodeRuntime, connect_leader_rpc
 from ccbot.node_transport import RelayServer, connect_relay
 from ccbot.session_models import Session
 from ccbot.transfer_models import SessionTransfer
 
 
-class RecordingExecutor:
-    def __init__(self) -> None:
+class RecordingExecutor(WorkerInboxMixin):
+    def __init__(self, workdir: Path) -> None:
         self.started: list[dict[str, str]] = []
         self.sent: list[tuple[str, str]] = []
+        self.workdir = workdir
+
+    async def _find_session(self, session_id: str):
+        if session_id != "worker-session":
+            return None
+        return SimpleNamespace(window_id="@1", backend="codex", workdir=self.workdir)
 
     async def start_context_session(self, **kwargs):
         self.started.append(kwargs)
@@ -57,7 +64,8 @@ async def test_context_transfer_crosses_real_relay_and_worker_agent(tmp_path: Pa
             secret="worker-secret",
             leader_id="leader",
         )
-        executor = RecordingExecutor()
+        executor = RecordingExecutor(tmp_path / "worker-project")
+        executor.workdir.mkdir()
         agent = NodeAgent(
             worker_transport,
             executor,
@@ -85,9 +93,8 @@ async def test_context_transfer_crosses_real_relay_and_worker_agent(tmp_path: Pa
             context_path=str(context_path),
         )
 
-        result = await RemoteNodeRuntime(
-            leader_rpc, chunk_size=4
-        ).start_context_transfer(
+        runtime = RemoteNodeRuntime(leader_rpc, chunk_size=4)
+        result = await runtime.start_context_transfer(
             transfer=transfer,
             source=source,
             user_id=42,
@@ -103,6 +110,12 @@ async def test_context_transfer_crosses_real_relay_and_worker_agent(tmp_path: Pa
         update = SimpleNamespace(message=SimpleNamespace(text="continue"))
         assert await result.delivery(update, SimpleNamespace())
         assert executor.sent == [("worker-session", "continue")]
+        uploaded = await runtime.upload_inbox_file(
+            "worker-a", "worker-session", "../../photo.jpg", b"image-bytes"
+        )
+        worker_file = executor.workdir / uploaded["relative_path"]
+        assert worker_file.read_bytes() == b"image-bytes"
+        assert worker_file.name.endswith("-photo.jpg")
     finally:
         if leader_rpc is not None:
             await leader_rpc.close()

@@ -20,34 +20,11 @@ from .codex_startup import (
     drive_codex_startup,
 )
 from .config import config
+from .node_inbox import WorkerInboxMixin
 from .transcript_parser import TranscriptParser
 from .utils import ccbot_dir
 
 logger = logging.getLogger(__name__)
-
-
-async def dispatch_create_session(
-    executor: Any, payload: dict[str, Any]
-) -> dict[str, Any]:
-    """Adapt the extensible wire payload to the worker executor contract."""
-    kwargs = {
-        "path": str(payload.get("path", "")),
-        "backend": str(payload.get("backend", "")),
-        "name": str(payload.get("name", "")),
-        "startup_id": str(payload.get("startup_id", "")),
-    }
-    kwargs.update(
-        {
-            key: str(payload[key])
-            for key in (
-                "resume_session_id",
-                "source_backend",
-                "provider_transcript_path",
-            )
-            if payload.get(key)
-        }
-    )
-    return await executor.create_session(**kwargs)
 
 
 @dataclass
@@ -55,6 +32,7 @@ class _TmuxWorkerSession:
     session_id: str
     window_id: str
     backend: str
+    workdir: Path
     transcript_path: Path | None = None
     transcript_offset: int = 0
     pending_tools: dict[str, Any] = field(default_factory=dict)
@@ -64,7 +42,7 @@ class _TmuxWorkerSession:
     binding_announced: bool = False
 
 
-class TmuxWorkerExecutor:
+class TmuxWorkerExecutor(WorkerInboxMixin):
     """Small Telegram-free tmux executor used by the node-agent process."""
 
     def __init__(
@@ -348,6 +326,7 @@ class TmuxWorkerExecutor:
             session_id=session_id,
             window_id=window_id,
             backend=backend,
+            workdir=workdir,
         )
         if startup_id:
             self._startup_sessions[startup_id] = session_id
@@ -561,7 +540,7 @@ class TmuxWorkerExecutor:
             "-t",
             self._tmux_session,
             "-F",
-            "#{window_id}\t#{@ccbot_session_id}\t#{@ccbot_backend}",
+            "#{window_id}\t#{@ccbot_session_id}\t#{@ccbot_backend}\t#{pane_current_path}",
         )
         if code != 0:
             if reconcile:
@@ -570,9 +549,10 @@ class TmuxWorkerExecutor:
         recovered: dict[str, _TmuxWorkerSession] = {}
         for line in stdout.splitlines():
             parts = line.split("\t")
-            if len(parts) != 3:
+            if len(parts) not in (3, 4):
                 continue
-            window_id, session_id, backend = parts
+            window_id, session_id, backend = parts[:3]
+            workdir = parts[3] if len(parts) == 4 else str(self._workdir)
             if not window_id or not session_id or backend not in ("claude", "codex"):
                 continue
             existing = self._sessions.get(session_id)
@@ -580,6 +560,7 @@ class TmuxWorkerExecutor:
                 session_id=session_id,
                 window_id=window_id,
                 backend=backend,
+                workdir=Path(workdir).expanduser().resolve(),
                 recovered=True,
             )
         if reconcile:

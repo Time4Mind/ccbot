@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 from .node_transport import NodeEnvelope, NodeTransport, RequestReceiptLedger
 from .node_transport import connect_relay
 from .node_update import current_git_revision
+from .node_inbox import RemoteInboxMixin
 from .transfer_models import SessionTransfer
 from .transfer_runtime import (
     TransferRuntimeResult,
@@ -25,7 +26,6 @@ from .transfer_runtime import (
 from .session_models import Session
 
 logger = logging.getLogger(__name__)
-
 RpcEventHandler = Callable[[NodeEnvelope], Awaitable[None]]
 TransportFactory = Callable[[], Awaitable[NodeTransport]]
 _leader_rpc: NodeRpcClient | None = None
@@ -314,9 +314,7 @@ class NodeRpcClient:
                 future.set_exception(error)
 
 
-class RemoteNodeRuntime:
-    """Transfer runtime using typed RPC commands over the relay."""
-
+class RemoteNodeRuntime(RemoteInboxMixin):
     def __init__(self, rpc: Any, *, chunk_size: int = 256 * 1024):
         if chunk_size < 1:
             raise ValueError("chunk_size must be positive")
@@ -732,6 +730,12 @@ async def connect_configured_remote_runtimes(
         if _leader_rpc is not None and node.enabled and node_id not in _remote_node_ids:
             register_remote_runtime(node_id)
             _remote_node_ids.add(node_id)
+        if message.kind == "health":
+            from .node_reconcile import schedule_remote_reconcile
+
+            schedule_remote_reconcile(
+                session_manager, node_id, str(payload.get("boot_id", ""))
+            )
         if (
             message.kind == "health"
             and leader_revision
@@ -779,6 +783,9 @@ async def shutdown_remote_runtimes() -> None:
         await _leader_rpc.close()
         _leader_rpc = None
     set_remote_message_handler(None)
+    from .node_reconcile import shutdown_remote_reconcile
+
+    await shutdown_remote_reconcile()
 
 
 __all__ = [

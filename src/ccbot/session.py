@@ -212,8 +212,14 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
             logger.debug("State saved to %s", config.state_file)
 
     def is_window_id(self, key: str) -> bool:
-        """Check if a key looks like a tmux window ID (e.g. '@0', '@12')."""
-        return key.startswith("@") and len(key) > 1 and key[1:].isdigit()
+        """Check local or node-scoped tmux IDs (``@12``/``node::@12``)."""
+        local_id = key.rsplit("::", 1)[-1]
+        return (
+            local_id.startswith("@")
+            and len(local_id) > 1
+            and local_id[1:].isdigit()
+            and ("::" not in key or bool(key.rsplit("::", 1)[0]))
+        )
 
     def _load_state(self) -> None:
         """Load state synchronously during initialization.

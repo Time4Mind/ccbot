@@ -56,6 +56,14 @@ class NodeRuntime(Protocol):
         self, target_node_id: str, session_id: str, text: str
     ) -> dict[str, Any]: ...
 
+    async def upload_inbox_file(
+        self, target_node_id: str, session_id: str, filename: str, content: bytes
+    ) -> dict[str, Any]: ...
+
+    async def inspect_session(
+        self, target_node_id: str, session_id: str
+    ) -> dict[str, Any]: ...
+
     async def send_key(
         self, target_node_id: str, session_id: str, key: str
     ) -> dict[str, Any]: ...

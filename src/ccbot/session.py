@@ -25,6 +25,7 @@ Key classes:
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -500,6 +501,13 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                 settled,
                 backend,
                 resume,
+                extra={
+                    "event": "session_create_phase",
+                    "phase": "process_ready",
+                    "user_id": user_id,
+                    "window_id": window_id,
+                    "monotonic_ms": round(time.monotonic() * 1000),
+                },
             )
             drained = 0
             while True:

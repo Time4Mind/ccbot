@@ -217,6 +217,15 @@ async def edit_rich_media_card(
             "rich-media card edit timed out msg=%s; keeping carrier", state.msg_id
         )
         return True
+    except TimeoutError:
+        # Our short rich-transport deadline is intentional: unlike PTB's
+        # ambiguous full request timeout, it should immediately release the
+        # normal text path so an agent response cannot remain visually stale.
+        logger.info(
+            "rich-media short deadline expired msg=%s; using text fallback",
+            state.msg_id,
+        )
+        return False
     except BadRequest as exc:
         error = str(exc)
         if "message is not modified" in error.lower():

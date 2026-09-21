@@ -5,6 +5,7 @@ code spans), expandable-quote → <details> conversion, and the
 rich-first / MarkdownV2-fallback behaviour of safe_send and safe_edit.
 """
 
+import asyncio
 import importlib
 import re
 from pathlib import Path
@@ -663,6 +664,30 @@ class _FakeMessage:
 
 
 class TestSafeEditRichPath:
+    @pytest.mark.asyncio
+    async def test_hanging_rich_edit_falls_back_before_transport_timeout(
+        self, rich_on: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        release = asyncio.Event()
+
+        async def hanging_post(*_args, **_kwargs):
+            await release.wait()
+
+        bot = _FakeBot(post_result=True)
+        bot._post = hanging_post  # type: ignore[method-assign]
+        bot.edit_message_text = AsyncMock()  # type: ignore[attr-defined]
+        target = _FakeMessage(bot)
+        monkeypatch.setattr(rich, "RICH_FALLBACK_DEADLINE_SECONDS", 0.01)
+
+        try:
+            await asyncio.wait_for(
+                message_sender.safe_edit(target, "hello"), timeout=0.1
+            )
+        finally:
+            release.set()
+
+        bot.edit_message_text.assert_called_once()  # type: ignore[attr-defined]
+
     @pytest.mark.asyncio
     async def test_rich_edit_used_when_enabled(self, rich_on: None) -> None:
         bot = _FakeBot(post_result=True)

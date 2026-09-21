@@ -14,11 +14,89 @@ from ccbot.startup_queue import begin_startup_queue, has_startup_queue
 
 
 @pytest.mark.asyncio
+async def test_codex_card_is_published_before_auth_and_process_start(
+    monkeypatch,
+) -> None:
+    user_id = 41
+    auth_entered = asyncio.Event()
+    release_auth = asyncio.Event()
+    card_published = asyncio.Event()
+    process_started = asyncio.Event()
+    new_session = SimpleNamespace(
+        id="new-session",
+        claude_session_id=None,
+        window_id="",
+        state="active",
+    )
+
+    async def ensure_auth(*_args, **_kwargs):
+        auth_entered.set()
+        await release_auth.wait()
+        return True
+
+    async def create_window(*_args, **_kwargs):
+        process_started.set()
+        return True, "created", "project", "@2"
+
+    async def paint(*_args, **_kwargs):
+        card_published.set()
+
+    fake_manager = SimpleNamespace(
+        agent_backend="codex",
+        get_active_session=lambda _uid: None,
+        create_session=MagicMock(return_value=new_session),
+        set_session_claude_id=MagicMock(),
+        set_active_session=MagicMock(),
+        save_state=MagicMock(),
+        mark_window_starting=MagicMock(),
+        get_window_state=lambda _wid: SimpleNamespace(session_id=""),
+        wait_for_session_map_entry=AsyncMock(return_value=None),
+        get_user_settings=lambda _uid: {},
+    )
+    query = MagicMock(spec=CallbackQuery)
+    query.message = SimpleNamespace(message_id=101)
+    query.answer = AsyncMock()
+    user = MagicMock(spec=User)
+    user.id = user_id
+    context = SimpleNamespace(user_data={"_new_session_backend": "codex"}, bot=object())
+
+    monkeypatch.setattr(_session_create, "session_manager", fake_manager)
+    monkeypatch.setattr(
+        "ccbot.bot.commands.auth.ensure_codex_authenticated", ensure_auth
+    )
+    monkeypatch.setattr(
+        _session_create,
+        "tmux_manager",
+        SimpleNamespace(create_window=create_window),
+    )
+    monkeypatch.setattr(_session_create, "activate_card_on_carrier", AsyncMock())
+    monkeypatch.setattr(_session_create, "paint_card_on_carrier", paint)
+    monkeypatch.setattr(
+        "ccbot.startup_queue.bind_startup_queue", lambda _uid, _wid: None
+    )
+
+    await _session_create.create_and_activate_session(
+        query, context, user, "/tmp/project"
+    )
+    try:
+        await asyncio.wait_for(card_published.wait(), timeout=0.1)
+        await asyncio.wait_for(auth_entered.wait(), timeout=0.1)
+        assert process_started.is_set() is False
+    finally:
+        release_auth.set()
+        await _session_create.wait_for_session_creation(user_id)
+
+    assert process_started.is_set() is True
+    assert new_session.window_id == "@2"
+
+
+@pytest.mark.asyncio
 async def test_slow_remote_creation_returns_control_to_telegram_immediately(
     monkeypatch,
 ) -> None:
     entered = asyncio.Event()
     release = asyncio.Event()
+    card_published = asyncio.Event()
     received: list[tuple[object, ...]] = []
     new_session = SimpleNamespace(id="remote-session", claude_session_id=None)
 
@@ -43,7 +121,7 @@ async def test_slow_remote_creation_returns_control_to_telegram_immediately(
         save_state=MagicMock(),
     )
     query = MagicMock(spec=CallbackQuery)
-    query.message = None
+    query.message = SimpleNamespace(message_id=102)
     query.answer = AsyncMock()
     user = MagicMock(spec=User)
     user.id = 42
@@ -56,6 +134,12 @@ async def test_slow_remote_creation_returns_control_to_telegram_immediately(
     )
     monkeypatch.setattr(_session_create, "session_manager", fake_manager)
     monkeypatch.setattr(_session_create, "get_node_runtime", lambda _node_id: runtime)
+    monkeypatch.setattr(_session_create, "activate_card_on_carrier", AsyncMock())
+
+    async def paint(*_args, **_kwargs):
+        card_published.set()
+
+    monkeypatch.setattr(_session_create, "paint_card_on_carrier", paint)
     monkeypatch.setattr(
         "ccbot.startup_queue.bind_startup_queue", lambda _uid, _wid: None
     )
@@ -68,12 +152,15 @@ async def test_slow_remote_creation_returns_control_to_telegram_immediately(
     )
     context.user_data["_new_session_backend"] = "codex"
     context.user_data["_pending_session_name"] = "Changed later"
+    await asyncio.wait_for(card_published.wait(), timeout=0.1)
     await asyncio.wait_for(entered.wait(), timeout=0.1)
-    assert fake_manager.create_session.call_count == 0
+    assert fake_manager.create_session.call_count == 1
+    assert getattr(new_session, "window_id", "") == ""
 
     release.set()
     await _session_create.wait_for_session_creation(user.id)
     assert fake_manager.create_session.call_count == 1
+    assert new_session.window_id == "worker-a::@8"
     assert received == [("worker-a", "/worker/project", "claude", "Original task")]
 
 
@@ -83,9 +170,14 @@ async def test_failed_remote_creation_closes_its_startup_queue(monkeypatch) -> N
     runtime = SimpleNamespace(
         create_session=AsyncMock(side_effect=RuntimeError("worker startup failed"))
     )
+    failed_session = SimpleNamespace(id="failed", window_id="", state="active")
     fake_manager = SimpleNamespace(
         agent_backend="claude",
         get_active_session=lambda _uid: SimpleNamespace(id="old"),
+        create_session=MagicMock(return_value=failed_session),
+        set_active_session=MagicMock(),
+        save_state=MagicMock(),
+        mark_session_lost=MagicMock(),
     )
     query = MagicMock(spec=CallbackQuery)
     query.message = None
@@ -235,11 +327,12 @@ async def test_new_session_is_created_on_selected_remote_node(monkeypatch):
     )
     fake_manager.create_session.assert_called_once_with(
         name="Task",
-        window_id="worker-a::@8",
+        window_id="",
         workdir="/worker/project",
         backend="claude",
         node_id="worker-a",
     )
+    assert new_session.window_id == "worker-a::@8"
     fake_manager.set_session_claude_id.assert_called_once_with(
         "remote-session", "agent-8"
     )

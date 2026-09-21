@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -30,6 +31,7 @@ class InboundEntry:
     sequence: int
     processor: InboundProcessor
     completion: asyncio.Future[bool]
+    received_at: float
 
 
 @dataclass
@@ -81,6 +83,7 @@ def enqueue_inbound(
         sequence=lane.next_sequence,
         processor=processor,
         completion=loop.create_future(),
+        received_at=time.monotonic(),
     )
     lane.next_sequence += 1
     lane.entries.append(entry)
@@ -93,6 +96,8 @@ def enqueue_inbound(
             "kind": kind,
             "ahead": ahead,
             "pending": len(lane.entries),
+            "message_id": getattr(update.message, "message_id", None),
+            "received_monotonic_ms": round(entry.received_at * 1000),
         },
     )
     if lane.worker is None or lane.worker.done():
@@ -139,6 +144,9 @@ async def _drain_lane(key: tuple[int, str], lane: _Lane) -> None:
                     "kind": entry.kind,
                     "delivered": delivered,
                     "remaining": len(lane.entries),
+                    "input_submit_ms": round(
+                        (time.monotonic() - entry.received_at) * 1000
+                    ),
                 },
             )
     finally:

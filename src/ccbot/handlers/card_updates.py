@@ -106,6 +106,16 @@ async def update_session_card(
 
     Triggers a fresh card on long pause and on hard-limit overflow.
     """
+    observed_at = time.monotonic()
+    logger.info(
+        "agent_event_observed",
+        extra={
+            "event": "agent_event_observed",
+            "user_id": user_id,
+            "session_id": sess.id,
+            "content_type": msg.content_type,
+        },
+    )
     # Fire a (throttled) background prewarm of the pages cache so the
     # live-card's ◀ Older N/N counter has a value to render on the
     # next event. The first event after session start may still paint
@@ -186,7 +196,7 @@ async def update_session_card(
     # None`` and both spawn — produces "2 messages in wrong order".
     async with _card_lock(user_id, sess.id):
         return await _update_session_card_locked(
-            bot, user_id, sess, msg, state, new_event, replaced
+            bot, user_id, sess, msg, state, new_event, replaced, observed_at
         )
 
 
@@ -198,6 +208,7 @@ async def _update_session_card_locked(
     state: CardState,
     new_event: Event,
     replaced: bool,
+    observed_at: float,
 ) -> None:
     # Trigger: long pause → fresh card.
     if _is_stale(state):
@@ -249,6 +260,7 @@ async def _update_session_card_locked(
                 "msg_id": state.msg_id,
                 "content_type": msg.content_type,
                 "lines": len(state.events),
+                "event_to_visible_ms": round((time.monotonic() - observed_at) * 1000),
             },
         )
         return
@@ -278,6 +290,9 @@ async def _update_session_card_locked(
                     "msg_id": state.msg_id,
                     "content_type": msg.content_type,
                     "lines": len(state.events),
+                    "event_to_visible_ms": round(
+                        (time.monotonic() - observed_at) * 1000
+                    ),
                 },
             )
         else:

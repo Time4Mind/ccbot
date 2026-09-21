@@ -6,11 +6,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from telegram import CallbackQuery, User
+from telegram.ext import ApplicationHandlerStop
 
 from ccbot.bot import _session_create
 from ccbot.handlers.card_model import CardState
 from ccbot.handlers.card_registry import _cards
-from ccbot.startup_queue import begin_startup_queue, has_startup_queue
+from ccbot.startup_queue import (
+    begin_startup_queue,
+    capture_startup_message,
+    has_startup_queue,
+)
 
 
 @pytest.mark.asyncio
@@ -169,17 +174,24 @@ async def test_slow_remote_creation_returns_control_to_telegram_immediately(
 @pytest.mark.asyncio
 async def test_failed_remote_creation_closes_its_startup_queue(monkeypatch) -> None:
     user_id = 43
-    runtime = SimpleNamespace(
-        create_session=AsyncMock(side_effect=RuntimeError("worker startup failed"))
-    )
+    startup_entered = asyncio.Event()
+    release_startup = asyncio.Event()
+
+    async def fail_after_stall(*_args, **_kwargs):
+        startup_entered.set()
+        await release_startup.wait()
+        raise RuntimeError("worker startup failed")
+
+    runtime = SimpleNamespace(create_session=AsyncMock(side_effect=fail_after_stall))
     failed_session = SimpleNamespace(id="failed", window_id="", state="active")
+    card_state = CardState()
     fake_manager = SimpleNamespace(
         agent_backend="claude",
         get_active_session=lambda _uid: SimpleNamespace(id="old"),
         create_session=MagicMock(return_value=failed_session),
         set_active_session=MagicMock(),
         save_state=MagicMock(),
-        mark_session_lost=MagicMock(),
+        delete_session=MagicMock(return_value=True),
     )
     query = MagicMock(spec=CallbackQuery)
     query.message = None
@@ -190,14 +202,53 @@ async def test_failed_remote_creation_closes_its_startup_queue(monkeypatch) -> N
     monkeypatch.setattr(_session_create, "session_manager", fake_manager)
     monkeypatch.setattr(_session_create, "get_node_runtime", lambda _node_id: runtime)
     monkeypatch.setattr(_session_create, "safe_edit", AsyncMock())
+    monkeypatch.setattr(
+        "ccbot.session.session_manager.get_session",
+        lambda session_id: failed_session if session_id == "failed" else None,
+    )
+    monkeypatch.setattr(
+        "ccbot.handlers.notifications.get_card_state", lambda *_args: card_state
+    )
+    monkeypatch.setattr(
+        "ccbot.handlers.notifications.schedule_card_after_message", lambda *_args: None
+    )
     begin_startup_queue(user_id)
 
     await _session_create.create_and_activate_session(
         query, context, user, "/worker/project", node_id="worker-a"
     )
+    await startup_entered.wait()
+
+    def inbound(message_id: int, text: str) -> MagicMock:
+        update = MagicMock()
+        update.effective_user = SimpleNamespace(id=user_id)
+        update.message = SimpleNamespace(
+            message_id=message_id,
+            text=text,
+            voice=None,
+            photo=[],
+            document=None,
+        )
+        return update
+
+    await capture_startup_message(inbound(10, "/menu"), context)
+    with pytest.raises(ApplicationHandlerStop):
+        await capture_startup_message(inbound(11, "first prompt"), context)
+    with pytest.raises(ApplicationHandlerStop):
+        await capture_startup_message(inbound(12, "second prompt"), context)
+
+    assert [row.text for row in card_state.pending_prompts] == [
+        "first prompt",
+        "second prompt",
+    ]
+    release_startup.set()
     await _session_create.wait_for_session_creation(user_id)
 
     assert has_startup_queue(user_id) is False
+    fake_manager.delete_session.assert_called_once_with("failed")
+    failure = _session_create.safe_edit.await_args.args[1]
+    assert "❌ Not sent to the session: first prompt" in failure
+    assert "❌ Not sent to the session: second prompt" in failure
 
 
 @pytest.mark.asyncio

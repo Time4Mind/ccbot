@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
@@ -22,8 +23,11 @@ class CodexStartupError(RuntimeError):
 class CodexScreen(str, Enum):
     WAITING = "waiting"
     TRUST = "trust"
+    HOOKS_REVIEW = "hooks_review"
     RESUME_DIRECTORY = "resume_directory"
     UPDATE = "update"
+    AUTHENTICATION = "authentication"
+    UNHANDLED_MODAL = "unhandled_modal"
     READY = "ready"
 
 
@@ -55,6 +59,13 @@ def classify_codex_screen(text: str) -> CodexScreen:
     ):
         return CodexScreen.TRUST
     if (
+        "hooks need review" in lower
+        and "1. review hooks" in lower
+        and "2. trust all and continue" in lower
+        and "3. continue without trusting" in lower
+    ):
+        return CodexScreen.HOOKS_REVIEW
+    if (
         "choose working directory to resume this session" in lower
         and "1. use session directory" in lower
         and "2. use current directory" in lower
@@ -68,6 +79,17 @@ def classify_codex_screen(text: str) -> CodexScreen:
         and "press enter to continue" in lower
     ):
         return CodexScreen.UPDATE
+    if any(
+        marker in lower
+        for marker in (
+            "sign in with chatgpt",
+            "sign in with device code",
+            "provide your own api key",
+        )
+    ):
+        return CodexScreen.AUTHENTICATION
+    if len(re.findall(r"(?m)^\s*(?:›\s*)?\d+\.\s+", text)) >= 2:
+        return CodexScreen.UNHANDLED_MODAL
     if is_codex_ready(text):
         return CodexScreen.READY
     return CodexScreen.WAITING
@@ -151,6 +173,9 @@ async def drive_codex_startup(
             ready_since = None
         if screen is CodexScreen.TRUST:
             await send_key("ENTER")
+        elif screen is CodexScreen.HOOKS_REVIEW:
+            await send_key("DOWN")
+            await send_key("ENTER")
         elif screen is CodexScreen.RESUME_DIRECTORY:
             await send_key("DOWN")
             await send_key("ENTER")
@@ -160,6 +185,10 @@ async def drive_codex_startup(
             await send_key("ENTER")
             updated = True
             waiting_for_updater_exit = True
+        elif screen is CodexScreen.AUTHENTICATION:
+            raise CodexStartupError("Codex requires authentication")
+        elif screen is CodexScreen.UNHANDLED_MODAL:
+            raise CodexStartupError("Codex showed an unsupported startup prompt")
 
         await asyncio.sleep(max(0.0, poll_interval))
 

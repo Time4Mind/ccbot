@@ -20,6 +20,7 @@ from ccbot.startup_queue import (
     capture_startup_message,
     enqueue_startup_message,
     has_startup_queue,
+    bind_startup_session,
     pending_startup_count,
     reset_startup_queues_for_test,
     track_startup_operation,
@@ -99,6 +100,45 @@ async def test_new_command_can_retry_failed_creation_flow() -> None:
     context = MagicMock()
     begin_startup_queue(42)
     await capture_startup_message(_update(10, text="/new retry /tmp"), context)
+    assert pending_startup_count(42) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    ["/menu", "/stop", "/kill", "/archive", "/health", "/usage", "/help"],
+)
+async def test_control_commands_bypass_agent_startup_queue(command: str) -> None:
+    context = MagicMock()
+    begin_startup_queue(42)
+
+    await capture_startup_message(_update(10, text=command), context)
+
+    assert pending_startup_count(42) == 0
+
+
+@pytest.mark.asyncio
+async def test_provider_slash_command_remains_ordered_agent_input() -> None:
+    context = MagicMock()
+    begin_startup_queue(42)
+
+    with pytest.raises(ApplicationHandlerStop):
+        await capture_startup_message(_update(10, text="/model"), context)
+
+    assert pending_startup_count(42) == 1
+
+
+@pytest.mark.asyncio
+async def test_navigation_callback_bypasses_agent_startup_queue() -> None:
+    context = MagicMock()
+    begin_startup_queue(42)
+    update = MagicMock()
+    update.effective_user = SimpleNamespace(id=42)
+    update.message = None
+    update.callback_query = SimpleNamespace(data="mm:home")
+
+    await capture_startup_message(update, context)
+
     assert pending_startup_count(42) == 0
 
 
@@ -197,6 +237,27 @@ async def test_queued_text_is_visible_as_soon_as_new_card_is_bound() -> None:
 
         readiness.set()
         await task
+
+
+@pytest.mark.asyncio
+async def test_queued_text_is_visible_on_provisional_card_before_worker_ready() -> None:
+    context = MagicMock()
+    begin_startup_queue(42)
+    sess = SimpleNamespace(id="provisional", window_id="")
+    state = CardState()
+    with (
+        patch("ccbot.session.session_manager.get_session", return_value=sess),
+        patch("ccbot.handlers.notifications.get_card_state", return_value=state),
+        patch("ccbot.handlers.notifications.schedule_card_after_message") as surface,
+    ):
+        bind_startup_session(42, sess.id)
+        with pytest.raises(ApplicationHandlerStop):
+            await capture_startup_message(_update(10, text="first prompt"), context)
+
+    assert [(row.request_id, row.text) for row in state.pending_prompts] == [
+        ("10", "first prompt")
+    ]
+    surface.assert_called_once_with(context.bot, 42, sess, 10)
 
 
 @pytest.mark.asyncio

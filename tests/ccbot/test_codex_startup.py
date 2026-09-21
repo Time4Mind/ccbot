@@ -25,6 +25,15 @@ READY_PROMPT = """OpenAI Codex
 gpt-5.6 medium · ~/project
 """
 
+HOOKS_REVIEW_PROMPT = """Hooks need review
+2 hooks are new or changed.
+Hooks can run outside the sandbox after you trust them.
+
+1. Review hooks
+2. Trust all and continue
+3. Continue without trusting (hooks won't run)
+"""
+
 
 @pytest.mark.asyncio
 async def test_delayed_update_is_handled_before_readiness_is_final() -> None:
@@ -142,6 +151,66 @@ async def test_trust_and_resume_directory_prompts_use_the_same_lifecycle() -> No
 
     assert result.updated is False
     assert keys == ["ENTER", "DOWN", "ENTER"]
+
+
+@pytest.mark.asyncio
+async def test_hooks_review_trusts_worker_hooks_and_reaches_composer() -> None:
+    screens = iter([HOOKS_REVIEW_PROMPT, READY_PROMPT])
+    keys: list[str] = []
+
+    result = await drive_codex_startup(
+        command="codex",
+        capture=lambda: _next(screens),
+        current_process=lambda: _value("codex"),
+        send_key=lambda key: _append(keys, key),
+        relaunch=lambda _command: _done(),
+        timeout=1,
+        poll_interval=0,
+        ready_settle_time=0,
+    )
+
+    assert result.updated is False
+    assert keys == ["DOWN", "ENTER"]
+
+
+@pytest.mark.asyncio
+async def test_authentication_modal_fails_without_waiting_for_timeout() -> None:
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+
+    with pytest.raises(CodexStartupError, match="authentication"):
+        await drive_codex_startup(
+            command="codex",
+            capture=lambda: _value("Sign in with ChatGPT\nSign in with device code"),
+            current_process=lambda: _value("codex"),
+            send_key=lambda _key: _done(),
+            relaunch=lambda _command: _done(),
+            timeout=10,
+            poll_interval=0.1,
+            ready_settle_time=0,
+        )
+
+    assert loop.time() - started < 1
+
+
+@pytest.mark.asyncio
+async def test_unknown_numbered_startup_modal_fails_promptly() -> None:
+    with pytest.raises(CodexStartupError, match="unsupported startup prompt"):
+        await drive_codex_startup(
+            command="codex",
+            capture=lambda: _value(
+                "Unknown startup choice\n"
+                "› 1. First option\n"
+                "  2. Second option\n"
+                "Press enter to continue"
+            ),
+            current_process=lambda: _value("codex"),
+            send_key=lambda _key: _done(),
+            relaunch=lambda _command: _done(),
+            timeout=10,
+            poll_interval=0.1,
+            ready_settle_time=0,
+        )
 
 
 @pytest.mark.asyncio

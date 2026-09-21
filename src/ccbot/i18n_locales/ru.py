@@ -108,6 +108,7 @@ RU: dict[str, str] = {
     "menu.title": "*Меню*",
     "menu.empty": "*Меню*\n\nАктивной сессии нет — выбери в свитчере или тапни 🆕 Новая.",
     "menu.active": "*Меню* · активна: *{name}*",
+    "startup.prompt_not_sent": "❌ Не отправлено в сессию: {prompt}",
     "settings.title": "*Настройки*",
     "settings.table.section": "Раздел",
     "settings.table.contents": "Настройки",

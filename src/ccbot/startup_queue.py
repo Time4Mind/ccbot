@@ -35,12 +35,16 @@ class StartupFlow:
     user_id: int
     entries: deque[QueuedInbound] = field(default_factory=deque)
     next_sequence: int = 1
+    session_id: str | None = None
     window_id: str | None = None
     drain_task: asyncio.Task[None] | None = None
     operation_task: asyncio.Task[None] | None = None
 
 
 _flows: dict[int, StartupFlow] = {}
+_CONTROL_COMMANDS = frozenset(
+    {"archive", "health", "help", "kill", "login", "menu", "new", "stop", "usage"}
+)
 
 
 def begin_startup_queue(user_id: int) -> StartupFlow:
@@ -64,9 +68,14 @@ def pending_startup_count(user_id: int) -> int:
 
 def cancel_startup_queue(user_id: int) -> int:
     """Explicitly abandon a cancelled flow and return its unsent count."""
+    return len(fail_startup_queue(user_id))
+
+
+def fail_startup_queue(user_id: int) -> list[QueuedInbound]:
+    """Close a failed flow and return every undelivered update in FIFO order."""
     flow = _flows.pop(user_id, None)
     if flow is None:
-        return 0
+        return []
     if flow.drain_task is not None and not flow.drain_task.done():
         flow.drain_task.cancel()
     current = asyncio.current_task()
@@ -76,9 +85,9 @@ def cancel_startup_queue(user_id: int) -> int:
         and not flow.operation_task.done()
     ):
         flow.operation_task.cancel()
-    count = len(flow.entries)
-    logger.info("startup queue cancelled user=%d pending=%d", user_id, count)
-    return count
+    entries = list(flow.entries)
+    logger.info("startup queue cancelled user=%d pending=%d", user_id, len(entries))
+    return entries
 
 
 def track_startup_operation(user_id: int, task: asyncio.Task[None]) -> None:
@@ -111,7 +120,12 @@ async def capture_startup_message(
     if state == STATE_NAMING_DIRECTORY and update.message.text is not None:
         return
     text = (update.message.text or "").strip()
-    if text.startswith(("/login", "/new")):
+    command = (
+        text.split(maxsplit=1)[0].removeprefix("/").split("@", 1)[0].casefold()
+        if text
+        else ""
+    )
+    if text.startswith("/") and command in _CONTROL_COMMANDS:
         # Control-plane commands must be able to repair/restart a failed
         # creation flow. begin_startup_queue() retains the existing entries.
         return
@@ -140,8 +154,10 @@ def enqueue_startup_message(
     entry = QueuedInbound(update=update, context=context, sequence=flow.next_sequence)
     flow.next_sequence += 1
     flow.entries.append(entry)
-    if flow.window_id is not None:
-        _surface_startup_entry(entry, flow.window_id)
+    if flow.session_id is not None:
+        _surface_startup_entry(entry, session_id=flow.session_id)
+    elif flow.window_id is not None:
+        _surface_startup_entry(entry, window_id=flow.window_id)
     logger.info(
         "startup queue captured user=%d seq=%d message_id=%s pending=%d",
         user.id,
@@ -152,7 +168,9 @@ def enqueue_startup_message(
     return entry
 
 
-def _surface_startup_entry(entry: QueuedInbound, window_id: str) -> None:
+def _surface_startup_entry(
+    entry: QueuedInbound, *, session_id: str = "", window_id: str = ""
+) -> None:
     """Render an immediate card receipt while delivery waits for readiness."""
     from .handlers.card_types import PendingPrompt
     from .handlers.notifications import get_card_state, schedule_card_after_message
@@ -162,7 +180,11 @@ def _surface_startup_entry(entry: QueuedInbound, window_id: str) -> None:
     user = entry.update.effective_user
     if message is None or user is None:
         return
-    sess = session_manager.find_session_by_window(window_id)
+    sess = (
+        session_manager.get_session(session_id)
+        if session_id
+        else session_manager.find_session_by_window(window_id)
+    )
     if sess is None:
         return
     state = get_card_state(user.id, sess)
@@ -335,14 +357,25 @@ def bind_startup_queue(user_id: int, window_id: str) -> asyncio.Task[None] | Non
     if flow is None:
         return None
     flow.window_id = window_id
-    for entry in flow.entries:
-        _surface_startup_entry(entry, window_id)
+    if flow.session_id is None:
+        for entry in flow.entries:
+            _surface_startup_entry(entry, window_id=window_id)
     if flow.drain_task is not None and not flow.drain_task.done():
         return flow.drain_task
     flow.drain_task = asyncio.create_task(
         _drain(user_id, window_id), name=f"startup-queue:{user_id}:{window_id}"
     )
     return flow.drain_task
+
+
+def bind_startup_session(user_id: int, session_id: str) -> None:
+    """Attach the provisional card so queued prompts are visible immediately."""
+    flow = _flows.get(user_id)
+    if flow is None:
+        return
+    flow.session_id = session_id
+    for entry in flow.entries:
+        _surface_startup_entry(entry, session_id=session_id)
 
 
 def reset_startup_queues_for_test() -> None:
@@ -357,10 +390,12 @@ def reset_startup_queues_for_test() -> None:
 
 __all__ = [
     "begin_startup_queue",
+    "bind_startup_session",
     "bind_startup_queue",
     "cancel_startup_queue",
     "capture_startup_message",
     "enqueue_startup_message",
+    "fail_startup_queue",
     "has_startup_queue",
     "pending_startup_count",
     "track_startup_operation",

@@ -93,6 +93,7 @@ ZH: dict[str, str] = {
     "menu.title": "*菜单*",
     "menu.empty": "*菜单*\n\n无活动会话——从切换器选一个或点 🆕 新建。",
     "menu.active": "*菜单* · 活动: *{name}*",
+    "startup.prompt_not_sent": "❌ 未发送到会话：{prompt}",
     "settings.title": "*设置*",
     "settings.table.section": "分区",
     "settings.table.contents": "设置项",

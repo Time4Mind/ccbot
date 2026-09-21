@@ -23,6 +23,7 @@ from ..handlers.message_sender import safe_edit
 from ..handlers.notifications import (
     activate_card_on_carrier,
     paint_card_on_carrier,
+    reset_card,
 )
 from ..i18n import t
 from ..session import session_manager
@@ -146,11 +147,6 @@ async def _create_and_activate_session(
     assert isinstance(query, CallbackQuery)
     assert isinstance(user, User)
 
-    def cancel_pending_flow() -> int:
-        from ..startup_queue import cancel_startup_queue
-
-        return cancel_startup_queue(user.id)
-
     # The Telegram surface is the acknowledgement for Start. Publish it before
     # any account probe, tmux/RPC startup, readiness polling, or lifecycle bind.
     # Until a real window is attached, the startup FIFO owns all user input.
@@ -178,9 +174,14 @@ async def _create_and_activate_session(
             await safe_edit(query, "✅ Session is starting")
     else:
         session_manager.set_active_session(user.id, sess.id)
+    from ..startup_queue import bind_startup_session
+
+    bind_startup_session(user.id, sess.id)
     _log_phase("card_published", user.id, node_id, started_at)
 
-    def fail_startup(message: str) -> int:
+    def fail_startup(message: str) -> str:
+        from ..startup_queue import fail_startup_queue
+
         logger.warning(
             "Session startup failed user=%d session=%s node=%s: %s",
             user.id,
@@ -188,8 +189,26 @@ async def _create_and_activate_session(
             node_id,
             message,
         )
-        session_manager.mark_session_lost(sess.id)
-        return cancel_pending_flow()
+        queued = fail_startup_queue(user.id)
+        session_manager.delete_session(sess.id)
+        reset_card(user.id, sess.id)
+        lines = [message]
+        for entry in queued:
+            queued_message = entry.update.message
+            if queued_message is None:
+                label = "message"
+            elif queued_message.text:
+                label = queued_message.text
+            elif queued_message.voice:
+                label = "voice message"
+            elif queued_message.photo:
+                label = "photo"
+            elif queued_message.document:
+                label = "document"
+            else:
+                label = "message"
+            lines.append(t(user.id, "startup.prompt_not_sent", prompt=label))
+        return "\n".join(lines)
 
     if backend == "codex":
         from .commands.auth import ensure_codex_authenticated
@@ -199,10 +218,10 @@ async def _create_and_activate_session(
         )
         _log_phase("auth_result", user.id, node_id, started_at)
         if not authenticated:
-            fail_startup(t(user.id, "auth.codex.required"))
+            failure = fail_startup(t(user.id, "auth.codex.required"))
             await safe_edit(
                 query,
-                t(user.id, "auth.codex.required"),
+                failure,
             )
             return
 
@@ -215,21 +234,20 @@ async def _create_and_activate_session(
             wait_for_codex_ready=False,
         )
         if not success:
-            fail_startup(message)
-            await safe_edit(query, f"❌ {message}")
+            failure = fail_startup(message)
+            await safe_edit(query, f"❌ {failure}")
             return
     else:
         runtime = get_node_runtime(node_id)
         if runtime is None:
-            fail_startup(f"Node is not connected: {node_id}")
-            await safe_edit(query, f"❌ Node is not connected: {node_id}")
+            failure = fail_startup(f"Node is not connected: {node_id}")
+            await safe_edit(query, f"❌ {failure}")
             return
         if resume_session_id:
-            fail_startup("Remote resume is not supported")
+            failure = fail_startup("Remote resume is not supported")
             await safe_edit(
                 query,
-                "❌ Resuming an existing directory session on a remote node "
-                "is not supported yet.",
+                f"❌ {failure}",
             )
             return
         try:
@@ -241,15 +259,14 @@ async def _create_and_activate_session(
             )
         except Exception as exc:
             logger.exception("Remote session creation failed on node %s", node_id)
-            unsent = fail_startup(str(exc))
-            suffix = f"; {unsent} queued message(s) not sent" if unsent else ""
-            await safe_edit(query, f"❌ {exc}{suffix}")
+            failure = fail_startup(str(exc))
+            await safe_edit(query, f"❌ {failure}")
             return
         raw_window_id = str(result.get("target_window_id", ""))
         agent_session_id = str(result.get("target_agent_session_id", ""))
         if not raw_window_id or not agent_session_id:
-            fail_startup("Worker did not return a ready session")
-            await safe_edit(query, "❌ Worker did not return a ready session")
+            failure = fail_startup("Worker did not return a ready session")
+            await safe_edit(query, f"❌ {failure}")
             return
         created_wid = f"{node_id}::{raw_window_id}"
         created_wname = pending_name or raw_window_id

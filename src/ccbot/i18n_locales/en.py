@@ -110,6 +110,7 @@ EN: dict[str, str] = {
     "menu.title": "*Menu*",
     "menu.empty": "*Menu*\n\nNo active session — pick one from the switcher or tap 🆕 New.",
     "menu.active": "*Menu* · active: *{name}*",
+    "startup.prompt_not_sent": "❌ Not sent to the session: {prompt}",
     # Settings — top
     "settings.title": "*Settings*",
     "settings.table.section": "Section",

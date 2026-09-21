@@ -212,7 +212,7 @@ class NodeSessionStateMixin:
         target.context_error = context_error
         target.imported_from_backend = source.backend
         target.imported_from_session_id = source.id
-        target.claude_session_id = target_agent_session_id
+        target.worker_session_id = target_agent_session_id
         transfer.target_session_id = target.id
         transfer.state = "ready"
         transfer.error = context_error

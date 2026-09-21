@@ -56,10 +56,11 @@ async def capture_window(window_id: str) -> str | None:
         from ...transfer_runtime import get_node_runtime
 
         runtime = get_node_runtime(sess.node_id)
-        if runtime is None or not sess.claude_session_id:
+        routing_id = sess.worker_session_id or sess.claude_session_id
+        if runtime is None or not routing_id:
             return None
         try:
-            result = await runtime.capture_session(sess.node_id, sess.claude_session_id)
+            result = await runtime.capture_session(sess.node_id, routing_id)
         except Exception:
             logger.exception("Remote pane capture failed for %s", sess.id)
             return None
@@ -74,10 +75,11 @@ async def _send_window_key(window_id: str, key: str) -> bool:
         from ...transfer_runtime import get_node_runtime
 
         runtime = get_node_runtime(sess.node_id)
-        if runtime is None or not sess.claude_session_id:
+        routing_id = sess.worker_session_id or sess.claude_session_id
+        if runtime is None or not routing_id:
             return False
         try:
-            result = await runtime.send_key(sess.node_id, sess.claude_session_id, key)
+            result = await runtime.send_key(sess.node_id, routing_id, key)
         except Exception:
             logger.exception("Remote key delivery failed for %s", sess.id)
             return False

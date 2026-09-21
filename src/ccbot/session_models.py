@@ -110,7 +110,8 @@ class Session:
         workdir: Working directory at session creation. Used as cwd for `claude --resume`.
         goal: Free-form goal description retained for persisted compatibility.
         state: 'active' | 'idle' | 'archived' | 'completed' | 'lost'.
-        claude_session_id: Last known Claude session id (uuid). Set by SessionStart hook.
+        worker_session_id: Stable remote-worker routing id for RPC and events.
+        claude_session_id: Native provider session id used for transcript/resume.
         created_at: Unix timestamp.
         last_event_at: Unix timestamp of most recent inbound or outbound activity.
         archived_at: Unix timestamp of archival, 0 while active.
@@ -127,7 +128,9 @@ class Session:
     workdir: str = ""
     goal: str = ""
     state: SessionState = "active"
+    worker_session_id: str = ""
     claude_session_id: str = ""
+    provider_transcript_path: str = ""
     created_at: float = 0.0
     last_event_at: float = 0.0
     archived_at: float = 0.0
@@ -222,7 +225,9 @@ class Session:
             "workdir": self.workdir,
             "goal": self.goal,
             "state": self.state,
+            "worker_session_id": self.worker_session_id,
             "claude_session_id": self.claude_session_id,
+            "provider_transcript_path": self.provider_transcript_path,
             "created_at": self.created_at,
             "last_event_at": self.last_event_at,
             "archived_at": self.archived_at,
@@ -250,6 +255,12 @@ class Session:
         state_val = data.get("state", "active")
         if state_val not in ("active", "idle", "archived", "completed", "lost"):
             state_val = "active"
+        node_id = str(data.get("node_id", "local"))
+        provider_session_id = str(data.get("claude_session_id", ""))
+        worker_session_id = str(data.get("worker_session_id", ""))
+        if node_id != "local" and "worker_session_id" not in data:
+            worker_session_id = provider_session_id
+            provider_session_id = ""
         return cls(
             id=data["id"],
             name=data.get("name", ""),
@@ -257,7 +268,9 @@ class Session:
             workdir=data.get("workdir", ""),
             goal=data.get("goal", ""),
             state=state_val,
-            claude_session_id=data.get("claude_session_id", ""),
+            worker_session_id=worker_session_id,
+            claude_session_id=provider_session_id,
+            provider_transcript_path=str(data.get("provider_transcript_path", "")),
             created_at=float(data.get("created_at", 0.0)),
             last_event_at=float(data.get("last_event_at", 0.0)),
             archived_at=float(data.get("archived_at", 0.0)),
@@ -285,7 +298,7 @@ class Session:
                 and isinstance(value.get("original"), str)
             ][-128:],
             default_reserve_user_id=int(data.get("default_reserve_user_id", 0)),
-            node_id=str(data.get("node_id", "local")),
+            node_id=node_id,
             context_path=str(data.get("context_path", "")),
             context_error=str(data.get("context_error", "")),
         )

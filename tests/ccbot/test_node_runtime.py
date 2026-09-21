@@ -10,6 +10,7 @@ from ccbot import node_runtime
 from ccbot.node_runtime import NodeRpcClient
 from ccbot.session import session_manager
 from ccbot.node_transport import NodeEnvelope
+from ccbot.node_models import Node
 
 
 @pytest.mark.asyncio
@@ -96,6 +97,55 @@ async def test_worker_health_auto_registers_remote_node_and_runtime(monkeypatch)
     )
     assert persisted == [True, False]
     assert registered_runtimes == ["worker-a"]
+    await node_runtime.shutdown_remote_runtimes()
+
+
+@pytest.mark.asyncio
+async def test_worker_binding_event_persists_native_provider_identity(monkeypatch):
+    rpc = SimpleNamespace(close=AsyncMock())
+    captured: dict[str, object] = {}
+
+    async def fake_connect_leader_rpc(**kwargs):
+        captured.update(kwargs)
+        return rpc
+
+    monkeypatch.setattr(node_runtime, "connect_leader_rpc", fake_connect_leader_rpc)
+    monkeypatch.setattr(node_runtime, "register_node_runtime", lambda *_args: None)
+    node_runtime._leader_rpc = None
+    node_runtime._remote_node_ids.clear()
+    session_manager.register_node(
+        Node(id="worker-a", display_name="Worker A", state="ready")
+    )
+    session = session_manager.create_session(
+        name="Remote",
+        node_id="worker-a",
+        worker_session_id="routing-42",
+        backend="codex",
+    )
+
+    await node_runtime.connect_configured_remote_runtimes(
+        relay_url="relay.example.test:8765",
+        leader_id="leader",
+        secret="secret",
+        node_ids=["worker-a"],
+    )
+    handler = captured["event_handler"]
+    await handler(
+        NodeEnvelope(
+            kind="event",
+            payload={
+                "node_id": "worker-a",
+                "event_type": "session_binding",
+                "session_id": "routing-42",
+                "provider_session_id": "provider-01",
+                "transcript_path": "/worker/rollout.jsonl",
+            },
+        )
+    )
+
+    assert session.worker_session_id == "routing-42"
+    assert session.claude_session_id == "provider-01"
+    assert session.provider_transcript_path == "/worker/rollout.jsonl"
     await node_runtime.shutdown_remote_runtimes()
 
 

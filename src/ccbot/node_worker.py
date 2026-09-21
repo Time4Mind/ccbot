@@ -54,6 +54,9 @@ class _TmuxWorkerSession:
     transcript_offset: int = 0
     pending_tools: dict[str, Any] = field(default_factory=dict)
     recovered: bool = False
+    provider_session_id: str = ""
+    provider_transcript_path: str = ""
+    binding_announced: bool = False
 
 
 class TmuxWorkerExecutor:
@@ -147,7 +150,6 @@ class TmuxWorkerExecutor:
         if backend not in ("claude", "codex"):
             raise ValueError(f"unsupported backend: {backend}")
         command = self._agent_command(backend)
-        worker_session_id = ""
         if resume_session_id:
             source_backend = source_backend or backend
             await asyncio.to_thread(
@@ -160,7 +162,6 @@ class TmuxWorkerExecutor:
                 command = self._agent_command(
                     backend, resume_session_id=resume_session_id
                 )
-                worker_session_id = resume_session_id
             else:
                 from .session_import import build_import_context, import_prompt
                 from .session_models import Session
@@ -179,14 +180,51 @@ class TmuxWorkerExecutor:
                     backend,
                     initial_prompt=import_prompt(context_path, source_backend),
                 )
-        return await self._start_tmux_agent(
+        result = await self._start_tmux_agent(
             workdir=directory,
             backend=backend,
             name=name,
             command=command,
             startup_id=startup_id,
-            session_id=worker_session_id,
         )
+        if resume_session_id and source_backend == backend:
+            result["provider_session_id"] = resume_session_id
+        return result
+
+    async def resolve_provider_session(
+        self, *, path: str, backend: str, session_id: str
+    ) -> dict[str, Any]:
+        """Recover one legacy routing id only when transcript identity is exact."""
+        directory = self._resolve_directory(path)
+        live = await self._find_session(session_id)
+        if live is not None:
+            await self._bind_transcript(live)
+            if live.provider_session_id:
+                return {
+                    "ok": True,
+                    "provider_session_id": live.provider_session_id,
+                    "transcript_path": live.provider_transcript_path,
+                }
+        if backend == "codex":
+            from .codex_session_io import list_sessions_for_directory
+        elif backend == "claude":
+            from .session_claude_io import list_sessions_for_directory
+        else:
+            return {"ok": False, "error_code": "unsupported_backend"}
+        candidates = await list_sessions_for_directory(str(directory))
+        if len(candidates) != 1:
+            return {
+                "ok": False,
+                "error_code": (
+                    "ambiguous_transcript" if candidates else "missing_transcript"
+                ),
+            }
+        candidate = candidates[0]
+        return {
+            "ok": True,
+            "provider_session_id": candidate.session_id,
+            "transcript_path": candidate.file_path,
+        }
 
     async def start_context_session(
         self, *, context_path: str, backend: str, name: str
@@ -383,6 +421,18 @@ class TmuxWorkerExecutor:
         for session in tuple(self._sessions.values()):
             try:
                 await self._bind_transcript(session)
+                if getattr(session, "provider_session_id", "") and not getattr(
+                    session, "binding_announced", False
+                ):
+                    events.append(
+                        {
+                            "event_type": "session_binding",
+                            "session_id": session.session_id,
+                            "provider_session_id": session.provider_session_id,
+                            "transcript_path": session.provider_transcript_path,
+                        }
+                    )
+                    session.binding_announced = True
                 path = session.transcript_path
                 if path is None:
                     continue
@@ -445,10 +495,12 @@ class TmuxWorkerExecutor:
         return chunk, start + len(chunk)
 
     async def _bind_transcript(self, session: _TmuxWorkerSession) -> None:
-        if session.transcript_path is not None:
+        if session.transcript_path is not None and getattr(
+            session, "provider_session_id", ""
+        ):
             return
 
-        def lookup() -> Path | None:
+        def lookup() -> tuple[str, Path] | None:
             path = ccbot_dir() / "session_map.json"
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
@@ -461,14 +513,18 @@ class TmuxWorkerExecutor:
                 if not str(key).endswith(suffix) or not isinstance(value, dict):
                     continue
                 transcript = Path(str(value.get("transcript_path", "")))
-                if transcript.is_file():
-                    return transcript
+                provider_session_id = str(value.get("session_id", ""))
+                if provider_session_id and transcript.is_file():
+                    return provider_session_id, transcript
             return None
 
-        path = await asyncio.to_thread(lookup)
-        if path is None:
+        binding = await asyncio.to_thread(lookup)
+        if binding is None:
             return
+        provider_session_id, path = binding
         session.transcript_path = path
+        session.provider_session_id = provider_session_id
+        session.provider_transcript_path = str(path)
         try:
             # A newly-created Codex session can publish session_map only after
             # its first response is already in the rollout. Read that rollout

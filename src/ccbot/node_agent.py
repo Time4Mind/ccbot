@@ -316,8 +316,6 @@ class NodeAgent:
         try:
             result = await self._dispatch(message.payload or {})
         except asyncio.CancelledError:
-            # Preserve an idempotent terminal receipt across relay reconnects.
-            # The executor's cancellation path has already removed any window.
             self._ledger.complete(
                 message.request_id,
                 {"ok": False, "error": "worker command cancelled after disconnect"},
@@ -355,6 +353,12 @@ class NodeAgent:
             )
         if operation in ("create_session", "restore_session"):
             return await dispatch_create_session(self._executor, payload)
+        if operation == "resolve_provider_session":
+            return await cast(Any, self._executor).resolve_provider_session(
+                path=str(payload.get("path", "")),
+                backend=str(payload.get("backend", "")),
+                session_id=str(payload.get("session_id", "")),
+            )
         if operation == "cancel_session_start":
             return await self._executor.cancel_session_start(
                 startup_id=str(payload.get("startup_id", ""))
@@ -793,8 +797,4 @@ def main(argv: list[str] | None = None) -> None:
     )
 
 
-__all__ = [
-    "NodeAgent",
-    "NodeCredentialStore",
-    "main",
-]
+__all__ = ["NodeAgent", "NodeCredentialStore", "main"]

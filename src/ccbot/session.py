@@ -698,9 +698,12 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
             if node is None or not node.is_available():
                 return False, "Remote node is offline; message was not sent"
             runtime = get_node_runtime(node_id)
-            if runtime is None or not getattr(sess, "claude_session_id", ""):
+            routing_id = getattr(sess, "worker_session_id", "") or getattr(
+                sess, "claude_session_id", ""
+            )
+            if runtime is None or not routing_id:
                 return False, "Remote node session is not available"
-            result = await runtime.send_text(node_id, sess.claude_session_id, text)
+            result = await runtime.send_text(node_id, routing_id, text)
             if result.get("ok", True):
                 return True, f"Sent to {display}"
             return False, str(result.get("error", "Failed to send to remote node"))

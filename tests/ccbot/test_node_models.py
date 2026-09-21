@@ -51,6 +51,56 @@ def test_legacy_session_and_window_state_default_to_local_node() -> None:
     assert window.node_id == "local"
 
 
+def test_remote_session_round_trip_keeps_worker_and_provider_ids_separate() -> None:
+    session = Session(
+        id="remote",
+        name="Remote",
+        node_id="worker-a",
+        worker_session_id="routing-42",
+        claude_session_id="provider-01",
+        provider_transcript_path="/worker/rollout.jsonl",
+    )
+
+    restored = Session.from_dict(session.to_dict())
+
+    assert restored.worker_session_id == "routing-42"
+    assert restored.claude_session_id == "provider-01"
+    assert restored.provider_transcript_path == "/worker/rollout.jsonl"
+
+
+def test_legacy_remote_session_migrates_old_id_to_worker_routing() -> None:
+    restored = Session.from_dict(
+        {
+            "id": "remote",
+            "name": "Remote",
+            "node_id": "worker-a",
+            "claude_session_id": "old-routing-uuid",
+        }
+    )
+
+    assert restored.worker_session_id == "old-routing-uuid"
+    assert restored.claude_session_id == ""
+
+
+def test_remote_events_still_resolve_by_worker_routing_after_provider_binding(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
+    monkeypatch.setattr(SessionManager, "save_state", lambda self: None)
+    manager = SessionManager()
+    session = manager.create_session(
+        name="Remote",
+        node_id="worker-a",
+        worker_session_id="routing-42",
+        backend="codex",
+    )
+    session.claude_session_id = "provider-01"
+
+    targets = manager.all_user_sessions_with_claude_id("routing-42")
+
+    assert [target.id for _user_id, target in targets] == [session.id]
+
+
 def test_session_context_metadata_round_trips() -> None:
     session = Session(
         id="target",

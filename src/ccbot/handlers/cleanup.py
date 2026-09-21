@@ -52,8 +52,9 @@ async def teardown_session_runtime(
         from ..transfer_runtime import get_node_runtime
 
         runtime = get_node_runtime(sess.node_id)
-        if runtime is not None and provider_session_id:
-            await runtime.terminate_session(sess.node_id, provider_session_id)
+        routing_id = sess.worker_session_id or provider_session_id
+        if runtime is not None and routing_id:
+            await runtime.terminate_session(sess.node_id, routing_id)
         for window_id in sorted(window_ids):
             await clear_session_state(user_id, window_id, bot)
         return window_ids

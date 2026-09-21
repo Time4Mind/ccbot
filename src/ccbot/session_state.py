@@ -168,6 +168,7 @@ class SessionStateMixin(NodeSessionStateMixin):
         backend: str | None = None,
         default_reserve_user_id: int = 0,
         node_id: str = "local",
+        worker_session_id: str = "",
     ) -> "Session":
         """Register a new Session record. Caller is responsible for the tmux window."""
         now = time.time()
@@ -189,6 +190,7 @@ class SessionStateMixin(NodeSessionStateMixin):
             backend=backend or self.agent_backend,
             default_reserve_user_id=default_reserve_user_id,
             node_id=node_id,
+            worker_session_id=worker_session_id,
         )
         self.sessions[sid] = sess
         self.save_state()
@@ -567,6 +569,31 @@ class SessionStateMixin(NodeSessionStateMixin):
             sess.claude_session_id = claude_session_id
             self.save_state()
 
+    def set_session_worker_id(self, session_id: str, worker_session_id: str) -> None:
+        sess = self.sessions.get(session_id)
+        if sess and sess.worker_session_id != worker_session_id:
+            sess.worker_session_id = worker_session_id
+            self.save_state()
+
+    def bind_remote_session(
+        self,
+        node_id: str,
+        worker_session_id: str,
+        provider_session_id: str,
+        transcript_path: str,
+    ) -> "Session | None":
+        """Persist a worker routing id -> native provider identity binding."""
+        if not node_id or not worker_session_id or not provider_session_id:
+            return None
+        for sess in self.sessions.values():
+            if sess.node_id != node_id or sess.worker_session_id != worker_session_id:
+                continue
+            sess.claude_session_id = provider_session_id
+            sess.provider_transcript_path = transcript_path
+            self.save_state()
+            return sess
+        return None
+
     def get_last_switcher_msg(self, user_id: int) -> int | None:
         return self.last_switcher_msg_id.get(user_id)
 
@@ -620,6 +647,7 @@ class SessionStateMixin(NodeSessionStateMixin):
             sess
             for sess in self.sessions.values()
             if sess.claude_session_id == claude_session_id
+            or sess.worker_session_id == claude_session_id
         ]
         out: list[tuple[int, "Session"]] = []
         for user_id in sorted(config.allowed_users):

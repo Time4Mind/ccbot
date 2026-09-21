@@ -52,6 +52,16 @@ PAGE_SIZE = 6
 DEFAULT_LOOKBACK_SECONDS = 20 * 86400
 
 
+def _remote_restore_error(sess: Session, reason: str, message: str) -> tuple[bool, str]:
+    logger.warning(
+        "remote_restore_failed node=%s session=%s reason=%s",
+        sess.node_id,
+        sess.id,
+        reason,
+    )
+    return False, message
+
+
 def _format_blurb(messages: list[str]) -> str:
     """Lay out early prompts with an independent per-prompt display cap."""
     if not messages:
@@ -221,6 +231,10 @@ async def _archive_blurb(sess: Session, user_id: int | None = None) -> str:
 async def _archive_context_status(sess: Session) -> bool | None:
     """Return whether a session has user context, or None if unreadable."""
     if not sess.claude_session_id:
+        if getattr(sess, "node_id", "local") != "local" and getattr(
+            sess, "worker_session_id", ""
+        ):
+            return None
         return False
     fp = build_session_file_path(sess.claude_session_id, sess.workdir)
     if fp is None or not fp.exists():
@@ -428,8 +442,59 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
     cross_backend = source_backend != target_backend
     resume_session_id = sess.claude_session_id or None
     initial_prompt: str | None = None
-    if sess.node_id != "local" and not resume_session_id:
-        return False, "Provider session id is missing on the remote archive"
+    remote_runtime = None
+    if sess.node_id != "local":
+        logger.info(
+            "remote_restore_attempt node=%s session=%s provider_bound=%s",
+            sess.node_id,
+            sess.id,
+            bool(resume_session_id),
+        )
+        remote_runtime = get_node_runtime(sess.node_id)
+        if remote_runtime is None:
+            return _remote_restore_error(
+                sess, "offline", f"Node is not connected: {sess.node_id}"
+            )
+        if not resume_session_id:
+            routing_id = sess.worker_session_id
+            if not routing_id:
+                return _remote_restore_error(
+                    sess,
+                    "missing_identity",
+                    "Remote archive has no worker or provider session id",
+                )
+            try:
+                resolved = await remote_runtime.resolve_provider_session(
+                    sess.node_id, workdir, source_backend, routing_id
+                )
+            except Exception:
+                return _remote_restore_error(
+                    sess,
+                    "resolve_error",
+                    "Could not resolve the remote provider session",
+                )
+            if not resolved.get("ok", False):
+                reason = str(resolved.get("error_code", "unresolved_transcript"))
+                if reason == "ambiguous_transcript":
+                    return _remote_restore_error(
+                        sess,
+                        reason,
+                        "Several remote transcripts share this workdir; "
+                        "the exact archived session cannot be selected safely",
+                    )
+                return _remote_restore_error(
+                    sess, reason, "Remote transcript was not found on the worker"
+                )
+            resume_session_id = str(resolved.get("provider_session_id", "")) or None
+            if not resume_session_id:
+                return _remote_restore_error(
+                    sess,
+                    "missing_provider_id",
+                    "Worker returned no provider session id",
+                )
+            sess.claude_session_id = resume_session_id
+            sess.provider_transcript_path = str(resolved.get("transcript_path", ""))
+            session_manager.save_state()
     if cross_backend and sess.node_id == "local":
         from ..session_import import build_import_context, import_prompt
 
@@ -443,11 +508,9 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
         resume_session_id = None
 
     if sess.node_id != "local":
-        runtime = get_node_runtime(sess.node_id)
-        if runtime is None:
-            return False, f"Node is not connected: {sess.node_id}"
+        assert remote_runtime is not None
         try:
-            result = await runtime.create_session(
+            result = await remote_runtime.create_session(
                 sess.node_id,
                 workdir,
                 target_backend,
@@ -456,21 +519,36 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
                 source_backend=source_backend,
             )
         except Exception as exc:
-            return False, f"Remote restore failed on {sess.node_id}: {exc}"
+            return _remote_restore_error(
+                sess,
+                "worker_rejected",
+                f"Remote restore failed on {sess.node_id}: {exc}",
+            )
         raw_window_id = str(result.get("target_window_id", ""))
         agent_session_id = str(result.get("target_agent_session_id", ""))
         if not raw_window_id or not agent_session_id:
-            return False, f"Remote restore failed on {sess.node_id}: invalid response"
+            return _remote_restore_error(
+                sess,
+                "invalid_response",
+                f"Remote restore failed on {sess.node_id}: invalid response",
+            )
         created_wid = f"{sess.node_id}::{raw_window_id}"
         created_wname = sess.name or raw_window_id
         session_manager.set_session_window(sess.id, created_wid)
-        session_manager.set_session_claude_id(sess.id, agent_session_id)
+        session_manager.set_session_worker_id(sess.id, agent_session_id)
         if cross_backend:
             sess.imported_from_backend = source_backend
             sess.imported_from_session_id = resume_session_id or ""
             sess.backend = target_backend
+            sess.claude_session_id = str(result.get("provider_session_id", ""))
+            sess.provider_transcript_path = str(result.get("transcript_path", ""))
         session_manager.select_session(user_id, sess.id)
         session_manager.save_state()
+        logger.info(
+            "remote_restore_succeeded node=%s session=%s",
+            sess.node_id,
+            sess.id,
+        )
         note = (
             f" - imported from {source_backend} into a native {target_backend} session"
             if cross_backend

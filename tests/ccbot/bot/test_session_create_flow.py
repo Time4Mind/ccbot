@@ -46,6 +46,7 @@ async def test_codex_card_is_published_before_auth_and_process_start(
         get_active_session=lambda _uid: None,
         create_session=MagicMock(return_value=new_session),
         set_session_claude_id=MagicMock(),
+        set_session_worker_id=MagicMock(),
         set_active_session=MagicMock(),
         save_state=MagicMock(),
         mark_window_starting=MagicMock(),
@@ -117,6 +118,7 @@ async def test_slow_remote_creation_returns_control_to_telegram_immediately(
         get_active_session=lambda _uid: None,
         create_session=MagicMock(return_value=new_session),
         set_session_claude_id=MagicMock(),
+        set_session_worker_id=MagicMock(),
         set_active_session=MagicMock(),
         save_state=MagicMock(),
     )
@@ -235,6 +237,7 @@ async def test_old_card_stays_background_until_atomic_new_session_handoff(
         get_window_state=lambda _wid: window_state,
         create_session=MagicMock(return_value=new_session),
         set_session_claude_id=MagicMock(),
+        set_session_worker_id=MagicMock(),
         set_active_session=plain_set_active,
         save_state=MagicMock(),
         wait_for_session_map_entry=AsyncMock(return_value=None),
@@ -298,6 +301,7 @@ async def test_new_session_is_created_on_selected_remote_node(monkeypatch):
         get_active_session=lambda _uid: None,
         create_session=MagicMock(return_value=new_session),
         set_session_claude_id=MagicMock(),
+        set_session_worker_id=MagicMock(),
         set_active_session=MagicMock(),
         save_state=MagicMock(),
     )
@@ -333,6 +337,6 @@ async def test_new_session_is_created_on_selected_remote_node(monkeypatch):
         node_id="worker-a",
     )
     assert new_session.window_id == "worker-a::@8"
-    fake_manager.set_session_claude_id.assert_called_once_with(
+    fake_manager.set_session_worker_id.assert_called_once_with(
         "remote-session", "agent-8"
     )

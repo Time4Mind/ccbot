@@ -9,6 +9,7 @@ import json
 
 from ccbot.node_agent import NodeAgent, NodeCredentialStore, TmuxWorkerExecutor
 from ccbot.node_transport import NodeEnvelope
+from ccbot.config import config
 
 
 class FakeTransport:
@@ -513,7 +514,13 @@ async def test_worker_emits_assistant_transcript_events_for_remote_card(
 
     events = await executor.poll_events()
 
-    assert events == [
+    assert events[0] == {
+        "event_type": "session_binding",
+        "session_id": session_id,
+        "provider_session_id": "provider-session",
+        "transcript_path": str(transcript),
+    }
+    assert events[1:] == [
         {
             "event_type": "session_message",
             "session_id": session_id,
@@ -559,7 +566,8 @@ async def test_worker_resumes_existing_codex_rollout_on_worker(tmp_path, monkeyp
         source_backend="codex",
     )
 
-    assert result["target_agent_session_id"] == "rollout-42"
+    assert result["target_agent_session_id"] != "rollout-42"
+    assert result["provider_session_id"] == "rollout-42"
     assert (
         "send-keys",
         "-t",
@@ -652,7 +660,11 @@ async def test_worker_emits_queued_user_rows_before_remote_answer(
 
     events = await executor.poll_events()
 
-    assert [(event["role"], event["text"]) for event in events] == [
+    assert [
+        (event["role"], event["text"])
+        for event in events
+        if event["event_type"] == "session_message"
+    ] == [
         ("user", "first prompt"),
         ("user", "second prompt"),
         ("assistant", "answer"),
@@ -732,9 +744,92 @@ async def test_remote_codex_delayed_binding_emits_both_turns_once(
         )
     second_events = await executor.poll_events()
 
-    assert [event["text"] for event in first_events] == ["first answer"]
+    assert first_events[0] == {
+        "event_type": "session_binding",
+        "session_id": session_id,
+        "provider_session_id": "provider-session",
+        "transcript_path": str(transcript),
+    }
+    assert [event["text"] for event in first_events[1:]] == ["first answer"]
     assert [event["text"] for event in second_events] == ["second answer"]
     assert await executor.poll_events() == []
+
+
+@pytest.mark.asyncio
+async def test_worker_republishes_provider_binding_after_restart(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    monkeypatch.setenv("CCBOT_DIR", str(state_dir))
+    transcript = tmp_path / "rollout.jsonl"
+    transcript.write_text("", encoding="utf-8")
+    (state_dir / "session_map.json").write_text(
+        json.dumps(
+            {
+                "ccbot-worker:@9": {
+                    "session_id": "provider-01",
+                    "transcript_path": str(transcript),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    executor = TmuxWorkerExecutor(workdir=tmp_path, reconcile_interval=0)
+
+    async def fake_tmux(*args: str):
+        if args[0] == "list-windows":
+            return 0, "@9\trouting-42\tcodex\n", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(executor, "_run_tmux", fake_tmux)
+
+    events = await executor.poll_events()
+
+    assert events == [
+        {
+            "event_type": "session_binding",
+            "session_id": "routing-42",
+            "provider_session_id": "provider-01",
+            "transcript_path": str(transcript),
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_legacy_restore_rejects_ambiguous_rollouts_in_same_workdir(
+    tmp_path, monkeypatch
+):
+    sessions_root = tmp_path / "sessions"
+    day = sessions_root / "2026" / "09" / "21"
+    day.mkdir(parents=True)
+    workdir = tmp_path / "project"
+    workdir.mkdir()
+    monkeypatch.setattr(config, "codex_sessions_path", sessions_root)
+    for index in (1, 2):
+        (day / f"rollout-{index}.jsonl").write_text(
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "payload": {"id": f"provider-{index}", "cwd": str(workdir)},
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": "prompt"},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+
+    result = await executor.resolve_provider_session(
+        path=str(workdir), backend="codex", session_id="legacy-routing"
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "ambiguous_transcript"
 
 
 @pytest.mark.asyncio

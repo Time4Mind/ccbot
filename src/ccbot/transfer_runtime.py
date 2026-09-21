@@ -47,6 +47,10 @@ class NodeRuntime(Protocol):
         source_backend: str = "",
     ) -> dict[str, Any]: ...
 
+    async def resolve_provider_session(
+        self, target_node_id: str, path: str, backend: str, session_id: str
+    ) -> dict[str, Any]: ...
+
     async def send_text(
         self, target_node_id: str, session_id: str, text: str
     ) -> dict[str, Any]: ...

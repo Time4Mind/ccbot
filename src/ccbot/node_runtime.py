@@ -385,6 +385,15 @@ class RemoteNodeRuntime:
             {"session_id": session_id, "text": text},
         )
 
+    async def resolve_provider_session(
+        self, target_node_id: str, path: str, backend: str, session_id: str
+    ) -> dict[str, Any]:
+        return await self._request(
+            target_node_id,
+            "resolve_provider_session",
+            {"path": path, "backend": backend, "session_id": session_id},
+        )
+
     async def send_key(
         self, target_node_id: str, session_id: str, key: str
     ) -> dict[str, Any]:
@@ -585,6 +594,20 @@ async def connect_configured_remote_runtimes(
         from .session import session_manager
 
         if node_id in session_manager.removed_node_ids:
+            return
+        if message.kind == "event" and payload.get("event_type") == "session_binding":
+            bound = session_manager.bind_remote_session(
+                node_id,
+                str(payload.get("session_id", "")),
+                str(payload.get("provider_session_id", "")),
+                str(payload.get("transcript_path", "")),
+            )
+            if bound is None:
+                logger.warning(
+                    "remote session binding has no owner node=%s routing=%s",
+                    node_id,
+                    payload.get("session_id", ""),
+                )
             return
         if message.kind == "event" and payload.get("event_type") == "session_message":
             if _remote_message_handler is not None:

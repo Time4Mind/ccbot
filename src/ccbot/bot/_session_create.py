@@ -296,7 +296,7 @@ async def _create_and_activate_session(
         if ws.session_id:
             session_manager.set_session_claude_id(sess.id, ws.session_id)
     else:
-        session_manager.set_session_claude_id(sess.id, agent_session_id)
+        session_manager.set_session_worker_id(sess.id, agent_session_id)
     # Every inbound captured since the user pressed Start is now owned by
     # this window. Binding happens after the initial paint so a queued user's
     # visual receipt can move the finished card below that Telegram message

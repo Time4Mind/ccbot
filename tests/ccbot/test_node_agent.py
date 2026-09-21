@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import json
 
 from ccbot.node_agent import NodeAgent, NodeCredentialStore, TmuxWorkerExecutor
-from ccbot import node_worker
+from ccbot import node_backend_readiness
 from ccbot.node_transport import NodeEnvelope
 from ccbot.config import config
 
@@ -260,11 +260,13 @@ async def test_worker_advertises_only_cli_with_working_auth(tmp_path, monkeypatc
         return Process(0 if executable.endswith("codex") else 1)
 
     monkeypatch.setattr(
-        node_worker.shutil,
+        node_backend_readiness.shutil,
         "which",
         lambda name: f"/usr/local/bin/{name}" if name in ("claude", "codex") else None,
     )
-    monkeypatch.setattr(node_worker.asyncio, "create_subprocess_exec", create_process)
+    monkeypatch.setattr(
+        node_backend_readiness.asyncio, "create_subprocess_exec", create_process
+    )
     executor = TmuxWorkerExecutor(workdir=tmp_path)
 
     ready = await executor.ready_backends(("claude", "codex"), max_age=0.0)

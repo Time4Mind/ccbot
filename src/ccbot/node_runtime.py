@@ -14,6 +14,7 @@ from typing import Any, Awaitable, Callable
 from urllib.parse import urlparse
 
 from .node_transport import NodeEnvelope, NodeTransport, RequestReceiptLedger
+from .node_backend_readiness import update_backend_health
 from .node_transport import connect_relay
 from .node_update import current_git_revision
 from .node_history import RemoteHistoryMixin
@@ -605,7 +606,6 @@ async def connect_configured_remote_runtimes(
     node_ids: list[str],
     tls: bool = False,
 ) -> NodeRpcClient:
-    """Connect one leader RPC and register runtimes for known remote nodes."""
     global _leader_rpc
     if _leader_rpc is not None:
         return _leader_rpc
@@ -689,22 +689,7 @@ async def connect_configured_remote_runtimes(
         node.state = state
         node.platform = str(payload.get("platform", node.platform))
         node.arch = str(payload.get("arch", node.arch))
-        node.backends = [
-            str(value)
-            for value in payload.get("backends", [])
-            if value in ("claude", "codex")
-        ]
-        node.configured_backends = [
-            str(value)
-            for value in payload.get("configured_backends", node.backends)
-            if str(value) in ("claude", "codex")
-        ]
-        raw_backend_status = payload.get("backend_status", {})
-        node.backend_status = (
-            {str(key): str(value) for key, value in raw_backend_status.items()}
-            if isinstance(raw_backend_status, dict)
-            else {}
-        )
+        update_backend_health(node, payload)
         node.capabilities = {
             str(key): bool(value)
             for key, value in (payload.get("capabilities", {}) or {}).items()

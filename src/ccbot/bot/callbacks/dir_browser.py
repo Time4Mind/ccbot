@@ -45,6 +45,7 @@ from ...i18n import t
 from ...session import session_manager
 from ...transfer_runtime import get_node_runtime
 from .._common import open_more_in_place
+from ..backend_picker import build_backend_picker
 from ..messages import create_and_activate_session
 
 
@@ -72,24 +73,6 @@ async def open_new_session_flow(
     if context.user_data is not None:
         context.user_data["_new_session_backend"] = only_backend
     await open_directory_browser(query, context, user_id, node_id=node_id)
-
-
-def build_backend_picker(
-    user_id: int, *, node_id: str | None = None
-) -> InlineKeyboardMarkup:
-    node_id = node_id or session_manager.get_selected_node_id(user_id)
-    enabled = session_manager.get_effective_backends(user_id, node_id)
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    name.capitalize(), callback_data=f"{CB_NEW_BACKEND}{name}"
-                )
-                for name in enabled
-            ],
-            [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_DIR_CANCEL)],
-        ]
-    )
 
 
 async def open_directory_browser(

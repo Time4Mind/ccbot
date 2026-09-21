@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import shlex
-import shutil
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -22,6 +21,7 @@ from .codex_startup import (
 )
 from .config import config
 from .node_inbox import WorkerInboxMixin
+from .node_backend_readiness import probe_ready_backends
 from .node_history import WorkerHistoryMixin
 from .transcript_parser import TranscriptParser
 from .utils import ccbot_dir
@@ -46,8 +46,6 @@ class _TmuxWorkerSession:
 
 
 class TmuxWorkerExecutor(WorkerInboxMixin, WorkerHistoryMixin):
-    """Small Telegram-free tmux executor used by the node-agent process."""
-
     def __init__(
         self,
         *,
@@ -85,51 +83,14 @@ class TmuxWorkerExecutor(WorkerInboxMixin, WorkerHistoryMixin):
     async def ready_backends(
         self, configured: tuple[str, ...], *, max_age: float = 60.0
     ) -> tuple[str, ...]:
-        """Return configured providers whose CLI and authentication are usable."""
         now = time.monotonic()
         if now - self._backend_probe_at < max_age:
             return self._ready_backend_cache
-        ready: list[str] = []
-        for backend in configured:
-            command = (
-                self._claude_command if backend == "claude" else self._codex_command
-            )
-            try:
-                parts = shlex.split(command)
-            except ValueError:
-                continue
-            if not parts:
-                continue
-            executable = parts[0]
-            resolved = (
-                executable if Path(executable).is_file() else shutil.which(executable)
-            )
-            if not resolved:
-                continue
-            status_args = (
-                ["auth", "status"] if backend == "claude" else ["login", "status"]
-            )
-            process: asyncio.subprocess.Process | None = None
-            try:
-                process = await asyncio.create_subprocess_exec(
-                    resolved,
-                    *parts[1:],
-                    *status_args,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                return_code = await asyncio.wait_for(process.wait(), timeout=5.0)
-            except (TimeoutError, asyncio.TimeoutError):
-                if process is not None:
-                    process.kill()
-                    await process.wait()
-                continue
-            except OSError:
-                continue
-            if return_code == 0:
-                ready.append(backend)
         self._backend_probe_at = now
-        self._ready_backend_cache = tuple(ready)
+        self._ready_backend_cache = await probe_ready_backends(
+            configured,
+            commands=dict(claude=self._claude_command, codex=self._codex_command),
+        )
         return self._ready_backend_cache
 
     def capacity_snapshot(self) -> dict[str, int]:

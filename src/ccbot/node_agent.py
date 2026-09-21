@@ -6,7 +6,6 @@ import asyncio
 import argparse
 import base64
 import hashlib
-import getpass
 import json
 import logging
 import os
@@ -30,6 +29,8 @@ from .node_pairing import PairingInvitation
 from .node_event_pump import NodeEventPump
 from .node_update import GitNodeUpdater, current_git_revision
 from .node_inbox import dispatch_inbox_operation, is_inbox_operation
+from .node_backend_readiness import health_backend_fields, require_ready_backend
+from .node_agent_config import print_connection_receipt, ssh_access_from_environment
 from .node_session_start import dispatch_create_session
 from .node_worker import TmuxWorkerExecutor
 
@@ -256,15 +257,7 @@ class NodeAgent:
                     ),
                     "platform": platform.system(),
                     "arch": platform.machine(),
-                    "backends": list(self._backends),
-                    "configured_backends": list(self._configured_backends),
-                    "ready_backends": list(self._backends),
-                    "backend_status": {
-                        backend: (
-                            "ready" if backend in self._backends else "unavailable"
-                        )
-                        for backend in self._configured_backends
-                    },
+                    **health_backend_fields(self._configured_backends, self._backends),
                     "capabilities": {
                         "directory_browser": True,
                         "create_session": True,
@@ -366,11 +359,7 @@ class NodeAgent:
                 name=str(payload.get("name", "")),
             )
         if operation in ("create_session", "restore_session"):
-            backend = str(payload.get("backend", ""))
-            if backend not in self._backends:
-                raise ValueError(
-                    f"Backend is unavailable on this worker: {backend or 'missing'}"
-                )
+            require_ready_backend(payload.get("backend"), self._backends)
             return await dispatch_create_session(self._executor, payload)
         if operation == "resolve_provider_session":
             return await cast(Any, self._executor).resolve_provider_session(
@@ -409,11 +398,7 @@ class NodeAgent:
         raise ValueError(f"unsupported node operation: {operation}")
 
     def _begin_context(self, payload: dict[str, Any]) -> dict[str, Any]:
-        backend = str(payload.get("target_backend", ""))
-        if backend not in self._backends:
-            raise ValueError(
-                f"Backend is unavailable on this worker: {backend or 'missing'}"
-            )
+        backend = require_ready_backend(payload.get("target_backend"), self._backends)
         expected_bytes = int(payload.get("total_bytes", -1))
         expected_sha256 = str(payload.get("sha256", ""))
         if expected_bytes < 0 or expected_bytes > self._max_context_bytes:
@@ -458,10 +443,7 @@ class NodeAgent:
         pending = self._pending_contexts.pop(transfer_id, None)
         if pending is None:
             raise ValueError("unknown context transfer")
-        if pending.backend not in self._backends:
-            raise ValueError(
-                f"Backend is unavailable on this worker: {pending.backend}"
-            )
+        require_ready_backend(pending.backend, self._backends)
         content = await asyncio.to_thread(pending.path.read_bytes)
         if len(content) != pending.expected_bytes:
             raise ValueError("context byte count mismatch")
@@ -545,37 +527,6 @@ def _default_node_id() -> str:
     return value
 
 
-def _ssh_access_from_environment() -> dict[str, Any]:
-    """Read public connection metadata; authentication stays in OpenSSH."""
-    host = os.environ.get("CCBOT_NODE_SSH_HOST", "").strip()
-    if not host:
-        return {}
-    user = os.environ.get("CCBOT_NODE_SSH_USER", "").strip() or getpass.getuser()
-    try:
-        port = int(os.environ.get("CCBOT_NODE_SSH_PORT", "22"))
-    except ValueError as exc:
-        raise RuntimeError("CCBOT_NODE_SSH_PORT must be an integer") from exc
-    if not 1 <= port <= 65535:
-        raise RuntimeError("CCBOT_NODE_SSH_PORT must be between 1 and 65535")
-    return {
-        "host": host,
-        "user": user,
-        "port": port,
-        "proxy_jump": os.environ.get("CCBOT_NODE_SSH_PROXY_JUMP", "").strip(),
-    }
-
-
-def _print_connection_receipt(
-    *, node_id: str, display_name: str, leader_id: str, relay_url: str
-) -> None:
-    """Print safe machine-readable facts for an SSH/remote-agent caller."""
-    print("ccbot-node-agent: connected", flush=True)
-    print(f"node_id={node_id}", flush=True)
-    print(f"display_name={display_name}", flush=True)
-    print(f"leader_id={leader_id}", flush=True)
-    print(f"relay_url={relay_url}", flush=True)
-
-
 async def _run_agent_forever(
     *,
     pairing_link: str = "",
@@ -649,7 +600,7 @@ async def _run_agent_forever(
         or os.environ.get("CCBOT_NODE_NAME", node_id).strip()
         or node_id
     )
-    ssh_access = _ssh_access_from_environment()
+    ssh_access = ssh_access_from_environment()
     agent: NodeAgent | None = None
     receipt_printed = False
     while True:
@@ -682,7 +633,7 @@ async def _run_agent_forever(
                 invitation = None
                 using_pairing = False
             if not receipt_printed:
-                _print_connection_receipt(
+                print_connection_receipt(
                     node_id=node_id,
                     display_name=display_name,
                     leader_id=leader_id,

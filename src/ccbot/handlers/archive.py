@@ -457,9 +457,7 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
     if not enabled_backends:
         return False, f"Node has no available backend: {sess.node_id}"
     target_backend = (
-        source_backend
-        if source_backend in enabled_backends
-        else enabled_backends[0]
+        source_backend if source_backend in enabled_backends else enabled_backends[0]
     )
     cross_backend = source_backend != target_backend
     resume_session_id = sess.claude_session_id or None

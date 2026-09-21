@@ -134,9 +134,7 @@ class NodeSessionStateMixin:
             return tuple(preferences)
         return tuple(
             dict.fromkeys(
-                backend
-                for backend in node.backends
-                if backend in ("claude", "codex")
+                backend for backend in node.backends if backend in ("claude", "codex")
             )
         )
 

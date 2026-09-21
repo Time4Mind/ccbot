@@ -224,9 +224,7 @@ async def test_node_agent_routes_send_text_to_executor(tmp_path):
 async def test_node_agent_rejects_create_for_unadvertised_backend(tmp_path):
     transport = FakeTransport()
     executor = FakeExecutor()
-    agent = NodeAgent(
-        transport, executor, context_dir=tmp_path, backends=("codex",)
-    )
+    agent = NodeAgent(transport, executor, context_dir=tmp_path, backends=("codex",))
 
     await agent._handle_command(
         NodeEnvelope(

@@ -213,9 +213,7 @@ async def handle(
             return True
         if context.user_data is not None:
             context.user_data["_new_session_backend"] = backend
-        await open_directory_browser(
-            query, context, user.id, node_id=str(flow_node_id)
-        )
+        await open_directory_browser(query, context, user.id, node_id=str(flow_node_id))
         await query.answer()
         return True
 

@@ -102,7 +102,6 @@ class TmuxWorkerExecutor:
     def capacity_snapshot(self) -> dict[str, int]:
         return {
             "active_sessions": len(self._sessions),
-            # Zero is the wire-level representation for no ccbot-imposed cap.
             "max_sessions": 0,
         }
 
@@ -158,13 +157,19 @@ class TmuxWorkerExecutor:
         command = self._agent_command(backend)
         if resume_session_id:
             source_backend = source_backend or backend
-            await asyncio.to_thread(
+            transcript_path = await asyncio.to_thread(
                 self._restore_transcript_path,
                 resume_session_id,
                 str(directory),
                 source_backend,
                 provider_transcript_path,
             )
+            if source_backend == backend == "codex":
+                from .codex_session_io import stage_session_rollout
+
+                await asyncio.to_thread(
+                    stage_session_rollout, transcript_path, resume_session_id
+                )
             if source_backend == backend:
                 command = self._agent_command(
                     backend, resume_session_id=resume_session_id

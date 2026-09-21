@@ -1159,6 +1159,9 @@ async def test_archive_restore_rebuilds_live_card_on_existing_carrier(
     monkeypatch.setattr(archive_callback, "reset_card", reset)
 
     handled = await archive_callback.handle(query, context, user)
+    task = archive_callback._restore_tasks.get((42, sess.id))
+    if task is not None:
+        await task
 
     assert handled is True
     reset.assert_called_once_with(42, "restored")

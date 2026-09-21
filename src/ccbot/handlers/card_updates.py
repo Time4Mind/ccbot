@@ -307,10 +307,22 @@ async def _update_session_card_locked(
             state.last_edit_ts = time.monotonic()
             logger.warning(
                 "card_update edit_failed sess=%s msg_id=%s — keeping "
-                "stale card; new render will retry on next event",
+                "stale card; scheduling bounded convergence retry",
                 sess.id,
                 state.msg_id,
             )
+            if state.pending_edit is None or state.pending_edit.done():
+                state.pending_edit = asyncio.create_task(
+                    _deferred_edit(
+                        bot,
+                        user_id,
+                        sess,
+                        state,
+                        1.0,
+                        force=True,
+                        retry_delays=(2.0, 4.0),
+                    )
+                )
         return
 
     # Inside the coalescing window: ensure exactly one deferred edit is queued.

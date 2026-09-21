@@ -220,6 +220,26 @@ async def test_node_agent_routes_send_text_to_executor(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_node_agent_never_returns_an_empty_worker_error(tmp_path):
+    class FailingExecutor(FakeExecutor):
+        async def send_text(self, *, session_id: str, text: str):
+            raise RuntimeError()
+
+    transport = FakeTransport()
+    agent = NodeAgent(transport, FailingExecutor(), context_dir=tmp_path)
+
+    await agent._handle_command(
+        NodeEnvelope(
+            kind="command",
+            request_id="send-failed",
+            payload={"operation": "send_text", "session_id": "agent-7", "text": "x"},
+        )
+    )
+
+    assert transport.sent[-1].payload == {"ok": False, "error": "RuntimeError"}
+
+
+@pytest.mark.asyncio
 async def test_worker_health_reports_exact_runtime_revision(tmp_path):
     transport = FakeTransport()
     agent = NodeAgent(
@@ -539,8 +559,13 @@ async def test_worker_emits_assistant_transcript_events_for_remote_card(
 
 @pytest.mark.asyncio
 async def test_worker_resumes_existing_codex_rollout_on_worker(tmp_path, monkeypatch):
-    transcript = tmp_path / "rollout.jsonl"
-    transcript.write_text("{}\n", encoding="utf-8")
+    transcript = tmp_path / "old" / "2026" / "09" / "21" / "rollout.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": "rollout-42"}}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "codex_sessions_path", tmp_path / "active" / "sessions")
     executor = TmuxWorkerExecutor(workdir=tmp_path)
     calls: list[tuple[str, ...]] = []
 

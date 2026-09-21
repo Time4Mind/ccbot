@@ -53,13 +53,29 @@ DEFAULT_LOOKBACK_SECONDS = 20 * 86400
 
 
 def _remote_restore_error(sess: Session, reason: str, message: str) -> tuple[bool, str]:
+    detail = " ".join(message.split())[:300]
     logger.warning(
-        "remote_restore_failed node=%s session=%s reason=%s",
+        "remote_restore_failed node=%s session=%s reason=%s detail=%s",
         sess.node_id,
         sess.id,
         reason,
+        detail,
     )
     return False, message
+
+
+def _worker_restore_failure(exc: Exception) -> tuple[str, str]:
+    detail = str(exc).strip() or type(exc).__name__
+    lowered = detail.casefold()
+    if isinstance(exc, TimeoutError) or "timeout" in lowered:
+        return "startup_timeout", detail
+    if "auth" in lowered or "login" in lowered:
+        return "authentication_required", detail
+    if "rollout" in lowered or "transcript" in lowered:
+        return "transcript_unavailable", detail
+    if isinstance(exc, ConnectionError):
+        return "transport", detail
+    return "worker_rejected", detail
 
 
 def _format_blurb(messages: list[str]) -> str:
@@ -524,10 +540,11 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
                 provider_transcript_path=sess.provider_transcript_path,
             )
         except Exception as exc:
+            reason, detail = _worker_restore_failure(exc)
             return _remote_restore_error(
                 sess,
-                "worker_rejected",
-                f"Remote restore failed on {sess.node_id}: {exc}",
+                reason,
+                f"Remote restore failed on {sess.node_id}: {detail}",
             )
         raw_window_id = str(result.get("target_window_id", ""))
         agent_session_id = str(result.get("target_agent_session_id", ""))

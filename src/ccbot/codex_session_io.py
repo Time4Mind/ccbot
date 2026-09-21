@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +42,40 @@ def _read_meta(path: Path) -> dict[str, Any]:
 def session_id_for_path(path: str | Path) -> str:
     """Return the authoritative rollout id stored at an exact path."""
     return str(_read_meta(Path(path).expanduser()).get("id") or "")
+
+
+def stage_session_rollout(path: str | Path, session_id: str) -> Path:
+    """Copy one validated rollout into the active Codex resume namespace."""
+    source = Path(path).expanduser().resolve()
+    active_root = config.codex_sessions_path.expanduser().resolve()
+    if session_id_for_path(source) != session_id:
+        raise ValueError("Persisted transcript path does not match provider session id")
+    if not session_id or Path(session_id).name != session_id or "\\" in session_id:
+        raise ValueError("Provider session id is not safe for staging")
+    if source.is_relative_to(active_root):
+        return source
+    date_parts = [source.parents[index].name for index in (2, 1, 0)]
+    if not (
+        len(date_parts[0]) == 4
+        and all(part.isdigit() for part in date_parts)
+        and all(len(part) == 2 for part in date_parts[1:])
+    ):
+        raise ValueError("Codex rollout path has no YYYY/MM/DD namespace")
+    destination = active_root.joinpath(*date_parts, f"rollout-ccbot-{session_id}.jsonl")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        if session_id_for_path(destination) != session_id:
+            raise ValueError("Active Codex rollout path belongs to another session")
+        return destination
+    temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        shutil.copy2(source, temporary)
+        if session_id_for_path(temporary) != session_id:
+            raise ValueError("Staged Codex rollout failed identity validation")
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
 
 
 def _parse_rollout(path: Path, expected_id: str = "") -> ClaudeSession | None:

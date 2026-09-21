@@ -12,6 +12,7 @@ just count how many times it was invoked under a simulated race.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -333,6 +334,46 @@ async def test_serial_calls_still_spawn_then_edit(monkeypatch):
 
     assert len(sent) == 1
     assert len(edits) == 1
+
+
+@pytest.mark.asyncio
+async def test_transient_edit_failure_retries_without_another_event(monkeypatch):
+    sess = _make_sess()
+    bot = AsyncMock()
+    attempts = 0
+
+    async def fake_send_card(_b, _uid, _sess, state, *, text, reply_markup=None):
+        state.msg_id = 3001
+
+    async def flaky_edit(_b, _uid, _state, *, text, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        return attempts > 1
+
+    real_sleep = asyncio.sleep
+
+    async def no_wait(_delay):
+        await real_sleep(0)
+
+    monkeypatch.setattr(notifications, "_send_card", fake_send_card)
+    monkeypatch.setattr(notifications, "_edit_card", flaky_edit)
+    monkeypatch.setattr(notifications, "_ensure_seeded", AsyncMock(return_value=None))
+    monkeypatch.setattr("ccbot.handlers.card_transport.asyncio.sleep", no_wait)
+    monkeypatch.setattr(
+        notifications.session_manager,
+        "get_active_session",
+        lambda _uid: sess,
+    )
+
+    await notifications.update_session_card(bot, 42, sess, _make_msg("a"))
+    await notifications.update_session_card(bot, 42, sess, _make_msg("b"))
+    state = _cards[(42, sess.id)]
+    pending = state.pending_edit
+    assert pending is not None
+    await pending
+
+    assert attempts == 2
+    assert state.last_rendered
 
 
 @pytest.mark.asyncio

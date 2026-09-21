@@ -216,6 +216,7 @@ EN: dict[str, str] = {
         "Archive or kill all live sessions before switching the global agent."
     ),
     "toast.restored": "Restored",
+    "toast.restoring": "Restoring…",
     "toast.already_gone": "Already gone",
     "toast.nothing_to_kill": "Nothing to kill",
     "toast.term_opened": "🖥 Terminal opened",

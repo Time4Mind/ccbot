@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from ccbot.bot.callbacks import archive as archive_cb
-from ccbot.handlers.callback_data import CB_ARC_BACK, CB_ARC_INSPECT
+from ccbot.handlers.callback_data import CB_ARC_BACK, CB_ARC_INSPECT, CB_ARC_RESTORE
 from ccbot.session_models import Session
 from ccbot.node_models import Node
 
@@ -48,6 +49,49 @@ def _make_context() -> MagicMock:
 
 
 class TestArchiveInspectBack:
+    @pytest.mark.asyncio
+    async def test_restore_callback_is_acknowledged_before_worker_finishes(
+        self,
+    ) -> None:
+        sess = _make_archived(8, age_hours=2.0)
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        surface_updated = asyncio.Event()
+
+        async def blocked_restore(*_args, **_kwargs):
+            entered.set()
+            await release.wait()
+            return False, "worker startup timeout"
+
+        async def update_surface(*_args, **_kwargs):
+            surface_updated.set()
+
+        query = _make_query(f"{CB_ARC_RESTORE}{sess.id}")
+        with (
+            patch.object(archive_cb.session_manager, "get_session", return_value=sess),
+            patch.object(archive_cb, "restore_session", side_effect=blocked_restore),
+            patch.object(archive_cb, "safe_edit", side_effect=update_surface) as edit,
+        ):
+            task = asyncio.create_task(
+                archive_cb.handle(query, _make_context(), _make_user())
+            )
+            try:
+                await entered.wait()
+                await asyncio.sleep(0)
+
+                assert task.done()
+                assert task.result() is True
+                query.answer.assert_awaited_once()
+                edit.assert_not_awaited()
+
+                release.set()
+                await asyncio.wait_for(surface_updated.wait(), timeout=1)
+            finally:
+                release.set()
+                await task
+
+        assert "worker startup timeout" in edit.await_args.args[1]
+
     @pytest.mark.asyncio
     async def test_remote_inspect_identifies_source_node(self) -> None:
         sess = _make_archived(7, age_hours=2.0)

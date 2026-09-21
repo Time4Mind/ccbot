@@ -415,3 +415,59 @@ async def test_request_and_reader_failure_share_one_reconnect() -> None:
         assert reconnects == 1
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_response_timeout_keeps_shared_transport_and_unrelated_rpc_alive() -> (
+    None
+):
+    class MultiplexTransport:
+        def __init__(self) -> None:
+            self.incoming: asyncio.Queue[NodeEnvelope] = asyncio.Queue()
+            self.closed = False
+            self.slow_request_id = ""
+
+        async def send(self, message: NodeEnvelope) -> None:
+            operation = str((message.payload or {}).get("operation", ""))
+            if operation == "slow_restore":
+                self.slow_request_id = message.request_id
+                return
+            await self.incoming.put(
+                NodeEnvelope(
+                    kind="result",
+                    request_id=message.request_id,
+                    payload={"ok": True, "operation": operation},
+                )
+            )
+
+        async def receive(self) -> NodeEnvelope:
+            return await self.incoming.get()
+
+        async def close(self) -> None:
+            self.closed = True
+
+    transport = MultiplexTransport()
+    reconnect = AsyncMock()
+    client = NodeRpcClient(transport, reconnect=reconnect, request_timeout=0.02)
+    slow = asyncio.create_task(
+        client.request("worker-a", "slow_restore", retries=1, timeout=0.02)
+    )
+    try:
+        while not transport.slow_request_id:
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.025)
+        health = await client.request("worker-a", "health", retries=0, timeout=0.1)
+        await transport.incoming.put(
+            NodeEnvelope(
+                kind="result",
+                request_id=transport.slow_request_id,
+                payload={"ok": True, "restored": True},
+            )
+        )
+
+        assert health == {"ok": True, "operation": "health"}
+        assert await slow == {"ok": True, "restored": True}
+        reconnect.assert_not_awaited()
+        assert transport.closed is False
+    finally:
+        await client.close()

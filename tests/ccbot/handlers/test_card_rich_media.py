@@ -646,3 +646,41 @@ async def test_final_send_keeps_latest_pane_when_screenshots_are_enabled(
     send_text.assert_not_awaited()
     assert state.msg_id == 17
     assert state.is_rich_media_msg is True
+
+
+@pytest.mark.asyncio
+async def test_remote_session_skips_local_pane_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capture = AsyncMock(return_value=(b"wrong-node", "pane-hash"))
+    send_text = AsyncMock(return_value=SimpleNamespace(message_id=18))
+    send_rich = AsyncMock()
+    monkeypatch.setattr(card_transport, "_inline_screens_enabled", lambda _uid: True)
+    monkeypatch.setattr(card_transport, "_capture_pane_png", capture)
+    monkeypatch.setattr(message_sender, "send_with_fallback", send_text)
+    monkeypatch.setattr(card_transport, "send_rich_media_card", send_rich)
+    monkeypatch.setattr(card_transport, "_strip_stale_switchers", AsyncMock())
+    monkeypatch.setattr(card_transport, "_register_msg", lambda *_args: None)
+    monkeypatch.setattr(
+        card_transport.session_manager, "set_last_switcher_msg", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        card_transport.session_manager, "set_card_msg", lambda *_args: None
+    )
+    state = CardState(turn_phase=TurnPhase.IDLE)
+    session = SimpleNamespace(
+        id="remote", node_id="worker-a", window_id="worker-a::@11", workdir=""
+    )
+
+    assert await card_transport._send_card_locked(
+        SimpleNamespace(),
+        42,
+        session,
+        state,
+        text="remote answer",
+        reply_markup=SimpleNamespace(),
+    )
+
+    capture.assert_not_awaited()
+    send_rich.assert_not_awaited()
+    send_text.assert_awaited_once()

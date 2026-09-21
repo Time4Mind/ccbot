@@ -39,6 +39,14 @@ from .card_registry import (
 logger = logging.getLogger(__name__)
 
 
+def _has_local_pane(sess: object | None) -> bool:
+    return bool(
+        sess is not None
+        and getattr(sess, "node_id", "local") == "local"
+        and getattr(sess, "window_id", "")
+    )
+
+
 __all__ = [
     "_send_card",
     "_send_card_locked",
@@ -110,7 +118,7 @@ async def _send_card_locked(
     # Inline screenshots ON: prefer a Rich Markdown card whose media block
     # sits before the service tail. The latest image remains after completion.
     sent = None
-    if _inline_screens_enabled(user_id) and sess.window_id:
+    if _inline_screens_enabled(user_id) and _has_local_pane(sess):
         png, pane_hash = await _capture_pane_png(sess.window_id, user_id=user_id)
         if png is not None:
             rich_sent = await send_rich_media_card(
@@ -282,6 +290,7 @@ async def _edit_card_unlocked(
         not rich_media_failed
         and _inline_screens_enabled(user_id)
         and config.rich_messages
+        and _has_local_pane(sess)
     ):
         promoted = await edit_rich_media_card(
             bot,
@@ -398,6 +407,7 @@ async def _deferred_edit(
     min_interval: float = 0.0,
     force: bool = False,
     refresh_pane: bool = True,
+    retry_delays: tuple[float, ...] = (),
 ) -> None:
     """Sleep `delay` then render the latest card state and edit once.
 
@@ -406,6 +416,7 @@ async def _deferred_edit(
     """
     try:
         remaining = delay
+        retries = iter(retry_delays)
         while True:
             await asyncio.sleep(remaining)
             async with _card_lock(user_id, sess.id):
@@ -436,7 +447,12 @@ async def _deferred_edit(
                 ):
                     state.last_rendered = text
                     state.last_edit_ts = time.monotonic()
-                return
+                    return
+                try:
+                    remaining = next(retries)
+                except StopIteration:
+                    return
+                force = True
     except asyncio.CancelledError:
         return
     except Exception as e:

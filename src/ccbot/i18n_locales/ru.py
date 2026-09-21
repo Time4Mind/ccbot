@@ -206,6 +206,7 @@ RU: dict[str, str] = {
         "Перед сменой глобального агента заверши или архивируй все живые сессии."
     ),
     "toast.restored": "Восстановлена",
+    "toast.restoring": "Восстанавливаю…",
     "toast.already_gone": "Уже нет",
     "toast.nothing_to_kill": "Убивать нечего",
     "toast.term_opened": "🖥 Терминал открыт",

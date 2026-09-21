@@ -124,6 +124,35 @@ async def test_remote_archive_restore_surfaces_worker_failure(
 
 
 @pytest.mark.asyncio
+async def test_remote_restore_logs_actionable_worker_failure_category(
+    monkeypatch, caplog
+) -> None:
+    manager = _manager(monkeypatch)
+    session = Session(
+        id="archived",
+        name="Remote task",
+        state="archived",
+        node_id="worker-a",
+        workdir="/srv/project",
+        backend="codex",
+        claude_session_id="rollout-42",
+    )
+    manager.sessions[session.id] = session
+    runtime = RestoreRuntime(error=TimeoutError("worker startup timeout"))
+    monkeypatch.setattr(archive, "get_node_runtime", lambda _node_id: runtime)
+
+    ok, message = await archive.restore_session(MagicMock(), 42, session)
+
+    assert ok is False
+    assert "worker startup timeout" in message
+    assert "reason=startup_timeout" in caplog.text
+    assert (
+        "detail=Remote restore failed on worker-a: worker startup timeout"
+        in caplog.text
+    )
+
+
+@pytest.mark.asyncio
 async def test_remote_codex_create_bind_archive_restore_uses_native_rollout(
     tmp_path, monkeypatch
 ) -> None:
@@ -213,6 +242,15 @@ async def test_remote_codex_create_bind_archive_restore_uses_native_rollout(
     assert session.claude_session_id == "provider-01"
     assert session.worker_session_id
     assert session.worker_session_id != "provider-01"
+    staged = list(sessions_root.glob("*/*/*/rollout-*.jsonl"))
+    assert len(staged) == 1
+    assert (
+        json.loads(staged[0].read_text(encoding="utf-8").splitlines()[0])["payload"][
+            "id"
+        ]
+        == "provider-01"
+    )
+    assert rollout.is_file()
     assert any(
         call[:3] == ("send-keys", "-t", "@10")
         and f"HOME={home}" in call[3]

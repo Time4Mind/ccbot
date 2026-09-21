@@ -326,7 +326,7 @@ class NodeAgent:
                 "node command failed operation=%s",
                 (message.payload or {}).get("operation"),
             )
-            result = {"ok": False, "error": str(exc)}
+            result = {"ok": False, "error": str(exc).strip() or type(exc).__name__}
         self._ledger.complete(message.request_id, result)
         await self._transport.send(
             NodeEnvelope(kind="result", request_id=message.request_id, payload=result)

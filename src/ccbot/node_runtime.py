@@ -36,6 +36,11 @@ _node_update_attempts: dict[str, float] = {}
 _NODE_UPDATE_RETRY_SECONDS = 300.0
 _RECONNECT_INITIAL_SECONDS = 0.5
 _RECONNECT_MAX_SECONDS = 5.0
+_REMOTE_SESSION_START_TIMEOUT_SECONDS = 135.0
+
+
+class _NodeResponseTimeout(TimeoutError):
+    """One RPC response missed its deadline while the relay stayed healthy."""
 
 
 async def _request_node_update(node_id: str, revision: str) -> None:
@@ -180,6 +185,10 @@ class NodeRpcClient:
                 return await self._request_once(
                     request_id, body, transport=transport, timeout=timeout
                 )
+            except _NodeResponseTimeout as exc:
+                last_error = exc
+                if attempt + 1 >= attempts:
+                    raise
             except (ConnectionError, TimeoutError, asyncio.TimeoutError) as exc:
                 last_error = exc
                 if attempt + 1 >= attempts or self._reconnect is None:
@@ -202,10 +211,13 @@ class NodeRpcClient:
             await transport.send(
                 NodeEnvelope(kind="command", request_id=request_id, payload=payload)
             )
-            return await asyncio.wait_for(
-                asyncio.shield(future),
-                timeout=self._request_timeout if timeout is None else timeout,
-            )
+            try:
+                return await asyncio.wait_for(
+                    asyncio.shield(future),
+                    timeout=self._request_timeout if timeout is None else timeout,
+                )
+            except (TimeoutError, asyncio.TimeoutError) as exc:
+                raise _NodeResponseTimeout from exc
         finally:
             self._pending.pop(request_id, None)
 
@@ -358,6 +370,7 @@ class RemoteNodeRuntime:
                 target_node_id,
                 "restore_session" if resume_session_id else "create_session",
                 payload,
+                timeout=_REMOTE_SESSION_START_TIMEOUT_SECONDS,
             )
         except BaseException:
             try:
@@ -492,7 +505,12 @@ class RemoteNodeRuntime:
         )
 
     async def _request(
-        self, target_node_id: str, operation: str, payload: dict[str, Any]
+        self,
+        target_node_id: str,
+        operation: str,
+        payload: dict[str, Any],
+        *,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         if operation in {
             "send_key",
@@ -508,12 +526,17 @@ class RemoteNodeRuntime:
                 retries=0,
                 timeout=5.0,
             )
+        if timeout is not None:
+            return await self._rpc.request(
+                target_node_id, operation, payload, retries=0, timeout=timeout
+            )
         return await self._rpc.request(target_node_id, operation, payload, retries=2)
 
     @staticmethod
     def _require_ok(result: dict[str, Any]) -> None:
         if result.get("ok", True) is False:
-            raise RuntimeError(str(result.get("error", "worker command failed")))
+            detail = str(result.get("error", "")).strip()
+            raise RuntimeError(detail or "worker command failed")
 
 
 async def connect_leader_rpc(

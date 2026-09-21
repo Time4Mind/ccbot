@@ -180,6 +180,7 @@ ZH: dict[str, str] = {
     "toast.saved": "已保存",
     "toast.agent_live": "切换全局代理前，请先结束或归档所有活动会话。",
     "toast.restored": "已恢复",
+    "toast.restoring": "正在恢复…",
     "toast.already_gone": "已不存在",
     "toast.nothing_to_kill": "没什么可终止的",
     "toast.term_opened": "🖥 已打开终端",

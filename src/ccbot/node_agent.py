@@ -183,7 +183,6 @@ class NodeAgent:
         )
 
     def attach_transport(self, transport: NodeTransport) -> None:
-        """Attach a reconnected relay while retaining receipts and context."""
         self._transport = transport
 
     async def run(self) -> None:
@@ -375,9 +374,10 @@ class NodeAgent:
                 key=str(payload.get("key", "")),
             )
         if operation == "capture_session":
-            return await self._executor.capture_session(
-                session_id=str(payload.get("session_id", ""))
-            )
+            kwargs: dict[str, Any] = {"session_id": str(payload.get("session_id", ""))}
+            if "with_ansi" in payload:
+                kwargs["with_ansi"] = bool(payload["with_ansi"])
+            return await self._executor.capture_session(**kwargs)
         if operation == "terminate_session":
             return await self._executor.terminate_session(
                 session_id=str(payload.get("session_id", ""))

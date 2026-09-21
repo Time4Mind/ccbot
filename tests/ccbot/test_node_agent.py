@@ -962,6 +962,21 @@ async def test_worker_reads_only_appended_transcript_bytes(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_worker_remote_screenshot_capture_preserves_ansi(tmp_path, monkeypatch):
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+    executor._sessions["agent-1"] = SimpleNamespace(
+        session_id="agent-1", window_id="@17", backend="codex"
+    )
+    run_tmux = AsyncMock(return_value=(0, "\x1b[31mred\x1b[0m", ""))
+    monkeypatch.setattr(executor, "_run_tmux", run_tmux)
+
+    result = await executor.capture_session(session_id="agent-1", with_ansi=True)
+
+    assert result["pane"] == "\x1b[31mred\x1b[0m"
+    run_tmux.assert_awaited_once_with("capture-pane", "-p", "-e", "-t", "@17")
+
+
+@pytest.mark.asyncio
 async def test_worker_accepts_more_than_eight_sessions(tmp_path, monkeypatch):
     executor = TmuxWorkerExecutor(workdir=tmp_path)
     for index in range(8):

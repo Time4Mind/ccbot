@@ -213,6 +213,7 @@ RU: dict[str, str] = {
     "toast.invalid_page": "Неверная страница",
     "toast.session_not_found": "Сессия не найдена",
     "toast.restore_failed": "Не удалось восстановить: {msg}",
+    "toast.screenshot_failed": "Скриншот недоступен: {msg}",
     # Archive screen
     "archive.title": "Архивные сессии",
     "archive.empty": "Архивных сессий в этом окне нет.",

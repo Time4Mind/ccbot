@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -27,6 +28,7 @@ from ...handlers.callback_data import (
     CB_PG_PREV,
 )
 from ...handlers.card_model import TurnPhase
+from ...handlers.message_sender import safe_send
 from ...handlers.menu import (
     build_footer_keyboard,
     toggle_footer_options,
@@ -42,10 +44,45 @@ from ...handlers.notifications import (
 )
 from ...i18n import t
 from ...session import session_manager
-from ...tmux_manager import tmux_manager
-from .._common import active_window, set_view
+from ...terminal_runtime import capture_session_pane, send_session_key
+from .._common import set_view
 
 logger = logging.getLogger(__name__)
+_screenshot_tasks: dict[int, asyncio.Task[None]] = {}
+
+
+async def _apply_screenshot_toggle(bot: Any, user_id: int, enabled: bool) -> None:
+    """Converge screenshot state outside Telegram's serialized callback path."""
+    try:
+        sess = session_manager.get_active_session(user_id)
+        if enabled and sess is not None and sess.node_id != "local":
+            await capture_session_pane(sess)
+        refreshed = await refresh_panel(
+            bot, user_id, immediate=True, refresh_keyboard=True
+        )
+        if enabled and sess is not None and sess.node_id != "local":
+            state = get_card_state(user_id, sess)
+            if not refreshed or not state.is_rich_media_msg:
+                raise RuntimeError("remote screenshot could not update the card")
+    except Exception as exc:
+        detail = str(exc).strip() or type(exc).__name__
+        current = session_manager.get_user_settings(user_id)
+        if enabled and current.get("card_inline_screenshots", False):
+            session_manager.update_user_setting(
+                user_id, "card_inline_screenshots", False
+            )
+            try:
+                await refresh_panel(bot, user_id, immediate=True, refresh_keyboard=True)
+            except Exception:
+                logger.debug("Screenshot rollback repaint failed", exc_info=True)
+        await safe_send(bot, user_id, t(user_id, "toast.screenshot_failed", msg=detail))
+
+
+def _screenshot_done(user_id: int, task: asyncio.Task[None]) -> None:
+    if _screenshot_tasks.get(user_id) is task:
+        _screenshot_tasks.pop(user_id, None)
+    if not task.cancelled() and task.exception() is not None:
+        logger.error("Screenshot toggle task failed user_id=%s", user_id)
 
 
 async def handle(
@@ -54,20 +91,17 @@ async def handle(
     data = query.data or ""
 
     if data == CB_FT_STOP:
-        wid = active_window(user.id)
-        if not wid:
+        sess = session_manager.get_active_session(user.id)
+        if sess is None or not sess.window_id:
             await query.answer(t(user.id, "toast.no_session"), show_alert=False)
             return True
-        w = await tmux_manager.find_window_by_id(wid)
-        if not w:
+        if not await send_session_key(sess, "Escape"):
             await query.answer(t(user.id, "toast.window_gone"), show_alert=False)
             return True
-        await tmux_manager.send_keys(w.window_id, "\x1b", enter=False)
         # Stop is an authoritative user transition. A stale pane spinner or
         # late transcript event from the interrupted turn must not flip the
         # button back to Stop and trap the session in an unclosable state.
-        sess = session_manager.get_active_session(user.id)
-        if sess is not None and sess.window_id == w.window_id:
+        if sess.window_id:
             state = get_card_state(user.id, sess)
             state.user_stopped = True
             state.pane_busy = False
@@ -167,10 +201,12 @@ async def handle(
         enabled = not bool(settings.get("card_inline_screenshots", False))
         session_manager.update_user_setting(user.id, "card_inline_screenshots", enabled)
         await query.answer()
-        # Keep Options expanded and transform the existing carrier in place.
-        # Rich-media failures leave the text card intact and retry on the next
-        # ordinary update.
-        await refresh_panel(context.bot, user.id, immediate=True, refresh_keyboard=True)
+        task = asyncio.create_task(
+            _apply_screenshot_toggle(context.bot, user.id, enabled),
+            name=f"screenshot-toggle-{user.id}",
+        )
+        _screenshot_tasks[user.id] = task
+        task.add_done_callback(lambda done, uid=user.id: _screenshot_done(uid, done))
         return True
 
     if data in (CB_PG_PREV, CB_PG_NEXT, CB_PG_JUMP):

@@ -1,5 +1,10 @@
 """User-visible identity metadata in the live-card header."""
 
+from unittest.mock import AsyncMock
+
+import pytest
+
+from ccbot.handlers import card_terminal
 from ccbot.handlers.card_layout import _render_card
 from ccbot.handlers.card_types import CardState
 from ccbot.session_models import Session
@@ -23,3 +28,33 @@ def test_card_header_shows_compact_model_and_effort_before_timestamp() -> None:
     header = _render_card(sess, state).splitlines()[0]
 
     assert "· ccbot · 5.6-sol med ·" in header
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("node_id", ["local", "worker-a"])
+async def test_codex_identity_header_is_node_independent(
+    monkeypatch: pytest.MonkeyPatch, node_id: str
+) -> None:
+    sess = Session(
+        id=node_id,
+        name="same session",
+        backend="codex",
+        node_id=node_id,
+        window_id="@17" if node_id == "local" else "worker-a::@17",
+    )
+    state = CardState(last_event_ts=1.0)
+    capture = AsyncMock(
+        side_effect=[
+            "› Ask anything\n\n  gpt-5.6-sol medium · /project",
+            "› Ask anything\n\n  gpt-6-astra high · /project",
+        ]
+    )
+    monkeypatch.setattr(card_terminal, "capture_session_pane", capture)
+
+    assert await card_terminal.sync_card_identity(sess, state)
+    first_header = _render_card(sess, state).splitlines()[0]
+    assert "5.6-sol med" in first_header
+
+    assert await card_terminal.sync_card_identity(sess, state)
+    changed_header = _render_card(sess, state).splitlines()[0]
+    assert "6-astra high" in changed_header

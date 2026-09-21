@@ -39,11 +39,15 @@ from .card_registry import (
 logger = logging.getLogger(__name__)
 
 
-def _has_local_pane(sess: object | None) -> bool:
+def _has_pane_target(sess: object | None) -> bool:
     return bool(
         sess is not None
-        and getattr(sess, "node_id", "local") == "local"
         and getattr(sess, "window_id", "")
+        and (
+            getattr(sess, "node_id", "local") == "local"
+            or getattr(sess, "worker_session_id", "")
+            or getattr(sess, "claude_session_id", "")
+        )
     )
 
 
@@ -118,7 +122,7 @@ async def _send_card_locked(
     # Inline screenshots ON: prefer a Rich Markdown card whose media block
     # sits before the service tail. The latest image remains after completion.
     sent = None
-    if _inline_screens_enabled(user_id) and _has_local_pane(sess):
+    if _inline_screens_enabled(user_id) and _has_pane_target(sess):
         png, pane_hash = await _capture_pane_png(sess.window_id, user_id=user_id)
         if png is not None:
             rich_sent = await send_rich_media_card(
@@ -290,7 +294,7 @@ async def _edit_card_unlocked(
         not rich_media_failed
         and _inline_screens_enabled(user_id)
         and config.rich_messages
-        and _has_local_pane(sess)
+        and _has_pane_target(sess)
     ):
         promoted = await edit_rich_media_card(
             bot,

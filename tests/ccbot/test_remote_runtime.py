@@ -147,7 +147,7 @@ async def test_remote_runtime_controls_and_terminates_worker_session():
     runtime = RemoteNodeRuntime(rpc)
 
     await runtime.send_key("worker-a", "worker-session", "Escape")
-    await runtime.capture_session("worker-a", "worker-session")
+    await runtime.capture_session("worker-a", "worker-session", with_ansi=True)
     await runtime.terminate_session("worker-a", "worker-session")
     await runtime.revoke_node("worker-a")
 
@@ -158,6 +158,7 @@ async def test_remote_runtime_controls_and_terminates_worker_session():
         "revoke_node",
     ]
     assert rpc.calls[0][1]["key"] == "Escape"
+    assert rpc.calls[1][1]["with_ansi"] is True
     assert all(
         payload.get("session_id") == "worker-session"
         for _operation, payload in rpc.calls[:3]

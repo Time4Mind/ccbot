@@ -649,12 +649,23 @@ async def test_final_send_keeps_latest_pane_when_screenshots_are_enabled(
 
 
 @pytest.mark.asyncio
-async def test_remote_session_skips_local_pane_capture(
+@pytest.mark.parametrize(
+    ("node_id", "window_id", "worker_session_id"),
+    [("local", "@11", ""), ("worker-a", "worker-a::@11", "worker-session")],
+)
+async def test_session_promotes_to_same_rich_card_on_every_node(
     monkeypatch: pytest.MonkeyPatch,
+    node_id: str,
+    window_id: str,
+    worker_session_id: str,
 ) -> None:
-    capture = AsyncMock(return_value=(b"wrong-node", "pane-hash"))
+    capture = AsyncMock(return_value=(b"remote-pane", "pane-hash"))
     send_text = AsyncMock(return_value=SimpleNamespace(message_id=18))
-    send_rich = AsyncMock()
+    send_rich = AsyncMock(
+        return_value=card_rich_media.RichCardSend(
+            message=SimpleNamespace(message_id=17), photo_file_id="remote-photo"
+        )
+    )
     monkeypatch.setattr(card_transport, "_inline_screens_enabled", lambda _uid: True)
     monkeypatch.setattr(card_transport, "_capture_pane_png", capture)
     monkeypatch.setattr(message_sender, "send_with_fallback", send_text)
@@ -669,7 +680,11 @@ async def test_remote_session_skips_local_pane_capture(
     )
     state = CardState(turn_phase=TurnPhase.IDLE)
     session = SimpleNamespace(
-        id="remote", node_id="worker-a", window_id="worker-a::@11", workdir=""
+        id="remote",
+        node_id=node_id,
+        window_id=window_id,
+        worker_session_id=worker_session_id,
+        workdir="",
     )
 
     assert await card_transport._send_card_locked(
@@ -681,6 +696,8 @@ async def test_remote_session_skips_local_pane_capture(
         reply_markup=SimpleNamespace(),
     )
 
-    capture.assert_not_awaited()
-    send_rich.assert_not_awaited()
-    send_text.assert_awaited_once()
+    capture.assert_awaited_once_with(window_id, user_id=42)
+    send_rich.assert_awaited_once()
+    send_text.assert_not_awaited()
+    assert state.msg_id == 17
+    assert state.is_rich_media_msg is True

@@ -52,38 +52,24 @@ _NAV = (
 
 async def capture_window(window_id: str) -> str | None:
     sess = session_manager.find_session_by_window(window_id)
-    if sess is not None and sess.node_id != "local":
-        from ...transfer_runtime import get_node_runtime
+    if sess is not None:
+        from ...terminal_runtime import capture_session_pane
 
-        runtime = get_node_runtime(sess.node_id)
-        routing_id = sess.worker_session_id or sess.claude_session_id
-        if runtime is None or not routing_id:
-            return None
         try:
-            result = await runtime.capture_session(sess.node_id, routing_id)
+            return await capture_session_pane(sess)
         except Exception:
-            logger.exception("Remote pane capture failed for %s", sess.id)
+            logger.exception("Pane capture failed for %s", sess.id)
             return None
-        return str(result.get("pane", "")) if result.get("ok") else None
     w = await tmux_manager.find_window_by_id(window_id)
     return await tmux_manager.capture_pane(w.window_id) if w is not None else None
 
 
 async def _send_window_key(window_id: str, key: str) -> bool:
     sess = session_manager.find_session_by_window(window_id)
-    if sess is not None and sess.node_id != "local":
-        from ...transfer_runtime import get_node_runtime
+    if sess is not None:
+        from ...terminal_runtime import send_session_key
 
-        runtime = get_node_runtime(sess.node_id)
-        routing_id = sess.worker_session_id or sess.claude_session_id
-        if runtime is None or not routing_id:
-            return False
-        try:
-            result = await runtime.send_key(sess.node_id, routing_id, key)
-        except Exception:
-            logger.exception("Remote key delivery failed for %s", sess.id)
-            return False
-        return bool(result.get("ok"))
+        return await send_session_key(sess, key)
     w = await tmux_manager.find_window_by_id(window_id)
     if w is None:
         return False

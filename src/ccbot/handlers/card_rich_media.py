@@ -150,11 +150,7 @@ async def edit_rich_media_card(
     sess = session_manager.get_session(sess_id) if sess_id else None
     workdir = getattr(sess, "workdir", "")
     file_base_dir = Path(workdir) if workdir else None
-    window_id = (
-        sess.window_id
-        if sess is not None and getattr(sess, "node_id", "local") == "local"
-        else ""
-    )
+    window_id = sess.window_id if sess is not None else ""
     elapsed = time.monotonic() - state.last_photo_edit_ts
 
     photo: bytes | str | None = state.rich_media_file_id or None

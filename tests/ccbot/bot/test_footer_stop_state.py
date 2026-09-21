@@ -28,22 +28,17 @@ async def test_stop_immediately_makes_session_closable_and_survives_stale_workin
     query = SimpleNamespace(data=CB_FT_STOP, answer=AsyncMock())
     context = SimpleNamespace(bot=object())
     user = SimpleNamespace(id=42)
-    window = SimpleNamespace(window_id="@1")
     refresh = AsyncMock(return_value=True)
     send_keys = AsyncMock(return_value=True)
 
-    monkeypatch.setattr(footer, "active_window", lambda _uid: "@1")
-    monkeypatch.setattr(
-        footer.tmux_manager, "find_window_by_id", AsyncMock(return_value=window)
-    )
-    monkeypatch.setattr(footer.tmux_manager, "send_keys", send_keys)
+    monkeypatch.setattr(footer, "send_session_key", send_keys)
     monkeypatch.setattr(footer.session_manager, "get_active_session", lambda _uid: sess)
     monkeypatch.setattr(footer, "get_card_state", lambda *_a: state)
     monkeypatch.setattr(footer, "refresh_panel", refresh)
 
     assert _card_is_busy(state) is True
     assert await footer.handle(query, context, user) is True
-    send_keys.assert_awaited_once_with("@1", "\x1b", enter=False)
+    send_keys.assert_awaited_once_with(sess, "Escape")
     assert _card_is_busy(state) is False
     refresh.assert_awaited_once_with(
         context.bot, 42, immediate=True, refresh_keyboard=True
@@ -70,6 +65,33 @@ async def test_stop_immediately_makes_session_closable_and_survives_stale_workin
 
     assert _card_is_busy(state) is False
     fire_typing.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stop_routes_remote_escape_without_local_tmux(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sess = SimpleNamespace(
+        id="remote",
+        node_id="worker-a",
+        window_id="worker-a::@17",
+        worker_session_id="worker-session",
+        state="active",
+    )
+    state = CardState(msg_id=9, turn_phase=TurnPhase.RUNNING)
+    send_key = AsyncMock(return_value=True)
+    monkeypatch.setattr(footer.session_manager, "get_active_session", lambda _uid: sess)
+    monkeypatch.setattr(footer, "get_card_state", lambda *_a: state)
+    monkeypatch.setattr(footer, "send_session_key", send_key, raising=False)
+    monkeypatch.setattr(footer, "refresh_panel", AsyncMock(return_value=True))
+    query = SimpleNamespace(data=CB_FT_STOP, answer=AsyncMock())
+
+    assert await footer.handle(
+        query, SimpleNamespace(bot=object()), SimpleNamespace(id=42)
+    )
+
+    send_key.assert_awaited_once_with(sess, "Escape")
+    assert state.turn_phase is TurnPhase.IDLE
 
 
 @pytest.mark.asyncio

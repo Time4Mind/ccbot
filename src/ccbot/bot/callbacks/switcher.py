@@ -26,7 +26,7 @@ from ...handlers.notifications import (
 from ...handlers.card_carrier import SCREENSHOT_CACHE_FRESH_SECONDS
 from ...session import session_manager
 from ...terminal_parser import extract_interactive_content, is_interactive_ui
-from ...tmux_manager import tmux_manager
+from .interactive_ui import capture_window
 from .._common import render_session_preview
 
 logger = logging.getLogger(__name__)
@@ -183,33 +183,31 @@ async def handle(
         showed_interactive_ui = False
         pending_ui = bg_status.get_pending_interactive_ui(user.id, target_id)
         if pending_ui is not None and sess.window_id and query.message is not None:
-            w = await tmux_manager.find_window_by_id(sess.window_id)
-            if w:
-                pane = await tmux_manager.capture_pane(w.window_id)
-                if pane and is_interactive_ui(pane):
-                    content_obj = extract_interactive_content(pane)
-                    if content_obj is not None:
-                        # Claim the carrier as the live card msg, then
-                        # flip it into kb-mode view. paint_card_on_carrier
-                        # sets msg_id; enter_kb_mode then edits in place.
-                        try:
-                            state = get_card_state(user.id, sess)
-                            bind_carrier(
-                                state,
-                                query.message.message_id,
-                                CarrierKind.TEXT,
-                            )
-                            state.in_menu_view = False
-                            await enter_kb_mode(
-                                context.bot,
-                                user.id,
-                                sess,
-                                content_obj.content,
-                                content_obj.name,
-                            )
-                            showed_interactive_ui = True
-                        except Exception as e:
-                            logger.debug("pending UI kb_mode failed: %s", e)
+            pane = await capture_window(sess.window_id)
+            if pane and is_interactive_ui(pane):
+                content_obj = extract_interactive_content(pane)
+                if content_obj is not None:
+                    # Claim the carrier as the live card msg, then
+                    # flip it into kb-mode view. paint_card_on_carrier
+                    # sets msg_id; enter_kb_mode then edits in place.
+                    try:
+                        state = get_card_state(user.id, sess)
+                        bind_carrier(
+                            state,
+                            query.message.message_id,
+                            CarrierKind.TEXT,
+                        )
+                        state.in_menu_view = False
+                        await enter_kb_mode(
+                            context.bot,
+                            user.id,
+                            sess,
+                            content_obj.content,
+                            content_obj.name,
+                        )
+                        showed_interactive_ui = True
+                    except Exception as e:
+                        logger.debug("pending UI kb_mode failed: %s", e)
 
         if not showed_interactive_ui:
             # Switcher tap unifies with Menu → Sessions: the carrier

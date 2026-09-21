@@ -418,10 +418,16 @@ class RemoteNodeRuntime:
         )
 
     async def capture_session(
-        self, target_node_id: str, session_id: str
+        self,
+        target_node_id: str,
+        session_id: str,
+        *,
+        with_ansi: bool = False,
     ) -> dict[str, Any]:
         return await self._request(
-            target_node_id, "capture_session", {"session_id": session_id}
+            target_node_id,
+            "capture_session",
+            {"session_id": session_id, "with_ansi": with_ansi},
         )
 
     async def terminate_session(

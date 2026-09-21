@@ -546,13 +546,23 @@ async def update_status_message(
     """
     sess = session_manager.find_session_by_window(window_id)
     if sess is not None and getattr(sess, "node_id", "local") != "local":
-        return
-    w = window or await tmux_manager.find_window_by_id(window_id)
-    if not w:
-        return
+        if pane_text is None:
+            from ..terminal_runtime import PaneCaptureError, capture_session_pane
 
-    if pane_text is None:
-        pane_text = await tmux_manager.capture_pane(w.window_id)
+            try:
+                pane_text = await capture_session_pane(sess)
+            except PaneCaptureError as exc:
+                logger.debug(
+                    "Remote status capture failed session=%s: %s", sess.id, exc
+                )
+                return
+        w = None
+    else:
+        w = window or await tmux_manager.find_window_by_id(window_id)
+        if not w:
+            return
+        if pane_text is None:
+            pane_text = await tmux_manager.capture_pane(w.window_id)
     if not pane_text:
         return
 
@@ -688,6 +698,7 @@ async def status_poll_loop(bot: Bot) -> None:
                         activity_grace_until[wid] = now + ACTIVITY_CAPTURE_GRACE
                     captured_activity[wid] = window.activity
 
+            remote_checks: list[tuple[int, str]] = []
             for user_id, wid in pairs:
                 try:
                     sess = session_manager.find_session_by_window(wid)
@@ -695,9 +706,14 @@ async def status_poll_loop(bot: Bot) -> None:
                         sess is not None
                         and getattr(sess, "node_id", "local") != "local"
                     ):
-                        # Remote workers own their tmux windows; the leader's
-                        # local tmux inventory cannot be used as a liveness
-                        # probe for them.
+                        active = session_manager.get_active_session(user_id)
+                        if (
+                            active is not None and active.id == sess.id
+                        ) or now - last_status_check.get(
+                            wid, 0.0
+                        ) >= UNCHANGED_STATUS_RECHECK:
+                            last_status_check[wid] = now
+                            remote_checks.append((user_id, wid))
                         continue
                     # Reap tmux windows that vanished externally.
                     w = windows_by_id.get(wid)
@@ -755,6 +771,23 @@ async def status_poll_loop(bot: Bot) -> None:
                         wid,
                         e,
                     )
+            if remote_checks:
+                with background_telegram_request():
+                    results = await asyncio.gather(
+                        *(
+                            update_status_message(bot, user_id, wid)
+                            for user_id, wid in remote_checks
+                        ),
+                        return_exceptions=True,
+                    )
+                for (user_id, wid), result in zip(remote_checks, results):
+                    if isinstance(result, BaseException):
+                        logger.debug(
+                            "Remote status update error for user %d window %s: %s",
+                            user_id,
+                            wid,
+                            result,
+                        )
         except Exception as e:
             logger.error("Status poll loop error: %s", e)
 

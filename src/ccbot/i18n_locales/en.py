@@ -223,6 +223,7 @@ EN: dict[str, str] = {
     "toast.invalid_page": "Invalid page",
     "toast.session_not_found": "Session not found",
     "toast.restore_failed": "Restore failed: {msg}",
+    "toast.screenshot_failed": "Screenshot unavailable: {msg}",
     # Archive screen
     "archive.title": "Archived sessions",
     "archive.empty": "No archived sessions in this window.",

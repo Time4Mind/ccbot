@@ -164,6 +164,55 @@ async def test_pre_resolved_window_skips_second_tmux_lookup(mock_bot: AsyncMock)
 
 
 @pytest.mark.asyncio
+async def test_remote_status_uses_worker_pane_without_local_tmux(
+    monkeypatch: pytest.MonkeyPatch, mock_bot: AsyncMock
+) -> None:
+    from ccbot import terminal_runtime
+    from ccbot.handlers import status_polling
+    from ccbot.session_models import Session
+
+    sess = Session(
+        id="remote",
+        name="Remote",
+        node_id="worker-a",
+        window_id="worker-a::@17",
+        worker_session_id="worker-session",
+        backend="codex",
+    )
+    pane = "› Ask anything\n\n  gpt-5.6-sol high · /srv/project"
+    runtime = SimpleNamespace(
+        capture_session=AsyncMock(return_value={"ok": True, "pane": pane})
+    )
+    drive = AsyncMock()
+    local_tmux = MagicMock()
+    local_tmux.find_window_by_id = AsyncMock()
+    local_tmux.capture_pane = AsyncMock()
+    monkeypatch.setattr(
+        status_polling.session_manager, "find_session_by_window", lambda _wid: sess
+    )
+    monkeypatch.setattr(
+        status_polling.session_manager, "get_active_session", lambda _uid: sess
+    )
+    monkeypatch.setattr(terminal_runtime, "get_node_runtime", lambda _nid: runtime)
+    monkeypatch.setattr(status_polling, "tmux_manager", local_tmux)
+    monkeypatch.setattr(
+        status_polling, "_resolve_existing_interactive", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(status_polling, "is_interactive_ui", lambda _pane: False)
+    monkeypatch.setattr(status_polling, "_reconcile_no_ui_state", AsyncMock())
+    monkeypatch.setattr(status_polling, "_drive_typing_indicator", drive)
+
+    await update_status_message(mock_bot, 42, sess.window_id)
+
+    runtime.capture_session.assert_awaited_once_with(
+        "worker-a", "worker-session", with_ansi=False
+    )
+    local_tmux.find_window_by_id.assert_not_awaited()
+    local_tmux.capture_pane.assert_not_awaited()
+    drive.assert_awaited_once_with(mock_bot, 42, sess.window_id, pane, sess, False)
+
+
+@pytest.mark.asyncio
 async def test_codex_background_terminal_reopens_working_surface(monkeypatch) -> None:
     from ccbot.handlers import status_polling
 
@@ -332,6 +381,63 @@ async def test_status_tick_uses_one_window_snapshot_for_all_live_sessions():
     assert update.await_count == 2
     assert [call.kwargs["window"] for call in update.await_args_list] == windows
     save_state.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_status_tick_polls_remote_active_session_without_local_lookup():
+    session = SimpleNamespace(
+        id="remote",
+        window_id="worker-a::@17",
+        node_id="worker-a",
+    )
+    update = AsyncMock()
+    with (
+        patch("ccbot.handlers.status_polling.config.allowed_users", {7}),
+        patch(
+            "ccbot.handlers.status_polling.session_manager.list_user_sessions",
+            return_value=[session],
+        ),
+        patch(
+            "ccbot.handlers.status_polling.session_manager.get_active_session",
+            return_value=session,
+        ),
+        patch(
+            "ccbot.handlers.status_polling.session_manager.find_session_by_window",
+            return_value=session,
+        ),
+        patch(
+            "ccbot.handlers.status_polling.tmux_manager.polling_snapshot",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch(
+            "ccbot.handlers.status_polling.tmux_manager.capture_panes",
+            new_callable=AsyncMock,
+        ) as local_capture,
+        patch(
+            "ccbot.handlers.status_polling.update_status_message",
+            update,
+        ),
+        patch(
+            "ccbot.handlers.status_polling.idle_archive_sweep",
+            new_callable=AsyncMock,
+        ),
+        patch("ccbot.handlers.status_polling.session_manager.save_state"),
+        patch("ccbot.handlers.status_polling.time.monotonic", return_value=120.0),
+        patch("ccbot.handlers.status_polling.purge_sweep"),
+        patch("ccbot.handlers.status_polling.inbox_sweep"),
+        patch(
+            "ccbot.handlers.status_polling.asyncio.sleep",
+            new_callable=AsyncMock,
+            side_effect=asyncio.CancelledError,
+        ),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await status_poll_loop(AsyncMock())
+
+    local_capture.assert_not_awaited()
+    update.assert_awaited_once()
+    assert update.await_args.args[2] == "worker-a::@17"
 
 
 @pytest.mark.asyncio

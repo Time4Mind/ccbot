@@ -376,13 +376,16 @@ class TmuxWorkerExecutor:
         )
         return {"ok": code == 0, "error": "" if code == 0 else stderr.strip()}
 
-    async def capture_session(self, *, session_id: str) -> dict[str, Any]:
+    async def capture_session(
+        self, *, session_id: str, with_ansi: bool = False
+    ) -> dict[str, Any]:
         session = await self._find_session(session_id)
         if session is None:
             return {"ok": False, "error": "worker session not found"}
-        code, stdout, stderr = await self._run_tmux(
-            "capture-pane", "-p", "-t", session.window_id
-        )
+        args = ["capture-pane", "-p"]
+        if with_ansi:
+            args.append("-e")
+        code, stdout, stderr = await self._run_tmux(*args, "-t", session.window_id)
         return {
             "ok": code == 0,
             "pane": stdout if code == 0 else "",
@@ -472,8 +475,7 @@ class TmuxWorkerExecutor:
                     getattr(session, "transcript_path", None),
                 )
                 continue
-            # Commit parser state only after the complete chunk was accepted.
-            # A transient read/parser failure therefore retries the same bytes.
+            # Commit only after parsing so transient failures retry the bytes.
             session.transcript_offset = end_offset
             session.pending_tools = remaining
             for entry in parsed:
@@ -539,10 +541,7 @@ class TmuxWorkerExecutor:
         session.provider_session_id = provider_session_id
         session.provider_transcript_path = str(path)
         try:
-            # A newly-created Codex session can publish session_map only after
-            # its first response is already in the rollout. Read that rollout
-            # from byte zero. Recovered tmux sessions tail their existing file
-            # to avoid replaying already-delivered history after agent restart.
+            # New sessions read from zero; recovered sessions tail existing data.
             session.transcript_offset = (
                 path.stat().st_size if getattr(session, "recovered", False) else 0
             )

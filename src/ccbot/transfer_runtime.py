@@ -61,7 +61,11 @@ class NodeRuntime(Protocol):
     ) -> dict[str, Any]: ...
 
     async def capture_session(
-        self, target_node_id: str, session_id: str
+        self,
+        target_node_id: str,
+        session_id: str,
+        *,
+        with_ansi: bool = False,
     ) -> dict[str, Any]: ...
 
     async def terminate_session(

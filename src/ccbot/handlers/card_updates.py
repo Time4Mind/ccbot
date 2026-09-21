@@ -242,6 +242,10 @@ async def _update_session_card_locked(
     # CARD_HARD_LIMIT chars (paginate splits before the boundary).
     # No continuation-card path.
 
+    if state.msg_id is None and not state.agent_model:
+        from .card_terminal import sync_card_identity
+
+        await sync_card_identity(sess, state)
     text = _legacy("_render_card")(sess, state, user_id=user_id)
 
     if state.msg_id is None:

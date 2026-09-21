@@ -187,6 +187,7 @@ ZH: dict[str, str] = {
     "toast.invalid_page": "页面无效",
     "toast.session_not_found": "未找到会话",
     "toast.restore_failed": "恢复失败:{msg}",
+    "toast.screenshot_failed": "截图不可用:{msg}",
     # Archive screen
     "archive.title": "已归档会话",
     "archive.empty": "此范围内没有已归档会话。",

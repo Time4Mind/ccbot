@@ -258,6 +258,7 @@ class NodeAgent:
                         "send_text": True,
                         "inbox_upload": True,
                         "file_download": True,
+                        "history_seed": hasattr(self._executor, "seed_session_history"),
                         "event_stream": self._event_pump.healthy,
                     },
                     "capacity": capacity,
@@ -761,7 +762,6 @@ async def _install_service_from_invitation(
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Run the Telegram-free worker process or bootstrap it from a link."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--pairing",

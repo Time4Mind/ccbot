@@ -21,6 +21,7 @@ from .codex_startup import (
 )
 from .config import config
 from .node_inbox import WorkerInboxMixin
+from .node_history import WorkerHistoryMixin
 from .transcript_parser import TranscriptParser
 from .utils import ccbot_dir
 
@@ -43,7 +44,7 @@ class _TmuxWorkerSession:
     ignored_provider_session_id: str = ""
 
 
-class TmuxWorkerExecutor(WorkerInboxMixin):
+class TmuxWorkerExecutor(WorkerInboxMixin, WorkerHistoryMixin):
     """Small Telegram-free tmux executor used by the node-agent process."""
 
     def __init__(

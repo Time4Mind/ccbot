@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from ccbot.node_agent import NodeAgent
+from ccbot.node_history import WorkerHistoryMixin
 from ccbot.node_inbox import WorkerInboxMixin
 from ccbot.node_runtime import RemoteNodeRuntime, connect_leader_rpc
 from ccbot.node_transport import RelayServer, connect_relay
@@ -14,16 +16,25 @@ from ccbot.session_models import Session
 from ccbot.transfer_models import SessionTransfer
 
 
-class RecordingExecutor(WorkerInboxMixin):
+class RecordingExecutor(WorkerInboxMixin, WorkerHistoryMixin):
     def __init__(self, workdir: Path) -> None:
         self.started: list[dict[str, str]] = []
         self.sent: list[tuple[str, str]] = []
         self.workdir = workdir
+        self.transcript_path: Path | None = None
 
     async def _find_session(self, session_id: str):
         if session_id != "worker-session":
             return None
-        return SimpleNamespace(window_id="@1", backend="codex", workdir=self.workdir)
+        return SimpleNamespace(
+            window_id="@1",
+            backend="codex",
+            workdir=self.workdir,
+            transcript_path=self.transcript_path,
+        )
+
+    async def _bind_transcript(self, _session):
+        return None
 
     async def start_context_session(self, **kwargs):
         self.started.append(kwargs)
@@ -127,6 +138,26 @@ async def test_context_transfer_crosses_real_relay_and_worker_agent(tmp_path: Pa
             "name": "result.zip",
             "content": b"worker-output",
         }
+
+        executor.transcript_path = executor.workdir / "session.jsonl"
+        executor.transcript_path.write_text(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "worker history"}],
+                        "stop_reason": "end_turn",
+                    },
+                    "timestamp": "2026-09-21T10:00:01Z",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        history = await runtime.seed_session_history("worker-a", "worker-session", 20)
+        assert history["ok"] is True
+        assert [entry["text"] for entry in history["entries"]] == ["worker history"]
     finally:
         if leader_rpc is not None:
             await leader_rpc.close()

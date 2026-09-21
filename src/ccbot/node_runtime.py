@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 from .node_transport import NodeEnvelope, NodeTransport, RequestReceiptLedger
 from .node_transport import connect_relay
 from .node_update import current_git_revision
+from .node_history import RemoteHistoryMixin
 from .node_inbox import RemoteInboxMixin
 from .transfer_models import SessionTransfer
 from .transfer_runtime import (
@@ -314,7 +315,7 @@ class NodeRpcClient:
                 future.set_exception(error)
 
 
-class RemoteNodeRuntime(RemoteInboxMixin):
+class RemoteNodeRuntime(RemoteInboxMixin, RemoteHistoryMixin):
     def __init__(self, rpc: Any, *, chunk_size: int = 256 * 1024):
         if chunk_size < 1:
             raise ValueError("chunk_size must be positive")

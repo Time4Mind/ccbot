@@ -76,6 +76,15 @@ class NodeRuntime(Protocol):
         self, target_node_id: str, session_id: str, path: str
     ) -> dict[str, Any]: ...
 
+    async def seed_session_history(
+        self,
+        target_node_id: str,
+        session_id: str,
+        max_turns: int,
+        *,
+        known_version: str = "",
+    ) -> dict[str, Any]: ...
+
     async def send_key(
         self, target_node_id: str, session_id: str, key: str
     ) -> dict[str, Any]: ...

@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 
 from ..session import Session, session_manager
 from ..session_monitor import NewMessage
+from ..transfer_runtime import get_node_runtime
 from .card_model import (
     CARD_SEED_TURNS,
     CardState,
@@ -146,6 +148,9 @@ async def _seed_events_from_jsonl(
     ``max_turns`` defaults to the module constant but is overridden by
     ``_ensure_seeded`` from the user's ``card_history`` setting.
     """
+    if sess.node_id != "local":
+        seeded, _version = await _seed_remote_events(sess, max_turns, "")
+        return seeded
     if not sess.window_id:
         return []
     # Derive the transcript path by pure path math instead of
@@ -174,6 +179,42 @@ async def _seed_events_from_jsonl(
         logger.debug("seed: tail read/parse failed for %s: %s", fp, e)
         return []
 
+    return _events_from_parsed_entries(sess, parsed_list, max_turns)
+
+
+def _entry_value(entry: Any, key: str, default: Any = None) -> Any:
+    return (
+        entry.get(key, default)
+        if isinstance(entry, dict)
+        else getattr(entry, key, default)
+    )
+
+
+def _entry_images(entry: Any) -> list[tuple[str, bytes]] | None:
+    raw = _entry_value(entry, "image_data")
+    if not raw:
+        return None
+    if not isinstance(entry, dict):
+        return raw
+    images: list[tuple[str, bytes]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            images.append(
+                (
+                    str(item.get("media_type", "application/octet-stream")),
+                    base64.b64decode(str(item.get("data", "")), validate=True),
+                )
+            )
+        except (ValueError, TypeError):
+            continue
+    return images or None
+
+
+def _events_from_parsed_entries(
+    sess: Session, parsed_list: list[Any], max_turns: int
+) -> list[Event]:
     # Walk backwards collecting indices of end_turn boundaries (final
     # assistant text). Keep only entries from the last CARD_SEED_TURNS
     # boundaries - earlier history stays in JSONL for transcript recovery or
@@ -182,9 +223,9 @@ async def _seed_events_from_jsonl(
     for i in range(len(parsed_list) - 1, -1, -1):
         p = parsed_list[i]
         if (
-            getattr(p, "role", "") == "assistant"
-            and getattr(p, "content_type", "") == "text"
-            and getattr(p, "stop_reason", "")
+            _entry_value(p, "role", "") == "assistant"
+            and _entry_value(p, "content_type", "") == "text"
+            and _entry_value(p, "stop_reason", "")
             in ("end_turn", "stop_sequence", "max_tokens")
         ):
             end_turn_idxs.append(i)
@@ -204,18 +245,20 @@ async def _seed_events_from_jsonl(
     pseudo_state = CardState()
     events = pseudo_state.events
     for p in tail:
-        ct = getattr(p, "content_type", "text")
+        ct = _entry_value(p, "content_type", "text")
         msg = NewMessage(
             session_id="seed",
-            text=getattr(p, "text", "") or "",
+            text=_entry_value(p, "text", "") or "",
             is_complete=True,
             content_type=ct,
-            tool_use_id=getattr(p, "tool_use_id", None),
-            role=getattr(p, "role", "assistant"),
-            tool_name=getattr(p, "tool_name", None),
-            image_data=getattr(p, "image_data", None),
-            stop_reason=getattr(p, "stop_reason", None),
-            timestamp=getattr(p, "timestamp", "") or "",
+            tool_use_id=_entry_value(p, "tool_use_id"),
+            role=_entry_value(p, "role", "assistant"),
+            tool_name=_entry_value(p, "tool_name"),
+            image_data=_entry_images(p),
+            stop_reason=_entry_value(p, "stop_reason"),
+            timestamp=_entry_value(p, "timestamp", "") or "",
+            is_error=bool(_entry_value(p, "is_error", False)),
+            api_error=str(_entry_value(p, "api_error", "") or ""),
         )
         ev = _build_event(msg)
         if ev.type == "user_msg" and sess.was_preprocessed_prompt(msg.text):
@@ -224,6 +267,63 @@ async def _seed_events_from_jsonl(
             continue
         events.append(ev)
     return events
+
+
+async def _seed_remote_events(
+    sess: Session, max_turns: int, known_version: str
+) -> tuple[list[Event], str]:
+    routing_id = sess.worker_session_id or sess.claude_session_id
+    runtime = get_node_runtime(sess.node_id)
+    if runtime is None or not routing_id:
+        logger.info(
+            "remote card seed deferred node=%s session=%s reason=offline",
+            sess.node_id,
+            sess.id,
+        )
+        return [], known_version
+    try:
+        result = await runtime.seed_session_history(
+            sess.node_id,
+            routing_id,
+            max_turns,
+            known_version=known_version,
+        )
+    except Exception as exc:
+        logger.warning(
+            "remote card seed failed node=%s session=%s error=%s",
+            sess.node_id,
+            sess.id,
+            str(exc).strip() or type(exc).__name__,
+        )
+        return [], known_version
+    version = str(result.get("version", known_version))
+    if not result.get("ok", False):
+        logger.warning(
+            "remote card seed rejected node=%s session=%s error=%s",
+            sess.node_id,
+            sess.id,
+            result.get("error", "unknown error"),
+        )
+        return [], version
+    if result.get("unchanged"):
+        return [], version
+    raw_entries = result.get("entries", [])
+    if not isinstance(raw_entries, list):
+        logger.warning(
+            "remote card seed invalid payload node=%s session=%s",
+            sess.node_id,
+            sess.id,
+        )
+        return [], version
+    events = _events_from_parsed_entries(sess, raw_entries, max_turns)
+    if not events:
+        logger.info(
+            "remote card seed empty node=%s session=%s version=%s",
+            sess.node_id,
+            sess.id,
+            version,
+        )
+    return events, version
 
 
 def _legacy_seed_loader() -> SeedLoader:
@@ -283,12 +383,6 @@ async def _ensure_seeded(user_id: int, sess: Session, state: CardState) -> None:
         return
     if state.seed_attempted:
         return
-    mtime = _transcript_mtime(sess)
-    if mtime >= 0.0 and mtime == state.seed_mtime:
-        # Nothing new on disk since the last empty attempt — skip the
-        # re-parse and wait for the transcript to grow.
-        return
-    state.seed_mtime = mtime
     # User-settable depth — Settings → Card history (10/20/50/100).
     try:
         max_turns = int(
@@ -298,13 +392,44 @@ async def _ensure_seeded(user_id: int, sess: Session, state: CardState) -> None:
         )
     except (TypeError, ValueError):
         max_turns = CARD_SEED_TURNS
-    seeded = await _legacy_seed_loader()(sess, max_turns=max_turns)
+    if sess.node_id != "local":
+        seeded, version = await _seed_remote_events(
+            sess, max_turns, state.remote_seed_version
+        )
+        state.remote_seed_version = version
+    else:
+        mtime = _transcript_mtime(sess)
+        if mtime >= 0.0 and mtime == state.seed_mtime:
+            # Nothing new on disk since the last empty attempt — skip the
+            # re-parse and wait for the transcript to grow.
+            return
+        state.seed_mtime = mtime
+        seeded = await _legacy_seed_loader()(sess, max_turns=max_turns)
     if seeded:
         reconciled = _reconcile_seeded_pending(state, seeded)
         for _ in range(min(reconciled, len(state.pending_request_sequences))):
             _message_id, sequence = state.pending_request_sequences.pop(0)
             state.active_turn_sequence = sequence
-        state.events = seeded
+        # A live worker event may land while the bounded seed RPC is in flight.
+        # Preserve it after the historical prefix and suppress an exact row
+        # already present in the authoritative transcript response.
+        signatures = {
+            (event.type, event.text, event.body, event.tool_use_id, event.started_at)
+            for event in seeded
+        }
+        live_tail = [
+            event
+            for event in state.events
+            if (
+                event.type,
+                event.text,
+                event.body,
+                event.tool_use_id,
+                event.started_at,
+            )
+            not in signatures
+        ]
+        state.events = [*seeded, *live_tail]
         state.seed_attempted = True
         logger.info(
             "card_seeded user=%d sess=%s events=%d",

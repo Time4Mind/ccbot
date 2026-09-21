@@ -226,6 +226,8 @@ class CardState:
     # stat() each, not a full re-parse. Reset alongside ``seed_attempted``
     # at the non-destructive re-seed sites.
     seed_mtime: float = -1.0
+    # Authoritative worker transcript size/mtime identity for empty-seed retry.
+    remote_seed_version: str = ""
     # A silent unfinished turn stays RUNNING instead of being replaced by a
     # warning. Status polling refreshes its live pane for the active session.
     stall_watch_active: bool = False

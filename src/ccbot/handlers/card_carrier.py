@@ -409,6 +409,7 @@ def release_card_message(user_id: int, session_id: str) -> None:
     # turn-history instead of collapsing to ``1/1``.
     state.seed_attempted = False
     state.seed_mtime = -1.0
+    state.remote_seed_version = ""
     logger.info(
         "card_release user=%d sess=%s",
         user_id,
@@ -661,6 +662,7 @@ async def clear_card(bot: Bot, user_id: int, sess: Session) -> None:
     state.in_kb_mode = False
     state.seed_attempted = True
     state.seed_mtime = -1.0
+    state.remote_seed_version = ""
     state.stall_watch_active = False
     state.last_stall_pane_refresh_ts = 0.0
     state.last_rendered = ""

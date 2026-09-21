@@ -22,6 +22,7 @@ _INBOX_OPERATIONS = {
     "inspect_session",
     "read_session_file",
     "reset_session_binding",
+    "seed_session_history",
     "stat_session_file",
     "upload_inbox_begin",
     "upload_inbox_chunk",

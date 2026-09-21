@@ -125,6 +125,71 @@ class TestSeedFromJsonl:
 
 @pytest.mark.asyncio
 class TestEnsureSeededIdempotent:
+    async def test_remote_session_seeds_from_worker_without_local_window_state(
+        self, monkeypatch
+    ) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        import ccbot.handlers.card_seed as card_seed
+        from ccbot.handlers.card_pagination import paginate_events_for_card
+        from ccbot.session import Session
+
+        runtime = SimpleNamespace(
+            seed_session_history=AsyncMock(
+                return_value={
+                    "ok": True,
+                    "version": "100:200",
+                    "entries": [
+                        {
+                            "role": "user",
+                            "text": "earlier question",
+                            "content_type": "text",
+                            "timestamp": "2026-09-21T10:00:00Z",
+                        },
+                        {
+                            "role": "assistant",
+                            "text": "earlier answer",
+                            "content_type": "text",
+                            "stop_reason": "end_turn",
+                            "timestamp": "2026-09-21T10:00:01Z",
+                        },
+                    ],
+                }
+            )
+        )
+        monkeypatch.setattr(
+            card_seed, "get_node_runtime", lambda _node: runtime, raising=False
+        )
+        monkeypatch.setattr(
+            card_seed.session_manager,
+            "get_user_settings",
+            lambda _uid: {"card_history": 50},
+        )
+        state = CardState()
+        sess = Session(
+            id="remote",
+            name="Remote",
+            node_id="worker-a",
+            window_id="",
+            worker_session_id="routing-1",
+            workdir="/worker/project",
+            backend="codex",
+        )
+
+        await _ensure_seeded(42, sess, state)
+
+        runtime.seed_session_history.assert_awaited_once_with(
+            "worker-a", "routing-1", 50, known_version=""
+        )
+        assert [event.type for event in state.events] == ["user_msg", "final_text"]
+        assert [event.text for event in state.events] == [
+            "earlier question",
+            "earlier answer",
+        ]
+        assert state.seed_attempted is True
+        assert len(paginate_events_for_card(state, None)) >= 2
+
     async def test_seed_reconciles_pending_prompt_at_its_turn_position(
         self, monkeypatch
     ) -> None:

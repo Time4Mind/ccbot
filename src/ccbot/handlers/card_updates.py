@@ -223,6 +223,7 @@ async def _update_session_card_locked(
         # second turn completes — even though the transcript is long.
         state.seed_attempted = False
         state.seed_mtime = -1.0
+        state.remote_seed_version = ""
         await _legacy("_ensure_seeded")(user_id, sess, state)
 
     if not replaced and not _duplicate_of_seeded(state.events, new_event):

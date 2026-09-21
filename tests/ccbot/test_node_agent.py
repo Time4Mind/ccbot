@@ -568,13 +568,12 @@ async def test_worker_resumes_existing_codex_rollout_on_worker(tmp_path, monkeyp
 
     assert result["target_agent_session_id"] != "rollout-42"
     assert result["provider_session_id"] == "rollout-42"
-    assert (
-        "send-keys",
-        "-t",
-        "@9",
-        "codex resume rollout-42",
-        "C-m",
-    ) in calls
+    assert any(
+        call[:3] == ("send-keys", "-t", "@9")
+        and call[3].endswith("codex resume rollout-42")
+        and call[4] == "C-m"
+        for call in calls
+    )
 
 
 @pytest.mark.asyncio
@@ -1130,13 +1129,13 @@ async def test_worker_installs_codex_update_and_relaunches_exact_command(
     command_sends = [
         call
         for call in calls
-        if call[:3] == ("send-keys", "-t", "@9") and command in call
+        if call[:3] == ("send-keys", "-t", "@9")
+        and call[3].endswith(command)
+        and call[4] == "C-m"
     ]
     assert result["target_window_id"] == "@9"
-    assert command_sends == [
-        ("send-keys", "-t", "@9", command, "C-m"),
-        ("send-keys", "-t", "@9", command, "C-m"),
-    ]
+    assert len(command_sends) == 2
+    assert command_sends[0] == command_sends[1]
     assert ("send-keys", "-t", "@9", "C-m") in calls
 
 

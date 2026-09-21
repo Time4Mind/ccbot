@@ -61,6 +61,7 @@ async def test_remote_archive_restore_runs_on_owner_and_selects_it(
         workdir="/srv/project",
         backend="codex",
         claude_session_id="rollout-42",
+        provider_transcript_path="/srv/codex/rollout-42.jsonl",
     )
     manager.sessions[session.id] = session
     runtime = RestoreRuntime()
@@ -72,7 +73,11 @@ async def test_remote_archive_restore_runs_on_owner_and_selects_it(
     assert runtime.calls == [
         (
             ("worker-a", "/srv/project", "codex", "Remote task"),
-            {"resume_session_id": "rollout-42", "source_backend": "codex"},
+            {
+                "resume_session_id": "rollout-42",
+                "source_backend": "codex",
+                "provider_transcript_path": "/srv/codex/rollout-42.jsonl",
+            },
         )
     ]
     assert session.window_id == "worker-a::@12"
@@ -125,9 +130,16 @@ async def test_remote_codex_create_bind_archive_restore_uses_native_rollout(
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     monkeypatch.setenv("CCBOT_DIR", str(state_dir))
-    sessions_root = tmp_path / "sessions"
-    day = sessions_root / "2026" / "09" / "21"
+    home = tmp_path / "home"
+    home.mkdir()
+    custom_codex_home = home / ".codex-current"
+    sessions_root = custom_codex_home / "sessions"
+    stale_sessions_root = home / ".codex" / "sessions"
+    day = stale_sessions_root / "2026" / "09" / "21"
     day.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(custom_codex_home))
+    monkeypatch.setenv("CCBOT_CODEX_SESSIONS_PATH", str(sessions_root))
     monkeypatch.setattr(config, "codex_sessions_path", sessions_root)
     workdir = tmp_path / "project"
     workdir.mkdir()
@@ -202,9 +214,58 @@ async def test_remote_codex_create_bind_archive_restore_uses_native_rollout(
     assert session.worker_session_id
     assert session.worker_session_id != "provider-01"
     assert any(
-        call[:3] == ("send-keys", "-t", "@10") and call[3] == "codex resume provider-01"
+        call[:3] == ("send-keys", "-t", "@10")
+        and f"HOME={home}" in call[3]
+        and f"CODEX_HOME={custom_codex_home}" in call[3]
+        and f"CCBOT_CODEX_SESSIONS_PATH={sessions_root}" in call[3]
+        and call[3].endswith("codex resume provider-01")
         for call in calls
     )
+
+
+@pytest.mark.asyncio
+async def test_remote_restore_rejects_mismatched_exact_transcript_path(
+    tmp_path, monkeypatch
+) -> None:
+    sessions_root = tmp_path / "configured-sessions"
+    day = sessions_root / "2026" / "09" / "21"
+    day.mkdir(parents=True)
+    workdir = tmp_path / "project"
+    workdir.mkdir()
+    monkeypatch.setattr(config, "codex_sessions_path", sessions_root)
+    configured = day / "rollout-provider-01.jsonl"
+    configured.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": "provider-01", "cwd": str(workdir)},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    wrong = tmp_path / "rollout-wrong.jsonl"
+    wrong.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": "other-provider", "cwd": str(workdir)},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+
+    with pytest.raises(ValueError, match="does not match"):
+        await executor.create_session(
+            path=str(workdir),
+            backend="codex",
+            name="Remote",
+            resume_session_id="provider-01",
+            source_backend="codex",
+            provider_transcript_path=str(wrong),
+        )
 
 
 @pytest.mark.asyncio

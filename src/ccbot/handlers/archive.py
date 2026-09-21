@@ -368,6 +368,10 @@ async def build_archive_page(
             wd = _shorten_workdir(sess.workdir) if sess.workdir else ""
             if wd:
                 first += f"<br><code>{wd}</code>"
+            if sess.node_id != "local":
+                node = session_manager.get_node(sess.node_id)
+                node_name = node.display_name if node is not None else sess.node_id
+                first += f"<br>{t(user_id, 'nodes.table.node')}: {node_name}"
             description = blurb or "-"
             table_rows.append(
                 f"| {first.replace('|', '\\|')} | "
@@ -517,6 +521,7 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
                 sess.name or "session",
                 resume_session_id=resume_session_id or "",
                 source_backend=source_backend,
+                provider_transcript_path=sess.provider_transcript_path,
             )
         except Exception as exc:
             return _remote_restore_error(

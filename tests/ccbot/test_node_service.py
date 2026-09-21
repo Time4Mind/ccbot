@@ -64,3 +64,32 @@ def test_service_preserves_non_secret_ssh_endpoint_configuration(
     assert "CCBOT_NODE_SSH_USER=artem" in content
     assert "CCBOT_NODE_SSH_PORT=22041" in content
     assert "CCBOT_NODE_SSH_PROXY_JUMP=bastion" in content
+
+
+def test_service_preserves_provider_transcript_environment(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(
+        "ccbot.node_service._agent_executable", lambda: "/opt/ccbot-node-agent"
+    )
+    monkeypatch.setenv("CODEX_HOME", "/srv/codex-current")
+    monkeypatch.setenv("CCBOT_CODEX_SESSIONS_PATH", "/srv/codex-current/sessions")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/srv/claude-current")
+    monkeypatch.setenv("CCBOT_CLAUDE_PROJECTS_PATH", "/srv/claude-current/projects")
+
+    path = install_node_service(
+        node_id="worker-a",
+        display_name="Worker A",
+        relay_url="tls://relay:8765",
+        leader_id="leader",
+        credential_file=tmp_path / "worker/credential.json",
+        runner=lambda *_args, **_kwargs: SimpleNamespace(returncode=0),
+        system="Linux",
+    )
+
+    content = path.read_text(encoding="utf-8")
+    assert "CODEX_HOME=/srv/codex-current" in content
+    assert "CCBOT_CODEX_SESSIONS_PATH=/srv/codex-current/sessions" in content
+    assert "CLAUDE_CONFIG_DIR=/srv/claude-current" in content
+    assert "CCBOT_CLAUDE_PROJECTS_PATH=/srv/claude-current/projects" in content

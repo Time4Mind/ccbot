@@ -103,8 +103,8 @@ class WorkerSessionExecutor(Protocol):
         startup_id: str = "",
         resume_session_id: str = "",
         source_backend: str = "",
+        provider_transcript_path: str = "",
     ) -> dict[str, Any]: ...
-
     async def cancel_session_start(self, *, startup_id: str) -> dict[str, Any]: ...
 
     async def start_context_session(

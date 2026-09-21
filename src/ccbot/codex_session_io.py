@@ -37,6 +37,11 @@ def _read_meta(path: Path) -> dict[str, Any]:
     return {}
 
 
+def session_id_for_path(path: str | Path) -> str:
+    """Return the authoritative rollout id stored at an exact path."""
+    return str(_read_meta(Path(path).expanduser()).get("id") or "")
+
+
 def _parse_rollout(path: Path, expected_id: str = "") -> ClaudeSession | None:
     meta = _read_meta(path)
     session_id = str(meta.get("id") or expected_id)

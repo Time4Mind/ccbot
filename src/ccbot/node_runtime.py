@@ -338,6 +338,7 @@ class RemoteNodeRuntime:
         *,
         resume_session_id: str = "",
         source_backend: str = "",
+        provider_transcript_path: str = "",
     ) -> dict[str, Any]:
         startup_id = secrets.token_urlsafe(12)
         payload = {
@@ -350,6 +351,8 @@ class RemoteNodeRuntime:
             payload["resume_session_id"] = resume_session_id
         if source_backend:
             payload["source_backend"] = source_backend
+        if provider_transcript_path:
+            payload["provider_transcript_path"] = provider_transcript_path
         try:
             result = await self._request(
                 target_node_id,

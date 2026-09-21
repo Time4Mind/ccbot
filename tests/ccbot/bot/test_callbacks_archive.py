@@ -10,6 +10,7 @@ import pytest
 from ccbot.bot.callbacks import archive as archive_cb
 from ccbot.handlers.callback_data import CB_ARC_BACK, CB_ARC_INSPECT
 from ccbot.session_models import Session
+from ccbot.node_models import Node
 
 
 def _make_archived(idx: int, age_hours: float) -> Session:
@@ -47,6 +48,25 @@ def _make_context() -> MagicMock:
 
 
 class TestArchiveInspectBack:
+    @pytest.mark.asyncio
+    async def test_remote_inspect_identifies_source_node(self) -> None:
+        sess = _make_archived(7, age_hours=2.0)
+        sess.node_id = "worker-a"
+        with (
+            patch.object(archive_cb, "render_archived_card_pages", return_value=None),
+            patch.object(
+                archive_cb, "render_session_preview", return_value="session preview"
+            ),
+            patch.object(
+                archive_cb.session_manager,
+                "get_node",
+                return_value=Node(id="worker-a", display_name="Worker A"),
+            ),
+        ):
+            text = await archive_cb._build_inspect_text(sess, 1)
+
+        assert "Node: *Worker A*" in text or "Нода: *Worker A*" in text
+
     @pytest.mark.asyncio
     async def test_back_returns_to_originating_archive_page(self) -> None:
         sess = _make_archived(7, age_hours=2.0)

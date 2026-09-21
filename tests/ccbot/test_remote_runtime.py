@@ -129,6 +129,7 @@ async def test_remote_runtime_sends_restore_contract_to_worker():
         "Task",
         resume_session_id="rollout-42",
         source_backend="codex",
+        provider_transcript_path="/srv/codex/rollout-42.jsonl",
     )
 
     operation, payload = rpc.calls[0]
@@ -136,6 +137,7 @@ async def test_remote_runtime_sends_restore_contract_to_worker():
     assert payload["target_node_id"] == "worker-a"
     assert payload["resume_session_id"] == "rollout-42"
     assert payload["source_backend"] == "codex"
+    assert payload["provider_transcript_path"] == "/srv/codex/rollout-42.jsonl"
 
 
 @pytest.mark.asyncio

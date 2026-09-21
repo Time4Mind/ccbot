@@ -30,6 +30,11 @@ def _service_environment(
         "CCBOT_NODE_CREDENTIAL_FILE": str(credential_file),
     }
     for key in (
+        "HOME",
+        "CODEX_HOME",
+        "CCBOT_CODEX_SESSIONS_PATH",
+        "CLAUDE_CONFIG_DIR",
+        "CCBOT_CLAUDE_PROJECTS_PATH",
         "CCBOT_WORKER_WORKDIR",
         "CCBOT_WORKER_TMUX_SESSION",
         "CCBOT_CLAUDE_COMMAND",

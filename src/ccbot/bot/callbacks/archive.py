@@ -51,13 +51,18 @@ async def _build_inspect_text(sess: Session, user_id: int | None = None) -> str:
     """
     pages_total = await render_archived_card_pages(sess, user_id)
     if pages_total is None:
-        return await render_session_preview(sess)
-    pages, total = pages_total
-    last = pages[-1] if pages else ""
-    if len(pages) > 1:
-        prefix = f"_… {len(pages) - 1} older page(s) — restore to read fully ({total} events)_\n\n"
-        last = prefix + last
-    return last
+        text = await render_session_preview(sess)
+    else:
+        pages, total = pages_total
+        text = pages[-1] if pages else ""
+        if len(pages) > 1:
+            prefix = f"_… {len(pages) - 1} older page(s) — restore to read fully ({total} events)_\n\n"
+            text = prefix + text
+    if sess.node_id != "local":
+        node = session_manager.get_node(sess.node_id)
+        node_name = node.display_name if node is not None else sess.node_id
+        text = f"{t(user_id or 0, 'nodes.table.node')}: *{node_name}*\n\n{text}"
+    return text
 
 
 def _inspect_target(data: str) -> tuple[int, str]:

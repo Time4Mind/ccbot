@@ -21,6 +21,16 @@ _MAX_IMPORT_CHARS = 240_000
 def _transcript_path(sess: Session) -> Path | None:
     if not sess.claude_session_id or not sess.workdir:
         return None
+    if sess.provider_transcript_path:
+        exact = Path(sess.provider_transcript_path).expanduser()
+        if exact.is_file():
+            if sess.backend == "codex":
+                from .codex_session_io import session_id_for_path
+
+                if session_id_for_path(exact) == sess.claude_session_id:
+                    return exact
+            elif exact.stem == sess.claude_session_id:
+                return exact
     if sess.backend == "codex":
         from .codex_session_io import build_session_file_path
 

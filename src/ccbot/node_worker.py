@@ -19,6 +19,7 @@ from .codex_startup import (
     CodexStartupError,
     drive_codex_startup,
 )
+from .config import config
 from .transcript_parser import TranscriptParser
 from .utils import ccbot_dir
 
@@ -38,7 +39,11 @@ async def dispatch_create_session(
     kwargs.update(
         {
             key: str(payload[key])
-            for key in ("resume_session_id", "source_backend")
+            for key in (
+                "resume_session_id",
+                "source_backend",
+                "provider_transcript_path",
+            )
             if payload.get(key)
         }
     )
@@ -145,6 +150,7 @@ class TmuxWorkerExecutor:
         startup_id: str = "",
         resume_session_id: str = "",
         source_backend: str = "",
+        provider_transcript_path: str = "",
     ) -> dict[str, Any]:
         directory = self._resolve_directory(path)
         if backend not in ("claude", "codex"):
@@ -157,6 +163,7 @@ class TmuxWorkerExecutor:
                 resume_session_id,
                 str(directory),
                 source_backend,
+                provider_transcript_path,
             )
             if source_backend == backend:
                 command = self._agent_command(
@@ -172,6 +179,7 @@ class TmuxWorkerExecutor:
                     backend=source_backend,
                     workdir=str(directory),
                     claude_session_id=resume_session_id,
+                    provider_transcript_path=provider_transcript_path,
                 )
                 context_path = await asyncio.to_thread(
                     build_import_context, archived, backend
@@ -606,7 +614,21 @@ class TmuxWorkerExecutor:
         else:
             command = self._claude_command
             flags = self._claude_flags
-        parts = [command]
+        home = os.environ.get("HOME") or str(Path.home())
+        provider_env = {
+            "HOME": home,
+            "CODEX_HOME": os.environ.get("CODEX_HOME") or str(Path(home) / ".codex"),
+            "CCBOT_CODEX_SESSIONS_PATH": str(config.codex_sessions_path),
+            "CCBOT_DIR": str(ccbot_dir()),
+        }
+        for key in ("CLAUDE_CONFIG_DIR", "CCBOT_CLAUDE_PROJECTS_PATH"):
+            if value := os.environ.get(key):
+                provider_env[key] = value
+        parts = [
+            "env",
+            *(f"{key}={shlex.quote(value)}" for key, value in provider_env.items()),
+            command,
+        ]
         if flags:
             parts.append(flags)
         if resume_session_id:
@@ -626,7 +648,28 @@ class TmuxWorkerExecutor:
         return " ".join(parts)
 
     @staticmethod
-    def _restore_transcript_path(session_id: str, workdir: str, backend: str) -> Path:
+    def _restore_transcript_path(
+        session_id: str,
+        workdir: str,
+        backend: str,
+        provider_transcript_path: str = "",
+    ) -> Path:
+        if provider_transcript_path:
+            exact = Path(provider_transcript_path).expanduser()
+            if exact.is_file():
+                if backend == "codex":
+                    from .codex_session_io import session_id_for_path
+
+                    exact_session_id = session_id_for_path(exact)
+                elif backend == "claude":
+                    exact_session_id = exact.stem
+                else:
+                    raise ValueError(f"unsupported source backend: {backend}")
+                if exact_session_id != session_id:
+                    raise ValueError(
+                        "Persisted transcript path does not match provider session id"
+                    )
+                return exact
         if backend == "codex":
             from .codex_session_io import build_session_file_path
         elif backend == "claude":

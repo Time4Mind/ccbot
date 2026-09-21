@@ -45,6 +45,7 @@ class NodeRuntime(Protocol):
         *,
         resume_session_id: str = "",
         source_backend: str = "",
+        provider_transcript_path: str = "",
     ) -> dict[str, Any]: ...
 
     async def resolve_provider_session(

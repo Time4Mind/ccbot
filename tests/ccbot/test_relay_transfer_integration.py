@@ -116,6 +116,17 @@ async def test_context_transfer_crosses_real_relay_and_worker_agent(tmp_path: Pa
         worker_file = executor.workdir / uploaded["relative_path"]
         assert worker_file.read_bytes() == b"image-bytes"
         assert worker_file.name.endswith("-photo.jpg")
+
+        artifact = executor.workdir / "result.zip"
+        artifact.write_bytes(b"worker-output")
+        downloaded = await runtime.download_session_file(
+            "worker-a", "worker-session", str(artifact)
+        )
+        assert downloaded == {
+            "ok": True,
+            "name": "result.zip",
+            "content": b"worker-output",
+        }
     finally:
         if leader_rpc is not None:
             await leader_rpc.close()

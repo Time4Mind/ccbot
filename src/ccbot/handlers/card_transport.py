@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from pathlib import Path
 
 from telegram import Bot, InlineKeyboardMarkup
 from telegram.error import BadRequest, RetryAfter
 
 from ..config import config
+from ..file_actions import file_button_context_for_session
 from ..session import Session, session_manager
 from .card_binding import bind_carrier, carrier_kind, clear_carrier, snapshot_carrier
 from .card_model import (
@@ -118,6 +118,7 @@ async def _send_card_locked(
     sent_file_id = ""
     sent_pane_hash = ""
     sent_photo_ts = 0.0
+    file_button_context = await file_button_context_for_session(sess, text)
 
     # Inline screenshots ON: prefer a Rich Markdown card whose media block
     # sits before the service tail. The latest image remains after completion.
@@ -132,9 +133,7 @@ async def _send_card_locked(
                 text,
                 png,
                 reply_markup=keyboard,
-                file_base_dir=Path(sess.workdir)
-                if getattr(sess, "workdir", "")
-                else None,
+                file_base_dir=file_button_context,
             )
             if rich_sent is not None:
                 sent = rich_sent.message
@@ -152,9 +151,7 @@ async def _send_card_locked(
                 bot,
                 user_id,
                 text,
-                file_base_dir=Path(sess.workdir)
-                if getattr(sess, "workdir", "")
-                else None,
+                file_base_dir=file_button_context,
                 reply_markup=keyboard,
                 disable_notification=True,
             )
@@ -227,8 +224,9 @@ async def _edit_card_unlocked(
         return False
     sess_id = lookup_session_for_message(user_id, state.msg_id)
     sess = session_manager.get_session(sess_id) if sess_id else None
-    workdir = getattr(sess, "workdir", "")
-    file_base_dir = Path(workdir) if workdir else None
+    file_base_dir = (
+        await file_button_context_for_session(sess, text) if sess is not None else None
+    )
     # User is currently looking at a Menu / sub-screen on this card's
     # message. Don't repaint — would clobber whatever they're navigating.
     # State.lines keeps accumulating; resume_card_view will catch up.
@@ -278,6 +276,7 @@ async def _edit_card_unlocked(
                 reply_markup=reply_markup,
                 min_photo_interval=_PHOTO_EDIT_MIN_INTERVAL,
                 refresh_pane=refresh_pane,
+                file_base_dir=file_base_dir,
             )
             if updated:
                 return True
@@ -304,6 +303,7 @@ async def _edit_card_unlocked(
             reply_markup=reply_markup,
             min_photo_interval=_PHOTO_EDIT_MIN_INTERVAL,
             refresh_pane=refresh_pane,
+            file_base_dir=file_base_dir,
         )
         if promoted:
             bind_carrier(

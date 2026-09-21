@@ -29,7 +29,7 @@ from .node_transport import (
 from .node_pairing import PairingInvitation
 from .node_event_pump import NodeEventPump
 from .node_update import GitNodeUpdater, current_git_revision
-from .node_inbox import dispatch_inbox_operation
+from .node_inbox import dispatch_inbox_operation, is_inbox_operation
 from .node_session_start import dispatch_create_session
 from .node_worker import TmuxWorkerExecutor
 
@@ -42,7 +42,6 @@ _CONTROL_OPERATIONS = {
     "health",
 }
 _STARTUP_OPERATIONS = {"create_session", "transfer_context_finish"}
-_INBOX_OPERATIONS = {"inspect_session", "reset_session_binding"}
 _COMMAND_QUEUE_SIZE = 256
 
 
@@ -258,6 +257,7 @@ class NodeAgent:
                         "context_transfer": True,
                         "send_text": True,
                         "inbox_upload": True,
+                        "file_download": True,
                         "event_stream": self._event_pump.healthy,
                     },
                     "capacity": capacity,
@@ -339,7 +339,7 @@ class NodeAgent:
             return self._append_context(payload)
         if operation == "transfer_context_finish":
             return await self._finish_context(payload)
-        if operation in _INBOX_OPERATIONS or operation.startswith("upload_inbox_"):
+        if is_inbox_operation(operation):
             return await dispatch_inbox_operation(self._executor, payload)
         if operation == "list_directories":
             return await self._executor.list_directories(

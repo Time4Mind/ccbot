@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import os
 import re
 import secrets
@@ -13,7 +14,20 @@ from typing import Any, cast
 
 
 MAX_INBOX_BYTES = 20 * 1024 * 1024
+MAX_SESSION_FILE_BYTES = 20 * 1024 * 1024
+MAX_SESSION_FILE_CHUNK = 512 * 1024
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+logger = logging.getLogger(__name__)
+_INBOX_OPERATIONS = {
+    "inspect_session",
+    "read_session_file",
+    "reset_session_binding",
+    "stat_session_file",
+    "upload_inbox_begin",
+    "upload_inbox_chunk",
+    "upload_inbox_finish",
+    "upload_inbox_abort",
+}
 
 
 def _safe_name(value: str) -> str:
@@ -91,6 +105,54 @@ class RemoteInboxMixin:
             target_node_id, "reset_session_binding", {"session_id": session_id}
         )
 
+    async def stat_session_file(
+        self, target_node_id: str, session_id: str, path: str
+    ) -> dict[str, Any]:
+        return await cast(Any, self)._request(
+            target_node_id,
+            "stat_session_file",
+            {"session_id": session_id, "path": path},
+        )
+
+    async def download_session_file(
+        self, target_node_id: str, session_id: str, path: str
+    ) -> dict[str, Any]:
+        owner = cast(Any, self)
+        metadata = await self.stat_session_file(target_node_id, session_id, path)
+        owner._require_ok(metadata)
+        total_size = int(metadata.get("size", -1))
+        if total_size < 0 or total_size > MAX_SESSION_FILE_BYTES:
+            raise ValueError("worker file exceeds transfer limit")
+        canonical_path = str(metadata.get("path", ""))
+        version = str(metadata.get("version", ""))
+        content = bytearray()
+        while len(content) < total_size:
+            result = await owner._request(
+                target_node_id,
+                "read_session_file",
+                {
+                    "session_id": session_id,
+                    "path": canonical_path,
+                    "offset": len(content),
+                    "limit": min(owner._chunk_size, MAX_SESSION_FILE_CHUNK),
+                    "version": version,
+                },
+            )
+            owner._require_ok(result)
+            if int(result.get("offset", -1)) != len(content):
+                raise ValueError("worker file chunk offset mismatch")
+            chunk = base64.b64decode(str(result.get("data", "")), validate=True)
+            if not chunk and len(content) < total_size:
+                raise ValueError("worker file transfer ended early")
+            content.extend(chunk)
+            if len(content) > total_size:
+                raise ValueError("worker file transfer exceeded declared size")
+        return {
+            "ok": True,
+            "name": str(metadata.get("name", "file")),
+            "content": bytes(content),
+        }
+
 
 @dataclass
 class _PendingUpload:
@@ -135,6 +197,77 @@ class WorkerInboxMixin:
         session.pending_tools.clear()
         session.binding_announced = False
         return {"ok": True}
+
+    async def _resolve_session_file(self, session_id: str, raw_path: str) -> Path:
+        session = await cast(Any, self)._find_session(session_id)
+        if session is None:
+            raise ValueError("worker session not found")
+        try:
+            root = Path(session.workdir).expanduser().resolve(strict=True)
+            candidate = Path(raw_path).expanduser()
+            if candidate.is_absolute():
+                path = candidate.resolve(strict=True)
+            elif candidate.parts[:1] == (".ccbot-inbox",):
+                path = (root / candidate).resolve(strict=True)
+            else:
+                raise ValueError("relative worker file path is not allowed")
+            path.relative_to(root)
+        except (OSError, RuntimeError, ValueError) as exc:
+            logger.info(
+                "worker session file rejected session=%s path=%s reason=%s",
+                session_id,
+                raw_path,
+                str(exc).strip() or type(exc).__name__,
+            )
+            raise ValueError("worker file is unavailable") from exc
+        if not path.is_file() or not path.suffix:
+            logger.info(
+                "worker session file rejected session=%s path=%s reason=not_regular",
+                session_id,
+                raw_path,
+            )
+            raise ValueError("worker file is unavailable")
+        size = path.stat().st_size
+        if size > MAX_SESSION_FILE_BYTES:
+            raise ValueError("worker file exceeds transfer limit")
+        return path
+
+    async def stat_session_file(self, *, session_id: str, path: str) -> dict[str, Any]:
+        resolved = await self._resolve_session_file(session_id, path)
+        stat = resolved.stat()
+        return {
+            "ok": True,
+            "path": str(resolved),
+            "name": resolved.name,
+            "size": stat.st_size,
+            "version": f"{stat.st_size}:{stat.st_mtime_ns}",
+        }
+
+    async def read_session_file(
+        self,
+        *,
+        session_id: str,
+        path: str,
+        offset: int,
+        limit: int,
+        version: str,
+    ) -> dict[str, Any]:
+        resolved = await self._resolve_session_file(session_id, path)
+        stat = resolved.stat()
+        current_version = f"{stat.st_size}:{stat.st_mtime_ns}"
+        if version != current_version:
+            raise ValueError("worker file changed during transfer")
+        if offset < 0 or offset > stat.st_size:
+            raise ValueError("worker file offset is invalid")
+        bounded_limit = min(max(1, limit), MAX_SESSION_FILE_CHUNK)
+        with resolved.open("rb") as source:
+            source.seek(offset)
+            chunk = source.read(bounded_limit)
+        return {
+            "ok": True,
+            "offset": offset,
+            "data": base64.b64encode(chunk).decode("ascii"),
+        }
 
     async def upload_inbox_begin(self, **payload: Any) -> dict[str, Any]:
         upload_id = str(payload.get("upload_id", ""))
@@ -228,14 +361,7 @@ async def dispatch_inbox_operation(
     executor: Any, payload: dict[str, Any]
 ) -> dict[str, Any]:
     operation = str(payload.get("operation", ""))
-    if operation not in {
-        "inspect_session",
-        "reset_session_binding",
-        "upload_inbox_begin",
-        "upload_inbox_chunk",
-        "upload_inbox_finish",
-        "upload_inbox_abort",
-    }:
+    if operation not in _INBOX_OPERATIONS:
         raise ValueError(f"unsupported inbox operation: {operation}")
     method = getattr(executor, operation)
     kwargs = {
@@ -244,3 +370,7 @@ async def dispatch_inbox_operation(
         if key not in ("operation", "target_node_id")
     }
     return await method(**kwargs)
+
+
+def is_inbox_operation(operation: str) -> bool:
+    return operation in _INBOX_OPERATIONS

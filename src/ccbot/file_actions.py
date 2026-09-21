@@ -7,19 +7,49 @@ import html
 import json
 import logging
 import re
+import time
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import TypeAlias
 
 from .handlers.callback_data import CB_FILE_SEND
 from .config import config
+from .session_models import Session
+from .transfer_runtime import get_node_runtime
 from .utils import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
 FILE_CALLBACK_PREFIX = CB_FILE_SEND
 _REGISTRY_LIMIT = 2000
-_file_paths: dict[str, Path] = {}
+
+
+@dataclass(frozen=True)
+class RemoteFileReference:
+    node_id: str
+    session_id: str
+    path: str
+    name: str
+    size: int
+
+
+@dataclass(frozen=True)
+class RemoteFileButtonContext:
+    references: dict[str, RemoteFileReference]
+
+
+FileReference: TypeAlias = Path | RemoteFileReference
+FileButtonContext: TypeAlias = Path | RemoteFileButtonContext | None
+
+
+_file_paths: dict[str, FileReference] = {}
 _registry_loaded = False
 _REGISTRY_FILE = config.config_dir / "file_buttons.json"
+_remote_validation_cache: dict[
+    tuple[str, str, str], tuple[float, RemoteFileReference | None]
+] = {}
+_REMOTE_VALID_SECONDS = 300.0
+_REMOTE_REJECTED_SECONDS = 15.0
 
 _FENCED_CODE_RE = re.compile(r"```[\s\S]*?(?:```|$)")
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
@@ -32,9 +62,15 @@ _RELATIVE_INBOX_PATH_RE = re.compile(
 _TRAILING_PROSE = ".,;:!?"
 
 
-def _token_for_path(path: Path) -> str:
-    token = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:20]
-    return token
+def _token_for_reference(reference: FileReference) -> str:
+    if isinstance(reference, Path):
+        # Preserve tokens already persisted by the local-only implementation.
+        identity = str(reference)
+    else:
+        identity = (
+            f"remote\0{reference.node_id}\0{reference.session_id}\0{reference.path}"
+        )
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
 
 
 def _load_registry() -> None:
@@ -48,31 +84,52 @@ def _load_registry() -> None:
         return
     if not isinstance(raw, dict):
         return
-    for token, raw_path in list(raw.items())[-_REGISTRY_LIMIT:]:
-        if not isinstance(token, str) or not isinstance(raw_path, str):
+    for token, raw_reference in list(raw.items())[-_REGISTRY_LIMIT:]:
+        if not isinstance(token, str):
             continue
-        path = Path(raw_path)
-        if path.is_absolute() and token == _token_for_path(path):
-            _file_paths[token] = path
+        reference: FileReference | None = None
+        if isinstance(raw_reference, str):
+            path = Path(raw_reference)
+            if path.is_absolute():
+                reference = path
+        elif isinstance(raw_reference, dict) and raw_reference.get("kind") == "remote":
+            try:
+                reference = RemoteFileReference(
+                    node_id=str(raw_reference["node_id"]),
+                    session_id=str(raw_reference["session_id"]),
+                    path=str(raw_reference["path"]),
+                    name=str(raw_reference["name"]),
+                    size=int(raw_reference["size"]),
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        if reference is not None and token == _token_for_reference(reference):
+            _file_paths[token] = reference
 
 
 def _save_registry() -> None:
+    serialized: dict[str, object] = {}
+    for token, reference in _file_paths.items():
+        if isinstance(reference, Path):
+            serialized[token] = str(reference)
+        else:
+            serialized[token] = {"kind": "remote", **asdict(reference)}
     atomic_write_json(
         _REGISTRY_FILE,
-        {token: str(path) for token, path in _file_paths.items()},
+        serialized,
         indent=None,
     )
 
 
-def _register(path: Path) -> str:
+def _register(reference: FileReference) -> str:
     _load_registry()
-    token = _token_for_path(path)
-    if _file_paths.get(token) == path:
+    token = _token_for_reference(reference)
+    if _file_paths.get(token) == reference:
         return token
     if token not in _file_paths and len(_file_paths) >= _REGISTRY_LIMIT:
         for old_token in list(_file_paths)[: max(1, _REGISTRY_LIMIT // 10)]:
             _file_paths.pop(old_token, None)
-    _file_paths[token] = path
+    _file_paths[token] = reference
     try:
         _save_registry()
     except OSError as exc:
@@ -83,18 +140,130 @@ def _register(path: Path) -> str:
 def resolve_file_button(token: str) -> Path | None:
     """Resolve a button token and revalidate that it still names a file."""
     _load_registry()
-    path = _file_paths.get(token)
-    if path is None or not path.is_file():
+    reference = _file_paths.get(token)
+    if not isinstance(reference, Path) or not reference.is_file():
         return None
-    return path
+    return reference
 
 
-def _button_for_path(raw_path: str, file_base_dir: Path | None = None) -> str | None:
+def resolve_file_reference(token: str) -> FileReference | None:
+    """Resolve a persisted local or remote button reference."""
+    _load_registry()
+    reference = _file_paths.get(token)
+    if isinstance(reference, Path):
+        return reference if reference.is_file() else None
+    return reference
+
+
+def _candidate_paths(text: str) -> list[str]:
+    candidates: list[str] = []
+
+    def collect(segment: str) -> None:
+        for pattern in (
+            _MARKDOWN_LOCAL_LINK_RE,
+            _INLINE_CODE_RE,
+            _RELATIVE_INBOX_PATH_RE,
+            _BARE_HOME_PATH_RE,
+            _BARE_ABSOLUTE_PATH_RE,
+        ):
+            for match in pattern.finditer(segment):
+                value = match.group(1)
+                while value and value[-1] in _TRAILING_PROSE:
+                    value = value[:-1]
+                if value and value not in candidates:
+                    candidates.append(value)
+
+    last = 0
+    for match in _FENCED_CODE_RE.finditer(text):
+        collect(text[last : match.start()])
+        last = match.end()
+    collect(text[last:])
+    return candidates
+
+
+async def file_button_context_for_session(
+    session: Session, text: str
+) -> FileButtonContext:
+    """Validate candidate output paths on the session's owning node."""
+    node_id = getattr(session, "node_id", "local")
+    workdir = getattr(session, "workdir", "")
+    if node_id == "local":
+        return Path(workdir) if workdir else None
+    routing_id = getattr(session, "worker_session_id", "") or getattr(
+        session, "claude_session_id", ""
+    )
+    runtime = get_node_runtime(node_id)
+    references: dict[str, RemoteFileReference] = {}
+    if runtime is None or not routing_id:
+        logger.info(
+            "remote file button validation skipped node=%s session=%s reason=offline",
+            node_id,
+            session.id,
+        )
+        return RemoteFileButtonContext(references)
+    now = time.monotonic()
+    for candidate in _candidate_paths(text):
+        cache_key = (node_id, routing_id, candidate)
+        cached = _remote_validation_cache.get(cache_key)
+        if cached is not None and cached[0] > now:
+            if cached[1] is not None:
+                references[candidate] = cached[1]
+            continue
+        reference: RemoteFileReference | None = None
+        reason = "unavailable"
+        try:
+            result = await runtime.stat_session_file(node_id, routing_id, candidate)
+            if result.get("ok", False):
+                reference = RemoteFileReference(
+                    node_id=node_id,
+                    session_id=routing_id,
+                    path=str(result["path"]),
+                    name=str(result["name"]),
+                    size=int(result["size"]),
+                )
+            else:
+                reason = str(result.get("error", reason))
+        except Exception as exc:
+            reason = str(exc).strip() or type(exc).__name__
+        ttl = (
+            _REMOTE_VALID_SECONDS if reference is not None else _REMOTE_REJECTED_SECONDS
+        )
+        _remote_validation_cache[cache_key] = (now + ttl, reference)
+        if reference is None:
+            logger.info(
+                "remote file button candidate rejected node=%s session=%s path=%s "
+                "reason=%s",
+                node_id,
+                session.id,
+                candidate,
+                reason,
+            )
+            continue
+        references[candidate] = reference
+        _register(reference)
+    return RemoteFileButtonContext(references)
+
+
+def _button_for_path(
+    raw_path: str, file_base_dir: FileButtonContext = None
+) -> str | None:
     trailing = ""
     candidate = raw_path
     while candidate and candidate[-1] in _TRAILING_PROSE:
         trailing = candidate[-1] + trailing
         candidate = candidate[:-1]
+    if isinstance(file_base_dir, RemoteFileButtonContext):
+        reference = file_base_dir.references.get(candidate)
+        if reference is None:
+            return None
+        token = _register(reference)
+        display_path = Path(reference.name)
+        stem = html.escape(display_path.stem)
+        extension = html.escape(display_path.suffix.removeprefix("."))
+        return (
+            f'{stem} <tg-button type="callback_data" '
+            f'data="{FILE_CALLBACK_PREFIX}{token}">{extension}</tg-button>{trailing}'
+        )
     try:
         candidate_path = Path(candidate).expanduser()
         if candidate_path.is_absolute():
@@ -120,7 +289,7 @@ def _button_for_path(raw_path: str, file_base_dir: Path | None = None) -> str | 
     )
 
 
-def _replace_outside_fences(segment: str, file_base_dir: Path | None) -> str:
+def _replace_outside_fences(segment: str, file_base_dir: FileButtonContext) -> str:
     def replace_link(match: re.Match[str]) -> str:
         replacement = _button_for_path(match.group(1), file_base_dir)
         return replacement if replacement is not None else match.group(0)
@@ -152,7 +321,7 @@ def _replace_outside_fences(segment: str, file_base_dir: Path | None) -> str:
     return _BARE_ABSOLUTE_PATH_RE.sub(replace_bare, segment)
 
 
-def add_file_buttons(text: str, file_base_dir: Path | None = None) -> str:
+def add_file_buttons(text: str, file_base_dir: FileButtonContext = None) -> str:
     """Replace local paths with a filename stem and extension download button."""
     out: list[str] = []
     last = 0

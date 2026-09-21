@@ -68,6 +68,14 @@ class NodeRuntime(Protocol):
         self, target_node_id: str, session_id: str
     ) -> dict[str, Any]: ...
 
+    async def stat_session_file(
+        self, target_node_id: str, session_id: str, path: str
+    ) -> dict[str, Any]: ...
+
+    async def download_session_file(
+        self, target_node_id: str, session_id: str, path: str
+    ) -> dict[str, Any]: ...
+
     async def send_key(
         self, target_node_id: str, session_id: str, key: str
     ) -> dict[str, Any]: ...

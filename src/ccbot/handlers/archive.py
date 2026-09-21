@@ -26,6 +26,7 @@ from ..session import (
     session_manager,
 )
 from ..session_claude_io import build_session_file_path
+from ..transfer_runtime import get_node_runtime
 from ..tmux_manager import tmux_manager
 from ..transcript_parser import TranscriptParser
 from .archive_blurb import (
@@ -427,7 +428,9 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
     cross_backend = source_backend != target_backend
     resume_session_id = sess.claude_session_id or None
     initial_prompt: str | None = None
-    if cross_backend:
+    if sess.node_id != "local" and not resume_session_id:
+        return False, "Provider session id is missing on the remote archive"
+    if cross_backend and sess.node_id == "local":
         from ..session_import import build_import_context, import_prompt
 
         try:
@@ -438,6 +441,42 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
             return False, f"Could not import {source_backend} transcript: {e}"
         initial_prompt = import_prompt(context_path, source_backend)
         resume_session_id = None
+
+    if sess.node_id != "local":
+        runtime = get_node_runtime(sess.node_id)
+        if runtime is None:
+            return False, f"Node is not connected: {sess.node_id}"
+        try:
+            result = await runtime.create_session(
+                sess.node_id,
+                workdir,
+                target_backend,
+                sess.name or "session",
+                resume_session_id=resume_session_id or "",
+                source_backend=source_backend,
+            )
+        except Exception as exc:
+            return False, f"Remote restore failed on {sess.node_id}: {exc}"
+        raw_window_id = str(result.get("target_window_id", ""))
+        agent_session_id = str(result.get("target_agent_session_id", ""))
+        if not raw_window_id or not agent_session_id:
+            return False, f"Remote restore failed on {sess.node_id}: invalid response"
+        created_wid = f"{sess.node_id}::{raw_window_id}"
+        created_wname = sess.name or raw_window_id
+        session_manager.set_session_window(sess.id, created_wid)
+        session_manager.set_session_claude_id(sess.id, agent_session_id)
+        if cross_backend:
+            sess.imported_from_backend = source_backend
+            sess.imported_from_session_id = resume_session_id or ""
+            sess.backend = target_backend
+        session_manager.select_session(user_id, sess.id)
+        session_manager.save_state()
+        note = (
+            f" - imported from {source_backend} into a native {target_backend} session"
+            if cross_backend
+            else " - if it was a large session it may compact for a minute"
+        )
+        return True, f"Restored {sess.name or sess.id} ({created_wname}){note}"
 
     success, message, created_wname, created_wid = await tmux_manager.create_window(
         workdir,

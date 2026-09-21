@@ -108,7 +108,7 @@ async def handle(
                 query.message.message_id,
             )
         else:
-            session_manager.set_active_session(user.id, target_id)
+            session_manager.select_session(user.id, target_id)
         # Dismiss Telegram's tap spinner before any screenshot render/upload.
         # The carrier is already atomically owned by the target session here.
         await query.answer(f"→ {sess.name or sess.id}")

@@ -29,7 +29,7 @@ from .node_transport import (
 from .node_pairing import PairingInvitation
 from .node_event_pump import NodeEventPump
 from .node_update import GitNodeUpdater, current_git_revision
-from .node_worker import TmuxWorkerExecutor
+from .node_worker import TmuxWorkerExecutor, dispatch_create_session
 
 logger = logging.getLogger(__name__)
 HEALTH_INTERVAL_SECONDS = 15.0
@@ -95,7 +95,14 @@ class WorkerSessionExecutor(Protocol):
     async def create_directory(self, *, path: str, name: str) -> dict[str, Any]: ...
 
     async def create_session(
-        self, *, path: str, backend: str, name: str, startup_id: str = ""
+        self,
+        *,
+        path: str,
+        backend: str,
+        name: str,
+        startup_id: str = "",
+        resume_session_id: str = "",
+        source_backend: str = "",
     ) -> dict[str, Any]: ...
 
     async def cancel_session_start(self, *, startup_id: str) -> dict[str, Any]: ...
@@ -346,13 +353,8 @@ class NodeAgent:
                 path=str(payload.get("path", "")),
                 name=str(payload.get("name", "")),
             )
-        if operation == "create_session":
-            return await self._executor.create_session(
-                path=str(payload.get("path", "")),
-                backend=str(payload.get("backend", "")),
-                name=str(payload.get("name", "")),
-                startup_id=str(payload.get("startup_id", "")),
-            )
+        if operation in ("create_session", "restore_session"):
+            return await dispatch_create_session(self._executor, payload)
         if operation == "cancel_session_start":
             return await self._executor.cancel_session_start(
                 startup_id=str(payload.get("startup_id", ""))
@@ -794,7 +796,5 @@ def main(argv: list[str] | None = None) -> None:
 __all__ = [
     "NodeAgent",
     "NodeCredentialStore",
-    "TmuxWorkerExecutor",
-    "WorkerSessionExecutor",
     "main",
 ]

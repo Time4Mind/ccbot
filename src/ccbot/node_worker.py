@@ -25,6 +25,26 @@ from .utils import ccbot_dir
 logger = logging.getLogger(__name__)
 
 
+async def dispatch_create_session(
+    executor: Any, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Adapt the extensible wire payload to the worker executor contract."""
+    kwargs = {
+        "path": str(payload.get("path", "")),
+        "backend": str(payload.get("backend", "")),
+        "name": str(payload.get("name", "")),
+        "startup_id": str(payload.get("startup_id", "")),
+    }
+    kwargs.update(
+        {
+            key: str(payload[key])
+            for key in ("resume_session_id", "source_backend")
+            if payload.get(key)
+        }
+    )
+    return await executor.create_session(**kwargs)
+
+
 @dataclass
 class _TmuxWorkerSession:
     session_id: str
@@ -114,17 +134,58 @@ class TmuxWorkerExecutor:
         return result
 
     async def create_session(
-        self, *, path: str, backend: str, name: str, startup_id: str = ""
+        self,
+        *,
+        path: str,
+        backend: str,
+        name: str,
+        startup_id: str = "",
+        resume_session_id: str = "",
+        source_backend: str = "",
     ) -> dict[str, Any]:
         directory = self._resolve_directory(path)
         if backend not in ("claude", "codex"):
             raise ValueError(f"unsupported backend: {backend}")
+        command = self._agent_command(backend)
+        worker_session_id = ""
+        if resume_session_id:
+            source_backend = source_backend or backend
+            await asyncio.to_thread(
+                self._restore_transcript_path,
+                resume_session_id,
+                str(directory),
+                source_backend,
+            )
+            if source_backend == backend:
+                command = self._agent_command(
+                    backend, resume_session_id=resume_session_id
+                )
+                worker_session_id = resume_session_id
+            else:
+                from .session_import import build_import_context, import_prompt
+                from .session_models import Session
+
+                archived = Session(
+                    id=resume_session_id,
+                    name=name,
+                    backend=source_backend,
+                    workdir=str(directory),
+                    claude_session_id=resume_session_id,
+                )
+                context_path = await asyncio.to_thread(
+                    build_import_context, archived, backend
+                )
+                command = self._agent_command(
+                    backend,
+                    initial_prompt=import_prompt(context_path, source_backend),
+                )
         return await self._start_tmux_agent(
             workdir=directory,
             backend=backend,
             name=name,
-            command=self._agent_command(backend),
+            command=command,
             startup_id=startup_id,
+            session_id=worker_session_id,
         )
 
     async def start_context_session(
@@ -157,6 +218,7 @@ class TmuxWorkerExecutor:
         name: str,
         command: str,
         startup_id: str = "",
+        session_id: str = "",
     ) -> dict[str, Any]:
         if backend not in ("claude", "codex"):
             raise ValueError(f"unsupported backend: {backend}")
@@ -187,7 +249,7 @@ class TmuxWorkerExecutor:
             raise RuntimeError("tmux did not return a window id")
         if startup_id:
             self._startup_windows[startup_id] = window_id
-        session_id = str(uuid.uuid4())
+        session_id = session_id or str(uuid.uuid4())
         try:
             if startup_id and startup_id in self._cancelled_startups:
                 raise RuntimeError("worker session startup was cancelled")
@@ -352,12 +414,13 @@ class TmuxWorkerExecutor:
             session.transcript_offset = end_offset
             session.pending_tools = remaining
             for entry in parsed:
-                if entry.role != "assistant" or not entry.text:
+                if entry.role not in ("user", "assistant") or not entry.text:
                     continue
                 events.append(
                     {
                         "event_type": "session_message",
                         "session_id": session.session_id,
+                        "role": entry.role,
                         "text": entry.text,
                         "content_type": entry.content_type,
                         "tool_use_id": entry.tool_use_id,
@@ -473,7 +536,14 @@ class TmuxWorkerExecutor:
         if code != 0:
             raise RuntimeError(stderr.strip() or "tmux new-session failed")
 
-    def _agent_command(self, backend: str, context_path: str = "") -> str:
+    def _agent_command(
+        self,
+        backend: str,
+        context_path: str = "",
+        *,
+        resume_session_id: str = "",
+        initial_prompt: str = "",
+    ) -> str:
         if backend == "codex":
             command = self._codex_command
             flags = self._codex_flags
@@ -483,13 +553,35 @@ class TmuxWorkerExecutor:
         parts = [command]
         if flags:
             parts.append(flags)
+        if resume_session_id:
+            parts.extend(
+                ["resume", shlex.quote(resume_session_id)]
+                if backend == "codex"
+                else ["--resume", shlex.quote(resume_session_id)]
+            )
         if context_path:
             prompt = (
                 "Read the complete transferred session context from "
                 f"{context_path}. Continue the conversation from that context."
             )
             parts.append(shlex.quote(prompt))
+        if initial_prompt:
+            parts.append(shlex.quote(initial_prompt))
         return " ".join(parts)
+
+    @staticmethod
+    def _restore_transcript_path(session_id: str, workdir: str, backend: str) -> Path:
+        if backend == "codex":
+            from .codex_session_io import build_session_file_path
+        elif backend == "claude":
+            from .session_claude_io import build_session_file_path
+        else:
+            raise ValueError(f"unsupported source backend: {backend}")
+        path = build_session_file_path(session_id, workdir)
+        if path is None or not path.is_file():
+            label = "Codex rollout" if backend == "codex" else "Claude transcript"
+            raise ValueError(f"{label} not found on worker")
+        return path
 
     @staticmethod
     def _valid_directory_name(name: str) -> bool:

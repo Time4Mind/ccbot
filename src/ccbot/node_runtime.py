@@ -330,19 +330,31 @@ class RemoteNodeRuntime:
         return result
 
     async def create_session(
-        self, target_node_id: str, path: str, backend: str, name: str
+        self,
+        target_node_id: str,
+        path: str,
+        backend: str,
+        name: str,
+        *,
+        resume_session_id: str = "",
+        source_backend: str = "",
     ) -> dict[str, Any]:
         startup_id = secrets.token_urlsafe(12)
+        payload = {
+            "path": path,
+            "backend": backend,
+            "name": name,
+            "startup_id": startup_id,
+        }
+        if resume_session_id:
+            payload["resume_session_id"] = resume_session_id
+        if source_backend:
+            payload["source_backend"] = source_backend
         try:
             result = await self._request(
                 target_node_id,
-                "create_session",
-                {
-                    "path": path,
-                    "backend": backend,
-                    "name": name,
-                    "startup_id": startup_id,
-                },
+                "restore_session" if resume_session_id else "create_session",
+                payload,
             )
         except BaseException:
             try:
@@ -585,7 +597,7 @@ async def connect_configured_remote_runtimes(
                         is_complete=bool(payload.get("stop_reason")),
                         content_type=str(payload.get("content_type", "text")),
                         tool_use_id=payload.get("tool_use_id") or None,
-                        role="assistant",
+                        role=str(payload.get("role", "assistant")),
                         tool_name=payload.get("tool_name") or None,
                         stop_reason=payload.get("stop_reason") or None,
                         timestamp=str(payload.get("timestamp", "")),

@@ -25,10 +25,12 @@ from ccbot.handlers.card_model import (
     CardState,
     Event,
     PendingPrompt,
+    _build_event,
     _render_card,
     render_event,
 )
 from ccbot.session_models import Session
+from ccbot.session_monitor import NewMessage
 from ccbot.handlers.card_updates import _apply_preprocessing_marker
 from ccbot.handlers.menu import (
     build_footer_keyboard,
@@ -584,6 +586,56 @@ def test_concatenated_identical_prompts_are_reconciled_fifo() -> None:
     assert state.pending_prompts == []
     assert state.pending_request_sequences == []
     assert state.active_turn_sequence == 22
+
+
+def test_remote_user_rows_reconcile_two_prompts_before_completed_answer() -> None:
+    state = CardState(
+        pending_prompts=[
+            PendingPrompt(request_id="61", text="Первый"),
+            PendingPrompt(request_id="62", text="Второй"),
+        ],
+        pending_request_sequences=[(61, 41), (62, 42)],
+    )
+    sess = Session(id="remote", name="Remote")
+    messages = [
+        NewMessage("remote", "Первый", False, role="user"),
+        NewMessage("remote", "Второй", False, role="user"),
+        NewMessage(
+            "remote",
+            "Read(/tmp/file)",
+            False,
+            content_type="tool_use",
+            tool_use_id="tool-1",
+        ),
+        NewMessage(
+            "remote",
+            "Готово",
+            True,
+            role="assistant",
+            stop_reason="end_turn",
+        ),
+    ]
+
+    for message in messages:
+        event = _build_event(message)
+        _apply_preprocessing_marker(sess, state, event, message.text)
+        state.events.append(event)
+
+    rendered_events = "\n".join(
+        render_event(event, in_flight=False, now=1) for event in state.events
+    )
+    assert state.pending_prompts == []
+    assert state.pending_request_sequences == []
+    assert state.active_turn_sequence == 42
+    assert [event.type for event in state.events] == [
+        "user_msg",
+        "user_msg",
+        "tool_use",
+        "final_text",
+    ]
+    assert rendered_events.count("Первый") == 1
+    assert rendered_events.count("Второй") == 1
+    assert rendered_events.index("Первый") < rendered_events.index("Готово")
 
 
 def test_near_match_does_not_consume_multiple_pending_prompts() -> None:

@@ -118,6 +118,27 @@ async def test_remote_runtime_uses_target_node_for_directory_and_session_operati
 
 
 @pytest.mark.asyncio
+async def test_remote_runtime_sends_restore_contract_to_worker():
+    rpc = FakeRpc()
+    runtime = RemoteNodeRuntime(rpc)
+
+    await runtime.create_session(
+        "worker-a",
+        "/srv/project",
+        "codex",
+        "Task",
+        resume_session_id="rollout-42",
+        source_backend="codex",
+    )
+
+    operation, payload = rpc.calls[0]
+    assert operation == "restore_session"
+    assert payload["target_node_id"] == "worker-a"
+    assert payload["resume_session_id"] == "rollout-42"
+    assert payload["source_backend"] == "codex"
+
+
+@pytest.mark.asyncio
 async def test_remote_runtime_controls_and_terminates_worker_session():
     rpc = FakeRpc()
     runtime = RemoteNodeRuntime(rpc)

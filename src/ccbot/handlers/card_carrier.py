@@ -314,7 +314,7 @@ async def activate_card_on_carrier(
             False,
         )
         # One durable checkpoint contains both the new carrier and active route.
-        session_manager.set_active_session(user_id, to_session_id)
+        session_manager.select_session(user_id, to_session_id)
         return orphan_msg_id
 
 

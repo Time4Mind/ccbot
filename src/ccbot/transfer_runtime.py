@@ -37,7 +37,14 @@ class NodeRuntime(Protocol):
     ) -> dict[str, Any]: ...
 
     async def create_session(
-        self, target_node_id: str, path: str, backend: str, name: str
+        self,
+        target_node_id: str,
+        path: str,
+        backend: str,
+        name: str,
+        *,
+        resume_session_id: str = "",
+        source_backend: str = "",
     ) -> dict[str, Any]: ...
 
     async def send_text(

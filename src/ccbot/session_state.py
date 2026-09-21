@@ -78,6 +78,21 @@ class SessionStateMixin(NodeSessionStateMixin):
 
     def set_active_session(self, user_id: int, session_id: str) -> None:
         """Make `session_id` the active session for `user_id`."""
+        self._set_active_session_state(user_id, session_id)
+        self.save_state()
+
+    def select_session(self, user_id: int, session_id: str) -> None:
+        """Select a session and its owning node in one persisted transition."""
+        if session_id not in self.sessions:
+            raise KeyError(f"Unknown session id: {session_id}")
+        node_id = self.sessions[session_id].node_id
+        if node_id not in self.nodes:
+            raise KeyError(f"Unknown node id: {node_id}")
+        self.selected_node_ids[user_id] = node_id
+        self._set_active_session_state(user_id, session_id)
+        self.save_state()
+
+    def _set_active_session_state(self, user_id: int, session_id: str) -> None:
         if session_id not in self.sessions:
             raise KeyError(f"Unknown session id: {session_id}")
         session = self.sessions[session_id]
@@ -98,7 +113,6 @@ class SessionStateMixin(NodeSessionStateMixin):
             self.active_sessions[user_id] = session_id
         else:
             self.active_sessions.pop(user_id, None)
-        self.save_state()
         logger.info(
             "active_session_change user=%d prev=%s next=%s next_name=%s "
             "next_window=%s next_state=%s",

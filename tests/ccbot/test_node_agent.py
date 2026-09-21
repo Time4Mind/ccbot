@@ -517,6 +517,7 @@ async def test_worker_emits_assistant_transcript_events_for_remote_card(
         {
             "event_type": "session_message",
             "session_id": session_id,
+            "role": "assistant",
             "text": "remote answer",
             "content_type": "text",
             "tool_use_id": None,
@@ -526,6 +527,135 @@ async def test_worker_emits_assistant_transcript_events_for_remote_card(
             "is_error": False,
             "api_error": "",
         }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_worker_resumes_existing_codex_rollout_on_worker(tmp_path, monkeypatch):
+    transcript = tmp_path / "rollout.jsonl"
+    transcript.write_text("{}\n", encoding="utf-8")
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_tmux(*args: str):
+        calls.append(args)
+        if args[0] == "new-window":
+            return 0, "@9\n", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(executor, "_run_tmux", fake_tmux)
+    monkeypatch.setattr(executor, "_wait_ready", AsyncMock())
+    monkeypatch.setattr(
+        executor,
+        "_restore_transcript_path",
+        lambda *_args: transcript,
+    )
+
+    result = await executor.create_session(
+        path=str(tmp_path),
+        backend="codex",
+        name="Restored",
+        resume_session_id="rollout-42",
+        source_backend="codex",
+    )
+
+    assert result["target_agent_session_id"] == "rollout-42"
+    assert (
+        "send-keys",
+        "-t",
+        "@9",
+        "codex resume rollout-42",
+        "C-m",
+    ) in calls
+
+
+@pytest.mark.asyncio
+async def test_worker_rejects_missing_restore_rollout_before_window_creation(
+    tmp_path, monkeypatch
+):
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_tmux(*args: str):
+        calls.append(args)
+        return 0, "", ""
+
+    monkeypatch.setattr(executor, "_run_tmux", fake_tmux)
+    monkeypatch.setattr(
+        "ccbot.codex_session_io.build_session_file_path",
+        lambda *_args: None,
+    )
+
+    with pytest.raises(ValueError, match="Codex rollout not found on worker"):
+        await executor.create_session(
+            path=str(tmp_path),
+            backend="codex",
+            name="Restored",
+            resume_session_id="missing",
+            source_backend="codex",
+        )
+
+    assert not any(call[0] == "new-window" for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_worker_emits_queued_user_rows_before_remote_answer(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CCBOT_DIR", str(tmp_path / "state"))
+    transcript = tmp_path / "rollout.jsonl"
+    transcript.write_text("", encoding="utf-8")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "session_map.json").write_text(
+        json.dumps(
+            {
+                "ccbot-worker:@9": {
+                    "session_id": "provider-session",
+                    "transcript_path": str(transcript),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+
+    async def fake_tmux(*args: str):
+        if args[0] == "new-window":
+            return 0, "@9\n", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(executor, "_run_tmux", fake_tmux)
+    monkeypatch.setattr(executor, "_wait_ready", AsyncMock())
+    await executor.create_session(path=str(tmp_path), backend="codex", name="Task")
+    rows = [
+        {
+            "type": "event_msg",
+            "payload": {"type": "user_message", "message": "first prompt"},
+        },
+        {
+            "type": "event_msg",
+            "payload": {"type": "user_message", "message": "second prompt"},
+        },
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "agent_message",
+                "message": "answer",
+                "phase": "final_answer",
+            },
+        },
+    ]
+    transcript.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+    )
+
+    events = await executor.poll_events()
+
+    assert [(event["role"], event["text"]) for event in events] == [
+        ("user", "first prompt"),
+        ("user", "second prompt"),
+        ("assistant", "answer"),
     ]
 
 

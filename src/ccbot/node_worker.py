@@ -739,7 +739,7 @@ class TmuxWorkerExecutor(WorkerInboxMixin, WorkerHistoryMixin):
                 return stdout.strip()
 
             async def send_key(key: str) -> None:
-                tmux_key = "C-m" if key == "ENTER" else "Down"
+                tmux_key = {"ENTER": "C-m", "DOWN": "Down"}.get(key, key)
                 code, _stdout, stderr = await self._run_tmux(
                     "send-keys", "-t", window_id, tmux_key
                 )

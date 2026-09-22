@@ -24,6 +24,7 @@ class CodexScreen(str, Enum):
     WAITING = "waiting"
     TRUST = "trust"
     HOOKS_REVIEW = "hooks_review"
+    HOOKS_INLINE = "hooks_inline"
     RESUME_DIRECTORY = "resume_directory"
     UPDATE = "update"
     AUTHENTICATION = "authentication"
@@ -65,6 +66,13 @@ def classify_codex_screen(text: str) -> CodexScreen:
         and "3. continue without trusting" in lower
     ):
         return CodexScreen.HOOKS_REVIEW
+    if (
+        "hooks need review before they can run" in lower
+        and "press t to trust all" in lower
+        and "enter to review hooks" in lower
+        and "esc to close" in lower
+    ):
+        return CodexScreen.HOOKS_INLINE
     if (
         "choose working directory to resume this session" in lower
         and "1. use session directory" in lower
@@ -110,6 +118,8 @@ def is_codex_ready(text: str) -> bool:
             "sign in with device code",
             "provide your own api key",
             "update available!",
+            "hooks need review before they can run",
+            "press t to trust all",
         )
     ):
         return False
@@ -176,6 +186,8 @@ async def drive_codex_startup(
         elif screen is CodexScreen.HOOKS_REVIEW:
             await send_key("DOWN")
             await send_key("ENTER")
+        elif screen is CodexScreen.HOOKS_INLINE:
+            await send_key("t")
         elif screen is CodexScreen.RESUME_DIRECTORY:
             await send_key("DOWN")
             await send_key("ENTER")

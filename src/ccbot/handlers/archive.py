@@ -8,9 +8,11 @@ remain here to preserve historical imports and monkeypatch seams around
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import time
+from dataclasses import fields
 
 import aiofiles
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
@@ -453,6 +455,12 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
         return False, "No workdir on session record — cannot restore"
 
     source_backend = sess.backend
+    prior_session = copy.deepcopy(sess)
+    prior_active = session_manager.active_sessions.get(user_id)
+    prior_node_active = session_manager.active_sessions_by_node.get(user_id, {}).get(
+        sess.node_id
+    )
+    prior_history = list(session_manager.active_history.get(user_id, []))
     enabled_backends = session_manager.get_effective_backends(user_id, sess.node_id)
     if not enabled_backends:
         return False, f"Node has no available backend: {sess.node_id}"
@@ -578,13 +586,61 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
         )
         return True, f"Restored {sess.name or sess.id} ({created_wname}){note}"
 
-    success, message, created_wname, created_wid = await tmux_manager.create_window(
-        workdir,
-        resume_session_id=resume_session_id,
-        backend=target_backend,
-        initial_prompt=initial_prompt,
-    )
+    native_codex_restore = bool(resume_session_id and target_backend == "codex")
+    restore_published = asyncio.Event()
+
+    async def _rollback_failed_startup(
+        failed_window_id: str, startup_error: BaseException
+    ) -> None:
+        await restore_published.wait()
+        if sess.window_id != failed_window_id:
+            return
+        session_manager.cancel_window_startup(failed_window_id)
+        await session_manager.remove_provider_session_bindings(sess.claude_session_id)
+        for field in fields(Session):
+            setattr(sess, field.name, copy.deepcopy(getattr(prior_session, field.name)))
+        if prior_active is None:
+            session_manager.active_sessions.pop(user_id, None)
+        else:
+            session_manager.active_sessions[user_id] = prior_active
+        node_sessions = session_manager.active_sessions_by_node.setdefault(user_id, {})
+        if prior_node_active is None:
+            node_sessions.pop(sess.node_id, None)
+        else:
+            node_sessions[sess.node_id] = prior_node_active
+        if not node_sessions:
+            session_manager.active_sessions_by_node.pop(user_id, None)
+        if prior_history:
+            session_manager.active_history[user_id] = prior_history
+        else:
+            session_manager.active_history.pop(user_id, None)
+        session_manager.save_state()
+        logger.warning(
+            "Codex archive restore rolled back session=%s window=%s state=%s: %s",
+            sess.id,
+            failed_window_id,
+            sess.state,
+            startup_error,
+        )
+
+    if native_codex_restore:
+        create_result = await tmux_manager.create_window(
+            workdir,
+            resume_session_id=resume_session_id,
+            backend=target_backend,
+            initial_prompt=initial_prompt,
+            on_startup_failure=_rollback_failed_startup,
+        )
+    else:
+        create_result = await tmux_manager.create_window(
+            workdir,
+            resume_session_id=resume_session_id,
+            backend=target_backend,
+            initial_prompt=initial_prompt,
+        )
+    success, message, created_wname, created_wid = create_result
     if not success:
+        restore_published.set()
         return False, message
 
     # Publish the restored window immediately. Prompts sent from Telegram now
@@ -610,6 +666,7 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
 
         transcript_path = build_session_file_path(resume_session_id, workdir)
         if transcript_path is None or not transcript_path.is_file():
+            restore_published.set()
             session_manager.cancel_window_startup(created_wid)
             await tmux_manager.kill_window(created_wid)
             return False, "Codex rollout not found; restore was cancelled"
@@ -622,13 +679,17 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
                 transcript_path=transcript_path,
             )
         except (OSError, RuntimeError) as e:
+            restore_published.set()
             session_manager.cancel_window_startup(created_wid)
             await tmux_manager.kill_window(created_wid)
             logger.warning("Codex restore binding failed for %s: %s", created_wid, e)
             return False, "Could not publish Codex restore binding"
         codex_restore_published = True
+        restore_published.set()
     elif cross_backend:
         await session_manager.wait_for_session_map_entry(created_wid, timeout=15.0)
+    else:
+        restore_published.set()
 
     # If we did a --resume, override window_state to original sid (Claude allocates a new sid for the resume).
     if resume_session_id:

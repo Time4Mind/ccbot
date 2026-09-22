@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shlex
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from .codex_startup import CODEX_READY_SETTLE_SECONDS, drive_codex_startup
 
 
 _CODEX_STARTUP_POLL_SECONDS = 0.25
+StartupFailureHandler = Callable[[str, BaseException], Awaitable[None]]
 
 
 def handle_codex_startup_screen(
@@ -107,8 +109,10 @@ async def watch_codex_startup_screens(
     async def send_key(key: str) -> None:
         if key == "DOWN":
             await to_thread(send_keys, "Down", enter=False)
-        else:
+        elif key == "ENTER":
             await to_thread(send_keys, "", enter=True)
+        else:
+            await to_thread(send_keys, key, enter=False)
 
     async def relaunch(exact_command: str) -> None:
         await to_thread(send_keys, exact_command, enter=True)
@@ -135,6 +139,7 @@ async def create_window(
     backend: str | None = None,
     initial_prompt: str | None = None,
     wait_for_codex_ready: bool = False,
+    on_startup_failure: StartupFailureHandler | None = None,
     *,
     config_obj: Any,
     logger_obj: logging.Logger,
@@ -277,7 +282,7 @@ async def create_window(
                 return await manager._watch_codex_startup_screens(
                     created_pane, command=created_command
                 )
-            except BaseException:
+            except BaseException as startup_error:
                 if created_window is not None:
                     try:
                         await asyncio.to_thread(created_window.kill)
@@ -286,6 +291,15 @@ async def create_window(
                             "Failed to roll back Codex window %s: %s",
                             result[3],
                             cleanup_error,
+                        )
+                if on_startup_failure is not None and result[3]:
+                    try:
+                        await on_startup_failure(result[3], startup_error)
+                    except Exception as callback_error:
+                        logger_obj.exception(
+                            "Codex startup rollback callback failed for %s: %s",
+                            result[3],
+                            callback_error,
                         )
                 raise
 

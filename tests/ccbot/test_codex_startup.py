@@ -5,7 +5,9 @@ import asyncio
 import pytest
 
 from ccbot.codex_startup import (
+    CodexScreen,
     CodexStartupError,
+    classify_codex_screen,
     drive_codex_startup,
     is_codex_ready,
 )
@@ -32,6 +34,18 @@ Hooks can run outside the sandbox after you trust them.
 1. Review hooks
 2. Trust all and continue
 3. Continue without trusting (hooks won't run)
+"""
+
+INLINE_HOOKS_REVIEW_PROMPT = """OpenAI Codex
+
+Earlier resumed transcript:
+1. Keep the archive state.
+2. Do not lose the session.
+
+⚠ 2 hooks need review before they can run.
+SessionStart: ~/.ccbot/hooks/session-start.py
+UserPromptSubmit: ~/.ccbot/hooks/user-prompt.py
+Press t to trust all; enter to review hooks; esc to close
 """
 
 
@@ -171,6 +185,30 @@ async def test_hooks_review_trusts_worker_hooks_and_reaches_composer() -> None:
 
     assert result.updated is False
     assert keys == ["DOWN", "ENTER"]
+
+
+@pytest.mark.asyncio
+async def test_inline_hooks_review_ignores_resumed_numbered_content_and_trusts() -> (
+    None
+):
+    screens = iter([INLINE_HOOKS_REVIEW_PROMPT, READY_PROMPT])
+    keys: list[str] = []
+
+    assert classify_codex_screen(INLINE_HOOKS_REVIEW_PROMPT) is CodexScreen.HOOKS_INLINE
+
+    result = await drive_codex_startup(
+        command="codex resume abc",
+        capture=lambda: _next(screens),
+        current_process=lambda: _value("codex"),
+        send_key=lambda key: _append(keys, key),
+        relaunch=lambda _command: _done(),
+        timeout=1,
+        poll_interval=0,
+        ready_settle_time=0,
+    )
+
+    assert result.updated is False
+    assert keys == ["t"]
 
 
 @pytest.mark.asyncio

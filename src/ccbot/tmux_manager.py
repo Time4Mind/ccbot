@@ -778,6 +778,7 @@ class TmuxManager:
         backend: str | None = None,
         initial_prompt: str | None = None,
         wait_for_codex_ready: bool = False,
+        on_startup_failure: _tmux_window.StartupFailureHandler | None = None,
     ) -> tuple[bool, str, str, str]:
         """Create a tmux window and optionally start the configured agent."""
         return await _tmux_window.create_window(
@@ -789,6 +790,7 @@ class TmuxManager:
             backend=backend,
             initial_prompt=initial_prompt,
             wait_for_codex_ready=wait_for_codex_ready,
+            on_startup_failure=on_startup_failure,
             config_obj=config,
             logger_obj=logger,
         )

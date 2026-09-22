@@ -155,7 +155,7 @@ async def test_switcher_tap_flips_active_and_renders_multipage(
         ),
         _ctx(fake_bot),
     )
-    assert bg_status.status_emoji(USER_ID, "bbbbbbbb") == "☑️"
+    assert bg_status.status_emoji(USER_ID, "bbbbbbbb") == ""
 
 
 @pytest.mark.asyncio

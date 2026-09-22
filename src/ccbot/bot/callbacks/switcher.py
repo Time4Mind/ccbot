@@ -73,7 +73,8 @@ async def handle(
             return True
         # A completed result stays unread through its first presentation and
         # becomes acknowledged only when the user enters it a second time.
-        # Record before painting so that second entry already shows ☑️.
+        # Record before painting so that the second entry already has no
+        # unread-completion glyph.
         bg_status.record_finished_view(user.id, target_id)
         logger.info(
             "sw_use user=%d target=%s name=%s state=%s carrier_msg=%s",

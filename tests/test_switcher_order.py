@@ -104,7 +104,7 @@ def test_switcher_uses_status_without_arbitrary_colour_emoji() -> None:
 
         assert markup is not None
         labels = [button.text for row in markup.inline_keyboard for button in row]
-        assert "✓ ☑️ current" in labels
+        assert "✓ current" in labels
         assert "🔶 background" in labels
         assert all("🟩" not in label and "🟨" not in label for label in labels)
     finally:
@@ -152,7 +152,7 @@ def test_finished_marker_becomes_seen_only_on_explicit_acknowledgement() -> None
     saved_bg = {uid: dict(bucket) for uid, bucket in bg_status._bg.items()}
     try:
         bg_status._bg.clear()
-        assert bg_status.status_emoji(42, "legacy-idle") == "☑️"
+        assert bg_status.status_emoji(42, "legacy-idle") == ""
 
         bg_status.update_status(42, "done", "finished")
         assert bg_status.status_emoji(42, "done") == "✅"
@@ -160,7 +160,7 @@ def test_finished_marker_becomes_seen_only_on_explicit_acknowledgement() -> None
         assert bg_status.record_finished_view(42, "done") is False
         assert bg_status.status_emoji(42, "done") == "✅"
         assert bg_status.record_finished_view(42, "done") is True
-        assert bg_status.status_emoji(42, "done") == "☑️"
+        assert bg_status.status_emoji(42, "done") == ""
         assert bg_status.record_finished_view(42, "done") is False
     finally:
         bg_status._bg.clear()

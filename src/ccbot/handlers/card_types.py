@@ -198,8 +198,8 @@ class CardState:
     # resurrect Stop or prevent the session from being closed/archived.
     user_stopped: bool = False
     # A newly spawned final-answer card keeps its visible completion marker
-    # across automatic refreshes. Only the first user tap on that exact live
-    # carrier acknowledges it.
+    # across automatic refreshes. Any subsequent user action acknowledges the
+    # active header; the switcher button has its own independent read state.
     completion_marker_pending: bool = False
     last_pane_hash: str = ""  # SHA-256 of the exact last rendered PNG
     last_photo_edit_ts: float = 0.0  # monotonic seconds; 3s throttle

@@ -60,7 +60,7 @@ Status = Literal[
 _STATUS_EMOJI: dict[Status, str] = {
     "working": "🔶",
     "finished": "✅",
-    "seen_finished": "☑️",
+    "seen_finished": "",
     "error": "❗",
     "needs_action": "❗",
     "stalled": "❗",
@@ -156,12 +156,12 @@ def status_emoji(user_id: int, session_id: str) -> str:
     """Return the latest background-status glyph for a session button.
 
     A session with no recorded transition is idle/ready with no unread result,
-    hence ``☑️``. Startup asynchronously replaces that fallback for
+    hence no status glyph. Startup asynchronously replaces that fallback for
     restart-spanning work.
     """
     entry = _bg.get(user_id, {}).get(session_id)
     if entry is None:
-        return "☑️"
+        return ""
     return _STATUS_EMOJI.get(entry.status, "")
 
 
@@ -307,7 +307,7 @@ def _badge(sess: "Session", entry: BgStatus) -> str:
     from .switcher import session_emoji
 
     name = sess.name or sess.id
-    sess_emoji = session_emoji(sess)
+    sess_emoji = "" if entry.status == "seen_finished" else session_emoji(sess)
     status_glyph = _STATUS_EMOJI.get(entry.status, "")
     parts = [sess_emoji, name, status_glyph]
     line = " ".join(p for p in parts if p)

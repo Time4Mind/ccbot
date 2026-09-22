@@ -1,0 +1,10 @@
+services:
+  ccbot:
+    environment:
+      CCBOT_POLL_HEALTH_FILE: /run/ccbot/poll-health.json
+    healthcheck:
+      test: ["CMD", "ccbot-healthcheck"]
+      start_period: 3m
+      interval: 30s
+      timeout: 5s
+      retries: 2

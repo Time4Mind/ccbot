@@ -41,6 +41,7 @@ from ..handlers.status_polling import status_poll_loop
 from ..metrics import metrics_flush_loop
 from ..session import session_manager
 from ..session_monitor import NewMessage, SessionMonitor
+from ..telegram_polling_health import PollingHealth
 from ._common import CC_COMMANDS
 from .callbacks import callback_handler
 from .commands.auth import (
@@ -127,6 +128,18 @@ _network_last_seen: float | None = None
 LIVENESS_TICK_SECONDS = 15.0
 LIVENESS_MAX_STALE_SECONDS = 90.0
 _last_heartbeat: float = 0.0
+polling_health = PollingHealth(
+    stale_seconds=config.poll_stale_seconds,
+    startup_grace_seconds=config.poll_startup_grace_seconds,
+    state_path=config.poll_health_file,
+)
+
+
+def _record_poll_success() -> None:
+    global _last_network_err_text, _network_first_seen, _network_last_seen
+    _last_network_err_text = None
+    _network_first_seen = None
+    _network_last_seen = None
 
 
 async def _heartbeat_loop() -> None:
@@ -148,6 +161,23 @@ def _liveness_watchdog_tick() -> None:
             "Event loop unresponsive for %.0fs (no heartbeat) — forcing "
             "exit so the supervisor restarts a clean instance.",
             stale,
+        )
+        _terminate_for_sustained_conflict()
+        return
+    poll_status, poll_age = polling_health.status()
+    network_errors_active = (
+        _network_last_seen is not None
+        and time.monotonic() - _network_last_seen <= NETWORK_GAP_SECONDS
+    )
+    if (
+        poll_status == "stale"
+        and not network_errors_active
+        and polling_health.claim_terminal()
+    ):
+        logger.critical(
+            "Telegram polling stale for %.0fs while event loop is healthy - "
+            "forcing exit so the supervisor restarts a clean instance.",
+            poll_age,
         )
         _terminate_for_sustained_conflict()
 
@@ -334,6 +364,7 @@ def _pull_lifecycle_state() -> None:
 
 
 async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") -> None:
+    polling_health.start()
     _sync_app_implementation(_lifecycle_impl)
     try:
         await _ORIGINAL_POST_INIT(application)
@@ -344,6 +375,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
 async def post_shutdown(
     application: "Application[Any, Any, Any, Any, Any, Any]",
 ) -> None:
+    polling_health.mark_stopping()
     _sync_app_implementation(_lifecycle_impl)
     try:
         await _ORIGINAL_POST_SHUTDOWN(application)

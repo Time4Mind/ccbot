@@ -188,3 +188,20 @@ def test_bot_keeps_global_update_processing_sequential(monkeypatch) -> None:
     application = create_bot()
 
     assert application.update_processor.max_concurrent_updates == 1
+
+
+@pytest.mark.parametrize("proxy", ["", "http://127.0.0.1:8080"])
+def test_polling_transport_is_instrumented_with_and_without_proxy(
+    monkeypatch, proxy
+) -> None:
+    monkeypatch.setattr(config, "telegram_bot_token", "123456:ABCDEF")
+    monkeypatch.setattr(config, "tg_proxy_url", proxy)
+
+    application = create_bot()
+
+    polling_request = application.bot._request[0]
+    assert type(polling_request).__name__ == "PollingHeartbeatRequest"
+    assert polling_request.delegate is not application.bot.request
+    assert polling_request.delegate._client.timeout.connect == 10.0
+    assert polling_request.delegate._client.timeout.pool == 10.0
+    assert polling_request.delegate._client._transport._pool._max_connections == 4

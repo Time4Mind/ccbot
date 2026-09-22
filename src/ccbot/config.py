@@ -286,6 +286,15 @@ class Config:
         # host is on a network that cannot reach api.telegram.org directly
         # (e.g. RU-blocked IPs). Accepts http://host:port or socks5://host:port.
         self.tg_proxy_url: str = os.getenv("TG_PROXY_URL", "").strip()
+        self.poll_stale_seconds: float = max(
+            1.0, float(os.getenv("CCBOT_POLL_STALE_SECONDS", "180"))
+        )
+        self.poll_startup_grace_seconds: float = max(
+            1.0, float(os.getenv("CCBOT_POLL_STARTUP_GRACE_SECONDS", "180"))
+        )
+        self.poll_health_file: str = os.getenv(
+            "CCBOT_POLL_HEALTH_FILE", str(self.config_dir / "poll-health.json")
+        ).strip()
 
         # Multi-node control-plane relay. Provider/VPN connectivity remains
         # local to each node; this URL is only the stable rendezvous path for

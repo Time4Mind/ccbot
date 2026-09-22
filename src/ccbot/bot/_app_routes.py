@@ -5,8 +5,10 @@ The public entry point remains in :mod:`ccbot.bot.app`.
 
 from __future__ import annotations
 
+import socket
 from typing import Any, TYPE_CHECKING, cast
 
+import httpx
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -17,6 +19,7 @@ from telegram.ext import (
 
 from ..startup_queue import capture_startup_message
 from ..telegram_rate_limit import PersistentEndpointRateLimiter
+from ..telegram_polling_health import PollingHeartbeatRequest
 
 from ..config import config
 from .callbacks import callback_handler
@@ -52,13 +55,57 @@ if TYPE_CHECKING:
     logger = cast(Any, None)
     post_init = cast(Any, None)
     post_shutdown = cast(Any, None)
+    polling_health = cast(Any, None)
+    _record_poll_success = cast(Any, None)
+
+
+def _socket_options() -> list[tuple[int, int, int]]:
+    options = [(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)]
+    for name, value in (
+        ("TCP_KEEPIDLE", 60),
+        ("TCP_KEEPINTVL", 30),
+        ("TCP_KEEPCNT", 3),
+    ):
+        if setting := getattr(socket, name, None):
+            options.append((socket.IPPROTO_TCP, setting, value))
+    return options
+
+
+def _request_pair() -> tuple[Any, PollingHeartbeatRequest]:
+    from telegram.request import HTTPXRequest
+
+    def request(*, pool_size: int, read_timeout: float) -> Any:
+        transport = httpx.AsyncHTTPTransport(
+            limits=httpx.Limits(
+                max_connections=pool_size,
+                max_keepalive_connections=pool_size,
+            ),
+            proxy=config.tg_proxy_url or None,
+            socket_options=_socket_options(),
+        )
+        return HTTPXRequest(
+            read_timeout=read_timeout,
+            connect_timeout=10.0,
+            write_timeout=10.0,
+            pool_timeout=10.0,
+            httpx_kwargs={"transport": transport},
+        )
+
+    general = request(pool_size=16, read_timeout=20.0)
+    polling = request(pool_size=4, read_timeout=15.0)
+    return general, PollingHeartbeatRequest(
+        polling, polling_health, on_success=_record_poll_success
+    )
 
 
 def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     """Build the Application, wire all handlers, return it ready to run_polling."""
+    general_request, polling_request = _request_pair()
     builder = (
         Application.builder()
         .token(config.telegram_bot_token)
+        .request(general_request)
+        .get_updates_request(polling_request)
         .rate_limiter(
             PersistentEndpointRateLimiter(
                 token=config.telegram_bot_token,
@@ -69,14 +116,7 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
         .post_shutdown(post_shutdown)
     )
     if config.tg_proxy_url:
-        # Route both long-poll and Bot API calls through TG_PROXY_URL.
-        # Required when api.telegram.org is unreachable from the host.
-        from telegram.request import HTTPXRequest
-
-        builder = builder.request(
-            HTTPXRequest(proxy=config.tg_proxy_url)
-        ).get_updates_request(HTTPXRequest(proxy=config.tg_proxy_url))
-        logger.info("TG proxy enabled: %s", config.tg_proxy_url)
+        logger.info("TG proxy enabled")
     application = builder.build()
 
     # Activity is observed in its own earlier group so messages captured by

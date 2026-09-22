@@ -17,7 +17,9 @@ from .node_transport import NodeEnvelope, NodeTransport, RequestReceiptLedger
 from .node_backend_readiness import update_backend_health
 from .node_transport import connect_relay
 from .node_update import current_git_revision
-from .node_history import RemoteHistoryMixin
+from .node_history import RemoteHistoryMixin, decode_entry_images
+from .node_event_state import LeaderEventCursorStore
+from .node_rpc_events import NodeRpcEventMixin, RpcEventHandler
 from .node_inbox import RemoteInboxMixin
 from .transfer_models import SessionTransfer
 from .transfer_runtime import (
@@ -26,9 +28,9 @@ from .transfer_runtime import (
     unregister_node_runtime,
 )
 from .session_models import Session
+from .utils import ccbot_dir
 
 logger = logging.getLogger(__name__)
-RpcEventHandler = Callable[[NodeEnvelope], Awaitable[None]]
 TransportFactory = Callable[[], Awaitable[NodeTransport]]
 _leader_rpc: NodeRpcClient | None = None
 _remote_node_ids: set[str] = set()
@@ -36,9 +38,8 @@ _remote_message_handler: Callable[[Any], Awaitable[None]] | None = None
 _node_update_tasks: dict[str, asyncio.Task[None]] = {}
 _node_update_attempts: dict[str, float] = {}
 _NODE_UPDATE_RETRY_SECONDS = 300.0
-_RECONNECT_INITIAL_SECONDS = 0.5
-_RECONNECT_MAX_SECONDS = 5.0
 _REMOTE_SESSION_START_TIMEOUT_SECONDS = 135.0
+_EVENT_DRAIN_TIMEOUT_SECONDS = 10.0
 
 
 class _NodeResponseTimeout(TimeoutError):
@@ -101,7 +102,7 @@ def set_remote_message_handler(
     _remote_message_handler = handler
 
 
-class NodeRpcClient:
+class NodeRpcClient(NodeRpcEventMixin):
     """Multiplex request/result RPC over a relay connection.
 
     A retry keeps the same request ID. The worker-side receipt ledger can then
@@ -115,6 +116,7 @@ class NodeRpcClient:
         reconnect: TransportFactory | None = None,
         event_handler: RpcEventHandler | None = None,
         request_timeout: float = 60.0,
+        event_state_path: str | Path | None = None,
     ):
         self._transport = transport
         self._reconnect = reconnect
@@ -127,6 +129,7 @@ class NodeRpcClient:
         self._health_task: asyncio.Task[None] | None = None
         self._event_queue: asyncio.Queue[NodeEnvelope] = asyncio.Queue(maxsize=1024)
         self._health_queue: asyncio.Queue[NodeEnvelope] = asyncio.Queue(maxsize=256)
+        self._event_cursors = LeaderEventCursorStore(event_state_path)
         self._reconnect_lock = asyncio.Lock()
         self._closed = False
 
@@ -151,15 +154,27 @@ class NodeRpcClient:
         if self._closed:
             return
         self._closed = True
-        task, self._reader_task = self._reader_task, None
-        background = [task, self._event_task, self._health_task]
+        reader, self._reader_task = self._reader_task, None
+        if reader is not None and not reader.done():
+            reader.cancel()
+        if reader is not None:
+            await asyncio.gather(reader, return_exceptions=True)
+        handlers = [self._event_task, self._health_task]
+        if any(task is not None and not task.done() for task in handlers):
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(self._event_queue.join(), self._health_queue.join()),
+                    timeout=_EVENT_DRAIN_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.warning("Timed out draining remote node events during shutdown")
         self._event_task = None
         self._health_task = None
-        for background_task in background:
-            if background_task is not None and not background_task.done():
-                background_task.cancel()
+        for task in handlers:
+            if task is not None and not task.done():
+                task.cancel()
         await asyncio.gather(
-            *(item for item in background if item is not None), return_exceptions=True
+            *(task for task in handlers if task is not None), return_exceptions=True
         )
         await self._transport.close()
         self._fail_pending(ConnectionError("node RPC closed"))
@@ -241,79 +256,6 @@ class NodeRpcClient:
                 return False
             self._transport = replacement
             return True
-
-    async def _read_loop(self) -> None:
-        backoff = _RECONNECT_INITIAL_SECONDS
-        while not self._closed:
-            transport = self._transport
-            try:
-                message = await transport.receive()
-                if message.kind in ("result", "error") and message.request_id:
-                    future = self._pending.get(message.request_id)
-                    if future is None or future.done():
-                        continue
-                    if message.kind == "error":
-                        error = str((message.payload or {}).get("error", "node error"))
-                        future.set_exception(ConnectionError(error))
-                    else:
-                        future.set_result(dict(message.payload or {}))
-                elif (
-                    message.kind in ("event", "health")
-                    and self._event_handler is not None
-                ):
-                    queue = (
-                        self._health_queue
-                        if message.kind == "health"
-                        else self._event_queue
-                    )
-                    await queue.put(message)
-                # Acks are deliberately not terminal: request completion is
-                # proven only by the matching result.
-                backoff = _RECONNECT_INITIAL_SECONDS
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                self._fail_pending(ConnectionError(str(exc)))
-                if self._closed or self._reconnect is None:
-                    return
-                logger.warning("Node relay reader disconnected: %s", exc)
-                while not self._closed:
-                    try:
-                        if await self._reconnect_transport(transport):
-                            logger.info("Node relay reader reconnected")
-                            backoff = _RECONNECT_INITIAL_SECONDS
-                            break
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as reconnect_error:
-                        logger.warning(
-                            "Node relay reconnect failed; retrying in %.1fs: %s",
-                            backoff,
-                            reconnect_error,
-                        )
-                    await asyncio.sleep(backoff)
-                    backoff = min(
-                        _RECONNECT_MAX_SECONDS,
-                        max(_RECONNECT_INITIAL_SECONDS, backoff * 2),
-                    )
-
-    async def _handle_events(self, queue: asyncio.Queue[NodeEnvelope]) -> None:
-        while True:
-            message = await queue.get()
-            try:
-                if self._event_handler is not None:
-                    await self._event_handler(message)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Remote node event handling failed")
-            finally:
-                queue.task_done()
-
-    def _fail_pending(self, error: Exception) -> None:
-        for future in tuple(self._pending.values()):
-            if not future.done():
-                future.set_exception(error)
 
 
 class RemoteNodeRuntime(RemoteInboxMixin, RemoteHistoryMixin):
@@ -554,6 +496,7 @@ async def connect_leader_rpc(
     ssl: Any = None,
     request_timeout: float = 60.0,
     event_handler: RpcEventHandler | None = None,
+    event_state_path: str | Path | None = None,
 ) -> NodeRpcClient:
     """Open the leader's single relay connection for all worker runtimes."""
     transport = await connect_relay(
@@ -582,6 +525,7 @@ async def connect_leader_rpc(
         reconnect=reconnect,
         event_handler=event_handler,
         request_timeout=request_timeout,
+        event_state_path=event_state_path,
     )
     await client.start()
     return client
@@ -653,8 +597,9 @@ async def connect_configured_remote_runtimes(
                         tool_use_id=payload.get("tool_use_id") or None,
                         role=str(payload.get("role", "assistant")),
                         tool_name=payload.get("tool_name") or None,
+                        image_data=decode_entry_images(payload.get("image_data")),
                         stop_reason=payload.get("stop_reason") or None,
-                        timestamp=str(payload.get("timestamp", "")),
+                        timestamp=str(payload.get("timestamp") or ""),
                         is_error=bool(payload.get("is_error", False)),
                         api_error=str(payload.get("api_error", "")),
                     )
@@ -753,6 +698,7 @@ async def connect_configured_remote_runtimes(
         secret=secret,
         ssl=ssl_context,
         event_handler=handle_node_event,
+        event_state_path=ccbot_dir() / "node-event-cursors.json",
     )
     for node_id in node_ids:
         if node_id == "local":

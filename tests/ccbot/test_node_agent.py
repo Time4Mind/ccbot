@@ -11,6 +11,7 @@ from ccbot.node_agent import NodeAgent, NodeCredentialStore, TmuxWorkerExecutor
 from ccbot import node_backend_readiness
 from ccbot.node_transport import NodeEnvelope
 from ccbot.config import config
+from ccbot.transcript_parser import ParsedEntry, TranscriptParser
 
 
 class FakeTransport:
@@ -595,21 +596,24 @@ async def test_worker_emits_assistant_transcript_events_for_remote_card(
         "provider_session_id": "provider-session",
         "transcript_path": str(transcript),
     }
-    assert events[1:] == [
-        {
-            "event_type": "session_message",
-            "session_id": session_id,
-            "role": "assistant",
-            "text": "remote answer",
-            "content_type": "text",
-            "tool_use_id": None,
-            "tool_name": None,
-            "stop_reason": "end_turn",
-            "timestamp": "",
-            "is_error": False,
-            "api_error": "",
-        }
-    ]
+    assert len(events) == 2
+    message = events[1]
+    assert message == {
+        "event_type": "session_message",
+        "session_id": session_id,
+        "role": "assistant",
+        "text": "remote answer",
+        "content_type": "text",
+        "tool_use_id": None,
+        "tool_name": None,
+        "image_data": [],
+        "stop_reason": "end_turn",
+        "timestamp": None,
+        "is_error": False,
+        "api_error": "",
+        "_transcript_path": str(transcript),
+        "_transcript_offset": transcript.stat().st_size,
+    }
 
 
 @pytest.mark.asyncio
@@ -1014,6 +1018,136 @@ async def test_worker_reads_only_appended_transcript_bytes(tmp_path, monkeypatch
     events = await executor.poll_events()
 
     assert [event["text"] for event in events] == ["new answer"]
+
+
+@pytest.mark.asyncio
+async def test_worker_emits_complete_row_before_partial_tail(tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    complete = json.dumps(
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "text", "text": "complete answer"}],
+                "stop_reason": "end_turn",
+            },
+        }
+    )
+    transcript.write_bytes((complete + "\n" + '{"type":').encode())
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+    executor._sessions["agent-1"] = SimpleNamespace(
+        session_id="agent-1",
+        window_id="@1",
+        backend="claude",
+        transcript_path=transcript,
+        transcript_offset=0,
+        pending_tools={},
+        provider_session_id="provider-1",
+        binding_announced=True,
+    )
+
+    events = await executor.poll_events()
+
+    assert [event["text"] for event in events] == ["complete answer"]
+    assert executor._sessions["agent-1"].transcript_offset == len(
+        (complete + "\n").encode()
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_bounds_oversized_live_image_event(tmp_path, monkeypatch):
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text("{}\n", encoding="utf-8")
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+    executor._sessions["agent-1"] = SimpleNamespace(
+        session_id="agent-1",
+        window_id="@1",
+        backend="claude",
+        transcript_path=transcript,
+        transcript_offset=0,
+        pending_tools={},
+        provider_session_id="provider-1",
+        binding_announced=True,
+    )
+    oversized_image = b"x" * (2 * 1024 * 1024)
+    monkeypatch.setattr(
+        TranscriptParser,
+        "parse_entries",
+        lambda *_args, **_kwargs: (
+            [
+                ParsedEntry(
+                    role="assistant",
+                    text="",
+                    content_type="tool_result",
+                    image_data=[("image/png", oversized_image)],
+                )
+            ],
+            {},
+        ),
+    )
+
+    events = await executor.poll_events()
+
+    assert len(events) == 1
+    assert events[0]["image_data"] == []
+    assert events[0]["image_truncated"] is True
+    assert events[0]["text"] == "[Image omitted: live event exceeds 2 MiB limit]"
+    assert len(json.dumps(events[0], ensure_ascii=False).encode()) <= 2 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_restored_worker_session_does_not_publish_history_as_live(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    monkeypatch.setenv("CCBOT_DIR", str(state_dir))
+    transcript = tmp_path / "existing.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "historical answer"}],
+                    "stop_reason": "end_turn",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (state_dir / "session_map.json").write_text(
+        json.dumps(
+            {
+                "ccbot-worker:@9": {
+                    "session_id": "provider-old",
+                    "transcript_path": str(transcript),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    executor = TmuxWorkerExecutor(workdir=tmp_path)
+
+    async def fake_tmux(*args: str):
+        if args[0] == "new-window":
+            return 0, "@9\n", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(executor, "_run_tmux", fake_tmux)
+    monkeypatch.setattr(executor, "_wait_ready", AsyncMock())
+    monkeypatch.setattr(executor, "_restore_transcript_path", lambda *_args: transcript)
+    created = await executor.create_session(
+        path=str(tmp_path),
+        backend="claude",
+        name="Restored",
+        resume_session_id="provider-old",
+        source_backend="claude",
+    )
+
+    events = await executor.poll_events()
+
+    assert created["provider_session_id"] == "provider-old"
+    assert [event for event in events if event["event_type"] == "session_message"] == []
 
 
 @pytest.mark.asyncio
@@ -1455,3 +1589,63 @@ async def test_control_command_is_not_blocked_by_slow_session_creation(tmp_path)
     executor.release_create.set()
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_control_command_is_not_blocked_by_full_regular_queue(
+    tmp_path, monkeypatch
+):
+    import ccbot.node_agent as node_agent_module
+
+    monkeypatch.setattr(node_agent_module, "_COMMAND_QUEUE_SIZE", 1)
+
+    class BlockingExecutor(FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.regular_started = asyncio.Event()
+            self.release_regular = asyncio.Event()
+            self.key_sent = asyncio.Event()
+
+        async def list_directories(self, *, path: str):
+            self.regular_started.set()
+            await self.release_regular.wait()
+            return {"ok": True, "path": path, "directories": []}
+
+        async def send_key(self, *, session_id: str, key: str):
+            self.key_sent.set()
+            return {"ok": True, "session_id": session_id, "key": key}
+
+    transport = QueueTransport()
+    executor = BlockingExecutor()
+    agent = NodeAgent(transport, executor, context_dir=tmp_path)
+    task = asyncio.create_task(agent.run())
+    await transport.incoming.put(
+        NodeEnvelope(
+            kind="command",
+            request_id="regular-1",
+            payload={"operation": "list_directories", "path": "/worker"},
+        )
+    )
+    await asyncio.wait_for(executor.regular_started.wait(), timeout=1)
+    for request_id in ("regular-2", "regular-3"):
+        await transport.incoming.put(
+            NodeEnvelope(
+                kind="command",
+                request_id=request_id,
+                payload={"operation": "list_directories", "path": "/worker"},
+            )
+        )
+    await transport.incoming.put(
+        NodeEnvelope(
+            kind="command",
+            request_id="escape",
+            payload={"operation": "send_key", "session_id": "s1", "key": "Escape"},
+        )
+    )
+
+    try:
+        await asyncio.wait_for(executor.key_sent.wait(), timeout=0.2)
+    finally:
+        executor.release_regular.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

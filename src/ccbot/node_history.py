@@ -36,7 +36,7 @@ class RemoteHistoryMixin:
         )
 
 
-def _serialize_entry(entry: Any) -> dict[str, Any]:
+def serialize_entry(entry: Any) -> dict[str, Any]:
     images = []
     for media_type, content in getattr(entry, "image_data", None) or []:
         images.append(
@@ -57,6 +57,25 @@ def _serialize_entry(entry: Any) -> dict[str, Any]:
         "is_error": bool(getattr(entry, "is_error", False)),
         "api_error": str(getattr(entry, "api_error", "") or ""),
     }
+
+
+def decode_entry_images(raw: Any) -> list[tuple[str, bytes]] | None:
+    if not isinstance(raw, list):
+        return None
+    images: list[tuple[str, bytes]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            images.append(
+                (
+                    str(item.get("media_type", "application/octet-stream")),
+                    base64.b64decode(str(item.get("data", "")), validate=True),
+                )
+            )
+        except (ValueError, TypeError):
+            continue
+    return images or None
 
 
 def _bound_entries(entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
@@ -116,7 +135,7 @@ class WorkerHistoryMixin:
         try:
             parsed = await asyncio.to_thread(load_recent_parsed_entries, path, turns)
             entries, truncated = _bound_entries(
-                [_serialize_entry(row) for row in parsed]
+                [serialize_entry(row) for row in parsed]
             )
         except Exception as exc:
             logger.warning(

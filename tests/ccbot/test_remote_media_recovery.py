@@ -443,7 +443,7 @@ async def test_worker_clear_ignores_old_transcript_then_binds_new_provider(
         recovered=False,
     )
     monkeypatch.setattr(executor, "_find_session", AsyncMock(return_value=session))
-    monkeypatch.setattr("ccbot.node_worker.ccbot_dir", lambda: tmp_path)
+    monkeypatch.setattr("ccbot.node_worker_events.ccbot_dir", lambda: tmp_path)
 
     await executor.reset_session_binding(session_id="routing-1")
     session_map = tmp_path / "session_map.json"

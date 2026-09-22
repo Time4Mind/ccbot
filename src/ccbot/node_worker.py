@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import shlex
@@ -11,7 +10,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import tmux_input_transport
 from .codex_startup import (
@@ -23,7 +22,7 @@ from .config import config
 from .node_inbox import WorkerInboxMixin
 from .node_backend_readiness import probe_ready_backends
 from .node_history import WorkerHistoryMixin
-from .transcript_parser import TranscriptParser
+from .node_worker_events import WorkerEventPollingMixin
 from .utils import ccbot_dir
 
 logger = logging.getLogger(__name__)
@@ -45,7 +44,7 @@ class _TmuxWorkerSession:
     ignored_provider_session_id: str = ""
 
 
-class TmuxWorkerExecutor(WorkerInboxMixin, WorkerHistoryMixin):
+class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistoryMixin):
     def __init__(
         self,
         *,
@@ -79,6 +78,8 @@ class TmuxWorkerExecutor(WorkerInboxMixin, WorkerHistoryMixin):
         self._cancelled_startups: set[str] = set()
         self._backend_probe_at = float("-inf")
         self._ready_backend_cache: tuple[str, ...] = ()
+        self._event_cursor_for: Callable[[str], int | None] | None = None
+        self._ensure_event_cursor: Callable[[str, int], None] | None = None
 
     async def ready_backends(
         self, configured: tuple[str, ...], *, max_age: float = 60.0
@@ -195,6 +196,9 @@ class TmuxWorkerExecutor(WorkerInboxMixin, WorkerHistoryMixin):
             startup_id=startup_id,
         )
         if resume_session_id and source_backend == backend:
+            restored = self._sessions.get(str(result["target_agent_session_id"]))
+            if restored is not None:
+                restored.recovered = True
             result["provider_session_id"] = resume_session_id
         return result
 
@@ -419,139 +423,6 @@ class TmuxWorkerExecutor(WorkerInboxMixin, WorkerHistoryMixin):
             await self._recover_sessions()
             session = self._sessions.get(session_id)
         return session
-
-    async def poll_events(self) -> list[dict[str, Any]]:
-        now = time.monotonic()
-        if (
-            self._reconcile_interval == 0
-            or now - self._last_reconcile_at >= self._reconcile_interval
-        ):
-            await self._recover_sessions(reconcile=True)
-            self._last_reconcile_at = now
-        events: list[dict[str, Any]] = []
-        for session in tuple(self._sessions.values()):
-            try:
-                await self._bind_transcript(session)
-                if getattr(session, "provider_session_id", "") and not getattr(
-                    session, "binding_announced", False
-                ):
-                    events.append(
-                        {
-                            "event_type": "session_binding",
-                            "session_id": session.session_id,
-                            "provider_session_id": session.provider_session_id,
-                            "transcript_path": session.provider_transcript_path,
-                        }
-                    )
-                    session.binding_announced = True
-                path = session.transcript_path
-                if path is None:
-                    continue
-                chunk, end_offset = await asyncio.to_thread(
-                    self._read_transcript_tail, path, session.transcript_offset
-                )
-                if not chunk or not chunk.endswith(b"\n"):
-                    continue
-                rows = []
-                for raw_line in chunk.decode("utf-8", errors="replace").splitlines():
-                    row = TranscriptParser.parse_line(raw_line)
-                    if row:
-                        rows.append(row)
-                parsed, remaining = TranscriptParser.parse_entries(
-                    rows, pending_tools=session.pending_tools
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception(
-                    "worker event poll failed session=%s window=%s transcript=%s",
-                    session.session_id,
-                    session.window_id,
-                    getattr(session, "transcript_path", None),
-                )
-                continue
-            # Commit only after parsing so transient failures retry the bytes.
-            session.transcript_offset = end_offset
-            session.pending_tools = remaining
-            for entry in parsed:
-                if entry.role not in ("user", "assistant") or not entry.text:
-                    continue
-                events.append(
-                    {
-                        "event_type": "session_message",
-                        "session_id": session.session_id,
-                        "role": entry.role,
-                        "text": entry.text,
-                        "content_type": entry.content_type,
-                        "tool_use_id": entry.tool_use_id,
-                        "tool_name": entry.tool_name,
-                        "stop_reason": entry.stop_reason,
-                        "timestamp": entry.timestamp or "",
-                        "is_error": entry.is_error,
-                        "api_error": entry.api_error,
-                    }
-                )
-        return events
-
-    @staticmethod
-    def _read_transcript_tail(path: Path, offset: int) -> tuple[bytes, int]:
-        size = path.stat().st_size
-        start = offset if size >= offset else 0
-        if size == start:
-            return b"", start
-        with path.open("rb") as stream:
-            stream.seek(start)
-            chunk = stream.read()
-        return chunk, start + len(chunk)
-
-    async def _bind_transcript(self, session: _TmuxWorkerSession) -> None:
-        if session.transcript_path is not None and getattr(
-            session, "provider_session_id", ""
-        ):
-            return
-
-        def lookup() -> tuple[str, Path] | None:
-            path = ccbot_dir() / "session_map.json"
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError, TypeError):
-                return None
-            if not isinstance(data, dict):
-                return None
-            suffix = f":{session.window_id}"
-            for key, value in data.items():
-                if not str(key).endswith(suffix) or not isinstance(value, dict):
-                    continue
-                transcript = Path(str(value.get("transcript_path", "")))
-                provider_session_id = str(value.get("session_id", ""))
-                if provider_session_id and transcript.is_file():
-                    return provider_session_id, transcript
-            return None
-
-        binding = await asyncio.to_thread(lookup)
-        if binding is None:
-            return
-        provider_session_id, path = binding
-        if provider_session_id == session.ignored_provider_session_id:
-            return
-        session.ignored_provider_session_id = ""
-        session.transcript_path = path
-        session.provider_session_id = provider_session_id
-        session.provider_transcript_path = str(path)
-        try:
-            # New sessions read from zero; recovered sessions tail existing data.
-            session.transcript_offset = (
-                path.stat().st_size if getattr(session, "recovered", False) else 0
-            )
-        except OSError:
-            session.transcript_offset = 0
-        logger.info(
-            "worker transcript bound session=%s window=%s offset=%d recovered=%s",
-            session.session_id,
-            session.window_id,
-            session.transcript_offset,
-            getattr(session, "recovered", False),
-        )
 
     async def _recover_sessions(self, *, reconcile: bool = False) -> None:
         code, stdout, _stderr = await self._run_tmux(

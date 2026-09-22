@@ -1,11 +1,9 @@
 # Multi-node ccbot - TODO и контракт разработки
 
-Статус: UX и полный функциональный паритет остаются черновиком; автоматический
-bootstrap нод реализован отдельно и описан в
+Статус: multi-node runtime включён в `main`; дальнейшие изменения проходят
+обычный branch/PR/CI flow. UX и полный функциональный паритет продолжают
+проверяться по согласованным сценариям. Автоматический bootstrap нод описан в
 [`doc/multi-node-bootstrap.md`](multi-node-bootstrap.md).
-
-Базовый эталон: commit `5f8ddaa` (`main`). Ветка разработки:
-`feature/multi-node-runtime`.
 
 Подключение ноды не должно инициироваться через Telegram-настройки. Для
 automation-агента authoritative flow - `ccbot node bootstrap` на leader,
@@ -187,8 +185,8 @@ sequence и передают пропущенные события без дуб
 - Старый `state.json` без `node_id` мигрируется в `local` без потери сессий.
 - Один локальный leader после миграции ведёт себя визуально и функционально как
   commit `5f8ddaa`.
-- macOS, Linux arm64 и поддержанный chroot/proot сохраняют текущие ограничения;
-  multi-node не добавляет новые платформенные обещания.
+- macOS Apple Silicon, Linux x86_64/arm64 и поддержанный chroot/proot сохраняют
+  текущие ограничения; multi-node не добавляет новые платформенные обещания.
 
 ## 8. План реализации после согласования flow
 
@@ -219,9 +217,9 @@ Gate: полный suite и live single-node acceptance; визуально по
   CLI-ручку `ccbot node bootstrap`.
 - [x] Реализовать подписанный pairing/auth, capabilities и health handshake;
   version compatibility gate остаётся в полном scope.
-- [x] Реализовать typed idempotent commands и ack/result; event sequence replay
-  остаётся в полном scope.
-- [x] Добавить reconnect и health; bounded buffers остаются в полном scope.
+- [x] Реализовать typed idempotent commands, ack/result и durable ordered event
+  replay между worker и leader.
+- [x] Добавить reconnect, health и bounded priority buffers.
 - [ ] Тестировать disconnect на каждой границе request/ack/result.
 
 Gate: синтетический leader управляет worker без Telegram и без дублей после

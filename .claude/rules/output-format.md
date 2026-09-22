@@ -11,7 +11,7 @@ deployment it's running under:
 | Var | Source | Use |
 | --- | --- | --- |
 | `CCBOT_HOST` | `CCBOT_HOST` env on the bot host, falling back to `socket.gethostname()` | Identifies the device (e.g. `mac-air`, `arm64-kali`). |
-| `CCBOT_BOT_USERNAME` | Telegram `getMe` at bot startup | Identifies the Telegram bot (`@Stefania_tg_bot`). Empty if `getMe` didn't run. |
+| `CCBOT_BOT_USERNAME` | Telegram `getMe` at bot startup | Identifies the Telegram bot (for example, `@your_bot`). Empty if `getMe` didn't run. |
 
 When the user references "the bot" or "this machine" inside a session,
 check these to disambiguate. Don't dump them unsolicited.

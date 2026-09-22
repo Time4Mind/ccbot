@@ -60,9 +60,8 @@ def _label(sess: Session, *, is_active: bool, user_id: int) -> str:
     if len(name) > 14:
         name = name[:13] + "…"
     status = bg_status.status_emoji(user_id, sess.id)
-    if is_active:
-        return f"✓ {status} {name}"
-    return f"{status} {name}"
+    parts = (["✓"] if is_active else []) + ([status] if status else []) + [name]
+    return " ".join(parts)
 
 
 def build_switcher_keyboard(

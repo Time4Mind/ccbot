@@ -19,10 +19,11 @@ from .callback_data import (
     CB_FT_SCREENSHOT,
     CB_FT_STOP,
     CB_FT_TERM,
+    CB_FT_TRANSFER,
     CB_MM_ARCHIVE,
     CB_MM_BACK,
     CB_MM_LIST,
-    CB_MM_NEW,
+    CB_MM_NODES,
     CB_MM_SETTINGS,
     CB_PG_JUMP,
     CB_PG_NEXT,
@@ -122,6 +123,10 @@ def _has_active_session(user_id: int) -> bool:
     return session_manager.get_active_session(user_id) is not None
 
 
+def _has_multiple_nodes() -> bool:
+    return session_manager.has_multiple_nodes
+
+
 _footer_options_open_users: set[int] = set()
 
 
@@ -156,6 +161,8 @@ def can_offer_terminal(user_id: int) -> bool:
 
     sess = session_manager.get_active_session(user_id)
     if sess is None or not sess.window_id:
+        return False
+    if getattr(sess, "node_id", "local") != "local":
         return False
     settings = session_manager.get_user_settings(user_id)
     if not settings.get("option_button_terminal", False):
@@ -232,7 +239,7 @@ def _footer_top_row(
             row.append(
                 InlineKeyboardButton("🔙 Resume action", callback_data=CB_KB_RESUME)
             )
-        if _footer_options_row(user_id):
+        if _footer_options_row(user_id, is_busy=is_busy):
             row.append(
                 InlineKeyboardButton(
                     t(user_id, "btn.options"), callback_data=CB_FT_OPTIONS
@@ -243,13 +250,20 @@ def _footer_top_row(
 
 def _footer_bottom_row(user_id: int) -> list[InlineKeyboardButton]:
     """Keep New and Menu in their original bottom row."""
-    return [
+    row = [
         InlineKeyboardButton("+ new", callback_data=CB_SW_NEW),
-        InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_FT_MORE),
     ]
+    if _has_multiple_nodes():
+        row.append(
+            InlineKeyboardButton(t(user_id, "mm.nodes"), callback_data=CB_MM_NODES)
+        )
+    row.append(InlineKeyboardButton(t(user_id, "btn.menu"), callback_data=CB_FT_MORE))
+    return row
 
 
-def _footer_options_row(user_id: int) -> list[InlineKeyboardButton]:
+def _footer_options_row(
+    user_id: int, *, is_busy: bool = False
+) -> list[InlineKeyboardButton]:
     """Actions disclosed below Options and immediately above sessions."""
     settings = session_manager.get_user_settings(user_id)
     row: list[InlineKeyboardButton] = []
@@ -261,13 +275,23 @@ def _footer_options_row(user_id: int) -> list[InlineKeyboardButton]:
         row.append(
             InlineKeyboardButton(t(user_id, "btn.term"), callback_data=CB_FT_TERM)
         )
+    if (
+        not is_busy
+        and _has_multiple_nodes()
+        and settings.get("option_button_transfer", False)
+    ):
+        row.append(
+            InlineKeyboardButton(
+                t(user_id, "mm.transfer"), callback_data=CB_FT_TRANSFER
+            )
+        )
     return row
 
 
 _MM_BUTTONS: tuple[tuple[str, str, str], ...] = (
     ("sessions", "mm.sessions", CB_MM_LIST),
     ("archive", "mm.archive", CB_MM_ARCHIVE),
-    ("new", "mm.new", CB_MM_NEW),
+    ("nodes", "mm.nodes", CB_MM_NODES),
     ("settings", "mm.settings", CB_MM_SETTINGS),
 )
 
@@ -285,6 +309,7 @@ def _more_grid(
     buttons = [
         InlineKeyboardButton(t(user_id, label_key), callback_data=cb)
         for key, label_key, cb in _MM_BUTTONS
+        if key != "nodes" or _has_multiple_nodes()
         if key != exclude
     ]
     rows: list[list[InlineKeyboardButton]] = []
@@ -375,6 +400,8 @@ def build_footer_keyboard(
         rows.extend(_settings_option_grid(user_id, "option_button_screenshot"))
     elif screen == "settings_option_terminal":
         rows.extend(_settings_option_grid(user_id, "option_button_terminal"))
+    elif screen == "settings_option_transfer":
+        rows.extend(_settings_option_grid(user_id, "option_button_transfer"))
     elif screen == "settings_capture":
         rows.extend(_settings_capture_grid(user_id))
     elif screen == "settings_profile":
@@ -412,6 +439,12 @@ def build_footer_keyboard(
                 user_id, "bg_notify_needs_action", "settings_cat_notifications"
             )
         )
+    elif screen == "settings_bg_notify_node_status":
+        rows.extend(
+            _settings_bg_notify_grid(
+                user_id, "bg_notify_node_status", "settings_cat_notifications"
+            )
+        )
     elif screen == "settings_haiku":
         rows.extend(_settings_haiku_grid(user_id))
     elif screen == "settings_archive_ai_description":
@@ -445,7 +478,7 @@ def build_footer_keyboard(
         if top:
             rows.append(top)
         if user_id in _footer_options_open_users and _has_active_session(user_id):
-            rows.append(_footer_options_row(user_id))
+            rows.append(_footer_options_row(user_id, is_busy=is_busy))
 
     if include_switcher:
         sw = build_switcher_keyboard(

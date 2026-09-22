@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from pathlib import Path
 
 from telegram import Bot, InlineKeyboardMarkup
 from telegram.error import BadRequest, RetryAfter
 
 from ..config import config
+from ..file_actions import file_button_context_for_session
 from ..session import Session, session_manager
 from .card_binding import bind_carrier, carrier_kind, clear_carrier, snapshot_carrier
 from .card_model import (
@@ -37,6 +37,18 @@ from .card_registry import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _has_pane_target(sess: object | None) -> bool:
+    return bool(
+        sess is not None
+        and getattr(sess, "window_id", "")
+        and (
+            getattr(sess, "node_id", "local") == "local"
+            or getattr(sess, "worker_session_id", "")
+            or getattr(sess, "claude_session_id", "")
+        )
+    )
 
 
 __all__ = [
@@ -106,11 +118,12 @@ async def _send_card_locked(
     sent_file_id = ""
     sent_pane_hash = ""
     sent_photo_ts = 0.0
+    file_button_context = await file_button_context_for_session(sess, text)
 
     # Inline screenshots ON: prefer a Rich Markdown card whose media block
     # sits before the service tail. The latest image remains after completion.
     sent = None
-    if _inline_screens_enabled(user_id) and sess.window_id:
+    if _inline_screens_enabled(user_id) and _has_pane_target(sess):
         png, pane_hash = await _capture_pane_png(sess.window_id, user_id=user_id)
         if png is not None:
             rich_sent = await send_rich_media_card(
@@ -120,9 +133,7 @@ async def _send_card_locked(
                 text,
                 png,
                 reply_markup=keyboard,
-                file_base_dir=Path(sess.workdir)
-                if getattr(sess, "workdir", "")
-                else None,
+                file_base_dir=file_button_context,
             )
             if rich_sent is not None:
                 sent = rich_sent.message
@@ -140,9 +151,7 @@ async def _send_card_locked(
                 bot,
                 user_id,
                 text,
-                file_base_dir=Path(sess.workdir)
-                if getattr(sess, "workdir", "")
-                else None,
+                file_base_dir=file_button_context,
                 reply_markup=keyboard,
                 disable_notification=True,
             )
@@ -215,8 +224,9 @@ async def _edit_card_unlocked(
         return False
     sess_id = lookup_session_for_message(user_id, state.msg_id)
     sess = session_manager.get_session(sess_id) if sess_id else None
-    workdir = getattr(sess, "workdir", "")
-    file_base_dir = Path(workdir) if workdir else None
+    file_base_dir = (
+        await file_button_context_for_session(sess, text) if sess is not None else None
+    )
     # User is currently looking at a Menu / sub-screen on this card's
     # message. Don't repaint — would clobber whatever they're navigating.
     # State.lines keeps accumulating; resume_card_view will catch up.
@@ -266,6 +276,7 @@ async def _edit_card_unlocked(
                 reply_markup=reply_markup,
                 min_photo_interval=_PHOTO_EDIT_MIN_INTERVAL,
                 refresh_pane=refresh_pane,
+                file_base_dir=file_base_dir,
             )
             if updated:
                 return True
@@ -282,6 +293,7 @@ async def _edit_card_unlocked(
         not rich_media_failed
         and _inline_screens_enabled(user_id)
         and config.rich_messages
+        and _has_pane_target(sess)
     ):
         promoted = await edit_rich_media_card(
             bot,
@@ -291,6 +303,7 @@ async def _edit_card_unlocked(
             reply_markup=reply_markup,
             min_photo_interval=_PHOTO_EDIT_MIN_INTERVAL,
             refresh_pane=refresh_pane,
+            file_base_dir=file_base_dir,
         )
         if promoted:
             bind_carrier(
@@ -398,6 +411,7 @@ async def _deferred_edit(
     min_interval: float = 0.0,
     force: bool = False,
     refresh_pane: bool = True,
+    retry_delays: tuple[float, ...] = (),
 ) -> None:
     """Sleep `delay` then render the latest card state and edit once.
 
@@ -406,6 +420,7 @@ async def _deferred_edit(
     """
     try:
         remaining = delay
+        retries = iter(retry_delays)
         while True:
             await asyncio.sleep(remaining)
             async with _card_lock(user_id, sess.id):
@@ -436,7 +451,12 @@ async def _deferred_edit(
                 ):
                     state.last_rendered = text
                     state.last_edit_ts = time.monotonic()
-                return
+                    return
+                try:
+                    remaining = next(retries)
+                except StopIteration:
+                    return
+                force = True
     except asyncio.CancelledError:
         return
     except Exception as e:

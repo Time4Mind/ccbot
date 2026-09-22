@@ -102,6 +102,18 @@ class TestPanelHardBreaks:
         """No bg sessions registered → empty panel, no orphan ``  \\n``."""
         assert bg_status.render_panel(42) == ""
 
+    def test_seen_session_row_has_no_emoji(self, isolated_bg) -> None:
+        sid = "seen-session"
+        sess = _seed_session(sid, "viewed")
+        try:
+            entry = bg_status._entry(42, sid)
+            entry.status = "seen_finished"
+            entry.last_change = 100.0
+
+            assert bg_status._badge(sess, entry) == "viewed"
+        finally:
+            session_manager.sessions.pop(sid, None)
+
 
 @pytest.mark.asyncio
 async def test_infer_status_treats_trailing_user_turn_as_working(
@@ -150,7 +162,7 @@ def test_legacy_finished_state_migrates_to_seen(isolated_bg) -> None:
         }
     )
 
-    assert bg_status.status_emoji(42, "old") == "☑️"
+    assert bg_status.status_emoji(42, "old") == ""
 
 
 def test_v2_unread_completion_migrates_to_two_view_flow(isolated_bg) -> None:
@@ -170,7 +182,7 @@ def test_v2_unread_completion_migrates_to_two_view_flow(isolated_bg) -> None:
     assert bg_status.status_emoji(42, "unread") == "✅"
     assert bg_status.record_finished_view(42, "unread") is False
     assert bg_status.record_finished_view(42, "unread") is True
-    assert bg_status.status_emoji(42, "unread") == "☑️"
+    assert bg_status.status_emoji(42, "unread") == ""
 
 
 def test_versioned_unread_completion_survives_round_trip(isolated_bg) -> None:
@@ -184,4 +196,4 @@ def test_versioned_unread_completion_survives_round_trip(isolated_bg) -> None:
     bg_status.load_per_user(raw)
     assert bg_status.status_emoji(42, "fresh") == "✅"
     assert bg_status.record_finished_view(42, "fresh") is True
-    assert bg_status.status_emoji(42, "fresh") == "☑️"
+    assert bg_status.status_emoji(42, "fresh") == ""

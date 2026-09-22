@@ -106,6 +106,16 @@ async def update_session_card(
 
     Triggers a fresh card on long pause and on hard-limit overflow.
     """
+    observed_at = time.monotonic()
+    logger.info(
+        "agent_event_observed",
+        extra={
+            "event": "agent_event_observed",
+            "user_id": user_id,
+            "session_id": sess.id,
+            "content_type": msg.content_type,
+        },
+    )
     # Fire a (throttled) background prewarm of the pages cache so the
     # live-card's ◀ Older N/N counter has a value to render on the
     # next event. The first event after session start may still paint
@@ -186,7 +196,7 @@ async def update_session_card(
     # None`` and both spawn — produces "2 messages in wrong order".
     async with _card_lock(user_id, sess.id):
         return await _update_session_card_locked(
-            bot, user_id, sess, msg, state, new_event, replaced
+            bot, user_id, sess, msg, state, new_event, replaced, observed_at
         )
 
 
@@ -198,6 +208,7 @@ async def _update_session_card_locked(
     state: CardState,
     new_event: Event,
     replaced: bool,
+    observed_at: float,
 ) -> None:
     # Trigger: long pause → fresh card.
     if _is_stale(state):
@@ -212,6 +223,7 @@ async def _update_session_card_locked(
         # second turn completes — even though the transcript is long.
         state.seed_attempted = False
         state.seed_mtime = -1.0
+        state.remote_seed_version = ""
         await _legacy("_ensure_seeded")(user_id, sess, state)
 
     if not replaced and not _duplicate_of_seeded(state.events, new_event):
@@ -231,6 +243,10 @@ async def _update_session_card_locked(
     # CARD_HARD_LIMIT chars (paginate splits before the boundary).
     # No continuation-card path.
 
+    if state.msg_id is None and not state.agent_model:
+        from .card_terminal import sync_card_identity
+
+        await sync_card_identity(sess, state)
     text = _legacy("_render_card")(sess, state, user_id=user_id)
 
     if state.msg_id is None:
@@ -249,6 +265,7 @@ async def _update_session_card_locked(
                 "msg_id": state.msg_id,
                 "content_type": msg.content_type,
                 "lines": len(state.events),
+                "event_to_visible_ms": round((time.monotonic() - observed_at) * 1000),
             },
         )
         return
@@ -278,6 +295,9 @@ async def _update_session_card_locked(
                     "msg_id": state.msg_id,
                     "content_type": msg.content_type,
                     "lines": len(state.events),
+                    "event_to_visible_ms": round(
+                        (time.monotonic() - observed_at) * 1000
+                    ),
                 },
             )
         else:
@@ -292,10 +312,22 @@ async def _update_session_card_locked(
             state.last_edit_ts = time.monotonic()
             logger.warning(
                 "card_update edit_failed sess=%s msg_id=%s — keeping "
-                "stale card; new render will retry on next event",
+                "stale card; scheduling bounded convergence retry",
                 sess.id,
                 state.msg_id,
             )
+            if state.pending_edit is None or state.pending_edit.done():
+                state.pending_edit = asyncio.create_task(
+                    _deferred_edit(
+                        bot,
+                        user_id,
+                        sess,
+                        state,
+                        1.0,
+                        force=True,
+                        retry_delays=(2.0, 4.0),
+                    )
+                )
         return
 
     # Inside the coalescing window: ensure exactly one deferred edit is queued.
@@ -440,6 +472,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     cleaned = (final_text or "").strip()
     attachments: list[Attachment] = []
     final_events: list[Event] = []
+    stripped_full = ""
     if cleaned:
         formatted = split_overflow(cleaned)
         cleaned = formatted.text
@@ -465,7 +498,26 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     async with _card_lock(user_id, sess.id):
         # Recover and seed under the same lock as final mutation/render so a
         # next-turn event cannot interleave a stale snapshot.
+        event_ids_before_seed = {id(event) for event in state.events}
         await _legacy("_ensure_seeded")(user_id, sess, state)
+        seeded_final = next(
+            (
+                event
+                for event in reversed(state.events)
+                if id(event) not in event_ids_before_seed
+                and event.type == "final_text"
+                and event.text == stripped_full
+            ),
+            None,
+        )
+        append_final_events = final_events
+        if seeded_final is not None:
+            # A brand-new session can reach its first terminal monitor event
+            # only after the transcript already contains that answer.  The
+            # initial seed therefore owns the authoritative copy; appending
+            # the synthetic completion event would render it twice.
+            final_events = [seeded_final]
+            append_final_events = []
         newer_request_pending = any(
             sequence > state.active_turn_sequence
             for _message_id, sequence in state.pending_request_sequences
@@ -496,7 +548,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
             clear_carrier(state)
 
         if final_events:
-            state.events.extend(final_events)
+            state.events.extend(append_final_events)
             if len(state.events) > CARD_MAX_EVENTS:
                 del state.events[: len(state.events) - CARD_MAX_EVENTS]
             state.last_event_ts = final_events[0].started_at

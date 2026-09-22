@@ -19,6 +19,7 @@ from typing import Any, Callable, cast
 
 from . import (
     _messages_media,
+    _messages_pending_ui,
     _messages_preprocessing,
     _messages_shared,
     _messages_text,
@@ -28,6 +29,7 @@ from ._session_create import create_and_activate_session
 
 _IMPLEMENTATION_MODULES: tuple[ModuleType, ...] = (
     _messages_shared,
+    _messages_pending_ui,
     _messages_media,
     _messages_voice,
     _messages_preprocessing,
@@ -64,8 +66,8 @@ _FUNCTION_OWNERS: dict[str, ModuleType] = {
     "_download_voice_bytes": _messages_shared,
     "_is_file_too_big": _messages_shared,
     "_card_repost_bracket": _messages_shared,
-    "_pane_has_interactive_ui": _messages_shared,
-    "_intercept_if_pending_ui": _messages_shared,
+    "_pane_has_interactive_ui": _messages_pending_ui,
+    "_intercept_if_pending_ui": _messages_pending_ui,
     "forward_command_handler": _messages_shared,
     # Forwarded content and Telegram file intake.
     "_forward_attribution": _messages_media,

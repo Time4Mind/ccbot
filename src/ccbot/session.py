@@ -25,6 +25,7 @@ Key classes:
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -35,6 +36,8 @@ if TYPE_CHECKING:
     from telegram import Bot
 
 from .config import config
+from .codex_startup import CODEX_READY_SETTLE_SECONDS, is_codex_ready
+from .node_models import Node
 from .session_defaults import DEFAULT_IDLE_ARCHIVE_HOURS, IDLE_ARCHIVE_HOUR_CHOICES
 from .session_keys import key_matches_window
 from .session_map import SessionMapMixin
@@ -42,6 +45,7 @@ from .session_models import ClaudeSession, Session, SessionState, WindowState
 from .session_state import SessionStateMixin
 from .terminal_parser import is_interactive_ui, parse_status_line
 from .tmux_manager import tmux_manager
+from .transfer_models import SessionTransfer
 from .transcript_parser import TranscriptParser
 from .utils import atomic_write_json
 
@@ -95,6 +99,9 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
     # DM mode: routing key for inbound user text.
     # user_id -> Session.id (short hex). Single active session per user.
     active_sessions: dict[int, str] = field(default_factory=dict)
+    # Node-scoped active pointers. ``active_sessions`` remains as the
+    # compatibility pointer for the currently selected node.
+    active_sessions_by_node: dict[int, dict[str, str]] = field(default_factory=dict)
     # Stack of previously-active session ids per user (most recent at the
     # end). Used by ``mark_session_archived`` to auto-pick the next
     # active session when the current one gets killed — without this the
@@ -104,6 +111,12 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
     # All sessions known to the bot (active, idle, archived, completed, lost).
     # Keyed by Session.id.
     sessions: dict[str, "Session"] = field(default_factory=dict)
+    # Registered execution nodes. ``local`` is the implicit node for legacy
+    # state and for all existing single-node sessions.
+    nodes: dict[str, Node] = field(default_factory=lambda: {"local": Node.local()})
+    removed_node_ids: set[str] = field(default_factory=set)
+    selected_node_ids: dict[int, str] = field(default_factory=dict)
+    transfers: dict[str, SessionTransfer] = field(default_factory=dict)
     # Telegram message_id of the bot message that currently carries the inline
     # session switcher for each user. Used to strip stale switchers when a new
     # bot message goes out.
@@ -156,10 +169,23 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
             "active_sessions": {
                 str(uid): sid for uid, sid in self.active_sessions.items()
             },
+            "active_sessions_by_node": {
+                str(uid): dict(node_sessions)
+                for uid, node_sessions in self.active_sessions_by_node.items()
+            },
             "active_history": {
                 str(uid): hist for uid, hist in self.active_history.items()
             },
             "sessions": {sid: s.to_dict() for sid, s in self.sessions.items()},
+            "nodes": {node_id: node.to_dict() for node_id, node in self.nodes.items()},
+            "removed_node_ids": sorted(self.removed_node_ids),
+            "selected_node_ids": {
+                str(uid): node_id for uid, node_id in self.selected_node_ids.items()
+            },
+            "transfers": {
+                transfer_id: transfer.to_dict()
+                for transfer_id, transfer in self.transfers.items()
+            },
             "last_switcher_msg_id": {
                 str(uid): mid for uid, mid in self.last_switcher_msg_id.items()
             },
@@ -186,8 +212,14 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
             logger.debug("State saved to %s", config.state_file)
 
     def is_window_id(self, key: str) -> bool:
-        """Check if a key looks like a tmux window ID (e.g. '@0', '@12')."""
-        return key.startswith("@") and len(key) > 1 and key[1:].isdigit()
+        """Check local or node-scoped tmux IDs (``@12``/``node::@12``)."""
+        local_id = key.rsplit("::", 1)[-1]
+        return (
+            local_id.startswith("@")
+            and len(local_id) > 1
+            and local_id[1:].isdigit()
+            and ("::" not in key or bool(key.rsplit("::", 1)[0]))
+        )
 
     def _load_state(self) -> None:
         """Load state synchronously during initialization.
@@ -210,6 +242,16 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                     int(uid): sid
                     for uid, sid in state.get("active_sessions", {}).items()
                 }
+                self.active_sessions_by_node = {
+                    int(uid): {
+                        str(node_id): str(session_id)
+                        for node_id, session_id in node_sessions.items()
+                    }
+                    for uid, node_sessions in state.get(
+                        "active_sessions_by_node", {}
+                    ).items()
+                    if isinstance(node_sessions, dict)
+                }
                 self.active_history = {
                     int(uid): list(hist)
                     for uid, hist in state.get("active_history", {}).items()
@@ -218,6 +260,27 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                 self.sessions = {
                     sid: Session.from_dict(data)
                     for sid, data in state.get("sessions", {}).items()
+                }
+                raw_nodes = state.get("nodes", {})
+                self.nodes = {
+                    str(node_id): Node.from_dict(data)
+                    for node_id, data in raw_nodes.items()
+                    if isinstance(data, dict) and str(node_id)
+                }
+                self.nodes.setdefault("local", Node.local())
+                self.removed_node_ids = {
+                    str(node_id)
+                    for node_id in state.get("removed_node_ids", [])
+                    if str(node_id) and str(node_id) != "local"
+                }
+                self.selected_node_ids = {
+                    int(uid): str(node_id)
+                    for uid, node_id in state.get("selected_node_ids", {}).items()
+                }
+                self.transfers = {
+                    transfer_id: SessionTransfer.from_dict(data)
+                    for transfer_id, data in state.get("transfers", {}).items()
+                    if isinstance(data, dict) and str(transfer_id)
                 }
                 self.last_switcher_msg_id = {
                     int(uid): int(mid)
@@ -264,7 +327,11 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                 self.window_states = {}
                 self.user_window_offsets = {}
                 self.active_sessions = {}
+                self.active_sessions_by_node = {}
                 self.sessions = {}
+                self.nodes = {"local": Node.local()}
+                self.selected_node_ids = {}
+                self.transfers = {}
                 self.last_switcher_msg_id = {}
                 self.card_msg_id = {}
                 self.window_display_names = {}
@@ -440,6 +507,13 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                 settled,
                 backend,
                 resume,
+                extra={
+                    "event": "session_create_phase",
+                    "phase": "process_ready",
+                    "user_id": user_id,
+                    "window_id": window_id,
+                    "monotonic_ms": round(time.monotonic() * 1000),
+                },
             )
             drained = 0
             while True:
@@ -494,53 +568,12 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
     @staticmethod
     def _pane_has_ready_input(pane: str, backend: str) -> bool:
         """Whether the visible pane ends in the agent's real input box."""
+        if backend == "codex":
+            return is_codex_ready(pane)
         if not pane or is_interactive_ui(pane) or parse_status_line(pane) is not None:
             return False
-        lower = pane.lower()
-        if backend == "codex" and (
-            "do you trust the contents of this directory?" in lower
-            or "choose working directory to resume this session" in lower
-            or "sign in with chatgpt" in lower
-            or "sign in with device code" in lower
-            or "provide your own api key" in lower
-            or "update available!" in lower
-        ):
-            return False
-        marker = "›" if backend == "codex" else "❯"
+        marker = "❯"
         lines = pane.strip().splitlines()
-        if backend == "codex" and "openai codex" not in lower:
-            # A fresh pane exposes the OpenAI Codex header, but a resumed long
-            # transcript scrolls that header out of capture-pane before the
-            # input becomes ready.  Its bottom status row is still stable:
-            # ``<model> <effort> · <cwd>``.  Accept that as Codex evidence so
-            # resume cannot remain gated forever, while still rejecting
-            # Artem's shell prompt (which also starts with ``›``).
-            # Codex 0.147 renders the configured/default reasoning choice as
-            # ``default`` in the footer instead of an explicit effort level.
-            efforts = {
-                "default",
-                "low",
-                "medium",
-                "high",
-                "xhigh",
-                "max",
-                "ultra",
-            }
-            has_codex_footer = False
-            for line in lines[-8:]:
-                parts = [part.strip() for part in line.split("·")]
-                if len(parts) < 2:
-                    continue
-                model_effort = parts[0].split()
-                if not model_effort or model_effort[-1].lower() not in efforts:
-                    continue
-                if any(
-                    part == "~" or part.startswith(("~/", "/")) for part in parts[1:]
-                ):
-                    has_codex_footer = True
-                    break
-            if not has_codex_footer:
-                return False
         # The live input row is pinned near the bottom. Restricting detection
         # to the tail avoids mistaking a historical user row for readiness
         # while a resumed transcript is still being restored.
@@ -604,11 +637,19 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                 saw_busy = True
                 idle_since = None
             else:
-                # Fresh sessions and Codex resumes are ready the moment the
-                # actual input box appears. Claude resume keeps the historical
-                # grace/stability rule because compaction may start shortly
-                # after an initially-idle frame.
-                if ready and (not resume or backend == "codex"):
+                # Codex can draw its composer before a delayed startup modal.
+                # Keep the input gate closed until that composer remains
+                # continuously stable; the Telegram card is already visible.
+                if ready and backend == "codex":
+                    if idle_since is None:
+                        idle_since = now
+                    if now - idle_since >= CODEX_READY_SETTLE_SECONDS:
+                        return True
+                    await asyncio.sleep(_RESUME_SETTLE_POLL)
+                    continue
+                # Fresh Claude sessions are ready as soon as their real input
+                # prompt appears. Claude resume keeps the historical grace.
+                if ready and not resume:
                     return True
                 if not ready:
                     idle_since = None
@@ -654,6 +695,24 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
             display,
             len(text),
         )
+        sess = self.find_session_by_window(window_id)
+        if sess is not None and getattr(sess, "node_id", "local") != "local":
+            from .transfer_runtime import get_node_runtime
+
+            node_id = getattr(sess, "node_id", "local")
+            node = self.get_node(node_id)
+            if node is None or not node.is_available():
+                return False, "Remote node is offline; message was not sent"
+            runtime = get_node_runtime(node_id)
+            routing_id = getattr(sess, "worker_session_id", "") or getattr(
+                sess, "claude_session_id", ""
+            )
+            if runtime is None or not routing_id:
+                return False, "Remote node session is not available"
+            result = await runtime.send_text(node_id, routing_id, text)
+            if result.get("ok", True):
+                return True, f"Sent to {display}"
+            return False, str(result.get("error", "Failed to send to remote node"))
         window = await tmux_manager.find_window_by_id(window_id)
         if not window:
             return False, "Window not found (may have been closed)"
@@ -668,7 +727,6 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                 len(text),
             )
             return True, f"Queued for {display} (session starting)"
-        sess = self.find_session_by_window(window_id)
         backend = sess.backend if sess is not None else ""
         success = await tmux_manager.send_keys(window.window_id, text, backend=backend)
         if success:

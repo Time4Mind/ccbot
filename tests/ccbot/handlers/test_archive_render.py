@@ -30,6 +30,7 @@ import pytest
 from ccbot.handlers.archive import PAGE_SIZE, build_archive_page
 from ccbot.handlers.callback_data import CB_ARC_INSPECT
 from ccbot.session_models import Session
+from ccbot.node_models import Node
 
 
 def _make_archived(idx: int) -> Session:
@@ -161,6 +162,27 @@ class TestArchivePageNumbering:
 
 
 class TestArchiveTableLayout:
+    @pytest.mark.asyncio
+    async def test_remote_session_row_identifies_source_node(self) -> None:
+        remote = _make_archived(1)
+        remote.node_id = "worker-a"
+        with (
+            patch(
+                "ccbot.handlers.archive.session_manager.list_archived",
+                return_value=[remote],
+            ),
+            patch(
+                "ccbot.handlers.archive.session_manager.get_node",
+                return_value=Node(id="worker-a", display_name="Worker A"),
+            ),
+            patch("ccbot.handlers.archive._archive_blurb", return_value="blurb"),
+        ):
+            text, _ = await build_archive_page(
+                page=0, lookback_seconds=None, show_all=False, user_id=1
+            )
+
+        assert "Node: Worker A" in text or "Нода: Worker A" in text
+
     @pytest.mark.asyncio
     async def test_each_session_is_one_table_row(self, many_archived) -> None:
         text, _ = await build_archive_page(

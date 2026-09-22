@@ -25,33 +25,28 @@ from . import (
     file_buttons,
     footer,
     help as help_callbacks,
-    history_pagination,
     interactive_ui,
     more_menu,
+    nodes,
     settings as settings_callbacks,
     switcher,
+    transfer,
     window_picker,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _acknowledge_completion_marker(
-    user_id: int, query: object
-) -> tuple[str, int] | None:
-    """Acknowledge a completion marker only from its own live carrier."""
-    message = getattr(query, "message", None)
-    message_id = getattr(message, "message_id", None)
-    if message_id is None:
-        return None
+def _acknowledge_completion_marker(user_id: int) -> tuple[str, int] | None:
+    """Acknowledge the active header after any allowed button action."""
     active = session_manager.get_active_session(user_id)
     if active is None:
         return None
     state = get_card_state(user_id, active)
-    if state.msg_id != message_id or not state.completion_marker_pending:
+    if state.msg_id is None or not state.completion_marker_pending:
         return None
     state.completion_marker_pending = False
-    return active.id, message_id
+    return active.id, state.msg_id
 
 
 async def _repaint_acknowledged_marker(
@@ -72,12 +67,13 @@ async def _repaint_acknowledged_marker(
 
 # Order matters only for prefix overlap; in practice the prefixes are disjoint.
 _HANDLERS = (
-    history_pagination.handle,
     auth_callbacks.handle,
     dir_browser.handle,
     file_buttons.handle,
     window_picker.handle,
     switcher.handle,
+    nodes.handle,
+    transfer.handle,
     archive.handle,
     footer.handle,
     more_menu.handle,
@@ -109,7 +105,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Every allowed button tap is an explicit user action, including noop
     # buttons that only dismiss Telegram's spinner.
     record_user_activity(user.id)
-    acknowledged = _acknowledge_completion_marker(user.id, query)
+    acknowledged = _acknowledge_completion_marker(user.id)
 
     if query.data == "noop":
         await query.answer()

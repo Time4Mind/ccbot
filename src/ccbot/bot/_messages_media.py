@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import logging
 import html
+import asyncio
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, TYPE_CHECKING, cast
@@ -22,6 +24,7 @@ from ..handlers.typing import fire_typing
 from ..handlers.inbox import save_inbox_file
 from ..session import session_manager
 from ..tmux_manager import tmux_manager
+from ..transfer_runtime import get_node_runtime
 from ..utils import ccbot_dir
 from ._common import active_window, is_user_allowed
 from ._messages_preprocessing import PreparedDispatch, prepare_request_for_dispatch
@@ -129,16 +132,57 @@ def _rich_photo_refs(msg: Any) -> list[tuple[str, str]]:
     return refs
 
 
-async def _save_rich_photos(msg: Any, bot: Bot, workdir: str) -> list[Path]:
-    saved: list[Path] = []
+async def _save_session_inbox_file(
+    sess: Any,
+    workdir: str,
+    filename: str,
+    fetch: Any,
+) -> str:
+    """Store locally or atomically upload to the owning worker."""
+    if sess is None or getattr(sess, "node_id", "local") == "local":
+        return str(await save_inbox_file(workdir, filename, fetch))
+    node_id = str(sess.node_id)
+    routing_id = str(
+        getattr(sess, "worker_session_id", "") or getattr(sess, "claude_session_id", "")
+    )
+    runtime = get_node_runtime(node_id)
+    if runtime is None or not routing_id:
+        raise RuntimeError("Remote node session is not available")
+    with tempfile.TemporaryDirectory(prefix="ccbot-inbox-") as staging:
+        staged = await save_inbox_file(staging, filename, fetch)
+        content = await asyncio.to_thread(staged.read_bytes)
+        result = await runtime.upload_inbox_file(node_id, routing_id, filename, content)
+    relative = str(result.get("relative_path", ""))
+    if not relative.startswith(".ccbot-inbox/") or Path(
+        relative
+    ).name != relative.removeprefix(".ccbot-inbox/"):
+        raise RuntimeError("Worker returned an invalid inbox path")
+    return relative
+
+
+async def _save_rich_photos(msg: Any, bot: Bot, sess: Any, workdir: str) -> list[str]:
+    saved: list[str] = []
     for file_id, unique_id in _rich_photo_refs(msg):
         tg_file = await bot.get_file(file_id)
 
         async def fetch(target: Path, source: Any = tg_file) -> None:
             await source.download_to_drive(target)
 
-        saved.append(await save_inbox_file(workdir, f"{unique_id}.jpg", fetch))
+        saved.append(
+            await _save_session_inbox_file(sess, workdir, f"{unique_id}.jpg", fetch)
+        )
     return saved
+
+
+async def _media_session(wid: str) -> Any | None:
+    """Resolve ownership before any local tmux liveness check."""
+    sess = session_manager.find_session_by_window(wid)
+    if sess is not None and getattr(sess, "node_id", "local") != "local":
+        routing_id = getattr(sess, "worker_session_id", "") or getattr(
+            sess, "claude_session_id", ""
+        )
+        return sess if routing_id and get_node_runtime(sess.node_id) else None
+    return sess if await tmux_manager.find_window_by_id(wid) else None
 
 
 def _forward_attribution(msg: Any) -> str:
@@ -244,8 +288,8 @@ async def unsupported_content_handler(
                 "❌ No active session. Send a text message first or use /new.",
             )
             return False
-        w = await tmux_manager.find_window_by_id(wid)
-        if not w:
+        sess = await _media_session(wid)
+        if sess is None:
             display = session_manager.get_display_name(wid)
             await safe_reply(
                 msg,
@@ -273,19 +317,25 @@ async def unsupported_content_handler(
         if hidden_urls:
             body_parts.append("Links:")
             body_parts.extend(hidden_urls)
-        sess = session_manager.find_session_by_window(wid)
         session_workdir = str(getattr(sess, "workdir", "") or "")
         workdir = session_workdir or str(ccbot_dir() / "images")
         try:
-            saved_photos = await _save_rich_photos(msg, context.bot, workdir)
+            saved_photos = await _save_rich_photos(msg, context.bot, sess, workdir)
         except BadRequest as exc:
             if _is_file_too_big(exc):
                 await safe_reply(msg, _FILE_TOO_BIG_MSG)
                 return False
             raise
+        except Exception as exc:
+            logger.warning("Rich media delivery failed window=%s: %s", wid, exc)
+            await safe_reply(msg, f"❌ File was not delivered: {exc}")
+            return False
         for file_path in saved_photos:
+            file_ref = str(file_path)
             body_parts.append(
-                f".ccbot-inbox/{file_path.name}" if session_workdir else str(file_path)
+                file_ref
+                if file_ref.startswith(".ccbot-inbox/") or not session_workdir
+                else f".ccbot-inbox/{Path(file_ref).name}"
             )
         text_to_send = "\n".join(body_parts)
 
@@ -382,8 +432,8 @@ async def photo_handler(
     if pinned_wid is None and not await _await_prior_voice(user.id, wid):
         return False
 
-    w = await tmux_manager.find_window_by_id(wid)
-    if not w:
+    sess = await _media_session(wid)
+    if sess is None:
         display = session_manager.get_display_name(wid)
         await safe_reply(
             update.message,
@@ -392,7 +442,6 @@ async def photo_handler(
         )
         return False
 
-    sess = session_manager.find_session_by_window(wid)
     workdir = sess.workdir if sess and sess.workdir else str(ccbot_dir() / "images")
 
     photo = update.message.photo[-1]
@@ -408,7 +457,12 @@ async def photo_handler(
     async def _fetch(target: Path) -> None:
         await tg_file.download_to_drive(target)
 
-    file_path = await save_inbox_file(workdir, filename, _fetch)
+    try:
+        file_path = await _save_session_inbox_file(sess, workdir, filename, _fetch)
+    except Exception as exc:
+        logger.warning("Photo delivery failed window=%s: %s", wid, exc)
+        await safe_reply(update.message, f"❌ File was not delivered: {exc}")
+        return False
 
     caption = update.message.caption or ""
     prepared_dispatch = (
@@ -434,7 +488,7 @@ async def photo_handler(
         return False
     async with _card_repost_bracket(context.bot, user.id, sess) as repost:
         success, message = await _forward_inbox_file(
-            user.id, wid, user.id, file_path, caption, "image", context.bot
+            user.id, wid, user.id, Path(file_path), caption, "image", context.bot
         )
         if not success:
             await safe_reply(update.message, f"❌ {message}")
@@ -472,8 +526,8 @@ async def document_handler(
     if pinned_wid is None and not await _await_prior_voice(user.id, wid):
         return False
 
-    w = await tmux_manager.find_window_by_id(wid)
-    if not w:
+    sess = await _media_session(wid)
+    if sess is None:
         display = session_manager.get_display_name(wid)
         await safe_reply(
             update.message,
@@ -483,7 +537,6 @@ async def document_handler(
         return False
 
     doc = update.message.document
-    sess = session_manager.find_session_by_window(wid)
     workdir = sess.workdir if sess and sess.workdir else str(ccbot_dir() / "images")
     filename = doc.file_name or f"{doc.file_unique_id}.bin"
     try:
@@ -497,7 +550,12 @@ async def document_handler(
     async def _fetch(target: Path) -> None:
         await tg_file.download_to_drive(target)
 
-    file_path = await save_inbox_file(workdir, filename, _fetch)
+    try:
+        file_path = await _save_session_inbox_file(sess, workdir, filename, _fetch)
+    except Exception as exc:
+        logger.warning("Document delivery failed window=%s: %s", wid, exc)
+        await safe_reply(update.message, f"❌ File was not delivered: {exc}")
+        return False
 
     caption = update.message.caption or ""
     prepared_dispatch = (
@@ -523,7 +581,7 @@ async def document_handler(
         return False
     async with _card_repost_bracket(context.bot, user.id, sess) as repost:
         success, message = await _forward_inbox_file(
-            user.id, wid, user.id, file_path, caption, "document", context.bot
+            user.id, wid, user.id, Path(file_path), caption, "document", context.bot
         )
         if not success:
             await safe_reply(update.message, f"❌ {message}")

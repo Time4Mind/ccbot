@@ -3,11 +3,15 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "$0")/.." && pwd)"
-staging_dir="${CCBOT_STAGING_DIR:-/Users/a-s-nosko/.ccbot-staging}"
-staging_codex_home="${CCBOT_STAGING_CODEX_HOME:-/Users/a-s-nosko/.codex-staging}"
+user_home="${HOME:?HOME must be set}"
+expected_project_dir="${CCBOT_STAGING_PROJECT_DIR:-${user_home}/pet_projects/ccbot-staging}"
+production_dir="${CCBOT_PRODUCTION_DIR:-${user_home}/.ccbot}"
+production_codex_home="${CCBOT_PRODUCTION_CODEX_HOME:-${user_home}/.codex}"
+staging_dir="${CCBOT_STAGING_DIR:-${user_home}/.ccbot-staging}"
+staging_codex_home="${CCBOT_STAGING_CODEX_HOME:-${user_home}/.codex-staging}"
 label="com.ccbot.staging"
 domain="gui/$(id -u)"
-plist_path="/Users/a-s-nosko/Library/LaunchAgents/${label}.plist"
+plist_path="${user_home}/Library/LaunchAgents/${label}.plist"
 template_path="${project_dir}/scripts/com.ccbot.staging.plist.template"
 env_path="${staging_dir}/.env"
 
@@ -38,15 +42,15 @@ PY
 }
 
 require_isolation() {
-    [ "$project_dir" = "/Users/a-s-nosko/pet_projects/ccbot-staging" ] \
+    [ "$project_dir" = "$expected_project_dir" ] \
         || die "refusing to run outside the staging worktree: ${project_dir}"
-    [ "$staging_dir" = "/Users/a-s-nosko/.ccbot-staging" ] \
+    [ "$staging_dir" = "${user_home}/.ccbot-staging" ] \
         || die "unexpected staging dir: ${staging_dir}"
-    [ "$staging_codex_home" = "/Users/a-s-nosko/.codex-staging" ] \
+    [ "$staging_codex_home" = "${user_home}/.codex-staging" ] \
         || die "unexpected staging CODEX_HOME: ${staging_codex_home}"
-    [ "$staging_dir" != "/Users/a-s-nosko/.ccbot" ] \
+    [ "$staging_dir" != "$production_dir" ] \
         || die "staging CCBOT_DIR points at production"
-    [ "$staging_codex_home" != "/Users/a-s-nosko/.codex" ] \
+    [ "$staging_codex_home" != "$production_codex_home" ] \
         || die "staging CODEX_HOME points at production"
 }
 
@@ -59,7 +63,7 @@ require_credentials() {
     [ -n "$users" ] || die "ALLOWED_USERS is empty in ${env_path}"
     [ "$(stat -f '%Lp' "$env_path")" = "600" ] \
         || die "${env_path} must have mode 600"
-    "${project_dir}/.venv/bin/python" - "$env_path" "/Users/a-s-nosko/.ccbot/.env" <<'PY'
+    "${project_dir}/.venv/bin/python" - "$env_path" "${production_dir}/.env" <<'PY'
 import hmac
 import sys
 
@@ -185,8 +189,8 @@ doctor_staging() {
     [ -f "$plist_path" ] || die "missing installed plist"
     plutil -lint "$plist_path" >/dev/null
     [ -x "${project_dir}/.venv/bin/ccbot" ] || die "staging venv is missing"
-    [ ! -e "/Users/a-s-nosko/.ccbot-staging/ccbot.lock" ] || {
-        [ "/Users/a-s-nosko/.ccbot-staging/ccbot.lock" != "/Users/a-s-nosko/.ccbot/ccbot.lock" ] \
+    [ ! -e "${staging_dir}/ccbot.lock" ] || {
+        [ "${staging_dir}/ccbot.lock" != "${production_dir}/ccbot.lock" ] \
             || die "lock collision"
     }
     if [ -f "$env_path" ]; then

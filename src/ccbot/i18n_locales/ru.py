@@ -103,9 +103,12 @@ RU: dict[str, str] = {
     "mm.new": "🆕 Новая",
     "mm.archive": "🗄 Архив",
     "mm.settings": "⚙ Настройки",
+    "mm.nodes": "🖧 Ноды",
+    "mm.transfer": "⇄ Перенос",
     "menu.title": "*Меню*",
     "menu.empty": "*Меню*\n\nАктивной сессии нет — выбери в свитчере или тапни 🆕 Новая.",
     "menu.active": "*Меню* · активна: *{name}*",
+    "startup.prompt_not_sent": "❌ Не отправлено в сессию: {prompt}",
     "settings.title": "*Настройки*",
     "settings.table.section": "Раздел",
     "settings.table.contents": "Настройки",
@@ -203,12 +206,14 @@ RU: dict[str, str] = {
         "Перед сменой глобального агента заверши или архивируй все живые сессии."
     ),
     "toast.restored": "Восстановлена",
+    "toast.restoring": "Восстанавливаю…",
     "toast.already_gone": "Уже нет",
     "toast.nothing_to_kill": "Убивать нечего",
     "toast.term_opened": "🖥 Терминал открыт",
     "toast.invalid_page": "Неверная страница",
     "toast.session_not_found": "Сессия не найдена",
     "toast.restore_failed": "Не удалось восстановить: {msg}",
+    "toast.screenshot_failed": "Скриншот недоступен: {msg}",
     # Archive screen
     "archive.title": "Архивные сессии",
     "archive.empty": "Архивных сессий в этом окне нет.",
@@ -318,6 +323,12 @@ RU: dict[str, str] = {
     "settings.group.bg_notify_finished": "Bg: задача готова",
     "settings.group.bg_notify_error": "Bg: ошибки",
     "settings.group.bg_notify_needs_action": "Bg: нужен ввод",
+    "settings.group.bg_notify_node_status": "Ноды: связь",
+    "settings.bg_notify.node_status.body": (
+        "*Состояние нод*\n\nУведомлять, если выбранная нода или нода с активной "
+        "сессией недоступна больше минуты, и один раз после восстановления. "
+        "Краткие сетевые сбои остаются без уведомлений."
+    ),
     "settings.bg_notify.finished.body": (
         "*Bg-сессия: задача готова*\n\n"
         "Когда фоновая сессия достигает end-of-turn, шлём тихий\n"
@@ -372,6 +383,50 @@ RU: dict[str, str] = {
         "*Локальный терминал*\n\nНативное Terminal / iTerm окно к tmux."
     ),
     "settings.cat.options.body": "*Кнопки опций*\n\nКакие действия показывать под кнопкой Опции.",
+    "settings.group.option_button_transfer": "Перенос сессии",
+    "settings.option_button_transfer.body": (
+        "*Перенос сессии*\n\nПоказывать кнопку переноса контекста на другую ноду. "
+        "Кнопка появится только при наличии нескольких нод и в простой сессии."
+    ),
+    "nodes.title": "*Ноды*",
+    "nodes.empty": "Зарегистрированных нод нет.",
+    "nodes.table.node": "Нода",
+    "nodes.table.state": "Состояние",
+    "nodes.table.backends": "Бэкенды",
+    "nodes.state.pending": "подключается",
+    "nodes.state.online": "онлайн",
+    "nodes.state.offline": "оффлайн",
+    "nodes.state.ready": "готова",
+    "nodes.disable": "Отключить",
+    "nodes.enable": "Подключить",
+    "nodes.disable.done": "Нода отключена. Сессии и история сохранены.",
+    "nodes.enable.done": "Нода снова доступна для работы.",
+    "nodes.delete.confirm": (
+        "*Удалить ноду из ccbot?*\n\nНода: *{node}*\n\n"
+        "Сессии, transcript и архивы не удаляются."
+    ),
+    "nodes.delete.done": "Нода удалена из реестра ccbot.",
+    "nodes.delete.not_found": "Нода не найдена или уже удалена.",
+    "nodes.delete.revoke_failed": "Не удалось отозвать доступ ноды. Удаление отменено.",
+    "transfer.choose_node": "*Перенос сессии*\n\nСессия: *{session}*\n\nВыбери целевую ноду.",
+    "transfer.choose_backend": "*Выбери бэкенд*\n\nЦелевая нода: *{node}*",
+    "transfer.confirm": (
+        "*Подтвердить перенос*\n\nСессия: *{session}*\n"
+        "Целевая нода: *{node}*\nБэкенд: *{backend}*\n\n"
+        "Переносится только контекст сессии."
+    ),
+    "transfer.btn.start": "✅ Перенести",
+    "transfer.started": "⏳ Перенос запущен. Новые запросы будут поставлены в очередь до готовности целевой сессии.",
+    "transfer.ready": "✅ Целевая сессия готова.",
+    "transfer.cancelled": "Перенос отменён.",
+    "transfer.unavailable": "Перенос сейчас недоступен.",
+    "transfer.target_unavailable": "Целевая нода недоступна.",
+    "transfer.backend_unavailable": "Этот бэкенд недоступен на целевой ноде.",
+    "transfer.failed": "❌ Не удалось перенести сессию: {error}",
+    "transfer.context_limit": (
+        "⚠ Целевая сессия создана, но весь контекст не поместился.\n"
+        "Причина: {error}\n\nПолный контекст: `{path}`"
+    ),
     "settings.cat.preprocessing.body": (
         "*Препроцессинг*\n\nКонсервативная подготовка запроса общей Luna перед отправкой в целевую сессию."
     ),

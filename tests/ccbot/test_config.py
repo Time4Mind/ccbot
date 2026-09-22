@@ -142,3 +142,12 @@ class TestSensitiveEnvScrub:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
         Config()
         assert os.environ.get("OPENAI_API_KEY") is None
+
+    def test_node_secret_is_captured_then_scrubbed_from_env(self, monkeypatch):
+        import os
+
+        monkeypatch.setenv("CCBOT_NODE_SECRET", "leader-secret")
+        cfg = Config()
+
+        assert cfg.node_secret == "leader-secret"
+        assert os.environ.get("CCBOT_NODE_SECRET") is None

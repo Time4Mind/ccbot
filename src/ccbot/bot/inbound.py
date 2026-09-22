@@ -19,6 +19,7 @@ from ..handlers.notifications import (
     lookup_session_for_message,
     schedule_card_after_message,
 )
+from ..handlers.card_types import PendingPrompt
 from ..handlers.directory_browser import (
     STATE_KEY,
     STATE_NAMING_DIRECTORY,
@@ -26,6 +27,7 @@ from ..handlers.directory_browser import (
 )
 from ..inbound_queue import InboundProcessor, enqueue_inbound
 from ..session import session_manager
+from ..transfer_queue import capture_transfer_message
 from ._common import active_window, is_user_allowed
 from .messages import (
     document_handler,
@@ -139,10 +141,28 @@ def _enqueue(
                     for item in state.pending_request_sequences
                     if item != (message_id, request_sequence)
                 ]
+                pending_prompts = getattr(state, "pending_prompts", [])
+                state.pending_prompts = [
+                    row for row in pending_prompts if row.request_id != str(message_id)
+                ]
 
             completion = getattr(receipt, "completion", None)
             if completion is not None:
                 completion.add_done_callback(_discard_failed_request)
+        if kind == "text" and update.message.text:
+            request_id = str(message_id)
+            pending_prompts = getattr(state, "pending_prompts", None)
+            if pending_prompts is None:
+                pending_prompts = []
+                state.pending_prompts = pending_prompts
+            if not any(row.request_id == request_id for row in pending_prompts):
+                pending_prompts.append(
+                    PendingPrompt(
+                        request_id=request_id,
+                        text=update.message.text,
+                        user_icon="👤",
+                    )
+                )
         state.current_page_idx = None
         if kind == "voice":
             state.voice_pending = True
@@ -155,6 +175,13 @@ def _enqueue(
     return True
 
 
+def _capture_pending_transfer(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> bool:
+    """Keep requests off the source session while a target is starting."""
+    return capture_transfer_message(update, context)
+
+
 async def text_intake_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> bool:
@@ -164,6 +191,8 @@ async def text_intake_handler(
         # Folder names are control-plane input. Do not pin them to the active
         # session or schedule its card below the directory browser.
         return await text_handler(update, context)
+    if _capture_pending_transfer(update, context):
+        return True
     if user is not None and get_flow(user.id) is not None:
         return await text_handler(update, context)
     target_wid = None
@@ -195,6 +224,8 @@ async def text_intake_handler(
 async def command_intake_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> bool:
+    if _capture_pending_transfer(update, context):
+        return True
     if _enqueue(update, context, kind="command", processor=_run_command):
         return True
     return await forward_command_handler(update, context)
@@ -203,6 +234,8 @@ async def command_intake_handler(
 async def photo_intake_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> bool:
+    if _capture_pending_transfer(update, context):
+        return True
     if _enqueue(update, context, kind="photo", processor=_run_photo):
         return True
     return await photo_handler(update, context)
@@ -211,6 +244,8 @@ async def photo_intake_handler(
 async def document_intake_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> bool:
+    if _capture_pending_transfer(update, context):
+        return True
     if _enqueue(update, context, kind="document", processor=_run_document):
         return True
     return await document_handler(update, context)
@@ -219,6 +254,8 @@ async def document_intake_handler(
 async def voice_intake_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> bool:
+    if _capture_pending_transfer(update, context):
+        return True
     if _enqueue(update, context, kind="voice", processor=_run_voice):
         return True
     return await voice_handler(update, context)
@@ -227,6 +264,8 @@ async def voice_intake_handler(
 async def unsupported_intake_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> bool:
+    if _capture_pending_transfer(update, context):
+        return True
     if _enqueue(update, context, kind="unsupported", processor=_run_unsupported):
         return True
     return await unsupported_content_handler(update, context)

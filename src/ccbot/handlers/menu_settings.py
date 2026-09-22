@@ -111,7 +111,11 @@ def _format_setting_value(user_id: int, value_key: str, cur: object) -> str:
         return f"{int(cur)} lines" if cur else "?"  # type: ignore[arg-type]
     if value_key in ("spoiler_command_lines", "spoiler_result_lines"):
         return f"{int(cur)} lines" if cur else "?"  # type: ignore[arg-type]
-    if value_key in ("option_button_screenshot", "option_button_terminal"):
+    if value_key in (
+        "option_button_screenshot",
+        "option_button_terminal",
+        "option_button_transfer",
+    ):
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
     if value_key == "screenshot_capture_kib":
         return f"{cur} KiB"
@@ -493,7 +497,11 @@ def _settings_cardhist_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
 
 def _settings_option_grid(user_id: int, key: str) -> list[list[InlineKeyboardButton]]:
     cur = bool(session_manager.get_user_settings(user_id).get(key, False))
-    suffix = "screenshot" if key == "option_button_screenshot" else "terminal"
+    suffix = {
+        "option_button_screenshot": "screenshot",
+        "option_button_terminal": "terminal",
+        "option_button_transfer": "transfer",
+    }[key]
     return [
         [
             InlineKeyboardButton(

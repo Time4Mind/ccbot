@@ -2,27 +2,27 @@
 
 This deployment is intentionally isolated from the production bot:
 
-- checkout: `/Users/a-s-nosko/pet_projects/ccbot-staging`
-- state: `/Users/a-s-nosko/.ccbot-staging`
-- Codex home: `/Users/a-s-nosko/.codex-staging`
+- checkout: `~/pet_projects/ccbot-staging`
+- state: `~/.ccbot-staging`
+- Codex home: `~/.codex-staging`
 - tmux session: `ccbot-staging`
 - launchd label: `com.ccbot.staging`
 - Telegram token: a separate BotFather bot
-- process home / directory-browser root: `/Users/a-s-nosko/.ccbot-staging/workspaces`
+- process home / directory-browser root: `~/.ccbot-staging/workspaces`
 
 The manager refuses to run when any of these paths point at production.
 
 ## Bootstrap
 
 ```bash
-cd /Users/a-s-nosko/pet_projects/ccbot-staging
+cd ~/pet_projects/ccbot-staging
 ./scripts/ccbot-staging.sh install
 ```
 
-Put the staging bot token in `/Users/a-s-nosko/.ccbot-staging/.env`, then:
+Put the staging bot token in `~/.ccbot-staging/.env`, then:
 
 ```bash
-chmod 600 /Users/a-s-nosko/.ccbot-staging/.env
+chmod 600 ~/.ccbot-staging/.env
 ./scripts/ccbot-staging.sh doctor
 ./scripts/ccbot-staging.sh start
 ./scripts/ccbot-staging.sh status

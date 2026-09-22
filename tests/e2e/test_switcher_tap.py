@@ -16,8 +16,10 @@ from __future__ import annotations
 import pytest
 
 from ccbot.bot.callbacks import callback_handler
+from ccbot.bot.callbacks import switcher as switcher_callback
 from ccbot.handlers import notifications
 from ccbot.handlers.notifications import card_page_info
+from ccbot.node_models import Node
 from ccbot.session import session_manager
 
 from harness import (
@@ -153,7 +155,7 @@ async def test_switcher_tap_flips_active_and_renders_multipage(
         ),
         _ctx(fake_bot),
     )
-    assert bg_status.status_emoji(USER_ID, "bbbbbbbb") == "☑️"
+    assert bg_status.status_emoji(USER_ID, "bbbbbbbb") == ""
 
 
 @pytest.mark.asyncio
@@ -195,3 +197,57 @@ async def test_switcher_tap_on_dead_session_alerts(fake_tmux, fake_bot):
     active = session_manager.get_active_session(USER_ID)
     assert active is not None and active.id == "aaaaaaaa"
     assert query.answers and query.answers[-1][1] is True  # show_alert=True
+
+
+@pytest.mark.asyncio
+async def test_notification_jump_selects_remote_node_before_card_paint(
+    fake_tmux, fake_bot, monkeypatch
+):
+    session_manager.register_node(
+        Node(id="worker-b", display_name="Worker B", state="ready")
+    )
+    local = seed_session(
+        session_manager,
+        sid="local-session",
+        name="local",
+        window_id="@100",
+        workdir=WORKDIR_A,
+        claude_session_id=SID_A,
+        active_for=USER_ID,
+    )
+    remote = seed_session(
+        session_manager,
+        sid="remote-session",
+        name="remote",
+        window_id="worker-b::@200",
+        workdir="/srv/project",
+        claude_session_id=SID_B,
+    )
+    remote.node_id = "worker-b"
+    session_manager.save_state()
+    assert session_manager.get_active_session(USER_ID) is local
+
+    painted: list[str] = []
+
+    async def assert_route_before_paint(_bot, user_id, sess, _message_id, **_kwargs):
+        assert session_manager.get_selected_node_id(user_id) == "worker-b"
+        assert session_manager.get_active_session(user_id) is remote
+        painted.append(sess.id)
+
+    monkeypatch.setattr(
+        switcher_callback, "paint_card_on_carrier", assert_route_before_paint
+    )
+    user = FakeUser(USER_ID)
+    query = FakeCallbackQuery(
+        data=f"sw:{remote.id}",
+        user=user,
+        message_id=8000,
+        chat_id=USER_ID,
+        bot=fake_bot,
+    )
+
+    await callback_handler(FakeUpdate(user=user, callback_query=query), _ctx(fake_bot))
+
+    assert painted == [remote.id]
+    assert session_manager.get_selected_node_id(USER_ID) == "worker-b"
+    assert session_manager.get_active_session(USER_ID) is remote

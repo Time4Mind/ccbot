@@ -13,6 +13,11 @@ from telegram.ext import ContextTypes
 from ...handlers.message_sender import safe_reply
 from ...i18n import t
 from ...session import session_manager
+from ...terminal_runtime import (
+    PaneCaptureError,
+    capture_session_pane,
+    send_session_key,
+)
 from ...tmux_manager import tmux_manager
 from .._common import active_window, is_user_allowed
 
@@ -47,15 +52,20 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await safe_reply(update.message, "No active session. Use /new to create one.")
         return
 
-    w = await tmux_manager.find_window_by_id(wid)
-    if not w:
+    if active is None:
         await safe_reply(update.message, f"Window '{wid}' no longer exists.")
         return
 
-    await tmux_manager.send_keys(w.window_id, "/usage")
+    success, message = await session_manager.send_to_window(wid, "/usage")
+    if not success:
+        await safe_reply(update.message, f"Failed to request usage info: {message}")
+        return
     await asyncio.sleep(2.0)
-    pane_text = await tmux_manager.capture_pane(w.window_id)
-    await tmux_manager.send_keys(w.window_id, "Escape", enter=False, literal=False)
+    try:
+        pane_text = await capture_session_pane(active)
+    except PaneCaptureError:
+        pane_text = ""
+    await send_session_key(active, "Escape")
 
     if not pane_text:
         await safe_reply(update.message, "Failed to capture usage info.")

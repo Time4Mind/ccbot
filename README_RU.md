@@ -104,6 +104,8 @@ ccbot                           # foreground; для prod — systemd-юнит
 
 Полная пошаговая установка на Linux (написана так, чтобы её мог
 выполнить AI-агент) — в `doc/install-linux.md`.
+Автоматическое подключение worker-ноды через прямую CLI-ручку — в
+`doc/multi-node-bootstrap.md`.
 
 ## Конфигурация
 

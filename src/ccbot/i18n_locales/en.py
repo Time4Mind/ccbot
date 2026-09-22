@@ -104,10 +104,13 @@ EN: dict[str, str] = {
     "mm.new": "🆕 New",
     "mm.archive": "🗄 Archive",
     "mm.settings": "⚙ Settings",
+    "mm.nodes": "🖧 Nodes",
+    "mm.transfer": "⇄ Transfer",
     # Menu screen body
     "menu.title": "*Menu*",
     "menu.empty": "*Menu*\n\nNo active session — pick one from the switcher or tap 🆕 New.",
     "menu.active": "*Menu* · active: *{name}*",
+    "startup.prompt_not_sent": "❌ Not sent to the session: {prompt}",
     # Settings — top
     "settings.title": "*Settings*",
     "settings.table.section": "Section",
@@ -213,12 +216,14 @@ EN: dict[str, str] = {
         "Archive or kill all live sessions before switching the global agent."
     ),
     "toast.restored": "Restored",
+    "toast.restoring": "Restoring…",
     "toast.already_gone": "Already gone",
     "toast.nothing_to_kill": "Nothing to kill",
     "toast.term_opened": "🖥 Terminal opened",
     "toast.invalid_page": "Invalid page",
     "toast.session_not_found": "Session not found",
     "toast.restore_failed": "Restore failed: {msg}",
+    "toast.screenshot_failed": "Screenshot unavailable: {msg}",
     # Archive screen
     "archive.title": "Archived sessions",
     "archive.empty": "No archived sessions in this window.",
@@ -331,6 +336,12 @@ EN: dict[str, str] = {
     "settings.group.bg_notify_finished": "Bg: task complete",
     "settings.group.bg_notify_error": "Bg: errors",
     "settings.group.bg_notify_needs_action": "Bg: needs action",
+    "settings.group.bg_notify_node_status": "Nodes: connection",
+    "settings.bg_notify.node_status.body": (
+        "*Node status*\n\nNotify when the selected node or a node with an active "
+        "session is unavailable for over a minute, and once when it recovers. "
+        "Short network interruptions stay quiet."
+    ),
     "settings.bg_notify.finished.body": (
         "*Bg session: task complete*\n\n"
         "When a background session reaches end-of-turn, push a quiet "
@@ -389,6 +400,50 @@ EN: dict[str, str] = {
         "Native Terminal / iTerm window attached to each new session."
     ),
     "settings.cat.options.body": "*Option buttons*\n\nChoose which actions appear under Options.",
+    "settings.group.option_button_transfer": "Session transfer",
+    "settings.option_button_transfer.body": (
+        "*Session transfer*\n\nShow the context-transfer button for another node. "
+        "It appears only with multiple nodes and while the session is idle."
+    ),
+    "nodes.title": "*Nodes*",
+    "nodes.empty": "No registered nodes.",
+    "nodes.table.node": "Node",
+    "nodes.table.state": "State",
+    "nodes.table.backends": "Backends",
+    "nodes.state.pending": "connecting",
+    "nodes.state.online": "online",
+    "nodes.state.offline": "offline",
+    "nodes.state.ready": "ready",
+    "nodes.disable": "Disconnect",
+    "nodes.enable": "Reconnect",
+    "nodes.disable.done": "Node disconnected. Sessions and history were preserved.",
+    "nodes.enable.done": "Node is available again.",
+    "nodes.delete.confirm": (
+        "*Remove node from ccbot?*\n\nNode: *{node}*\n\n"
+        "Sessions, transcripts, and archives are preserved."
+    ),
+    "nodes.delete.done": "Node removed from the ccbot registry.",
+    "nodes.delete.not_found": "Node not found or already removed.",
+    "nodes.delete.revoke_failed": "Could not revoke node access. Removal was cancelled.",
+    "transfer.choose_node": "*Session transfer*\n\nSession: *{session}*\n\nChoose the target node.",
+    "transfer.choose_backend": "*Choose a backend*\n\nTarget node: *{node}*",
+    "transfer.confirm": (
+        "*Confirm transfer*\n\nSession: *{session}*\n"
+        "Target node: *{node}*\nBackend: *{backend}*\n\n"
+        "Only the session context will be transferred."
+    ),
+    "transfer.btn.start": "✅ Transfer",
+    "transfer.started": "⏳ Transfer started. New requests will be queued until the target session is ready.",
+    "transfer.ready": "✅ Target session is ready.",
+    "transfer.cancelled": "Transfer cancelled.",
+    "transfer.unavailable": "Transfer is currently unavailable.",
+    "transfer.target_unavailable": "The target node is unavailable.",
+    "transfer.backend_unavailable": "This backend is unavailable on the target node.",
+    "transfer.failed": "❌ Session transfer failed: {error}",
+    "transfer.context_limit": (
+        "⚠ The target session was created, but the full context did not fit.\n"
+        "Reason: {error}\n\nFull context: `{path}`"
+    ),
     "settings.cat.preprocessing.body": (
         "*Preprocessing*\n\nConservative request cleanup by one shared Luna before delivery to the pinned session."
     ),

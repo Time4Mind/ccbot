@@ -15,6 +15,7 @@ Key components:
 import asyncio
 import logging
 import os
+import posixpath
 import sys
 import threading
 import time
@@ -298,6 +299,7 @@ STATE_NAMING_DIRECTORY = "naming_directory"
 STATE_PREPROCESSING_INSTRUCTION = "preprocessing_instruction"
 STATE_SELECTING_WINDOW = "selecting_window"
 BROWSE_PATH_KEY = "browse_path"
+BROWSE_NODE_KEY = "browse_node_id"
 BROWSE_PAGE_KEY = "browse_page"
 BROWSE_DIRS_KEY = "browse_dirs"  # Cache of subdirs for current path
 UNBOUND_WINDOWS_KEY = "unbound_windows"  # Cache of (name, cwd) tuples
@@ -370,6 +372,7 @@ def clear_browse_state(user_data: dict[str, Any] | None) -> None:
     if user_data is not None:
         user_data.pop(STATE_KEY, None)
         user_data.pop(BROWSE_PATH_KEY, None)
+        user_data.pop(BROWSE_NODE_KEY, None)
         user_data.pop(BROWSE_PAGE_KEY, None)
         user_data.pop(BROWSE_DIRS_KEY, None)
 
@@ -389,24 +392,37 @@ def clear_session_picker_state(user_data: dict[str, Any] | None) -> None:
 
 
 async def build_directory_browser(
-    current_path: str, page: int = 0, *, user_id: int
+    current_path: str,
+    page: int = 0,
+    *,
+    user_id: int,
+    remote_subdirs: list[str] | None = None,
+    remote: bool = False,
 ) -> tuple[str, InlineKeyboardMarkup, list[str]]:
     """Build directory browser UI.
 
     Returns: (text, keyboard, subdirs) where subdirs is the full list[Any] for caching.
     """
-    path = Path(current_path).expanduser().resolve()
-    if not path.exists() or not path.is_dir():
-        path = Path.home()
-
-    try:
-        # UI work is metadata-only. A stale/missing recursive index is served
-        # immediately and refreshed in the background for the next paint.
-        subdirs, refresh_needed = await asyncio.to_thread(_sorted_subdirs_fast, path)
-        if refresh_needed:
-            _schedule_recency_refresh(path)
-    except (PermissionError, OSError):
-        subdirs = []
+    if remote:
+        path = current_path or "/"
+        subdirs = list(remote_subdirs or [])
+        at_root = posixpath.normpath(path) == "/"
+    else:
+        local_path = Path(current_path).expanduser().resolve()
+        if not local_path.exists() or not local_path.is_dir():
+            local_path = Path.home()
+        path = local_path
+        try:
+            # UI work is metadata-only. A stale/missing recursive index is served
+            # immediately and refreshed in the background for the next paint.
+            subdirs, refresh_needed = await asyncio.to_thread(
+                _sorted_subdirs_fast, local_path
+            )
+            if refresh_needed:
+                _schedule_recency_refresh(local_path)
+        except (PermissionError, OSError):
+            subdirs = []
+        at_root = local_path == local_path.parent
 
     total_pages = max(1, (len(subdirs) + DIRS_PER_PAGE - 1) // DIRS_PER_PAGE)
     page = max(0, min(page, total_pages - 1))
@@ -443,7 +459,7 @@ async def build_directory_browser(
 
     action_row: list[InlineKeyboardButton] = []
     # Allow going up unless at filesystem root
-    if path != path.parent:
+    if not at_root:
         action_row.append(
             InlineKeyboardButton(t(user_id, "dir.btn.up"), callback_data=CB_DIR_UP)
         )
@@ -458,7 +474,7 @@ async def build_directory_browser(
         [InlineKeyboardButton(t(user_id, "btn.back"), callback_data=CB_DIR_CANCEL)]
     )
 
-    display_path = str(path).replace(str(Path.home()), "~")
+    display_path = str(path) if remote else str(path).replace(str(Path.home()), "~")
     title = t(user_id, "dir.title")
     current = t(user_id, "dir.current", path=display_path)
     tail = t(user_id, "dir.empty") if not subdirs else t(user_id, "dir.hint")

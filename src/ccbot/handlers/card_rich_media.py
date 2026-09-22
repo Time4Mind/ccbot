@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import time
-from pathlib import Path
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,6 +12,7 @@ from telegram.error import BadRequest, RetryAfter, TimedOut
 
 from .. import rich
 from ..config import config
+from ..file_actions import FileButtonContext
 from ..session import session_manager
 from ..session_models import Session
 from .card_binding import bind_carrier, clear_carrier
@@ -107,7 +107,7 @@ async def send_rich_media_card(
     pane_png: bytes,
     *,
     reply_markup: InlineKeyboardMarkup | None,
-    file_base_dir: Path | None = None,
+    file_base_dir: FileButtonContext = None,
 ) -> RichCardSend | None:
     """Send a rich card containing ``pane_png``; None requests text fallback."""
     if not config.rich_messages:
@@ -141,6 +141,7 @@ async def edit_rich_media_card(
     reply_markup: InlineKeyboardMarkup | None,
     min_photo_interval: float,
     refresh_pane: bool = True,
+    file_base_dir: FileButtonContext = None,
 ) -> bool:
     """Edit text while keeping the terminal screenshot at its card anchor."""
     if state.msg_id is None or not config.rich_messages:
@@ -148,8 +149,6 @@ async def edit_rich_media_card(
 
     sess_id = lookup_session_for_message(user_id, state.msg_id)
     sess = session_manager.get_session(sess_id) if sess_id else None
-    workdir = getattr(sess, "workdir", "")
-    file_base_dir = Path(workdir) if workdir else None
     window_id = sess.window_id if sess is not None else ""
     elapsed = time.monotonic() - state.last_photo_edit_ts
 
@@ -217,6 +216,15 @@ async def edit_rich_media_card(
             "rich-media card edit timed out msg=%s; keeping carrier", state.msg_id
         )
         return True
+    except TimeoutError:
+        # Our short rich-transport deadline is intentional: unlike PTB's
+        # ambiguous full request timeout, it should immediately release the
+        # normal text path so an agent response cannot remain visually stale.
+        logger.info(
+            "rich-media short deadline expired msg=%s; using text fallback",
+            state.msg_id,
+        )
+        return False
     except BadRequest as exc:
         error = str(exc)
         if "message is not modified" in error.lower():
@@ -241,7 +249,9 @@ async def edit_rich_media_card(
             return False
         if "rich_message_photo_invalid" in error.lower() and isinstance(photo, str):
             invalidated_session = _discard_invalid_photo(state, sess, photo)
-            png, captured_hash = await _capture_pane_png(window_id, user_id=user_id)
+            png, captured_hash = (None, "")
+            if window_id:
+                png, captured_hash = await _capture_pane_png(window_id, user_id=user_id)
             if png is not None and captured_hash:
                 try:
                     result = await rich.edit_rich_message(
@@ -331,7 +341,7 @@ async def edit_rich_media_card(
 
 
 def _rich_card_markdown(
-    text: str, state: CardState, *, file_base_dir: Path | None = None
+    text: str, state: CardState, *, file_base_dir: FileButtonContext = None
 ) -> str:
     """Insert the spaced photo before context/background service metadata."""
     offset = state.media_anchor_offset

@@ -8,9 +8,11 @@ remain here to preserve historical imports and monkeypatch seams around
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import time
+from dataclasses import fields
 
 import aiofiles
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
@@ -26,6 +28,7 @@ from ..session import (
     session_manager,
 )
 from ..session_claude_io import build_session_file_path
+from ..transfer_runtime import get_node_runtime
 from ..tmux_manager import tmux_manager
 from ..transcript_parser import TranscriptParser
 from .archive_blurb import (
@@ -49,6 +52,32 @@ _BLURB_TOTAL_BUDGET = 240
 _BLURB_MAX_MESSAGES = 3
 PAGE_SIZE = 6
 DEFAULT_LOOKBACK_SECONDS = 20 * 86400
+
+
+def _remote_restore_error(sess: Session, reason: str, message: str) -> tuple[bool, str]:
+    detail = " ".join(message.split())[:300]
+    logger.warning(
+        "remote_restore_failed node=%s session=%s reason=%s detail=%s",
+        sess.node_id,
+        sess.id,
+        reason,
+        detail,
+    )
+    return False, message
+
+
+def _worker_restore_failure(exc: Exception) -> tuple[str, str]:
+    detail = str(exc).strip() or type(exc).__name__
+    lowered = detail.casefold()
+    if isinstance(exc, TimeoutError) or "timeout" in lowered:
+        return "startup_timeout", detail
+    if "auth" in lowered or "login" in lowered:
+        return "authentication_required", detail
+    if "rollout" in lowered or "transcript" in lowered:
+        return "transcript_unavailable", detail
+    if isinstance(exc, ConnectionError):
+        return "transport", detail
+    return "worker_rejected", detail
 
 
 def _format_blurb(messages: list[str]) -> str:
@@ -220,6 +249,10 @@ async def _archive_blurb(sess: Session, user_id: int | None = None) -> str:
 async def _archive_context_status(sess: Session) -> bool | None:
     """Return whether a session has user context, or None if unreadable."""
     if not sess.claude_session_id:
+        if getattr(sess, "node_id", "local") != "local" and getattr(
+            sess, "worker_session_id", ""
+        ):
+            return None
         return False
     fp = build_session_file_path(sess.claude_session_id, sess.workdir)
     if fp is None or not fp.exists():
@@ -353,6 +386,10 @@ async def build_archive_page(
             wd = _shorten_workdir(sess.workdir) if sess.workdir else ""
             if wd:
                 first += f"<br><code>{wd}</code>"
+            if sess.node_id != "local":
+                node = session_manager.get_node(sess.node_id)
+                node_name = node.display_name if node is not None else sess.node_id
+                first += f"<br>{t(user_id, 'nodes.table.node')}: {node_name}"
             description = blurb or "-"
             table_rows.append(
                 f"| {first.replace('|', '\\|')} | "
@@ -418,16 +455,75 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
         return False, "No workdir on session record — cannot restore"
 
     source_backend = sess.backend
-    enabled_backends = session_manager.get_enabled_backends(user_id)
+    prior_session = copy.deepcopy(sess)
+    prior_active = session_manager.active_sessions.get(user_id)
+    prior_node_active = session_manager.active_sessions_by_node.get(user_id, {}).get(
+        sess.node_id
+    )
+    prior_history = list(session_manager.active_history.get(user_id, []))
+    enabled_backends = session_manager.get_effective_backends(user_id, sess.node_id)
+    if not enabled_backends:
+        return False, f"Node has no available backend: {sess.node_id}"
     target_backend = (
-        source_backend
-        if source_backend in enabled_backends
-        else session_manager.get_default_backend(user_id)
+        source_backend if source_backend in enabled_backends else enabled_backends[0]
     )
     cross_backend = source_backend != target_backend
     resume_session_id = sess.claude_session_id or None
     initial_prompt: str | None = None
-    if cross_backend:
+    remote_runtime = None
+    if sess.node_id != "local":
+        logger.info(
+            "remote_restore_attempt node=%s session=%s provider_bound=%s",
+            sess.node_id,
+            sess.id,
+            bool(resume_session_id),
+        )
+        remote_runtime = get_node_runtime(sess.node_id)
+        if remote_runtime is None:
+            return _remote_restore_error(
+                sess, "offline", f"Node is not connected: {sess.node_id}"
+            )
+        if not resume_session_id:
+            routing_id = sess.worker_session_id
+            if not routing_id:
+                return _remote_restore_error(
+                    sess,
+                    "missing_identity",
+                    "Remote archive has no worker or provider session id",
+                )
+            try:
+                resolved = await remote_runtime.resolve_provider_session(
+                    sess.node_id, workdir, source_backend, routing_id
+                )
+            except Exception:
+                return _remote_restore_error(
+                    sess,
+                    "resolve_error",
+                    "Could not resolve the remote provider session",
+                )
+            if not resolved.get("ok", False):
+                reason = str(resolved.get("error_code", "unresolved_transcript"))
+                if reason == "ambiguous_transcript":
+                    return _remote_restore_error(
+                        sess,
+                        reason,
+                        "Several remote transcripts share this workdir; "
+                        "the exact archived session cannot be selected safely",
+                    )
+                return _remote_restore_error(
+                    sess, reason, "Remote transcript was not found on the worker"
+                )
+            resume_session_id = str(resolved.get("provider_session_id", "")) or None
+            if not resume_session_id:
+                return _remote_restore_error(
+                    sess,
+                    "missing_provider_id",
+                    "Worker returned no provider session id",
+                )
+            sess.claude_session_id = resume_session_id
+            sess.provider_transcript_path = str(resolved.get("transcript_path", ""))
+            session_manager.save_state()
+    if cross_backend and sess.node_id == "local":
         from ..session_import import build_import_context, import_prompt
 
         try:
@@ -439,13 +535,112 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
         initial_prompt = import_prompt(context_path, source_backend)
         resume_session_id = None
 
-    success, message, created_wname, created_wid = await tmux_manager.create_window(
-        workdir,
-        resume_session_id=resume_session_id,
-        backend=target_backend,
-        initial_prompt=initial_prompt,
-    )
+    if sess.node_id != "local":
+        assert remote_runtime is not None
+        try:
+            result = await remote_runtime.create_session(
+                sess.node_id,
+                workdir,
+                target_backend,
+                sess.name or "session",
+                resume_session_id=resume_session_id or "",
+                source_backend=source_backend,
+                provider_transcript_path=sess.provider_transcript_path,
+            )
+        except Exception as exc:
+            reason, detail = _worker_restore_failure(exc)
+            return _remote_restore_error(
+                sess,
+                reason,
+                f"Remote restore failed on {sess.node_id}: {detail}",
+            )
+        raw_window_id = str(result.get("target_window_id", ""))
+        agent_session_id = str(result.get("target_agent_session_id", ""))
+        if not raw_window_id or not agent_session_id:
+            return _remote_restore_error(
+                sess,
+                "invalid_response",
+                f"Remote restore failed on {sess.node_id}: invalid response",
+            )
+        created_wid = f"{sess.node_id}::{raw_window_id}"
+        created_wname = sess.name or raw_window_id
+        session_manager.set_session_window(sess.id, created_wid)
+        session_manager.set_session_worker_id(sess.id, agent_session_id)
+        if cross_backend:
+            sess.imported_from_backend = source_backend
+            sess.imported_from_session_id = resume_session_id or ""
+            sess.backend = target_backend
+            sess.claude_session_id = str(result.get("provider_session_id", ""))
+            sess.provider_transcript_path = str(result.get("transcript_path", ""))
+        session_manager.select_session(user_id, sess.id)
+        session_manager.save_state()
+        logger.info(
+            "remote_restore_succeeded node=%s session=%s",
+            sess.node_id,
+            sess.id,
+        )
+        note = (
+            f" - imported from {source_backend} into a native {target_backend} session"
+            if cross_backend
+            else " - if it was a large session it may compact for a minute"
+        )
+        return True, f"Restored {sess.name or sess.id} ({created_wname}){note}"
+
+    native_codex_restore = bool(resume_session_id and target_backend == "codex")
+    restore_published = asyncio.Event()
+
+    async def _rollback_failed_startup(
+        failed_window_id: str, startup_error: BaseException
+    ) -> None:
+        await restore_published.wait()
+        if sess.window_id != failed_window_id:
+            return
+        session_manager.cancel_window_startup(failed_window_id)
+        await session_manager.remove_provider_session_bindings(sess.claude_session_id)
+        for field in fields(Session):
+            setattr(sess, field.name, copy.deepcopy(getattr(prior_session, field.name)))
+        if prior_active is None:
+            session_manager.active_sessions.pop(user_id, None)
+        else:
+            session_manager.active_sessions[user_id] = prior_active
+        node_sessions = session_manager.active_sessions_by_node.setdefault(user_id, {})
+        if prior_node_active is None:
+            node_sessions.pop(sess.node_id, None)
+        else:
+            node_sessions[sess.node_id] = prior_node_active
+        if not node_sessions:
+            session_manager.active_sessions_by_node.pop(user_id, None)
+        if prior_history:
+            session_manager.active_history[user_id] = prior_history
+        else:
+            session_manager.active_history.pop(user_id, None)
+        session_manager.save_state()
+        logger.warning(
+            "Codex archive restore rolled back session=%s window=%s state=%s: %s",
+            sess.id,
+            failed_window_id,
+            sess.state,
+            startup_error,
+        )
+
+    if native_codex_restore:
+        create_result = await tmux_manager.create_window(
+            workdir,
+            resume_session_id=resume_session_id,
+            backend=target_backend,
+            initial_prompt=initial_prompt,
+            on_startup_failure=_rollback_failed_startup,
+        )
+    else:
+        create_result = await tmux_manager.create_window(
+            workdir,
+            resume_session_id=resume_session_id,
+            backend=target_backend,
+            initial_prompt=initial_prompt,
+        )
+    success, message, created_wname, created_wid = create_result
     if not success:
+        restore_published.set()
         return False, message
 
     # Publish the restored window immediately. Prompts sent from Telegram now
@@ -471,6 +666,7 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
 
         transcript_path = build_session_file_path(resume_session_id, workdir)
         if transcript_path is None or not transcript_path.is_file():
+            restore_published.set()
             session_manager.cancel_window_startup(created_wid)
             await tmux_manager.kill_window(created_wid)
             return False, "Codex rollout not found; restore was cancelled"
@@ -483,13 +679,17 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
                 transcript_path=transcript_path,
             )
         except (OSError, RuntimeError) as e:
+            restore_published.set()
             session_manager.cancel_window_startup(created_wid)
             await tmux_manager.kill_window(created_wid)
             logger.warning("Codex restore binding failed for %s: %s", created_wid, e)
             return False, "Could not publish Codex restore binding"
         codex_restore_published = True
+        restore_published.set()
     elif cross_backend:
         await session_manager.wait_for_session_map_entry(created_wid, timeout=15.0)
+    else:
+        restore_published.set()
 
     # If we did a --resume, override window_state to original sid (Claude allocates a new sid for the resume).
     if resume_session_id:

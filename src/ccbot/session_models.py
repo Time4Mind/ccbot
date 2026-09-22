@@ -55,6 +55,7 @@ class WindowState:
     window_name: str = ""
     backend: str = "claude"
     transcript_path: str = ""
+    node_id: str = "local"
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -67,6 +68,8 @@ class WindowState:
             d["backend"] = self.backend
         if self.transcript_path:
             d["transcript_path"] = self.transcript_path
+        if self.node_id != "local":
+            d["node_id"] = self.node_id
         return d
 
     @classmethod
@@ -77,6 +80,7 @@ class WindowState:
             window_name=data.get("window_name", ""),
             backend=data.get("backend", "claude"),
             transcript_path=data.get("transcript_path", ""),
+            node_id=data.get("node_id", "local"),
         )
 
 
@@ -106,7 +110,8 @@ class Session:
         workdir: Working directory at session creation. Used as cwd for `claude --resume`.
         goal: Free-form goal description retained for persisted compatibility.
         state: 'active' | 'idle' | 'archived' | 'completed' | 'lost'.
-        claude_session_id: Last known Claude session id (uuid). Set by SessionStart hook.
+        worker_session_id: Stable remote-worker routing id for RPC and events.
+        claude_session_id: Native provider session id used for transcript/resume.
         created_at: Unix timestamp.
         last_event_at: Unix timestamp of most recent inbound or outbound activity.
         archived_at: Unix timestamp of archival, 0 while active.
@@ -123,7 +128,9 @@ class Session:
     workdir: str = ""
     goal: str = ""
     state: SessionState = "active"
+    worker_session_id: str = ""
     claude_session_id: str = ""
+    provider_transcript_path: str = ""
     created_at: float = 0.0
     last_event_at: float = 0.0
     archived_at: float = 0.0
@@ -143,6 +150,12 @@ class Session:
     # Non-zero only while this is the single empty prewarmed session reserved
     # for the given Telegram user. Cleared synchronously on the first request.
     default_reserve_user_id: int = 0
+    # Stable execution scope.  Legacy state is implicitly local.
+    node_id: str = "local"
+    # Durable full-context artifact for imported sessions. This is separate
+    # from the provider's active context window and survives archive/restore.
+    context_path: str = ""
+    context_error: str = ""
 
     @staticmethod
     def new_id() -> str:
@@ -212,7 +225,9 @@ class Session:
             "workdir": self.workdir,
             "goal": self.goal,
             "state": self.state,
+            "worker_session_id": self.worker_session_id,
             "claude_session_id": self.claude_session_id,
+            "provider_transcript_path": self.provider_transcript_path,
             "created_at": self.created_at,
             "last_event_at": self.last_event_at,
             "archived_at": self.archived_at,
@@ -230,6 +245,9 @@ class Session:
             "preprocessed_prompt_hashes": prompt_hashes,
             "pending_preprocessing": self.pending_preprocessing,
             "default_reserve_user_id": self.default_reserve_user_id,
+            "node_id": self.node_id,
+            "context_path": self.context_path,
+            "context_error": self.context_error,
         }
 
     @classmethod
@@ -237,6 +255,12 @@ class Session:
         state_val = data.get("state", "active")
         if state_val not in ("active", "idle", "archived", "completed", "lost"):
             state_val = "active"
+        node_id = str(data.get("node_id", "local"))
+        provider_session_id = str(data.get("claude_session_id", ""))
+        worker_session_id = str(data.get("worker_session_id", ""))
+        if node_id != "local" and "worker_session_id" not in data:
+            worker_session_id = provider_session_id
+            provider_session_id = ""
         return cls(
             id=data["id"],
             name=data.get("name", ""),
@@ -244,7 +268,9 @@ class Session:
             workdir=data.get("workdir", ""),
             goal=data.get("goal", ""),
             state=state_val,
-            claude_session_id=data.get("claude_session_id", ""),
+            worker_session_id=worker_session_id,
+            claude_session_id=provider_session_id,
+            provider_transcript_path=str(data.get("provider_transcript_path", "")),
             created_at=float(data.get("created_at", 0.0)),
             last_event_at=float(data.get("last_event_at", 0.0)),
             archived_at=float(data.get("archived_at", 0.0)),
@@ -272,4 +298,7 @@ class Session:
                 and isinstance(value.get("original"), str)
             ][-128:],
             default_reserve_user_id=int(data.get("default_reserve_user_id", 0)),
+            node_id=node_id,
+            context_path=str(data.get("context_path", "")),
+            context_error=str(data.get("context_error", "")),
         )

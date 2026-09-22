@@ -20,15 +20,6 @@ from ...handlers.callback_data import (
 )
 from ...handlers.cleanup import teardown_session_runtime
 from ...session_models import reserve_owner
-from ...handlers.directory_browser import (
-    BROWSE_DIRS_KEY,
-    BROWSE_PAGE_KEY,
-    BROWSE_PATH_KEY,
-    STATE_BROWSING_DIRECTORY,
-    STATE_KEY,
-    build_directory_browser,
-    clear_browse_state,
-)
 from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_reply
 from ...i18n import t
@@ -59,18 +50,43 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     if not update.message:
         return
+    reply_message = update.message
 
     # Open capture before authentication, filesystem and Telegram awaits.
     # Non-blocking voice handlers can otherwise race into the old session.
-    begin_startup_queue(user.id)
+    startup_flow = begin_startup_queue(user.id)
 
     args = (update.message.text or "").split(maxsplit=2)
     name_arg = args[1] if len(args) > 1 else ""
     path_arg = args[2] if len(args) > 2 else ""
+    node_id = session_manager.get_selected_node_id(user.id)
+    enabled_backends = session_manager.get_effective_backends(user.id, node_id)
 
     if path_arg:
+        if node_id != "local":
+            from ...startup_queue import cancel_startup_queue
+
+            cancel_startup_queue(user.id)
+            await safe_reply(
+                update.message,
+                "❌ A path cannot be resolved on a remote node from this command. "
+                "Use /new and choose the directory on that node.",
+            )
+            return
+        if not enabled_backends:
+            from ...startup_queue import cancel_startup_queue
+
+            cancel_startup_queue(user.id)
+            await safe_reply(update.message, "❌ No available backend on local node")
+            return
+        preferred_backend = session_manager.get_default_backend(user.id)
+        backend = (
+            preferred_backend
+            if preferred_backend in enabled_backends
+            else enabled_backends[0]
+        )
         target_path = str(Path(path_arg).expanduser().resolve())
-        if session_manager.agent_backend == "codex":
+        if backend == "codex":
             from .auth import ensure_codex_authenticated
 
             if not await ensure_codex_authenticated(context.bot, user.id):
@@ -80,16 +96,71 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 )
                 return
         await safe_reply(update.message, f"⏳ Creating session at {target_path}…")
-        success, message, created_wname, created_wid = await tmux_manager.create_window(
-            target_path,
-            backend=session_manager.agent_backend,
-        )
+        created_session: Session | None = None
+        startup_window_published = asyncio.Event()
+
+        async def _rollback_failed_startup(
+            failed_window_id: str, startup_error: BaseException
+        ) -> None:
+            await startup_window_published.wait()
+            if created_session is None:
+                return
+            if session_manager.get_session(created_session.id) is not created_session:
+                return
+            if created_session.window_id not in (failed_window_id, ""):
+                return
+            from ...startup_queue import (
+                fail_startup_queue,
+                report_failed_startup_entries,
+            )
+
+            queued = fail_startup_queue(
+                user.id,
+                flow=startup_flow,
+                window_id=failed_window_id,
+            )
+            session_manager.cancel_window_startup(failed_window_id)
+            provider_session_id = created_session.claude_session_id
+            if provider_session_id:
+                await session_manager.remove_provider_session_bindings(
+                    provider_session_id
+                )
+            else:
+                session_manager.window_states.pop(failed_window_id, None)
+                session_manager.window_display_names.pop(failed_window_id, None)
+            session_manager.delete_session(created_session.id)
+            await report_failed_startup_entries(queued)
+            await safe_reply(
+                reply_message,
+                f"❌ Codex session did not start: {startup_error}",
+            )
+
+        if backend == "codex":
+            create_result = await tmux_manager.create_window(
+                target_path,
+                backend=backend,
+                on_startup_failure=_rollback_failed_startup,
+            )
+        else:
+            create_result = await tmux_manager.create_window(
+                target_path,
+                backend=backend,
+            )
+        success, message, created_wname, created_wid = create_result
         if not success:
+            startup_window_published.set()
+            from ...startup_queue import (
+                fail_startup_queue,
+                report_failed_startup_entries,
+            )
+
+            queued = fail_startup_queue(user.id, flow=startup_flow)
+            await report_failed_startup_entries(queued)
             await safe_reply(update.message, f"❌ {message}")
             return
         session_manager.mark_window_starting(
             created_wid,
-            backend=session_manager.agent_backend,
+            backend=backend,
             resume=False,
             bot=context.bot,
             user_id=user.id,
@@ -98,12 +169,15 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             name=name_arg or created_wname or "",
             window_id=created_wid,
             workdir=target_path,
+            backend=backend,
         )
+        created_session = sess
         ws = session_manager.get_window_state(created_wid)
         if ws.session_id:
             session_manager.set_session_claude_id(sess.id, ws.session_id)
         session_manager.set_active_session(user.id, sess.id)
-        bind_startup_queue(user.id, created_wid)
+        bind_startup_queue(user.id, created_wid, flow=startup_flow)
+        startup_window_published.set()
         await safe_reply(
             update.message,
             f"✅ Session `{sess.name}` ({sess.id}) created at {target_path}",
@@ -113,7 +187,6 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # No path → directory browser.
     if name_arg and context.user_data is not None:
         context.user_data["_pending_session_name"] = name_arg
-    enabled_backends = session_manager.get_enabled_backends(user.id)
     only_backend = next(iter(enabled_backends), None)
     if only_backend is None:
         await safe_reply(update.message, "❌ No enabled backend")
@@ -123,24 +196,22 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         if context.user_data is not None:
             context.user_data["menu_origin"] = "main"
+            context.user_data["_new_session_node_id"] = node_id
         await safe_reply(
             update.message,
             t(user.id, "backend.choose"),
-            reply_markup=build_backend_picker(user.id),
+            reply_markup=build_backend_picker(user.id, node_id=node_id),
         )
         return
     if context.user_data is not None:
         context.user_data["_new_session_backend"] = only_backend
-    clear_browse_state(context.user_data)
-    start_path = str(Path.home())
-    msg_text, keyboard, subdirs = await build_directory_browser(
-        start_path, user_id=user.id
+        context.user_data["_new_session_node_id"] = node_id
+    from ..callbacks.dir_browser import initialize_directory_browser
+
+    msg_text, keyboard, _subdirs = await initialize_directory_browser(
+        context, user.id, node_id=node_id
     )
     if context.user_data is not None:
-        context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
-        context.user_data[BROWSE_PATH_KEY] = start_path
-        context.user_data[BROWSE_PAGE_KEY] = 0
-        context.user_data[BROWSE_DIRS_KEY] = subdirs
         context.user_data["menu_origin"] = "main"
     await safe_reply(update.message, msg_text, reply_markup=keyboard)
 
@@ -210,6 +281,25 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     wid = active_window(user.id)
     if not wid:
         await safe_reply(update.message, "❌ No active session.")
+        return
+    sess = session_manager.find_session_by_window(wid)
+    if sess is not None and sess.node_id != "local":
+        from ...transfer_runtime import get_node_runtime
+
+        runtime = get_node_runtime(sess.node_id)
+        routing_id = sess.worker_session_id or sess.claude_session_id
+        if runtime is None or not routing_id:
+            await safe_reply(update.message, "❌ Remote session is unavailable.")
+            return
+        try:
+            result = await runtime.send_key(sess.node_id, routing_id, "Escape")
+        except Exception:
+            logger.exception("Remote stop failed for session %s", sess.id)
+            result = {"ok": False}
+        await safe_reply(
+            update.message,
+            "⎋ Sent Escape" if result.get("ok") else "❌ Failed to send Escape",
+        )
         return
     w = await tmux_manager.find_window_by_id(wid)
     if not w:

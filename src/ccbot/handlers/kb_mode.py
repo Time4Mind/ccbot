@@ -143,17 +143,19 @@ async def _capture_pane_png(
 
     from ..screenshot import text_to_image
     from ..session import session_manager
+    from ..terminal_runtime import capture_session_pane
     from ..tmux_manager import tmux_manager
 
     if not window_id:
         return None, ""
     try:
-        # Reuse the status poller's persistent tmux control client.  The old
-        # find-window + capture path spawned several tmux processes for every
-        # rich-card refresh, even though the stable window id is already the
-        # exact capture target.
-        text = (await tmux_manager.capture_panes([window_id], with_ansi=True)).get(
-            window_id
+        sess = session_manager.find_session_by_window(window_id)
+        text = (
+            await capture_session_pane(sess, with_ansi=True)
+            if sess is not None
+            else (await tmux_manager.capture_panes([window_id], with_ansi=True)).get(
+                window_id
+            )
         )
     except Exception as e:
         logger.debug("capture_pane_png: capture failed: %s", e)

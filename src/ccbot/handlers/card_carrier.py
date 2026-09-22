@@ -314,7 +314,7 @@ async def activate_card_on_carrier(
             False,
         )
         # One durable checkpoint contains both the new carrier and active route.
-        session_manager.set_active_session(user_id, to_session_id)
+        session_manager.select_session(user_id, to_session_id)
         return orphan_msg_id
 
 
@@ -409,6 +409,7 @@ def release_card_message(user_id: int, session_id: str) -> None:
     # turn-history instead of collapsing to ``1/1``.
     state.seed_attempted = False
     state.seed_mtime = -1.0
+    state.remote_seed_version = ""
     logger.info(
         "card_release user=%d sess=%s",
         user_id,
@@ -523,6 +524,10 @@ async def paint_card_on_carrier(
     # Menu → Sessions on a fresh post-restart state: seed history first
     # so the user lands on a card with their conversation, not 1/1.
     await _legacy("_ensure_seeded")(user_id, sess, state)
+    if getattr(sess, "node_id", "local") != "local":
+        from .card_terminal import sync_card_identity
+
+        await sync_card_identity(sess, state)
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
     state.pending_edit = None
@@ -657,6 +662,7 @@ async def clear_card(bot: Bot, user_id: int, sess: Session) -> None:
     state.in_kb_mode = False
     state.seed_attempted = True
     state.seed_mtime = -1.0
+    state.remote_seed_version = ""
     state.stall_watch_active = False
     state.last_stall_pane_refresh_ts = 0.0
     state.last_rendered = ""

@@ -19,7 +19,6 @@ operation-scoped RetryAfter cooldowns. Exceptions are re-raised so callers
 
 import io
 import logging
-from pathlib import Path
 from typing import Any
 
 from telegram import Bot, InputMediaPhoto, LinkPreviewOptions, Message
@@ -27,6 +26,7 @@ from telegram.error import BadRequest, RetryAfter
 
 from .. import rich
 from ..config import config
+from ..file_actions import FileButtonContext
 from ..markdown_v2 import convert_markdown
 from ..transcript_parser import TranscriptParser
 
@@ -61,7 +61,7 @@ async def _try_rich_send(
     text: str,
     kwargs: dict[str, Any],
     *,
-    file_base_dir: Path | None = None,
+    file_base_dir: FileButtonContext = None,
 ) -> Message | None:
     """Attempt a Bot API 10.1 rich send; None means fall back to MarkdownV2.
 
@@ -91,7 +91,7 @@ async def try_rich_edit(
     text: str,
     *,
     reply_markup: Any = None,
-    file_base_dir: Path | None = None,
+    file_base_dir: FileButtonContext = None,
 ) -> bool:
     """Attempt a Bot API 10.1 rich edit by explicit chat/message ids.
 
@@ -142,7 +142,7 @@ async def send_with_fallback(
     bot: Bot,
     chat_id: int,
     text: str,
-    file_base_dir: Path | None = None,
+    file_base_dir: FileButtonContext = None,
     **kwargs: Any,
 ) -> Message | None:
     """Send message with MarkdownV2, falling back to plain text on failure.

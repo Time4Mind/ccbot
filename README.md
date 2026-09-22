@@ -101,6 +101,8 @@ ccbot                           # foreground; for prod use the systemd unit
 
 A full step-by-step Linux install (written for an AI agent to follow)
 lives in `doc/install-linux.md`.
+Automatic worker-node connection through the direct CLI handle is documented
+in `doc/multi-node-bootstrap.md`.
 
 ## Configuration
 
@@ -134,9 +136,15 @@ Most-frequently-tweaked optionals:
 | `WHISPER_THREADS`           | `6`          | threads for `whisper-cli` (its own default is 4) |
 | `BG_STATUS_MAX`             | `4`          | max badges in the bg-status panel; older entries collapse to `+N more` |
 | `CARD_EDIT_LAG`             | `2.0`        | coalescing window for live-card edits (seconds) |
+| `CCBOT_FILE_DELIVERY_CONCURRENCY` | `3` | global background file-delivery limit; one active delivery per user |
+| `CCBOT_FILE_WORKER_TIMEOUT` | `2m` | timeout for fetching one worker file |
+| `CCBOT_FILE_TELEGRAM_TIMEOUT` | `2m` | timeout for one Telegram document upload |
 | `CCBOT_RICH_MESSAGES`       | `on`         | `off` disables Bot API 10.3 rich messages (MarkdownV2 only) |
 | `CCBOT_HOST`                | hostname     | deployment label exported to sessions as `CCBOT_HOST` |
 | `TG_PROXY_URL`              | _(unset)_    | outbound proxy for the Bot API (`socks5://…` or `http://…`) |
+| `CCBOT_POLL_STALE_SECONDS`  | `180`        | exit non-zero when real `getUpdates` has not completed successfully for this long |
+| `CCBOT_POLL_STARTUP_GRACE_SECONDS` | `180` | grace before the first successful poll is required |
+| `CCBOT_POLL_HEALTH_FILE`    | `~/.ccbot/poll-health.json` | atomic local polling-health state; use `/run/ccbot/poll-health.json` in Docker |
 
 The full list lives in `.env.example` and in
 `doc/dm-multisession-spec.md` § 12. Per-user UI preferences (card
@@ -145,6 +153,21 @@ they live behind `≡ Menu → Settings`, see below. The agent is also a
 persisted bot-wide setting at `Settings → Behavior → Agent`: one bot
 instance runs either Claude or Codex. `CCBOT_AGENT_BACKEND` is only the
 initial default when the state file has no saved selection.
+
+### Docker polling health
+
+ccbot records progress only after the dedicated PTB `getUpdates` request
+returns successfully, including an empty long-poll response. If that heartbeat
+stays stale while the event loop remains healthy, the OS-thread watchdog exits
+PID 1 non-zero. With `restart: unless-stopped`, Compose then replaces the whole
+container instead of leaving an alive-but-deaf bot running.
+
+Use `deploy/docker-compose.healthcheck.yml` as an override for Docker health
+observability. Docker/Compose marks stale polling as `unhealthy`, but health
+status alone does **not** restart a container; the in-process watchdog is the
+primary restart actuator. A host fallback should be a narrowly scoped systemd
+unit allowed to restart only the named ccbot container. Do not mount the Docker
+socket into a third-party autoheal container.
 
 ## Hook setup
 

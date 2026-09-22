@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -20,6 +21,7 @@ from ccbot.handlers.callback_data import (
     CB_MM_ARCHIVE,
     CB_MM_LIST,
     CB_MM_NEW,
+    CB_MM_NODES,
     CB_MM_SETTINGS,
     CB_MM_STATUS,
     CB_SW_NEW,
@@ -30,8 +32,9 @@ from ccbot.session import session_manager
 SCREENSHOT_CB = "ft:shot"
 
 
-def test_main_menu_has_four_buttons_and_no_status_button(monkeypatch) -> None:
+def test_main_menu_replaces_new_with_nodes_and_moves_settings(monkeypatch) -> None:
     monkeypatch.setattr(menu, "_has_active_session", lambda _uid: True)
+    monkeypatch.setattr(menu, "_has_multiple_nodes", lambda: True)
 
     keyboard = menu.build_footer_keyboard(42, screen="more")
 
@@ -41,9 +44,11 @@ def test_main_menu_has_four_buttons_and_no_status_button(monkeypatch) -> None:
     ]
     assert callbacks == [
         [CB_MM_LIST, CB_MM_ARCHIVE],
-        [CB_MM_NEW, CB_MM_SETTINGS],
+        [CB_MM_NODES, CB_MM_SETTINGS],
     ]
-    assert CB_MM_STATUS not in {value for row in callbacks for value in row}
+    flattened = {value for row in callbacks for value in row}
+    assert CB_MM_NEW not in flattened
+    assert CB_MM_STATUS not in flattened
 
 
 def test_page_size_choices_are_line_limits_30_50_70_100(monkeypatch) -> None:
@@ -155,6 +160,7 @@ def test_disclosed_actions_hide_unavailable_terminal(monkeypatch) -> None:
 
 def test_menu_stays_in_original_bottom_row(monkeypatch) -> None:
     monkeypatch.setattr(menu, "_has_active_session", lambda _uid: False)
+    monkeypatch.setattr(menu, "_has_multiple_nodes", lambda: False)
 
     keyboard = menu.build_footer_keyboard(42, screen="main")
     assert keyboard is not None
@@ -225,11 +231,65 @@ async def test_screenshot_action_toggles_global_state_on_current_card(
     user = SimpleNamespace(id=42)
 
     assert await footer.handle(query, context, user) is True
+    pending = footer._screenshot_tasks.get(42)
+    if pending is not None:
+        await pending
 
     assert updates == [(42, "card_inline_screenshots", True)]
     refresh.assert_awaited_once_with(
         context.bot, 42, immediate=True, refresh_keyboard=True
     )
+
+
+@pytest.mark.asyncio
+async def test_remote_screenshot_failure_is_background_visible_and_reverted(
+    monkeypatch,
+) -> None:
+    settings = {"card_inline_screenshots": False}
+    updates: list[bool] = []
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    failure_sent = asyncio.Event()
+    sess = SimpleNamespace(id="remote", node_id="worker-a", window_id="worker-a::@1")
+
+    def update(_user_id: int, _key: str, value: bool) -> None:
+        settings["card_inline_screenshots"] = value
+        updates.append(value)
+
+    async def blocked_failure(*_args, **_kwargs):
+        entered.set()
+        await release.wait()
+        raise RuntimeError("node offline")
+
+    async def notify(*_args, **_kwargs):
+        failure_sent.set()
+
+    monkeypatch.setattr(
+        session_manager, "get_user_settings", lambda _uid: dict(settings)
+    )
+    monkeypatch.setattr(session_manager, "update_user_setting", update)
+    monkeypatch.setattr(session_manager, "get_active_session", lambda _uid: sess)
+    monkeypatch.setattr(footer, "capture_session_pane", blocked_failure, raising=False)
+    monkeypatch.setattr(footer, "refresh_panel", blocked_failure)
+    monkeypatch.setattr(footer, "safe_send", notify, raising=False)
+    query = SimpleNamespace(data=SCREENSHOT_CB, answer=AsyncMock())
+    context = SimpleNamespace(bot=object())
+
+    task = asyncio.create_task(footer.handle(query, context, SimpleNamespace(id=42)))
+    try:
+        await entered.wait()
+        await asyncio.sleep(0)
+        assert task.done()
+        assert task.result() is True
+        query.answer.assert_awaited_once()
+
+        release.set()
+        await asyncio.wait_for(failure_sent.wait(), timeout=1)
+    finally:
+        release.set()
+        await task
+
+    assert updates == [True, False]
 
 
 def test_options_respect_configured_button_visibility(monkeypatch) -> None:

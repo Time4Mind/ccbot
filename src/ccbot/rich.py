@@ -20,9 +20,9 @@ Core responsibilities:
 Key functions: to_rich_markdown, send_rich_message, edit_rich_message.
 """
 
+import asyncio
 import html
 import re
-from pathlib import Path
 from typing import Any, cast
 
 from telegram import InlineKeyboardMarkup, InputFile, InputMediaPhoto, Message
@@ -35,10 +35,13 @@ from .transcript_format import (
     EXPANDABLE_QUOTE_END,
     EXPANDABLE_QUOTE_START,
 )
-from .file_actions import add_file_buttons
+from .file_actions import FileButtonContext, add_file_buttons
 
 # Rich messages cap (Bot API 10.2): 32768 UTF-8 chars of text.
 RICH_MAX_CHARS = 32768
+# Rich transport is an enhancement. A stalled experimental endpoint must not
+# hold menus, receipts, or agent replies behind PTB's much longer HTTP timeout.
+RICH_FALLBACK_DEADLINE_SECONDS = 0.75
 # Invisible opt-out marker for tables whose contents must keep normal font.
 # It remains invisible in Markdown fallback and is stripped on the rich path.
 RICH_TABLE_NORMAL_FONT = "\u2060"
@@ -340,7 +343,7 @@ def _render_details_headed(m: re.Match[str]) -> str:
     return f"\n<details><summary>{head}</summary>\n\n{body}\n\n</details>\n"
 
 
-def to_rich_markdown(text: str, *, file_base_dir: Path | None = None) -> str:
+def to_rich_markdown(text: str, *, file_base_dir: FileButtonContext = None) -> str:
     """Convert internal markdown to Rich Markdown for ``sendRichMessage``."""
     text = add_file_buttons(text, file_base_dir)
     text = _inline_single_line_fences(text)
@@ -472,7 +475,10 @@ async def send_rich_message(
         data["disable_notification"] = disable_notification
     if upload is not None:
         data[_RICH_PHOTO_UPLOAD_FIELD] = upload
-    result = await bot._post("sendRichMessage", data)  # pyright: ignore[reportPrivateUsage]
+    result = await asyncio.wait_for(
+        bot._post("sendRichMessage", data),  # pyright: ignore[reportPrivateUsage]
+        timeout=RICH_FALLBACK_DEADLINE_SECONDS,
+    )
     msg = Message.de_json(cast(dict[str, Any], result), bot)
     return msg
 
@@ -500,8 +506,11 @@ async def edit_rich_message(
         data["reply_markup"] = reply_markup
     if upload is not None:
         data[_RICH_PHOTO_UPLOAD_FIELD] = upload
-    result = await bot._post(  # pyright: ignore[reportPrivateUsage]
-        "editMessageText", data
+    result = await asyncio.wait_for(
+        bot._post(  # pyright: ignore[reportPrivateUsage]
+            "editMessageText", data
+        ),
+        timeout=RICH_FALLBACK_DEADLINE_SECONDS,
     )
     if isinstance(result, Message):
         return result

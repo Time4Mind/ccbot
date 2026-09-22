@@ -24,7 +24,12 @@ from .utils import ccbot_dir
 logger = logging.getLogger(__name__)
 
 # Env vars that must not leak to child processes (e.g. Claude Code via tmux)
-SENSITIVE_ENV_VARS = {"TELEGRAM_BOT_TOKEN", "ALLOWED_USERS", "OPENAI_API_KEY"}
+SENSITIVE_ENV_VARS = {
+    "TELEGRAM_BOT_TOKEN",
+    "ALLOWED_USERS",
+    "OPENAI_API_KEY",
+    "CCBOT_NODE_SECRET",
+}
 
 
 def _parse_duration(value: str, default_seconds: float) -> float:
@@ -183,6 +188,20 @@ class Config:
         except ValueError:
             self.card_edit_lag = 2.0
 
+        try:
+            file_concurrency = int(os.getenv("CCBOT_FILE_DELIVERY_CONCURRENCY", "3"))
+        except ValueError:
+            file_concurrency = 3
+        self.file_delivery_concurrency: int = min(16, max(1, file_concurrency))
+        self.file_delivery_worker_timeout: float = max(
+            1.0,
+            _parse_duration(os.getenv("CCBOT_FILE_WORKER_TIMEOUT", "2m"), 120.0),
+        )
+        self.file_delivery_telegram_timeout: float = max(
+            1.0,
+            _parse_duration(os.getenv("CCBOT_FILE_TELEGRAM_TIMEOUT", "2m"), 120.0),
+        )
+
         # Background-session status panel: max badges shown at the end of the
         # active card. Older entries collapse to a "+N more" tail.
         try:
@@ -267,6 +286,31 @@ class Config:
         # host is on a network that cannot reach api.telegram.org directly
         # (e.g. RU-blocked IPs). Accepts http://host:port or socks5://host:port.
         self.tg_proxy_url: str = os.getenv("TG_PROXY_URL", "").strip()
+        self.poll_stale_seconds: float = max(
+            1.0, float(os.getenv("CCBOT_POLL_STALE_SECONDS", "180"))
+        )
+        self.poll_startup_grace_seconds: float = max(
+            1.0, float(os.getenv("CCBOT_POLL_STARTUP_GRACE_SECONDS", "180"))
+        )
+        self.poll_health_file: str = os.getenv(
+            "CCBOT_POLL_HEALTH_FILE", str(self.config_dir / "poll-health.json")
+        ).strip()
+
+        # Multi-node control-plane relay. Provider/VPN connectivity remains
+        # local to each node; this URL is only the stable rendezvous path for
+        # leader/worker transport.
+        self.node_relay_url: str = os.getenv("CCBOT_NODE_RELAY_URL", "").strip()
+        self.node_leader_id: str = (
+            os.getenv("CCBOT_NODE_LEADER_ID", "local").strip() or "local"
+        )
+        self.node_id: str = (
+            os.getenv("CCBOT_NODE_ID", self.node_leader_id).strip()
+            or self.node_leader_id
+        )
+        self.node_secret: str = os.getenv("CCBOT_NODE_SECRET", "")
+        self.node_relay_tls: bool = os.getenv(
+            "CCBOT_NODE_RELAY_TLS", "false"
+        ).strip().lower() in ("1", "true", "yes", "on")
 
         # Identifying label for this deployment — surfaced to Claude via
         # ``CCBOT_HOST`` so a session can tell which device it's running

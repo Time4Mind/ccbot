@@ -44,6 +44,8 @@ async def reconcile_with_tmux(mgr: "SessionManager") -> int:
     live_ids = {w.window_id for w in windows}
     lost = 0
     for sess in mgr.sessions.values():
+        if getattr(sess, "node_id", "local") != "local":
+            continue
         if sess.state in ("active", "idle") and sess.window_id:
             if sess.window_id not in live_ids:
                 sess.state = "lost"
@@ -82,6 +84,12 @@ async def resolve_stale_window_ids(mgr: "SessionManager") -> None:
     # --- Migrate window_states ---
     new_window_states: dict[str, WindowState] = {}
     for key, ws in mgr.window_states.items():
+        owner = mgr.find_session_by_window(key)
+        if "::" in key or (
+            owner is not None and getattr(owner, "node_id", "local") != "local"
+        ):
+            new_window_states[key] = ws
+            continue
         if mgr.is_window_id(key):
             if key in live_ids:
                 new_window_states[key] = ws
@@ -125,6 +133,12 @@ async def resolve_stale_window_ids(mgr: "SessionManager") -> None:
     for uid, offsets in mgr.user_window_offsets.items():
         new_offsets: dict[str, int] = {}
         for key, offset in offsets.items():
+            owner = mgr.find_session_by_window(key)
+            if "::" in key or (
+                owner is not None and getattr(owner, "node_id", "local") != "local"
+            ):
+                new_offsets[key] = offset
+                continue
             if mgr.is_window_id(key):
                 if key in live_ids:
                     new_offsets[key] = offset
@@ -153,6 +167,92 @@ async def resolve_stale_window_ids(mgr: "SessionManager") -> None:
     await cleanup_old_format_session_map_keys(mgr)
     cleanup_orphan_grouped_sessions(live_ids)
     await detect_orphan_windows(mgr, windows)
+
+
+async def reconcile_remote_sessions(
+    mgr: "SessionManager", node_id: str, runtime: object
+) -> tuple[int, int, int]:
+    """Rebind live worker sessions and lose only authoritative misses."""
+    rebound = 0
+    lost = 0
+    deferred = 0
+    for sess in tuple(mgr.sessions.values()):
+        if sess.node_id != node_id or sess.state not in ("active", "idle", "lost"):
+            continue
+        routing_id = sess.worker_session_id or sess.claude_session_id
+        if not routing_id:
+            logger.warning(
+                "Remote session reconcile deferred node=%s session=%s: "
+                "worker routing id is missing",
+                node_id,
+                sess.id,
+            )
+            deferred += 1
+            continue
+        try:
+            result = await runtime.inspect_session(node_id, routing_id)  # type: ignore[attr-defined]
+        except Exception as exc:
+            logger.info(
+                "Remote session reconcile deferred node=%s session=%s: %s",
+                node_id,
+                sess.id,
+                exc,
+            )
+            deferred += 1
+            continue
+        if result.get("ok", True) is False:
+            logger.warning(
+                "Remote session reconcile deferred node=%s session=%s: %s",
+                node_id,
+                sess.id,
+                str(result.get("error", "worker inspect was rejected")),
+            )
+            deferred += 1
+            continue
+        found = result.get("found")
+        if found is False:
+            mgr.mark_session_lost(sess.id)
+            lost += 1
+            continue
+        if found is not True:
+            logger.warning(
+                "Remote session reconcile deferred node=%s session=%s: "
+                "worker inspect omitted found state",
+                node_id,
+                sess.id,
+            )
+            deferred += 1
+            continue
+        raw_window_id = str(result.get("window_id", ""))
+        if not raw_window_id:
+            logger.warning(
+                "Remote session reconcile deferred node=%s session=%s: "
+                "live worker session omitted window_id",
+                node_id,
+                sess.id,
+            )
+            deferred += 1
+            continue
+        new_window_id = f"{node_id}::{raw_window_id}"
+        old_window_id = sess.window_id
+        if old_window_id != new_window_id:
+            state = mgr.window_states.pop(old_window_id, None)
+            if state is not None:
+                mgr.window_states[new_window_id] = state
+            for offsets in mgr.user_window_offsets.values():
+                if old_window_id in offsets:
+                    offsets[new_window_id] = offsets.pop(old_window_id)
+            if old_window_id in mgr.window_display_names:
+                mgr.window_display_names[new_window_id] = mgr.window_display_names.pop(
+                    old_window_id
+                )
+            sess.window_id = new_window_id
+            rebound += 1
+        sess.workdir = str(result.get("workdir", sess.workdir)) or sess.workdir
+        if sess.state == "lost":
+            sess.state = "active"
+        mgr.save_state()
+    return rebound, lost, deferred
 
 
 # Reserved utility windows that aren't tracked as Sessions and must not

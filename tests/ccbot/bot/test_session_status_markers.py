@@ -80,7 +80,7 @@ async def test_active_session_turn_transitions_working_to_finished(monkeypatch) 
     # Completion was shown while active, so entering it once more is the
     # second presentation and acknowledges the result.
     assert bg_status.record_finished_view(42, sess.id) is True
-    assert bg_status.status_emoji(42, sess.id) == "☑️"
+    assert bg_status.status_emoji(42, sess.id) == ""
 
 
 @pytest.mark.asyncio

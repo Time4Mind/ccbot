@@ -96,6 +96,49 @@ async def test_message_activity_records_allowed_user(
 
 
 @pytest.mark.asyncio
+async def test_any_message_clears_only_active_header_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from ccbot.bot import activity
+    from ccbot.handlers import bg_status, notifications
+    from ccbot.session_models import Session
+
+    session = Session(id="active", name="active", window_id="@1", state="active")
+    state = notifications.CardState(completion_marker_pending=True)
+    monkeypatch.setattr(activity, "is_user_allowed", lambda _uid: True)
+    monkeypatch.setattr(bg_status, "_bg", {})
+    monkeypatch.setattr(
+        activity.session_manager, "get_active_session", lambda _uid: session
+    )
+    monkeypatch.setattr(activity, "get_card_state", lambda _uid, _sess: state)
+    refresh = AsyncMock()
+    monkeypatch.setattr(activity, "refresh_panel", refresh)
+    scheduled = []
+
+    def create_task(coro, *, update):
+        task = asyncio.create_task(coro)
+        scheduled.append(task)
+        return task
+
+    bg_status.update_status(42, session.id, "finished")
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=42))
+    context = SimpleNamespace(
+        bot=object(), application=SimpleNamespace(create_task=create_task)
+    )
+
+    assert "✅" in notifications._render_card(session, state)
+
+    await activity.record_user_message_activity(update, context)
+    await asyncio.gather(*scheduled)
+
+    assert "✅" not in notifications._render_card(session, state)
+    assert bg_status.status_emoji(42, session.id) == "✅"
+    refresh.assert_awaited_once_with(context.bot, 42, immediate=True)
+
+
+@pytest.mark.asyncio
 async def test_even_noop_button_records_user_activity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -104,7 +147,22 @@ async def test_even_noop_button_records_user_activity(
     recorded: list[int] = []
     monkeypatch.setattr(callbacks, "is_user_allowed", lambda _uid: True)
     monkeypatch.setattr(callbacks, "record_user_activity", recorded.append)
-    query = SimpleNamespace(data="noop", answer=AsyncMock())
+    active = SimpleNamespace(id="active")
+    state = SimpleNamespace(
+        msg_id=77,
+        completion_marker_pending=True,
+        in_menu_view=False,
+    )
+    monkeypatch.setattr(
+        callbacks.session_manager, "get_active_session", lambda _uid: active
+    )
+    monkeypatch.setattr(callbacks, "get_card_state", lambda _uid, _sess: state)
+    monkeypatch.setattr(callbacks, "refresh_panel", AsyncMock())
+    query = SimpleNamespace(
+        data="noop",
+        message=SimpleNamespace(message_id=999),
+        answer=AsyncMock(),
+    )
     update = SimpleNamespace(
         callback_query=query,
         effective_user=SimpleNamespace(id=42),
@@ -113,4 +171,5 @@ async def test_even_noop_button_records_user_activity(
     await callbacks.callback_handler(update, MagicMock())
 
     assert recorded == [42]
+    assert state.completion_marker_pending is False
     query.answer.assert_awaited_once()

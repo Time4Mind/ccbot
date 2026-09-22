@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -32,6 +33,53 @@ from ...session import Session, session_manager
 from .._common import render_session_preview
 
 logger = logging.getLogger(__name__)
+_restore_tasks: dict[tuple[int, str], asyncio.Task[None]] = {}
+
+
+async def _restore_and_update(
+    query: CallbackQuery,
+    context: ContextTypes.DEFAULT_TYPE,
+    user: Any,
+    sess: Session,
+) -> None:
+    """Restore outside Telegram's callback deadline, then converge the surface."""
+    try:
+        ok, msg = await restore_session(context.bot, user.id, sess)
+    except Exception as exc:
+        logger.exception(
+            "Archive restore task failed user_id=%s session_id=%s category=%s",
+            user.id,
+            sess.id,
+            type(exc).__name__,
+        )
+        ok = False
+        msg = str(exc).strip() or type(exc).__name__
+
+    if ok:
+        if query.message is not None:
+            reset_card(user.id, sess.id)
+            await paint_card_on_carrier(
+                context.bot, user.id, sess, query.message.message_id
+            )
+            session_manager.set_last_switcher_msg(user.id, query.message.message_id)
+        else:
+            preview = await render_session_preview(sess)
+            keyboard = build_footer_keyboard(user.id, screen="main")
+            await safe_edit(query, preview, reply_markup=keyboard)
+        return
+
+    await safe_edit(query, t(user.id, "toast.restore_failed", msg=msg))
+
+
+def _restore_done(key: tuple[int, str], task: asyncio.Task[None]) -> None:
+    if _restore_tasks.get(key) is task:
+        _restore_tasks.pop(key, None)
+    if not task.cancelled() and task.exception() is not None:
+        logger.error(
+            "Archive restore surface update failed user_id=%s session_id=%s",
+            *key,
+            exc_info=task.exception(),
+        )
 
 
 async def _build_inspect_text(sess: Session, user_id: int | None = None) -> str:
@@ -51,13 +99,18 @@ async def _build_inspect_text(sess: Session, user_id: int | None = None) -> str:
     """
     pages_total = await render_archived_card_pages(sess, user_id)
     if pages_total is None:
-        return await render_session_preview(sess)
-    pages, total = pages_total
-    last = pages[-1] if pages else ""
-    if len(pages) > 1:
-        prefix = f"_… {len(pages) - 1} older page(s) — restore to read fully ({total} events)_\n\n"
-        last = prefix + last
-    return last
+        text = await render_session_preview(sess)
+    else:
+        pages, total = pages_total
+        text = pages[-1] if pages else ""
+        if len(pages) > 1:
+            prefix = f"_… {len(pages) - 1} older page(s) — restore to read fully ({total} events)_\n\n"
+            text = prefix + text
+    if sess.node_id != "local":
+        node = session_manager.get_node(sess.node_id)
+        node_name = node.display_name if node is not None else sess.node_id
+        text = f"{t(user_id or 0, 'nodes.table.node')}: *{node_name}*\n\n{text}"
+    return text
 
 
 def _inspect_target(data: str) -> tuple[int, str]:
@@ -112,26 +165,16 @@ async def handle(
         if sess is None:
             await query.answer(t(user.id, "toast.session_not_found"), show_alert=True)
             return True
-        ok, msg = await restore_session(context.bot, user.id, sess)
-        if ok:
-            if query.message is not None:
-                # An archived card may still exist in memory with finalized
-                # pagination state. Rebuild from the backend-native JSONL and
-                # claim the archive carrier as the restored live card.
-                reset_card(user.id, sess.id)
-                await paint_card_on_carrier(
-                    context.bot, user.id, sess, query.message.message_id
-                )
-                session_manager.set_last_switcher_msg(user.id, query.message.message_id)
-            else:
-                preview = await render_session_preview(sess)
-                keyboard = build_footer_keyboard(user.id, screen="main")
-                await safe_edit(query, preview, reply_markup=keyboard)
-            await query.answer(t(user.id, "toast.restored"))
-        else:
-            await query.answer(
-                t(user.id, "toast.restore_failed", msg=msg), show_alert=True
-            )
+        key = (user.id, sess.id)
+        running = _restore_tasks.get(key)
+        if running is not None and not running.done():
+            await query.answer(t(user.id, "toast.restoring"))
+            return True
+
+        await query.answer(t(user.id, "toast.restoring"))
+        task = asyncio.create_task(_restore_and_update(query, context, user, sess))
+        _restore_tasks[key] = task
+        task.add_done_callback(lambda done, task_key=key: _restore_done(task_key, done))
         return True
 
     if data.startswith(CB_ARC_INSPECT):

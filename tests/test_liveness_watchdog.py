@@ -12,13 +12,16 @@ from unittest.mock import MagicMock
 import pytest
 
 from ccbot.bot import app
+from ccbot.telegram_polling_health import PollingHealth
 
 
 @pytest.fixture(autouse=True)
 def _reset_heartbeat() -> Iterator[None]:
     before = app._last_heartbeat
+    before_polling = app.polling_health
     yield
     app._last_heartbeat = before
+    app.polling_health = before_polling
 
 
 def test_fresh_heartbeat_does_not_terminate(monkeypatch: pytest.MonkeyPatch):
@@ -89,3 +92,49 @@ async def test_heartbeat_loop_ticks(monkeypatch: pytest.MonkeyPatch):
     # the timestamp reflects the tick that preceded it (2 sleeps' worth).
     assert app._last_heartbeat == 4000.0 + 2 * app.LIVENESS_TICK_SECONDS
     assert sleeps == [app.LIVENESS_TICK_SECONDS] * 3
+
+
+def test_healthy_loop_with_stale_polling_terminates(monkeypatch, tmp_path) -> None:
+    clock = {"t": 5000.0}
+    health = PollingHealth(
+        stale_seconds=180,
+        startup_grace_seconds=120,
+        state_path=tmp_path / "health.json",
+        clock=lambda: clock["t"],
+        wall_clock=lambda: clock["t"],
+    )
+    health.start()
+    terminate = MagicMock()
+    monkeypatch.setattr(app, "polling_health", health)
+    monkeypatch.setattr(app, "_terminate_for_sustained_conflict", terminate)
+    monkeypatch.setattr(app.time, "monotonic", lambda: clock["t"])
+    app._last_heartbeat = clock["t"]
+
+    clock["t"] += 121
+    app._last_heartbeat = clock["t"]
+    app._liveness_watchdog_tick()
+
+    terminate.assert_called_once()
+
+
+def test_active_network_failure_owns_restart_timer(monkeypatch, tmp_path) -> None:
+    clock = {"t": 6000.0}
+    health = PollingHealth(
+        stale_seconds=180,
+        startup_grace_seconds=120,
+        state_path=tmp_path / "health.json",
+        clock=lambda: clock["t"],
+        wall_clock=lambda: clock["t"],
+    )
+    health.start()
+    terminate = MagicMock()
+    monkeypatch.setattr(app, "polling_health", health)
+    monkeypatch.setattr(app, "_terminate_for_sustained_conflict", terminate)
+    monkeypatch.setattr(app.time, "monotonic", lambda: clock["t"])
+    clock["t"] += 121
+    app._last_heartbeat = clock["t"]
+    monkeypatch.setattr(app, "_network_last_seen", clock["t"])
+
+    app._liveness_watchdog_tick()
+
+    terminate.assert_not_called()

@@ -105,3 +105,45 @@ async def test_pane_capture_uses_user_limit_profile_and_complete_suffix(
     tmux_module.tmux_manager.capture_panes.assert_awaited_once_with(
         ["@1"], with_ansi=True
     )
+
+
+@pytest.mark.asyncio
+async def test_remote_screenshot_uses_worker_ansi_capture_not_local_tmux(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from ccbot import screenshot as screenshot_module
+    from ccbot import terminal_runtime
+    from ccbot.handlers import kb_mode
+    from ccbot.session import session_manager
+    from ccbot.session_models import Session
+
+    sess = Session(
+        id="remote",
+        name="Remote",
+        node_id="worker-a",
+        window_id="worker-a::@17",
+        worker_session_id="worker-session",
+    )
+    runtime = SimpleNamespace(
+        capture_session=AsyncMock(return_value={"ok": True, "pane": "remote pane"})
+    )
+    local_capture = AsyncMock()
+    monkeypatch.setattr(session_manager, "find_session_by_window", lambda _wid: sess)
+    monkeypatch.setattr(session_manager, "get_user_settings", lambda _uid: {})
+    monkeypatch.setattr(terminal_runtime, "get_node_runtime", lambda _nid: runtime)
+    monkeypatch.setattr(terminal_runtime.tmux_manager, "capture_panes", local_capture)
+    monkeypatch.setattr(
+        screenshot_module, "text_to_image", AsyncMock(return_value=b"remote-png")
+    )
+
+    png, digest = await kb_mode._capture_pane_png(sess.window_id, user_id=42)
+
+    assert png == b"remote-png"
+    assert digest
+    runtime.capture_session.assert_awaited_once_with(
+        "worker-a", "worker-session", with_ansi=True
+    )
+    local_capture.assert_not_awaited()

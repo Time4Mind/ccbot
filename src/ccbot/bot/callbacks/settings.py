@@ -220,6 +220,7 @@ _GROUP_TO_SCREEN: dict[str, Screen] = {
     "screenshot_profile": "settings_profile",
     "option_button_screenshot": "settings_option_screenshot",
     "option_button_terminal": "settings_option_terminal",
+    "option_button_transfer": "settings_option_transfer",
     "archive_ai_description": "settings_archive_ai_description",
     "preprocessing_mode": "settings_preprocessing_mode",
     "preprocessing_instruction": "settings_preprocessing_instruction",
@@ -381,7 +382,7 @@ async def handle(
         if context.user_data is not None:
             clear_browse_state(context.user_data)
             context.user_data["_directory_selection_target"] = "default_session"
-        await open_directory_browser(query, context, user.id)
+        await open_directory_browser(query, context, user.id, node_id="local")
         await query.answer()
         return True
     elif data.startswith(CB_ST_LAG):
@@ -542,6 +543,7 @@ async def handle(
         key = {
             "screenshot": "option_button_screenshot",
             "terminal": "option_button_terminal",
+            "transfer": "option_button_transfer",
         }.get(option)
         if key is not None and sval in ("on", "off"):
             session_manager.update_user_setting(user.id, key, sval == "on")
@@ -549,7 +551,11 @@ async def handle(
             Screen,
             "settings_option_screenshot"
             if option == "screenshot"
-            else "settings_option_terminal",
+            else (
+                "settings_option_terminal"
+                if option == "terminal"
+                else "settings_option_transfer"
+            ),
         )
     elif data.startswith(CB_ST_BGNOTIFY):
         payload = data[len(CB_ST_BGNOTIFY) :]
@@ -561,6 +567,7 @@ async def handle(
             "bg_notify_finished",
             "bg_notify_error",
             "bg_notify_needs_action",
+            "bg_notify_node_status",
         ) and sval in ("on", "off"):
             session_manager.update_user_setting(user.id, key, sval == "on")
         short = key.removeprefix("bg_notify_")

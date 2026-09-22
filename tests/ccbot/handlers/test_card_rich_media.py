@@ -373,6 +373,34 @@ async def test_rich_media_timeout_keeps_existing_carrier_for_next_update(
 
 
 @pytest.mark.asyncio
+async def test_short_rich_deadline_requests_immediate_text_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire_session(monkeypatch)
+    monkeypatch.setattr(
+        card_rich_media.rich,
+        "edit_rich_message",
+        AsyncMock(side_effect=TimeoutError),
+    )
+    state = CardState(
+        msg_id=9,
+        is_rich_media_msg=True,
+        rich_media_file_id="cached-pane",
+        last_photo_edit_ts=10.0,
+    )
+
+    assert not await card_rich_media.edit_rich_media_card(
+        SimpleNamespace(),
+        42,
+        state,
+        text="next",
+        reply_markup=None,
+        min_photo_interval=2.5,
+        refresh_pane=False,
+    )
+
+
+@pytest.mark.asyncio
 async def test_lost_rich_carrier_is_released(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -614,6 +642,61 @@ async def test_final_send_keeps_latest_pane_when_screenshots_are_enabled(
     )
 
     capture.assert_awaited_once()
+    send_rich.assert_awaited_once()
+    send_text.assert_not_awaited()
+    assert state.msg_id == 17
+    assert state.is_rich_media_msg is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("node_id", "window_id", "worker_session_id"),
+    [("local", "@11", ""), ("worker-a", "worker-a::@11", "worker-session")],
+)
+async def test_session_promotes_to_same_rich_card_on_every_node(
+    monkeypatch: pytest.MonkeyPatch,
+    node_id: str,
+    window_id: str,
+    worker_session_id: str,
+) -> None:
+    capture = AsyncMock(return_value=(b"remote-pane", "pane-hash"))
+    send_text = AsyncMock(return_value=SimpleNamespace(message_id=18))
+    send_rich = AsyncMock(
+        return_value=card_rich_media.RichCardSend(
+            message=SimpleNamespace(message_id=17), photo_file_id="remote-photo"
+        )
+    )
+    monkeypatch.setattr(card_transport, "_inline_screens_enabled", lambda _uid: True)
+    monkeypatch.setattr(card_transport, "_capture_pane_png", capture)
+    monkeypatch.setattr(message_sender, "send_with_fallback", send_text)
+    monkeypatch.setattr(card_transport, "send_rich_media_card", send_rich)
+    monkeypatch.setattr(card_transport, "_strip_stale_switchers", AsyncMock())
+    monkeypatch.setattr(card_transport, "_register_msg", lambda *_args: None)
+    monkeypatch.setattr(
+        card_transport.session_manager, "set_last_switcher_msg", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        card_transport.session_manager, "set_card_msg", lambda *_args: None
+    )
+    state = CardState(turn_phase=TurnPhase.IDLE)
+    session = SimpleNamespace(
+        id="remote",
+        node_id=node_id,
+        window_id=window_id,
+        worker_session_id=worker_session_id,
+        workdir="",
+    )
+
+    assert await card_transport._send_card_locked(
+        SimpleNamespace(),
+        42,
+        session,
+        state,
+        text="remote answer",
+        reply_markup=SimpleNamespace(),
+    )
+
+    capture.assert_awaited_once_with(window_id, user_id=42)
     send_rich.assert_awaited_once()
     send_text.assert_not_awaited()
     assert state.msg_id == 17

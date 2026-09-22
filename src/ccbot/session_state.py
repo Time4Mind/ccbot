@@ -12,17 +12,21 @@ import time
 from typing import Any, ClassVar
 
 from .config import config
-from .session_defaults import DEFAULT_IDLE_ARCHIVE_HOURS
+from .session_node_state import NodeSessionStateMixin
+from .session_settings_defaults import (
+    DEFAULT_USER_SETTINGS as DEFAULT_SESSION_USER_SETTINGS,
+)
 from .session_models import reserve_owner, Session, SessionState
 
 logger = logging.getLogger("ccbot.session")
 
 
-class SessionStateMixin:
+class SessionStateMixin(NodeSessionStateMixin):
     """DM routing and persisted session-state operations."""
 
     user_window_offsets: dict[int, dict[str, int]]
     active_sessions: dict[int, str]
+    active_sessions_by_node: dict[int, dict[str, str]]
     active_history: dict[int, list[str]]
     sessions: dict[str, Session]
     user_settings: dict[int, dict[str, Any]]
@@ -48,10 +52,22 @@ class SessionStateMixin:
 
     def get_active_session(self, user_id: int) -> "Session | None":
         """Return the currently active Session for a user, or None."""
-        sid = self.active_sessions.get(user_id)
+        node_id = self.get_selected_node_id(user_id)
+        # Prefer the compatibility pointer when present. Besides preserving
+        # old state, this keeps direct state repairs made by recovery/tests
+        # authoritative while the node-scoped map is being introduced.
+        legacy_sid = self.active_sessions.get(user_id)
+        legacy = self.sessions.get(legacy_sid) if legacy_sid else None
+        if legacy is not None and legacy.node_id == node_id:
+            sid = legacy_sid
+        else:
+            sid = self.active_sessions_by_node.get(user_id, {}).get(node_id)
         if not sid:
             return None
-        return self.sessions.get(sid)
+        session = self.sessions.get(sid)
+        if session is None or session.state not in ("active", "idle"):
+            return None
+        return session
 
     def get_active_window(self, user_id: int) -> str | None:
         """Return the tmux window_id of the user's active session, or None."""
@@ -62,8 +78,24 @@ class SessionStateMixin:
 
     def set_active_session(self, user_id: int, session_id: str) -> None:
         """Make `session_id` the active session for `user_id`."""
+        self._set_active_session_state(user_id, session_id)
+        self.save_state()
+
+    def select_session(self, user_id: int, session_id: str) -> None:
+        """Select a session and its owning node in one persisted transition."""
         if session_id not in self.sessions:
             raise KeyError(f"Unknown session id: {session_id}")
+        node_id = self.sessions[session_id].node_id
+        if node_id not in self.nodes:
+            raise KeyError(f"Unknown node id: {node_id}")
+        self.selected_node_ids[user_id] = node_id
+        self._set_active_session_state(user_id, session_id)
+        self.save_state()
+
+    def _set_active_session_state(self, user_id: int, session_id: str) -> None:
+        if session_id not in self.sessions:
+            raise KeyError(f"Unknown session id: {session_id}")
+        session = self.sessions[session_id]
         prev = self.active_sessions.get(user_id)
         if prev and prev != session_id:
             history = self.active_history.setdefault(user_id, [])
@@ -74,26 +106,30 @@ class SessionStateMixin:
             # Cap recent-history depth.
             if len(history) > 10:
                 del history[: len(history) - 10]
-        self.active_sessions[user_id] = session_id
-        self.save_state()
-        sess = self.sessions[session_id]
+        self.active_sessions_by_node.setdefault(user_id, {})[session.node_id] = (
+            session_id
+        )
+        if self.get_selected_node_id(user_id) == session.node_id:
+            self.active_sessions[user_id] = session_id
+        else:
+            self.active_sessions.pop(user_id, None)
         logger.info(
             "active_session_change user=%d prev=%s next=%s next_name=%s "
             "next_window=%s next_state=%s",
             user_id,
             prev or "-",
             session_id,
-            sess.name,
-            sess.window_id,
-            sess.state,
+            session.name,
+            session.window_id,
+            session.state,
             extra={
                 "event": "active_session_change",
                 "user_id": user_id,
                 "prev_session_id": prev,
                 "next_session_id": session_id,
-                "next_session_name": sess.name,
-                "next_window_id": sess.window_id,
-                "next_session_state": sess.state,
+                "next_session_name": session.name,
+                "next_window_id": session.window_id,
+                "next_session_state": session.state,
             },
         )
 
@@ -104,10 +140,12 @@ class SessionStateMixin:
         states: tuple[SessionState, ...] = ("active", "idle"),
     ) -> list["Session"]:
         """List sessions for a user filtered by state. Active first, by name."""
-        # In v0.1 every session is implicitly the bot's single user's; we still
-        # accept user_id so the public surface is uniform with other helpers.
-        del user_id  # no per-user partitioning yet
-        out = [s for s in self.sessions.values() if s.state in states]
+        selected_node_id = self.get_selected_node_id(user_id)
+        out = [
+            s
+            for s in self.sessions.values()
+            if s.state in states and s.node_id == selected_node_id
+        ]
         out.sort(key=lambda s: (s.state != "active", s.name or s.id))
         return out
 
@@ -129,6 +167,8 @@ class SessionStateMixin:
         goal: str = "",
         backend: str | None = None,
         default_reserve_user_id: int = 0,
+        node_id: str = "local",
+        worker_session_id: str = "",
     ) -> "Session":
         """Register a new Session record. Caller is responsible for the tmux window."""
         now = time.time()
@@ -149,6 +189,8 @@ class SessionStateMixin:
             last_event_at=now,
             backend=backend or self.agent_backend,
             default_reserve_user_id=default_reserve_user_id,
+            node_id=node_id,
+            worker_session_id=worker_session_id,
         )
         self.sessions[sid] = sess
         self.save_state()
@@ -165,6 +207,60 @@ class SessionStateMixin:
             return
         sess.last_event_at = time.time()
         # Don't save on every touch; callers batch via _save_state when appropriate.
+
+    def _replace_terminal_active_session(self, sess: Session) -> None:
+        """Repair both active pointers after a live session becomes terminal."""
+        user_ids = set(self.active_sessions) | set(self.active_sessions_by_node)
+        for uid in user_ids:
+            node_sessions = self.active_sessions_by_node.setdefault(uid, {})
+            was_node_active = node_sessions.get(sess.node_id) == sess.id
+            was_legacy_active = self.active_sessions.get(uid) == sess.id
+            if was_node_active:
+                node_sessions.pop(sess.node_id, None)
+            if was_legacy_active:
+                self.active_sessions.pop(uid, None)
+
+            history = self.active_history.get(uid, [])
+            while sess.id in history:
+                history.remove(sess.id)
+            if not (was_node_active or was_legacy_active):
+                continue
+
+            replacement: Session | None = None
+            for candidate_id in reversed(history):
+                candidate = self.sessions.get(candidate_id)
+                if (
+                    candidate is not None
+                    and candidate.node_id == sess.node_id
+                    and candidate.state in ("active", "idle")
+                ):
+                    replacement = candidate
+                    break
+            if replacement is None:
+                continue
+            while replacement.id in history:
+                history.remove(replacement.id)
+            node_sessions[sess.node_id] = replacement.id
+            if self.get_selected_node_id(uid) == sess.node_id:
+                self.active_sessions[uid] = replacement.id
+            logger.info(
+                "auto_active_replacement user=%d terminal=%s -> %s node=%s",
+                uid,
+                sess.id,
+                replacement.id,
+                sess.node_id,
+                extra={
+                    "event": "auto_active_replacement",
+                    "user_id": uid,
+                    "killed_session_id": sess.id,
+                    "new_active_session_id": replacement.id,
+                    "node_id": sess.node_id,
+                },
+            )
+
+        for history in self.active_history.values():
+            while sess.id in history:
+                history.remove(sess.id)
 
     def mark_session_archived(
         self, session_id: str, *, completed: bool = False
@@ -191,42 +287,7 @@ class SessionStateMixin:
         # A request admitted for this exact session must never migrate to the
         # fallback active session after the target is closed.
         sess.pending_preprocessing.clear()
-        # If this was anyone's active session, auto-pick the
-        # previously-active session as the replacement (per user
-        # request: "при удалении активной сессии необходимо
-        # автоматически выбирать последнюю активную до нее"). Walks
-        # ``active_history`` newest-first, skipping any entries that
-        # are themselves no longer live.
-        for uid, sid in list(self.active_sessions.items()):
-            if sid != session_id:
-                continue
-            del self.active_sessions[uid]
-            history = self.active_history.get(uid, [])
-            # Also drop the just-archived session from history if
-            # present so it can't be re-picked later.
-            while session_id in history:
-                history.remove(session_id)
-            while history:
-                candidate_id = history.pop()
-                candidate = self.sessions.get(candidate_id)
-                if candidate is not None and candidate.state in (
-                    "active",
-                    "idle",
-                ):
-                    self.active_sessions[uid] = candidate_id
-                    logger.info(
-                        "auto_active_replacement user=%d killed=%s -> %s",
-                        uid,
-                        session_id,
-                        candidate_id,
-                        extra={
-                            "event": "auto_active_replacement",
-                            "user_id": uid,
-                            "killed_session_id": session_id,
-                            "new_active_session_id": candidate_id,
-                        },
-                    )
-                    break
+        self._replace_terminal_active_session(sess)
         # Drop any bg-status panel entry — an archived session shouldn't
         # linger as a stale ✅/❓ badge on the next user message.
         from .handlers import bg_status
@@ -246,6 +307,7 @@ class SessionStateMixin:
         sess.state = "lost"
         sess.window_id = ""
         sess.pending_preprocessing.clear()
+        self._replace_terminal_active_session(sess)
         # Lost sessions can't make progress; remove from the bg panel.
         from .handlers import bg_status
 
@@ -312,25 +374,9 @@ class SessionStateMixin:
         """Permanently remove a Session record. Transcripts on disk are kept."""
         if session_id not in self.sessions:
             return False
+        sess = self.sessions[session_id]
         del self.sessions[session_id]
-        # Defensive auto-replacement: delete is normally called on already-
-        # archived sessions, but if a record is purged while still listed as
-        # active, walk active_history newest-first to pick a successor (same
-        # rule as ``mark_session_archived``).
-        for uid, sid in list(self.active_sessions.items()):
-            if sid != session_id:
-                continue
-            del self.active_sessions[uid]
-            history = self.active_history.get(uid, [])
-            while history:
-                candidate_id = history.pop()
-                candidate = self.sessions.get(candidate_id)
-                if candidate is not None and candidate.state in ("active", "idle"):
-                    self.active_sessions[uid] = candidate_id
-                    break
-        for hist in self.active_history.values():
-            while session_id in hist:
-                hist.remove(session_id)
+        self._replace_terminal_active_session(sess)
         from .handlers import bg_status
 
         bg_status.clear_for_session(session_id)
@@ -340,94 +386,9 @@ class SessionStateMixin:
 
     # --- User settings (set via the inline ⚙ menu) ---
 
-    DEFAULT_USER_SETTINGS: ClassVar[dict[str, Any]] = {
-        "language": "en",  # "en" | "ru" | "zh" — UI strings
-        "live_lag": 4,  # seconds, see PREVIEW_LIVE_LAG
-        "voice": "auto",  # "auto" | "parakeet" | "whisper" | "apple" | "off"
-        # Optional conservative rewrite before a prompt reaches the pinned
-        # session. It is deliberately opt-in: migrations and new users both
-        # remain on the direct-delivery path until they choose a mode.
-        "preprocessing_mode": "off",  # "off" | "voice" | "all"
-        # Empty selects the approved built-in instruction. A custom value
-        # replaces it verbatim; it is never mixed into the main agent context.
-        "preprocessing_instruction": "",
-        # Hours without activity before a live session is archived. 6h is the
-        # closest supported migration from the historical global 4h default.
-        "session_idle_hours": DEFAULT_IDLE_ARCHIVE_HOURS,
-        # Day-of-week the Anthropic weekly window resets on. Drives the %/d
-        # burn-rate computation in the Menu quota table. Values: "mon".."sun".
-        "weekly_reset_day": "mon",
-        # Auto-approve interactive Yes/No prompts that --dangerously-skip-
-        # permissions doesn't already bypass (e.g. WebFetch per-domain
-        # trust). "off" = surface in TG, "on" = auto-Yes on every prompt.
-        "auto_approve": "off",
-        # Three states for the desktop terminal companion:
-        #   off    — never spawn, never offer
-        #   manual — don't auto-spawn, but show "Open terminal" in Menu
-        #            when the active session has no attached tmux client
-        #   auto   — auto-spawn on session create AND show the manual
-        #            button whenever no client is attached
-        # On Linux ``manual``/``auto`` also need ``local_terminal_cmd``
-        # (or CCBOT_LOCAL_TERMINAL_CMD env) — without an emulator template
-        # the button is hidden because the click would silently no-op.
-        # Legacy binary "on" is auto-migrated to "auto" on read.
-        "local_terminal": "off",
-        # Linux: command template used by ``local_terminal``. Empty means
-        # "fall back to CCBOT_LOCAL_TERMINAL_CMD or skip". Templates are
-        # picked from a known list in Settings → Local terminal, or set
-        # manually via env. Use ``{shell}`` as the placeholder for the
-        # shell-quoted attach snippet.
-        "local_terminal_cmd": "",
-        # Disposition of the user's outgoing text relative to the live
-        # How many trailing end_turn boundaries to pull from the JSONL
-        # transcript when seeding an empty live-card state (e.g. after
-        # a bot restart, after switcher-tap / Menu → Sessions on a fresh
-        # state). Higher = more in-card scrollback at the cost of memory
-        # (each turn ≈ several events × ~500 bytes).
-        "card_history": 20,
-        # Global screenshot state. The Options action toggles it and the
-        # active Rich Markdown card transforms in place; text is the fallback.
-        "card_inline_screenshots": False,
-        # Which actions are disclosed by the live-card Options button.
-        # Visibility is independent from the global screenshot state above.
-        "option_button_screenshot": True,
-        "option_button_terminal": False,
-        # Pane suffix budget and deterministic image profile.
-        "screenshot_capture_kib": 48,
-        "screenshot_profile": "full8",
-        # Bg session push notifications (Task #42). Three independent
-        # toggles — user asked to make each granular. Default all-on
-        # so the user knows what bg sessions are doing.
-        "bg_notify_finished": True,
-        "bg_notify_error": True,
-        "bg_notify_needs_action": True,
-        # Max page size in logical \n-delimited LINES. Values 30/50/70/100.
-        # 30 keeps the card compact on phone; 100 is for power users who
-        # scroll long bodies. Anchor (page top) chunking handles overflow
-        # with smart sentence / paragraph boundaries — see
-        # ``_chunk_final_text`` for the exact preference order.
-        "card_page_lines": 30,
-        # Legacy shared spoiler limit retained only as a migration source.
-        "spoiler_block_lines": 10,
-        # Independent visible rows for the command and result blocks.
-        "spoiler_command_lines": 10,
-        "spoiler_result_lines": 10,
-        # Auto-rename new sessions via a cheap one-shot model call after the
-        # first user message ≥20 chars. When ``False``, names stay as
-        # the directory basename (``workdir``, ``workdir-2``, ...) for
-        # the session's lifetime. The persisted key keeps its historical
-        # name for state-file compatibility.
-        "haiku_naming": True,
-        # Summarise the first two user requests in Archive with the same
-        # isolated cheap model used for session naming. Off shows both prompts.
-        "archive_ai_description": False,
-        # Keep one empty agent session prewarmed for the selected directory.
-        "default_session_enabled": False,
-        "default_session_directory": "",
-        "default_session_backend": "",
-        # Empty means the historical bot-wide backend only (read migration).
-        "enabled_backends": [],
-    }
+    DEFAULT_USER_SETTINGS: ClassVar[dict[str, Any]] = dict(
+        DEFAULT_SESSION_USER_SETTINGS
+    )
 
     def get_user_settings(self, user_id: int) -> dict[str, Any]:
         """Return the user's settings, filling in defaults for missing keys."""
@@ -608,6 +569,31 @@ class SessionStateMixin:
             sess.claude_session_id = claude_session_id
             self.save_state()
 
+    def set_session_worker_id(self, session_id: str, worker_session_id: str) -> None:
+        sess = self.sessions.get(session_id)
+        if sess and sess.worker_session_id != worker_session_id:
+            sess.worker_session_id = worker_session_id
+            self.save_state()
+
+    def bind_remote_session(
+        self,
+        node_id: str,
+        worker_session_id: str,
+        provider_session_id: str,
+        transcript_path: str,
+    ) -> "Session | None":
+        """Persist a worker routing id -> native provider identity binding."""
+        if not node_id or not worker_session_id or not provider_session_id:
+            return None
+        for sess in self.sessions.values():
+            if sess.node_id != node_id or sess.worker_session_id != worker_session_id:
+                continue
+            sess.claude_session_id = provider_session_id
+            sess.provider_transcript_path = transcript_path
+            self.save_state()
+            return sess
+        return None
+
     def get_last_switcher_msg(self, user_id: int) -> int | None:
         return self.last_switcher_msg_id.get(user_id)
 
@@ -661,6 +647,7 @@ class SessionStateMixin:
             sess
             for sess in self.sessions.values()
             if sess.claude_session_id == claude_session_id
+            or sess.worker_session_id == claude_session_id
         ]
         out: list[tuple[int, "Session"]] = []
         for user_id in sorted(config.allowed_users):

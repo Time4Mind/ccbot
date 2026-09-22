@@ -75,16 +75,14 @@ async def handle(
             await query.answer(t(user.id, "toast.already_gone"), show_alert=False)
             return True
         from ...handlers.notifications import clear_card, resume_card_view
-        from ...tmux_manager import tmux_manager
+        from ...terminal_runtime import reset_session_binding, send_session_key
 
-        w = await tmux_manager.find_window_by_id(sess.window_id)
-        if not w:
+        if not await send_session_key(sess, "Escape"):
             await open_more_in_place(query, user.id)
             await query.answer(t(user.id, "toast.window_gone"), show_alert=False)
             return True
         # Esc to interrupt anything in flight — short pause so the
         # prompt redraws before /clear lands.
-        await tmux_manager.send_keys(w.window_id, "\x1b", enter=False)
         import asyncio as _asyncio
 
         await _asyncio.sleep(0.4)
@@ -94,6 +92,10 @@ async def handle(
         if not success:
             await open_more_in_place(query, user.id)
             await query.answer(f"Clear failed: {message}", show_alert=True)
+            return True
+        if not await reset_session_binding(sess):
+            await open_more_in_place(query, user.id)
+            await query.answer("Clear binding was not confirmed", show_alert=True)
             return True
         session_manager.clear_window_session(sess.window_id)
         await clear_card(query.get_bot(), user.id, sess)

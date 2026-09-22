@@ -9,17 +9,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from telegram.ext import ApplicationHandlerStop
 
+from ccbot.handlers.card_model import CardState
 from ccbot.session import SessionManager
 from ccbot.session_models import Session, WindowState
 from ccbot.startup_queue import (
     _replay,
     begin_startup_queue,
     bind_startup_queue,
+    cancel_startup_queue,
     capture_startup_message,
     enqueue_startup_message,
+    fail_startup_queue,
     has_startup_queue,
+    bind_startup_session,
     pending_startup_count,
     reset_startup_queues_for_test,
+    track_startup_operation,
 )
 
 
@@ -52,6 +57,24 @@ def _clean_queue() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancelling_flow_cancels_its_tracked_creation_operation() -> None:
+    started = asyncio.Event()
+
+    async def operation() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    begin_startup_queue(42)
+    task = asyncio.create_task(operation())
+    track_startup_operation(42, task)
+    await started.wait()
+
+    assert cancel_startup_queue(42) == 0
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
 async def test_capture_stops_old_session_routing_and_preserves_order() -> None:
     context = MagicMock()
     begin_startup_queue(42)
@@ -62,6 +85,104 @@ async def test_capture_stops_old_session_routing_and_preserves_order() -> None:
         await capture_startup_message(_update(11, voice=True), context)
 
     assert pending_startup_count(42) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("healthy_node", ["local", "worker-a"])
+async def test_bound_startup_queue_only_captures_its_active_session(
+    healthy_node: str,
+) -> None:
+    context = MagicMock()
+    flow = begin_startup_queue(42)
+    bind_startup_session(42, "starting")
+    healthy = SimpleNamespace(id="healthy", node_id=healthy_node)
+
+    with patch(
+        "ccbot.session.session_manager.get_active_session", return_value=healthy
+    ):
+        await capture_startup_message(_update(10, text="for healthy"), context)
+
+    assert pending_startup_count(42) == 0
+
+    with patch(
+        "ccbot.session.session_manager.get_active_session",
+        return_value=SimpleNamespace(id="starting"),
+    ):
+        with pytest.raises(ApplicationHandlerStop):
+            await capture_startup_message(_update(11, text="for starting"), context)
+
+    assert flow.session_id == "starting"
+    assert pending_startup_count(42) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_window_reports_its_prompts_and_releases_message_routing() -> None:
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=99))
+    context = MagicMock()
+    context.bot = bot
+    begin_startup_queue(42)
+    bind_startup_session(42, "failed-session")
+    enqueue_startup_message(_update(10, text="queued prompt"), context)
+
+    with (
+        patch(
+            "ccbot.session.session_manager.find_session_by_window",
+            return_value=SimpleNamespace(id="failed-session", node_id="local"),
+        ),
+        patch(
+            "ccbot.session.session_manager.wait_for_window_ready",
+            new=AsyncMock(return_value=False),
+        ),
+        patch("ccbot.handlers.notifications.get_card_state", return_value=CardState()),
+        patch("ccbot.handlers.notifications.schedule_card_after_message"),
+    ):
+        task = bind_startup_queue(42, "@failed")
+        assert task is not None
+        await task
+
+    assert not has_startup_queue(42)
+    sent_text = "\n".join(
+        str(call.kwargs.get("text", "")) for call in bot.send_message.await_args_list
+    )
+    assert "Not sent to the session: queued prompt" in sent_text
+
+    with patch(
+        "ccbot.session.session_manager.get_active_session",
+        return_value=SimpleNamespace(id="healthy"),
+    ):
+        await capture_startup_message(_update(11, text="for healthy"), context)
+
+
+@pytest.mark.asyncio
+async def test_late_failure_only_closes_its_own_startup_generation() -> None:
+    context = MagicMock()
+    old_flow = begin_startup_queue(42)
+    bind_startup_session(42, "startup-a")
+
+    new_flow = begin_startup_queue(42)
+    assert new_flow is not old_flow
+    bind_startup_session(42, "startup-b")
+
+    with patch(
+        "ccbot.session.session_manager.find_session_by_window",
+        return_value=SimpleNamespace(id="startup-a", node_id="worker-a"),
+    ):
+        old_drain = bind_startup_queue(42, "worker-a::@a", flow=old_flow)
+        assert old_drain is not None
+        await old_drain
+
+    assert fail_startup_queue(42, flow=old_flow) == []
+    assert has_startup_queue(42)
+
+    with patch(
+        "ccbot.session.session_manager.get_active_session",
+        return_value=SimpleNamespace(id="startup-b"),
+    ):
+        with pytest.raises(ApplicationHandlerStop):
+            await capture_startup_message(_update(12, text="for b"), context)
+
+    assert pending_startup_count(42) == 1
 
 
 @pytest.mark.asyncio
@@ -78,6 +199,45 @@ async def test_new_command_can_retry_failed_creation_flow() -> None:
     context = MagicMock()
     begin_startup_queue(42)
     await capture_startup_message(_update(10, text="/new retry /tmp"), context)
+    assert pending_startup_count(42) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    ["/menu", "/stop", "/kill", "/archive", "/health", "/usage", "/help"],
+)
+async def test_control_commands_bypass_agent_startup_queue(command: str) -> None:
+    context = MagicMock()
+    begin_startup_queue(42)
+
+    await capture_startup_message(_update(10, text=command), context)
+
+    assert pending_startup_count(42) == 0
+
+
+@pytest.mark.asyncio
+async def test_provider_slash_command_remains_ordered_agent_input() -> None:
+    context = MagicMock()
+    begin_startup_queue(42)
+
+    with pytest.raises(ApplicationHandlerStop):
+        await capture_startup_message(_update(10, text="/model"), context)
+
+    assert pending_startup_count(42) == 1
+
+
+@pytest.mark.asyncio
+async def test_navigation_callback_bypasses_agent_startup_queue() -> None:
+    context = MagicMock()
+    begin_startup_queue(42)
+    update = MagicMock()
+    update.effective_user = SimpleNamespace(id=42)
+    update.message = None
+    update.callback_query = SimpleNamespace(data="mm:home")
+
+    await capture_startup_message(update, context)
+
     assert pending_startup_count(42) == 0
 
 
@@ -141,6 +301,104 @@ async def test_queued_directory_flow_voice_replays_into_created_session() -> Non
 
 
 @pytest.mark.asyncio
+async def test_queued_text_is_visible_as_soon_as_new_card_is_bound() -> None:
+    context = MagicMock()
+    begin_startup_queue(42)
+    enqueue_startup_message(_update(10, text="first prompt"), context)
+    sess = SimpleNamespace(id="fresh")
+    state = CardState()
+    readiness = asyncio.Event()
+
+    async def wait_for_ready(_window_id: str) -> bool:
+        await readiness.wait()
+        return True
+
+    with (
+        patch(
+            "ccbot.session.session_manager.wait_for_window_ready",
+            side_effect=wait_for_ready,
+        ),
+        patch(
+            "ccbot.session.session_manager.find_session_by_window",
+            return_value=sess,
+        ),
+        patch("ccbot.handlers.notifications.get_card_state", return_value=state),
+        patch("ccbot.handlers.notifications.schedule_card_after_message") as surface,
+    ):
+        task = bind_startup_queue(42, "@new")
+        assert task is not None
+        await asyncio.sleep(0)
+
+        assert [
+            (row.request_id, row.text, row.user_icon) for row in state.pending_prompts
+        ] == [("10", "first prompt", "👤")]
+        surface.assert_called_once_with(context.bot, 42, sess, 10)
+
+        readiness.set()
+        await task
+
+
+@pytest.mark.asyncio
+async def test_queued_text_is_visible_on_provisional_card_before_worker_ready() -> None:
+    context = MagicMock()
+    begin_startup_queue(42)
+    sess = SimpleNamespace(id="provisional", window_id="")
+    state = CardState()
+    with (
+        patch("ccbot.session.session_manager.get_session", return_value=sess),
+        patch("ccbot.session.session_manager.get_active_session", return_value=sess),
+        patch("ccbot.handlers.notifications.get_card_state", return_value=state),
+        patch("ccbot.handlers.notifications.schedule_card_after_message") as surface,
+    ):
+        bind_startup_session(42, sess.id)
+        with pytest.raises(ApplicationHandlerStop):
+            await capture_startup_message(_update(10, text="first prompt"), context)
+
+    assert [(row.request_id, row.text) for row in state.pending_prompts] == [
+        ("10", "first prompt")
+    ]
+    surface.assert_called_once_with(context.bot, 42, sess, 10)
+
+
+@pytest.mark.asyncio
+async def test_first_queued_message_waits_for_settled_readiness() -> None:
+    context = MagicMock()
+    begin_startup_queue(42)
+    enqueue_startup_message(_update(1, text="first marker"), context)
+    readiness_checked = asyncio.Event()
+    settled = asyncio.Event()
+
+    async def wait_for_ready(_window_id: str) -> bool:
+        readiness_checked.set()
+        await settled.wait()
+        return True
+
+    with (
+        patch(
+            "ccbot.session.session_manager.wait_for_window_ready",
+            side_effect=wait_for_ready,
+        ),
+        patch(
+            "ccbot.session.session_manager.find_session_by_window",
+            return_value=SimpleNamespace(id="fresh", node_id="local"),
+        ),
+        patch(
+            "ccbot.startup_queue._replay", new=AsyncMock(return_value=True)
+        ) as replay,
+    ):
+        task = bind_startup_queue(42, "@new")
+        assert task is not None
+        await readiness_checked.wait()
+        replay.assert_not_awaited()
+        settled.set()
+        await task
+
+    replay.assert_awaited_once()
+    assert replay.await_args.args[0].update.message.text == "first marker"
+    assert replay.await_args.args[1] == "@new"
+
+
+@pytest.mark.asyncio
 async def test_drain_includes_messages_arriving_while_window_becomes_ready() -> None:
     context = MagicMock()
     begin_startup_queue(42)
@@ -183,7 +441,10 @@ async def test_drain_includes_messages_arriving_while_window_becomes_ready() -> 
         await task
 
     assert seen == [1, 2]
-    surface.assert_called_once_with(context.bot, 42, sess, 2)
+    assert surface.call_args_list == [
+        ((context.bot, 42, sess, 1), {}),
+        ((context.bot, 42, sess, 2), {}),
+    ]
     assert not has_startup_queue(42)
 
 

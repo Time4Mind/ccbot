@@ -19,7 +19,7 @@ from ccbot.handlers import archive
 from ccbot.handlers.history import render_archived_card_pages
 from ccbot.handlers.menu import build_footer_keyboard, render_settings_group_text
 from ccbot.session import SessionManager, session_manager
-from ccbot.session_import import build_import_context
+from ccbot.session_import import build_full_import_context, build_import_context
 from ccbot.session_models import Session as BotSession
 from ccbot.tmux_manager import TmuxManager
 from ccbot.transcript_parser import TranscriptParser
@@ -124,21 +124,69 @@ def test_codex_ready_prompt_is_not_auto_confirmed(
     assert TmuxManager._accept_codex_directory_trust(Pane()) is False
 
 
-def test_codex_update_prompt_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_local_codex_update_relaunches_the_exact_startup_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    screens = [
+        ["OpenAI Codex", "› Ask anything", "gpt-5.6 medium · ~/project"],
+        ["OpenAI Codex", "› Ask anything", "gpt-5.6 medium · ~/project"],
+        [
+            "Update available! 0.147.0 -> 0.151.0",
+            "› 1. Update now",
+            "  2. Skip",
+            "  3. Skip until next version",
+            "Press enter to continue",
+        ],
+        ["Installing update"],
+        ["shell"],
+    ]
+    processes = ["codex", "codex", "codex", "npm", "zsh"]
+
+    class Pane:
+        def __init__(self) -> None:
+            self.sent: list[tuple[str, bool]] = []
+
+        def capture_pane(self) -> list[str]:
+            if screens:
+                return screens.pop(0)
+            return ["OpenAI Codex", "› Ask anything", "gpt-5.6 medium · ~/project"]
+
+        @property
+        def pane_current_command(self) -> str:
+            return processes.pop(0) if processes else "codex"
+
+        def send_keys(self, value: str, enter: bool = True) -> None:
+            self.sent.append((value, enter))
+
+    pane = Pane()
+    command = "env CCBOT_INTERFACE=telegram codex --no-alt-screen resume abc"
+
+    updated = await TmuxManager._watch_codex_startup_screens(
+        pane, command=command, poll_interval=0.001, ready_settle_time=0.02
+    )
+
+    assert updated is True
+    assert pane.sent == [("", True), (command, True)]
+
+
+@pytest.mark.asyncio
+async def test_local_codex_inline_hooks_review_sends_literal_trust_key() -> None:
     screens = iter(
         [
             [
-                "Update available! 0.146.0 -> 0.146.1",
-                "› 1. Update now (runs npm install)",
-                "  2. Skip",
-                "  3. Skip until next version",
-                "Press enter to continue",
+                "1. Historical transcript row",
+                "2. Another transcript row",
+                "⚠ 2 hooks need review before they can run.",
+                "Press t to trust all; enter to review hooks; esc to close",
             ],
-            ["OpenAI Codex", "›"],
+            ["OpenAI Codex", "› Ask anything", "gpt-5.6 medium · ~/project"],
         ]
     )
 
     class Pane:
+        pane_current_command = "codex"
+
         def __init__(self) -> None:
             self.sent: list[tuple[str, bool]] = []
 
@@ -149,10 +197,16 @@ def test_codex_update_prompt_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None
             self.sent.append((value, enter))
 
     pane = Pane()
-    monkeypatch.setattr("ccbot.tmux_manager.time.sleep", lambda _delay: None)
 
-    assert TmuxManager._accept_codex_directory_trust(pane) is True
-    assert pane.sent == [("Down", False), ("", True)]
+    updated = await TmuxManager._watch_codex_startup_screens(
+        pane,
+        command="codex resume abc",
+        poll_interval=0,
+        ready_settle_time=0,
+    )
+
+    assert updated is False
+    assert pane.sent == [("t", False)]
 
 
 def test_codex_resume_uses_selected_current_directory(
@@ -241,6 +295,46 @@ def test_claude_transcript_converts_to_portable_context(
     assert "Target agent: `codex`" in text
     assert "## User\n\nFix the parser" in text
     assert "## Assistant\n\nI found the bug." in text
+
+
+def test_full_import_context_keeps_all_importable_turns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workdir = tmp_path / "project"
+    workdir.mkdir()
+    sid = "550e8400-e29b-41d4-a716-446655440000"
+    project_dir = tmp_path / "claude-projects" / str(workdir).replace("/", "-")
+    project_dir.mkdir(parents=True)
+    transcript = project_dir / f"{sid}.jsonl"
+    transcript.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {"content": [{"type": "text", "text": text}]},
+                }
+            )
+            for text in ("first turn", "second turn", "last turn")
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(config, "claude_projects_path", tmp_path / "claude-projects")
+    monkeypatch.setattr(config, "config_dir", tmp_path / "ccbot")
+    sess = BotSession(
+        id="full-context",
+        name="imported",
+        workdir=str(workdir),
+        claude_session_id=sid,
+        backend="claude",
+        state="archived",
+    )
+
+    context = build_full_import_context(sess, "codex")
+    text = context.read_text()
+
+    assert "## User\n\nfirst turn" in text
+    assert "## User\n\nsecond turn" in text
+    assert "## User\n\nlast turn" in text
 
 
 @pytest.mark.asyncio
@@ -373,6 +467,91 @@ async def test_restore_codex_archive_does_not_wait_for_hook(
 
     await mgr.load_session_map()
     assert mgr.get_window_state("@9").session_id == sid
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("original_state", ["archived", "completed", "lost"])
+async def test_published_codex_restore_rolls_back_after_async_startup_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    original_state: str,
+) -> None:
+    monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
+    mgr = SessionManager()
+    monkeypatch.setattr(mgr, "save_state", lambda: None)
+    mgr.agent_backend = "codex"
+    monkeypatch.setattr(archive, "session_manager", mgr)
+
+    sid = "550e8400-e29b-41d4-a716-446655440000"
+    workdir = tmp_path / "project"
+    workdir.mkdir()
+    prior = BotSession(
+        id="prior",
+        name="prior",
+        window_id="@1",
+        workdir=str(workdir),
+        backend="codex",
+        state="active",
+    )
+    restored = BotSession(
+        id="restored",
+        name="restored",
+        workdir=str(workdir),
+        claude_session_id=sid,
+        backend="codex",
+        state=original_state,  # type: ignore[arg-type]
+        created_at=11.0,
+        last_event_at=22.0,
+        archived_at=33.0,
+        was_lost=original_state == "lost",
+    )
+    mgr.sessions.update({prior.id: prior, restored.id: restored})
+    mgr.active_sessions[42] = prior.id
+    mgr.active_sessions_by_node[42] = {"local": prior.id}
+    mgr.active_history[42] = ["older"]
+
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": sid}}) + "\n"
+    )
+    monkeypatch.setattr(config, "session_map_file", tmp_path / "session_map.json")
+    monkeypatch.setattr(
+        codex_session_io,
+        "build_session_file_path",
+        lambda _sid, _cwd: rollout,
+    )
+
+    startup_failure = None
+
+    async def create_window(*_args, **kwargs):
+        nonlocal startup_failure
+        startup_failure = kwargs["on_startup_failure"]
+        return True, "ok", "project", "@9"
+
+    tmux = MagicMock()
+    tmux.create_window = create_window
+    monkeypatch.setattr(archive, "tmux_manager", tmux)
+
+    ok, _message = await archive.restore_session(MagicMock(), 42, restored)
+    assert ok is True
+    assert startup_failure is not None
+    assert restored.state == "active"
+    assert restored.window_id == "@9"
+
+    await startup_failure("@9", RuntimeError("unsupported startup prompt"))
+
+    assert restored.state == original_state
+    assert restored.window_id == ""
+    assert restored.created_at == 11.0
+    assert restored.last_event_at == 22.0
+    assert restored.archived_at == 33.0
+    assert restored.was_lost is (original_state == "lost")
+    assert mgr.active_sessions[42] == prior.id
+    assert mgr.active_sessions_by_node[42]["local"] == prior.id
+    assert mgr.active_history[42] == ["older"]
+    assert "@9" not in mgr.window_states
+    session_map = json.loads(config.session_map_file.read_text())
+    assert "ccbot:@9" not in session_map
 
 
 @pytest.mark.asyncio
@@ -1104,6 +1283,9 @@ async def test_archive_restore_rebuilds_live_card_on_existing_carrier(
     monkeypatch.setattr(archive_callback, "reset_card", reset)
 
     handled = await archive_callback.handle(query, context, user)
+    task = archive_callback._restore_tasks.get((42, sess.id))
+    if task is not None:
+        await task
 
     assert handled is True
     reset.assert_called_once_with(42, "restored")
@@ -1137,7 +1319,7 @@ async def test_tmux_builds_codex_resume_command(
     mgr = TmuxManager()
     monkeypatch.setattr(mgr, "get_or_create_session", lambda: Session())
 
-    async def wait_for_trust(_pane: object) -> bool:
+    async def wait_for_trust(_pane: object, **_kwargs: object) -> bool:
         trust_started.set()
         await asyncio.to_thread(release_trust.wait, 2.0)
         return True
@@ -1177,6 +1359,109 @@ async def test_tmux_builds_codex_resume_command(
     assert not startup_tasks[0].done()
     release_trust.set()
     await asyncio.gather(*startup_tasks)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_local_codex_startup_rolls_back_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = asyncio.Event()
+
+    class Pane:
+        def send_keys(self, _value: str, enter: bool = True) -> None:
+            pass
+
+    class Window:
+        window_id = "@31"
+        active_pane = Pane()
+
+        def __init__(self) -> None:
+            self.killed = False
+
+        def set_window_option(self, _name: str, _value: str) -> None:
+            pass
+
+        def kill(self) -> None:
+            self.killed = True
+
+    window = Window()
+
+    class Session:
+        def new_window(self, **_kwargs):
+            return window
+
+    mgr = TmuxManager()
+    monkeypatch.setattr(mgr, "get_or_create_session", lambda: Session())
+    monkeypatch.setattr(mgr, "find_window_by_name", AsyncMock(return_value=None))
+
+    async def wait_forever(_pane: object, **_kwargs: object) -> bool:
+        started.set()
+        await asyncio.Event().wait()
+        return False
+
+    monkeypatch.setattr(mgr, "_watch_codex_startup_screens", wait_forever)
+    task = asyncio.create_task(
+        mgr.create_window(str(tmp_path), backend="codex", wait_for_codex_ready=True)
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0)
+
+    assert window.killed is True
+
+
+@pytest.mark.asyncio
+async def test_background_codex_startup_failure_notifies_restore_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Pane:
+        def send_keys(self, _value: str, enter: bool = True) -> None:
+            pass
+
+    class Window:
+        window_id = "@32"
+        active_pane = Pane()
+
+        def __init__(self) -> None:
+            self.killed = False
+
+        def set_window_option(self, _name: str, _value: str) -> None:
+            pass
+
+        def kill(self) -> None:
+            self.killed = True
+
+    window = Window()
+
+    class Session:
+        def new_window(self, **_kwargs):
+            return window
+
+    mgr = TmuxManager()
+    monkeypatch.setattr(mgr, "get_or_create_session", lambda: Session())
+    monkeypatch.setattr(mgr, "find_window_by_name", AsyncMock(return_value=None))
+
+    async def fail_startup(_pane: object, **_kwargs: object) -> bool:
+        raise RuntimeError("unsupported startup prompt")
+
+    failure = AsyncMock()
+    monkeypatch.setattr(mgr, "_watch_codex_startup_screens", fail_startup)
+
+    ok, _message, _name, wid = await mgr.create_window(
+        str(tmp_path),
+        backend="codex",
+        on_startup_failure=failure,
+    )
+    assert ok is True
+    assert wid == "@32"
+    await asyncio.gather(*tuple(mgr._startup_tasks), return_exceptions=True)
+
+    assert window.killed is True
+    assert failure.await_count == 1
+    assert failure.await_args.args[0] == "@32"
+    assert isinstance(failure.await_args.args[1], RuntimeError)
 
 
 @pytest.mark.asyncio

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Restart the OGameScene ccbot containers after a prolonged proxy outage.
+# Restart ccbot containers after a prolonged proxy outage.
 
 set -euo pipefail
 
-proxy_url="${PROXY_URL:-http://172.17.0.1:1081}"
+proxy_url="${PROXY_URL:?PROXY_URL must be set}"
 check_url="${CHECK_URL:-https://api.telegram.org/}"
 fail_after_sec="${FAIL_AFTER_SEC:-1800}"
 state_dir="${STATE_DIR:-/var/lib/ccbot-connectivity-watchdog}"

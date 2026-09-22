@@ -48,6 +48,16 @@ async def teardown_session_runtime(
 
     provider_session_id = sess.claude_session_id
     window_ids = {sess.window_id} if sess.window_id else set()
+    if sess.node_id != "local":
+        from ..transfer_runtime import get_node_runtime
+
+        runtime = get_node_runtime(sess.node_id)
+        routing_id = sess.worker_session_id or provider_session_id
+        if runtime is not None and routing_id:
+            await runtime.terminate_session(sess.node_id, routing_id)
+        for window_id in sorted(window_ids):
+            await clear_session_state(user_id, window_id, bot)
+        return window_ids
     if provider_session_id:
         window_ids.update(
             await session_manager.remove_provider_session_bindings(provider_session_id)

@@ -198,8 +198,8 @@ class CardState:
     # resurrect Stop or prevent the session from being closed/archived.
     user_stopped: bool = False
     # A newly spawned final-answer card keeps its visible completion marker
-    # across automatic refreshes. Only the first user tap on that exact live
-    # carrier acknowledges it.
+    # across automatic refreshes. Any subsequent user action acknowledges the
+    # active header; the switcher button has its own independent read state.
     completion_marker_pending: bool = False
     last_pane_hash: str = ""  # SHA-256 of the exact last rendered PNG
     last_photo_edit_ts: float = 0.0  # monotonic seconds; 3s throttle
@@ -226,6 +226,8 @@ class CardState:
     # stat() each, not a full re-parse. Reset alongside ``seed_attempted``
     # at the non-destructive re-seed sites.
     seed_mtime: float = -1.0
+    # Authoritative worker transcript size/mtime identity for empty-seed retry.
+    remote_seed_version: str = ""
     # A silent unfinished turn stays RUNNING instead of being replaced by a
     # warning. Status polling refreshes its live pane for the active session.
     stall_watch_active: bool = False

@@ -17,6 +17,7 @@ from telegram.ext import (
 )
 
 from ..inbound_queue import shutdown_inbound_queues
+from ..file_delivery import file_delivery_manager, shutdown_file_deliveries
 
 from ..config import config
 from ..handlers.quota_alerts import quota_alerts_loop
@@ -55,6 +56,9 @@ _auth_preflight_task: asyncio.Task[None] | None = None
 _usage_prewarm_task: asyncio.Task[None] | None = None
 _preprocessing_recovery_task: asyncio.Task[int] | None = None
 _default_session_task: asyncio.Task[None] | None = None
+_node_runtime_task: asyncio.Task[None] | None = None
+_node_notifications_task: asyncio.Task[None] | None = None
+_local_backend_readiness_task: asyncio.Task[None] | None = None
 
 
 async def _sync_bot_commands(bot: Any, commands: list[BotCommand]) -> bool:
@@ -82,6 +86,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     global \
         session_monitor, \
         _status_poll_task, \
+        _node_notifications_task, \
         _card_timer_task, \
         _quota_alerts_task, \
         _metrics_flush_task, \
@@ -90,12 +95,15 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
         _usage_prewarm_task, \
         _preprocessing_recovery_task, \
         _default_session_task, \
+        _node_runtime_task, \
         _last_heartbeat, \
-        _conflict_app
+        _conflict_app, \
+        _local_backend_readiness_task
 
     # Reachable from ``_error_handler`` for the sustained-Conflict exit
     # path (Conflict updates carry no chat, so ``update`` is not an Update).
     _conflict_app = application
+    file_delivery_manager.start()
 
     # Warm the directory browser's recursive index off the startup path. The
     # picker itself always paints from cache/shallow metadata and never waits
@@ -134,6 +142,84 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     # window vanished get state=lost and surface in the switcher with a
     # Restore button.
     await session_manager.reconcile_sessions_with_tmux()
+
+    async def _connect_node_runtime() -> None:
+        if not config.node_relay_url or not config.node_secret:
+            return
+        from ..node_runtime import connect_configured_remote_runtimes
+
+        while True:
+            try:
+                await connect_configured_remote_runtimes(
+                    relay_url=config.node_relay_url,
+                    leader_id=config.node_leader_id,
+                    secret=config.node_secret,
+                    node_ids=[node.id for node in session_manager.list_nodes()],
+                    tls=config.node_relay_tls,
+                )
+                logger.info("Multi-node relay connected")
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Multi-node relay connection failed: %s", exc)
+                await asyncio.sleep(5.0)
+
+    _node_runtime_task = asyncio.create_task(
+        _connect_node_runtime(), name="node-runtime-connect"
+    )
+
+    async def _publish_local_backend_readiness() -> None:
+        from pathlib import Path
+
+        from ..node_worker import TmuxWorkerExecutor
+
+        probe = TmuxWorkerExecutor(
+            workdir=Path.home(),
+            claude_command=config.claude_command,
+            codex_command=config.codex_command,
+        )
+        while True:
+            configured = tuple(
+                dict.fromkeys(
+                    backend
+                    for user_id in config.allowed_users
+                    for backend in session_manager.get_enabled_backends(user_id)
+                )
+            ) or (session_manager.agent_backend,)
+            ready = await probe.ready_backends(configured)
+            local = session_manager.get_node("local")
+            if local is not None:
+                before = (
+                    tuple(local.configured_backends),
+                    tuple(local.backends),
+                    tuple(sorted(local.backend_status.items())),
+                )
+                local.configured_backends = list(configured)
+                local.backends = list(ready)
+                local.backend_status = {
+                    backend: "ready" if backend in ready else "unavailable"
+                    for backend in configured
+                }
+                after = (
+                    tuple(local.configured_backends),
+                    tuple(local.backends),
+                    tuple(sorted(local.backend_status.items())),
+                )
+                if before != after:
+                    session_manager.save_state()
+            await asyncio.sleep(60.0)
+
+    _local_backend_readiness_task = asyncio.create_task(
+        _publish_local_backend_readiness(), name="local-backend-readiness"
+    )
+    from ..node_notifications import NodeNotificationMonitor
+
+    node_notification_monitor = NodeNotificationMonitor(manager=session_manager)
+    _node_notifications_task = asyncio.create_task(
+        node_notification_monitor.run(application.bot, tuple(config.allowed_users)),
+        name="node-status-notifications",
+    )
 
     from ..default_session import default_session_loop
 
@@ -220,6 +306,9 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     async def message_callback(msg: NewMessage) -> None:
         await handle_new_message(msg, application.bot)
 
+    from ..node_runtime import set_remote_message_handler
+
+    set_remote_message_handler(message_callback)
     monitor.set_message_callback(message_callback)
     monitor.start()
     session_monitor = monitor
@@ -366,7 +455,10 @@ async def post_shutdown(
         _auth_preflight_task, \
         _usage_prewarm_task, \
         _preprocessing_recovery_task, \
-        _default_session_task
+        _default_session_task, \
+        _node_runtime_task, \
+        _node_notifications_task, \
+        _local_backend_readiness_task
 
     if _usage_prewarm_task:
         if not _usage_prewarm_task.done():
@@ -388,6 +480,25 @@ async def post_shutdown(
         _default_session_task.cancel()
         await asyncio.gather(_default_session_task, return_exceptions=True)
         _default_session_task = None
+    if _node_runtime_task:
+        _node_runtime_task.cancel()
+        await asyncio.gather(_node_runtime_task, return_exceptions=True)
+        _node_runtime_task = None
+    if _local_backend_readiness_task:
+        _local_backend_readiness_task.cancel()
+        await asyncio.gather(_local_backend_readiness_task, return_exceptions=True)
+        _local_backend_readiness_task = None
+    if _node_notifications_task:
+        _node_notifications_task.cancel()
+        await asyncio.gather(_node_notifications_task, return_exceptions=True)
+        _node_notifications_task = None
+    await shutdown_file_deliveries()
+    from ..node_runtime import shutdown_remote_runtimes
+
+    await shutdown_remote_runtimes()
+    from ..remote_prompt_queue import remote_prompt_queue
+
+    await remote_prompt_queue.fail_all()
     from ..default_session import shutdown_default_session_tasks
 
     await shutdown_default_session_tasks()

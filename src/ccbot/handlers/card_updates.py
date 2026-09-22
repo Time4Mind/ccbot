@@ -472,6 +472,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     cleaned = (final_text or "").strip()
     attachments: list[Attachment] = []
     final_events: list[Event] = []
+    stripped_full = ""
     if cleaned:
         formatted = split_overflow(cleaned)
         cleaned = formatted.text
@@ -497,7 +498,26 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
     async with _card_lock(user_id, sess.id):
         # Recover and seed under the same lock as final mutation/render so a
         # next-turn event cannot interleave a stale snapshot.
+        event_ids_before_seed = {id(event) for event in state.events}
         await _legacy("_ensure_seeded")(user_id, sess, state)
+        seeded_final = next(
+            (
+                event
+                for event in reversed(state.events)
+                if id(event) not in event_ids_before_seed
+                and event.type == "final_text"
+                and event.text == stripped_full
+            ),
+            None,
+        )
+        append_final_events = final_events
+        if seeded_final is not None:
+            # A brand-new session can reach its first terminal monitor event
+            # only after the transcript already contains that answer.  The
+            # initial seed therefore owns the authoritative copy; appending
+            # the synthetic completion event would render it twice.
+            final_events = [seeded_final]
+            append_final_events = []
         newer_request_pending = any(
             sequence > state.active_turn_sequence
             for _message_id, sequence in state.pending_request_sequences
@@ -528,7 +548,7 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
             clear_carrier(state)
 
         if final_events:
-            state.events.extend(final_events)
+            state.events.extend(append_final_events)
             if len(state.events) > CARD_MAX_EVENTS:
                 del state.events[: len(state.events) - CARD_MAX_EVENTS]
             state.last_event_ts = final_events[0].started_at

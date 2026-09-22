@@ -19,6 +19,7 @@ from ccbot.startup_queue import (
     cancel_startup_queue,
     capture_startup_message,
     enqueue_startup_message,
+    fail_startup_queue,
     has_startup_queue,
     bind_startup_session,
     pending_startup_count,
@@ -84,6 +85,104 @@ async def test_capture_stops_old_session_routing_and_preserves_order() -> None:
         await capture_startup_message(_update(11, voice=True), context)
 
     assert pending_startup_count(42) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("healthy_node", ["local", "worker-a"])
+async def test_bound_startup_queue_only_captures_its_active_session(
+    healthy_node: str,
+) -> None:
+    context = MagicMock()
+    flow = begin_startup_queue(42)
+    bind_startup_session(42, "starting")
+    healthy = SimpleNamespace(id="healthy", node_id=healthy_node)
+
+    with patch(
+        "ccbot.session.session_manager.get_active_session", return_value=healthy
+    ):
+        await capture_startup_message(_update(10, text="for healthy"), context)
+
+    assert pending_startup_count(42) == 0
+
+    with patch(
+        "ccbot.session.session_manager.get_active_session",
+        return_value=SimpleNamespace(id="starting"),
+    ):
+        with pytest.raises(ApplicationHandlerStop):
+            await capture_startup_message(_update(11, text="for starting"), context)
+
+    assert flow.session_id == "starting"
+    assert pending_startup_count(42) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_window_reports_its_prompts_and_releases_message_routing() -> None:
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=99))
+    context = MagicMock()
+    context.bot = bot
+    begin_startup_queue(42)
+    bind_startup_session(42, "failed-session")
+    enqueue_startup_message(_update(10, text="queued prompt"), context)
+
+    with (
+        patch(
+            "ccbot.session.session_manager.find_session_by_window",
+            return_value=SimpleNamespace(id="failed-session", node_id="local"),
+        ),
+        patch(
+            "ccbot.session.session_manager.wait_for_window_ready",
+            new=AsyncMock(return_value=False),
+        ),
+        patch("ccbot.handlers.notifications.get_card_state", return_value=CardState()),
+        patch("ccbot.handlers.notifications.schedule_card_after_message"),
+    ):
+        task = bind_startup_queue(42, "@failed")
+        assert task is not None
+        await task
+
+    assert not has_startup_queue(42)
+    sent_text = "\n".join(
+        str(call.kwargs.get("text", "")) for call in bot.send_message.await_args_list
+    )
+    assert "Not sent to the session: queued prompt" in sent_text
+
+    with patch(
+        "ccbot.session.session_manager.get_active_session",
+        return_value=SimpleNamespace(id="healthy"),
+    ):
+        await capture_startup_message(_update(11, text="for healthy"), context)
+
+
+@pytest.mark.asyncio
+async def test_late_failure_only_closes_its_own_startup_generation() -> None:
+    context = MagicMock()
+    old_flow = begin_startup_queue(42)
+    bind_startup_session(42, "startup-a")
+
+    new_flow = begin_startup_queue(42)
+    assert new_flow is not old_flow
+    bind_startup_session(42, "startup-b")
+
+    with patch(
+        "ccbot.session.session_manager.find_session_by_window",
+        return_value=SimpleNamespace(id="startup-a", node_id="worker-a"),
+    ):
+        old_drain = bind_startup_queue(42, "worker-a::@a", flow=old_flow)
+        assert old_drain is not None
+        await old_drain
+
+    assert fail_startup_queue(42, flow=old_flow) == []
+    assert has_startup_queue(42)
+
+    with patch(
+        "ccbot.session.session_manager.get_active_session",
+        return_value=SimpleNamespace(id="startup-b"),
+    ):
+        with pytest.raises(ApplicationHandlerStop):
+            await capture_startup_message(_update(12, text="for b"), context)
+
+    assert pending_startup_count(42) == 1
 
 
 @pytest.mark.asyncio
@@ -247,6 +346,7 @@ async def test_queued_text_is_visible_on_provisional_card_before_worker_ready() 
     state = CardState()
     with (
         patch("ccbot.session.session_manager.get_session", return_value=sess),
+        patch("ccbot.session.session_manager.get_active_session", return_value=sess),
         patch("ccbot.handlers.notifications.get_card_state", return_value=state),
         patch("ccbot.handlers.notifications.schedule_card_after_message") as surface,
     ):

@@ -50,10 +50,11 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     if not update.message:
         return
+    reply_message = update.message
 
     # Open capture before authentication, filesystem and Telegram awaits.
     # Non-blocking voice handlers can otherwise race into the old session.
-    begin_startup_queue(user.id)
+    startup_flow = begin_startup_queue(user.id)
 
     args = (update.message.text or "").split(maxsplit=2)
     name_arg = args[1] if len(args) > 1 else ""
@@ -95,11 +96,66 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 )
                 return
         await safe_reply(update.message, f"⏳ Creating session at {target_path}…")
-        success, message, created_wname, created_wid = await tmux_manager.create_window(
-            target_path,
-            backend=backend,
-        )
+        created_session: Session | None = None
+        startup_window_published = asyncio.Event()
+
+        async def _rollback_failed_startup(
+            failed_window_id: str, startup_error: BaseException
+        ) -> None:
+            await startup_window_published.wait()
+            if created_session is None:
+                return
+            if session_manager.get_session(created_session.id) is not created_session:
+                return
+            if created_session.window_id not in (failed_window_id, ""):
+                return
+            from ...startup_queue import (
+                fail_startup_queue,
+                report_failed_startup_entries,
+            )
+
+            queued = fail_startup_queue(
+                user.id,
+                flow=startup_flow,
+                window_id=failed_window_id,
+            )
+            session_manager.cancel_window_startup(failed_window_id)
+            provider_session_id = created_session.claude_session_id
+            if provider_session_id:
+                await session_manager.remove_provider_session_bindings(
+                    provider_session_id
+                )
+            else:
+                session_manager.window_states.pop(failed_window_id, None)
+                session_manager.window_display_names.pop(failed_window_id, None)
+            session_manager.delete_session(created_session.id)
+            await report_failed_startup_entries(queued)
+            await safe_reply(
+                reply_message,
+                f"❌ Codex session did not start: {startup_error}",
+            )
+
+        if backend == "codex":
+            create_result = await tmux_manager.create_window(
+                target_path,
+                backend=backend,
+                on_startup_failure=_rollback_failed_startup,
+            )
+        else:
+            create_result = await tmux_manager.create_window(
+                target_path,
+                backend=backend,
+            )
+        success, message, created_wname, created_wid = create_result
         if not success:
+            startup_window_published.set()
+            from ...startup_queue import (
+                fail_startup_queue,
+                report_failed_startup_entries,
+            )
+
+            queued = fail_startup_queue(user.id, flow=startup_flow)
+            await report_failed_startup_entries(queued)
             await safe_reply(update.message, f"❌ {message}")
             return
         session_manager.mark_window_starting(
@@ -115,11 +171,13 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             workdir=target_path,
             backend=backend,
         )
+        created_session = sess
         ws = session_manager.get_window_state(created_wid)
         if ws.session_id:
             session_manager.set_session_claude_id(sess.id, ws.session_id)
         session_manager.set_active_session(user.id, sess.id)
-        bind_startup_queue(user.id, created_wid)
+        bind_startup_queue(user.id, created_wid, flow=startup_flow)
+        startup_window_published.set()
         await safe_reply(
             update.message,
             f"✅ Session `{sess.name}` ({sess.id}) created at {target_path}",

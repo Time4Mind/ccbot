@@ -1329,6 +1329,54 @@ async def test_worker_handles_codex_inline_hooks_review_with_trust_key(
 
 
 @pytest.mark.asyncio
+async def test_worker_keeps_existing_model_at_codex_migration_prompt(
+    tmp_path, monkeypatch
+):
+    executor = TmuxWorkerExecutor(
+        workdir=tmp_path,
+        ready_timeout=1,
+        codex_poll_interval=0,
+        codex_ready_settle_time=0,
+    )
+    screens = iter(
+        [
+            "OpenAI Codex (v0.155.1)\n"
+            "Meet GPT-6 Sol\n"
+            "Choose how you'd like Codex to proceed.\n"
+            "1. Try new model\n"
+            "2. Use existing model\n"
+            "Use ↑/↓ to move, press enter to confirm",
+            "OpenAI Codex\n\n› Ask anything\n\ngpt-5.6 medium · ~/project",
+        ]
+    )
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_tmux(*args: str):
+        calls.append(args)
+        if args[0] == "list-windows":
+            return 1, "", ""
+        if args[0] == "has-session":
+            return 0, "", ""
+        if args[0] == "new-window":
+            return 0, "@9\n", ""
+        if args[0] == "capture-pane":
+            return 0, next(screens), ""
+        if args[0] == "display-message":
+            return 0, "codex", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(executor, "_run_tmux", fake_tmux)
+
+    result = await executor.create_session(
+        path=str(tmp_path), backend="codex", name="existing-model"
+    )
+
+    assert result["target_window_id"] == "@9"
+    assert ("send-keys", "-t", "@9", "Down") in calls
+    assert ("send-keys", "-t", "@9", "C-m") in calls
+
+
+@pytest.mark.asyncio
 async def test_worker_stops_polling_sessions_whose_tmux_windows_disappeared(
     tmp_path, monkeypatch
 ):

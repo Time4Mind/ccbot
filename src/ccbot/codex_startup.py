@@ -25,6 +25,7 @@ class CodexScreen(str, Enum):
     TRUST = "trust"
     HOOKS_REVIEW = "hooks_review"
     HOOKS_INLINE = "hooks_inline"
+    MODEL_MIGRATION = "model_migration"
     RESUME_DIRECTORY = "resume_directory"
     UPDATE = "update"
     AUTHENTICATION = "authentication"
@@ -74,6 +75,13 @@ def classify_codex_screen(text: str) -> CodexScreen:
     ):
         return CodexScreen.HOOKS_INLINE
     if (
+        "choose how you'd like codex to proceed" in lower
+        and "1. try new model" in lower
+        and "2. use existing model" in lower
+        and "press enter to confirm" in lower
+    ):
+        return CodexScreen.MODEL_MIGRATION
+    if (
         "choose working directory to resume this session" in lower
         and "1. use session directory" in lower
         and "2. use current directory" in lower
@@ -120,6 +128,8 @@ def is_codex_ready(text: str) -> bool:
             "update available!",
             "hooks need review before they can run",
             "press t to trust all",
+            "choose how you'd like codex to proceed",
+            "use existing model",
         )
     ):
         return False
@@ -188,6 +198,9 @@ async def drive_codex_startup(
             await send_key("ENTER")
         elif screen is CodexScreen.HOOKS_INLINE:
             await send_key("t")
+        elif screen is CodexScreen.MODEL_MIGRATION:
+            await send_key("DOWN")
+            await send_key("ENTER")
         elif screen is CodexScreen.RESUME_DIRECTORY:
             await send_key("DOWN")
             await send_key("ENTER")

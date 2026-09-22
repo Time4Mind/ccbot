@@ -19,7 +19,7 @@ from typing import Any, Callable, cast
 
 from telegram.ext import ContextTypes
 
-from ..handlers.message_sender import safe_edit
+from ..handlers.message_sender import safe_edit, safe_send
 from ..handlers.notifications import (
     activate_card_on_carrier,
     paint_card_on_carrier,
@@ -196,7 +196,54 @@ async def _create_and_activate_session(
         session_manager.set_active_session(user.id, sess.id)
     from ..startup_queue import bind_startup_session
 
-    bind_startup_session(user.id, sess.id)
+    startup_flow = bind_startup_session(user.id, sess.id)
+    startup_window_published = asyncio.Event()
+
+    async def _rollback_failed_local_codex_startup(
+        failed_window_id: str, startup_error: BaseException
+    ) -> None:
+        await startup_window_published.wait()
+        if session_manager.get_session(sess.id) is not sess:
+            return
+        if sess.window_id not in (failed_window_id, ""):
+            return
+        from ..startup_queue import (
+            fail_startup_queue,
+            report_failed_startup_entries,
+        )
+
+        queued = (
+            fail_startup_queue(
+                user.id,
+                flow=startup_flow,
+                window_id=failed_window_id,
+            )
+            if startup_flow is not None
+            else []
+        )
+        session_manager.cancel_window_startup(failed_window_id)
+        provider_session_id = sess.claude_session_id
+        if provider_session_id:
+            await session_manager.remove_provider_session_bindings(provider_session_id)
+        else:
+            session_manager.window_states.pop(failed_window_id, None)
+            session_manager.window_display_names.pop(failed_window_id, None)
+        session_manager.delete_session(sess.id)
+        reset_card(user.id, sess.id)
+        await report_failed_startup_entries(queued)
+        await safe_send(
+            context.bot,
+            user.id,
+            f"❌ Codex session did not start: {startup_error}",
+        )
+        logger.warning(
+            "Local Codex startup rolled back user=%d session=%s window=%s: %s",
+            user.id,
+            sess.id,
+            failed_window_id,
+            startup_error,
+        )
+
     _log_phase("card_published", user.id, node_id, started_at)
 
     def fail_startup(message: str) -> str:
@@ -209,7 +256,11 @@ async def _create_and_activate_session(
             node_id,
             message,
         )
-        queued = fail_startup_queue(user.id)
+        queued = (
+            fail_startup_queue(user.id, flow=startup_flow)
+            if startup_flow is not None
+            else []
+        )
         session_manager.delete_session(sess.id)
         reset_card(user.id, sess.id)
         lines = [message]
@@ -247,13 +298,24 @@ async def _create_and_activate_session(
 
     agent_session_id = ""
     if node_id == "local":
-        success, message, created_wname, created_wid = await tmux_manager.create_window(
-            selected_path,
-            resume_session_id=resume_session_id,
-            backend=backend,
-            wait_for_codex_ready=False,
-        )
+        if backend == "codex":
+            create_result = await tmux_manager.create_window(
+                selected_path,
+                resume_session_id=resume_session_id,
+                backend=backend,
+                wait_for_codex_ready=False,
+                on_startup_failure=_rollback_failed_local_codex_startup,
+            )
+        else:
+            create_result = await tmux_manager.create_window(
+                selected_path,
+                resume_session_id=resume_session_id,
+                backend=backend,
+                wait_for_codex_ready=False,
+            )
+        success, message, created_wname, created_wid = create_result
         if not success:
+            startup_window_published.set()
             failure = fail_startup(message)
             await safe_edit(query, f"❌ {failure}")
             return
@@ -341,7 +403,8 @@ async def _create_and_activate_session(
     # gated on proven TUI readiness.
     from ..startup_queue import bind_startup_queue
 
-    bind_startup_queue(user.id, created_wid)
+    bind_startup_queue(user.id, created_wid, flow=startup_flow)
+    startup_window_published.set()
 
     async def _bind_lifecycle_in_background() -> None:
         """Attach the hook-written session id without delaying Telegram UI."""

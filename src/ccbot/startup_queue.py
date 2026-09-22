@@ -50,7 +50,7 @@ _CONTROL_COMMANDS = frozenset(
 def begin_startup_queue(user_id: int) -> StartupFlow:
     """Open (or retain) the queue for the user's in-progress new session."""
     flow = _flows.get(user_id)
-    if flow is None:
+    if flow is None or flow.session_id is not None or flow.window_id is not None:
         flow = StartupFlow(user_id=user_id)
         _flows[user_id] = flow
         logger.info("startup queue opened user=%d", user_id)
@@ -71,23 +71,62 @@ def cancel_startup_queue(user_id: int) -> int:
     return len(fail_startup_queue(user_id))
 
 
-def fail_startup_queue(user_id: int) -> list[QueuedInbound]:
+def fail_startup_queue(
+    user_id: int,
+    *,
+    flow: StartupFlow | None = None,
+    window_id: str | None = None,
+) -> list[QueuedInbound]:
     """Close a failed flow and return every undelivered update in FIFO order."""
-    flow = _flows.pop(user_id, None)
-    if flow is None:
+    target = flow or _flows.get(user_id)
+    if target is None or (window_id is not None and target.window_id != window_id):
         return []
-    if flow.drain_task is not None and not flow.drain_task.done():
-        flow.drain_task.cancel()
+    if _flows.get(user_id) is target:
+        _flows.pop(user_id, None)
     current = asyncio.current_task()
     if (
-        flow.operation_task is not None
-        and flow.operation_task is not current
-        and not flow.operation_task.done()
+        target.drain_task is not None
+        and target.drain_task is not current
+        and not target.drain_task.done()
     ):
-        flow.operation_task.cancel()
-    entries = list(flow.entries)
+        target.drain_task.cancel()
+    if (
+        target.operation_task is not None
+        and target.operation_task is not current
+        and not target.operation_task.done()
+    ):
+        target.operation_task.cancel()
+    entries = list(target.entries)
+    target.entries.clear()
     logger.info("startup queue cancelled user=%d pending=%d", user_id, len(entries))
     return entries
+
+
+async def report_failed_startup_entries(entries: list[QueuedInbound]) -> None:
+    """Tell the user that each prompt owned by a failed flow was not sent."""
+    from .handlers.message_sender import safe_send
+    from .i18n import t
+
+    for entry in entries:
+        message = entry.update.message
+        user = entry.update.effective_user
+        if message is None or user is None:
+            continue
+        if message.text:
+            label = message.text
+        elif message.voice:
+            label = "voice message"
+        elif message.photo:
+            label = "photo"
+        elif message.document:
+            label = "document"
+        else:
+            label = "message"
+        await safe_send(
+            entry.context.bot,
+            user.id,
+            t(user.id, "startup.prompt_not_sent", prompt=label),
+        )
 
 
 def track_startup_operation(user_id: int, task: asyncio.Task[None]) -> None:
@@ -111,6 +150,12 @@ async def capture_startup_message(
     flow = _flows.get(user.id)
     if flow is None:
         return
+    if flow.session_id is not None:
+        from .session import session_manager
+
+        active = session_manager.get_active_session(user.id)
+        if active is None or active.id != flow.session_id:
+            return
     # The directory naming screen owns the next text message. This handler is
     # registered earlier than the normal text router, so capturing it here
     # would silently queue the folder name as a future agent prompt.
@@ -281,12 +326,9 @@ async def _replay(entry: QueuedInbound, window_id: str | None = None) -> bool:
     return result is not False
 
 
-async def _drain(user_id: int, window_id: str) -> None:
+async def _drain(user_id: int, window_id: str, flow: StartupFlow) -> None:
     from .session import session_manager
 
-    flow = _flows.get(user_id)
-    if flow is None:
-        return
     try:
         session = session_manager.find_session_by_window(window_id)
         if session is not None and getattr(session, "node_id", "local") != "local":
@@ -296,12 +338,16 @@ async def _drain(user_id: int, window_id: str) -> None:
             ready = await session_manager.wait_for_window_ready(window_id)
         if not ready:
             logger.error(
-                "startup queue kept closed: window never became ready "
+                "startup queue failed: window never became ready "
                 "user=%d window=%s pending=%d",
                 user_id,
                 window_id,
                 len(flow.entries),
             )
+            entries = fail_startup_queue(user_id, flow=flow, window_id=window_id)
+            for entry in entries:
+                _discard_startup_receipt(entry, window_id)
+            await report_failed_startup_entries(entries)
             return
         while flow.entries:
             entry = flow.entries[0]
@@ -351,31 +397,38 @@ async def _drain(user_id: int, window_id: str) -> None:
             flow.drain_task = None
 
 
-def bind_startup_queue(user_id: int, window_id: str) -> asyncio.Task[None] | None:
+def bind_startup_queue(
+    user_id: int,
+    window_id: str,
+    *,
+    flow: StartupFlow | None = None,
+) -> asyncio.Task[None] | None:
     """Bind the current flow to its new window and start ordered draining."""
-    flow = _flows.get(user_id)
-    if flow is None:
+    target = flow or _flows.get(user_id)
+    if target is None:
         return None
-    flow.window_id = window_id
-    if flow.session_id is None:
-        for entry in flow.entries:
+    target.window_id = window_id
+    if target.session_id is None:
+        for entry in target.entries:
             _surface_startup_entry(entry, window_id=window_id)
-    if flow.drain_task is not None and not flow.drain_task.done():
-        return flow.drain_task
-    flow.drain_task = asyncio.create_task(
-        _drain(user_id, window_id), name=f"startup-queue:{user_id}:{window_id}"
+    if target.drain_task is not None and not target.drain_task.done():
+        return target.drain_task
+    target.drain_task = asyncio.create_task(
+        _drain(user_id, window_id, target),
+        name=f"startup-queue:{user_id}:{window_id}",
     )
-    return flow.drain_task
+    return target.drain_task
 
 
-def bind_startup_session(user_id: int, session_id: str) -> None:
+def bind_startup_session(user_id: int, session_id: str) -> StartupFlow | None:
     """Attach the provisional card so queued prompts are visible immediately."""
     flow = _flows.get(user_id)
     if flow is None:
-        return
+        return None
     flow.session_id = session_id
     for entry in flow.entries:
         _surface_startup_entry(entry, session_id=session_id)
+    return flow
 
 
 def reset_startup_queues_for_test() -> None:
@@ -398,5 +451,6 @@ __all__ = [
     "fail_startup_queue",
     "has_startup_queue",
     "pending_startup_count",
+    "report_failed_startup_entries",
     "track_startup_operation",
 ]

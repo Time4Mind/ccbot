@@ -104,6 +104,7 @@ async def test_assistant_turn_renders_card(
     sent_texts = [m.text for m in fake_bot.sent_messages]
     # The body is MarkdownV2-rendered, so the trailing "." is escaped to "\.".
     assert any("Build finished: 0 errors" in t for t in sent_texts), sent_texts
+    assert sum(text.count("Build finished: 0 errors") for text in sent_texts) == 1
     # Live output is already consumed by the monitor offset. The historical
     # per-user window offset has no reader and must not force a full state.json
     # fsync for every streamed event.

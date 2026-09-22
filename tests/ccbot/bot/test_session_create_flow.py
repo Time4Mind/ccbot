@@ -111,7 +111,8 @@ async def test_codex_card_is_published_before_auth_and_process_start(
     monkeypatch.setattr(_session_create, "activate_card_on_carrier", AsyncMock())
     monkeypatch.setattr(_session_create, "paint_card_on_carrier", paint)
     monkeypatch.setattr(
-        "ccbot.startup_queue.bind_startup_queue", lambda _uid, _wid: None
+        "ccbot.startup_queue.bind_startup_queue",
+        lambda _uid, _wid, **_kwargs: None,
     )
 
     await _session_create.create_and_activate_session(
@@ -181,7 +182,8 @@ async def test_slow_remote_creation_returns_control_to_telegram_immediately(
 
     monkeypatch.setattr(_session_create, "paint_card_on_carrier", paint)
     monkeypatch.setattr(
-        "ccbot.startup_queue.bind_startup_queue", lambda _uid, _wid: None
+        "ccbot.startup_queue.bind_startup_queue",
+        lambda _uid, _wid, **_kwargs: None,
     )
 
     await asyncio.wait_for(
@@ -220,7 +222,7 @@ async def test_failed_remote_creation_closes_its_startup_queue(monkeypatch) -> N
     card_state = CardState()
     fake_manager = SimpleNamespace(
         agent_backend="claude",
-        get_active_session=lambda _uid: SimpleNamespace(id="old"),
+        get_active_session=lambda _uid: failed_session,
         create_session=MagicMock(return_value=failed_session),
         set_active_session=MagicMock(),
         save_state=MagicMock(),
@@ -238,6 +240,10 @@ async def test_failed_remote_creation_closes_its_startup_queue(monkeypatch) -> N
     monkeypatch.setattr(
         "ccbot.session.session_manager.get_session",
         lambda session_id: failed_session if session_id == "failed" else None,
+    )
+    monkeypatch.setattr(
+        "ccbot.session.session_manager.get_active_session",
+        lambda _user_id: failed_session,
     )
     monkeypatch.setattr(
         "ccbot.handlers.notifications.get_card_state", lambda *_args: card_state
@@ -282,6 +288,117 @@ async def test_failed_remote_creation_closes_its_startup_queue(monkeypatch) -> N
     failure = _session_create.safe_edit.await_args.args[1]
     assert "❌ Not sent to the session: first prompt" in failure
     assert "❌ Not sent to the session: second prompt" in failure
+
+
+@pytest.mark.asyncio
+async def test_async_local_codex_failure_rolls_back_only_its_session_and_fifo(
+    monkeypatch,
+) -> None:
+    user_id = 44
+    old_session = SimpleNamespace(id="healthy", node_id="local")
+    failed_session = SimpleNamespace(
+        id="failed",
+        node_id="local",
+        window_id="",
+        claude_session_id="",
+        state="active",
+    )
+    active = failed_session
+    startup_failure = None
+    window_state = SimpleNamespace(session_id="", cwd="", window_name="", backend="")
+
+    async def create_window(*_args, **kwargs):
+        nonlocal startup_failure
+        startup_failure = kwargs["on_startup_failure"]
+        return True, "created", "project", "@44"
+
+    def get_active_session(_user_id):
+        return active
+
+    fake_manager = SimpleNamespace(
+        agent_backend="codex",
+        get_active_session=get_active_session,
+        get_session=lambda session_id: (
+            failed_session if session_id == "failed" else None
+        ),
+        create_session=MagicMock(return_value=failed_session),
+        set_session_claude_id=MagicMock(),
+        set_session_worker_id=MagicMock(),
+        save_state=MagicMock(),
+        mark_window_starting=MagicMock(),
+        cancel_window_startup=MagicMock(),
+        window_states={"@44": window_state},
+        window_display_names={"@44": "project"},
+        get_window_state=lambda _wid: window_state,
+        wait_for_session_map_entry=AsyncMock(return_value=None),
+        delete_session=MagicMock(return_value=True),
+    )
+    query = MagicMock(spec=CallbackQuery)
+    query.message = SimpleNamespace(message_id=104)
+    query.answer = AsyncMock()
+    user = MagicMock(spec=User)
+    user.id = user_id
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=105))
+    context = SimpleNamespace(user_data={"_new_session_backend": "codex"}, bot=bot)
+    card_state = CardState()
+
+    monkeypatch.setattr(_session_create, "session_manager", fake_manager)
+    monkeypatch.setattr(
+        _session_create, "tmux_manager", SimpleNamespace(create_window=create_window)
+    )
+    monkeypatch.setattr(
+        "ccbot.bot.commands.auth.ensure_codex_authenticated",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(_session_create, "activate_card_on_carrier", AsyncMock())
+    monkeypatch.setattr(_session_create, "paint_card_on_carrier", AsyncMock())
+    monkeypatch.setattr(_session_create, "reset_card", MagicMock())
+    monkeypatch.setattr(
+        "ccbot.session.session_manager.get_active_session", get_active_session
+    )
+    monkeypatch.setattr(
+        "ccbot.session.session_manager.get_session",
+        lambda session_id: failed_session if session_id == "failed" else None,
+    )
+    monkeypatch.setattr(
+        "ccbot.handlers.notifications.get_card_state", lambda *_args: card_state
+    )
+    monkeypatch.setattr(
+        "ccbot.handlers.notifications.schedule_card_after_message", lambda *_args: None
+    )
+
+    begin_startup_queue(user_id)
+    await _session_create.create_and_activate_session(
+        query, context, user, "/tmp/project"
+    )
+    await _session_create.wait_for_session_creation(user_id)
+    assert startup_failure is not None
+
+    update = MagicMock()
+    update.effective_user = SimpleNamespace(id=user_id)
+    update.message = SimpleNamespace(
+        message_id=20,
+        text="queued only for failed",
+        voice=None,
+        photo=[],
+        document=None,
+    )
+    with pytest.raises(ApplicationHandlerStop):
+        await capture_startup_message(update, context)
+
+    await startup_failure("@44", RuntimeError("unsupported startup prompt"))
+
+    assert not has_startup_queue(user_id)
+    fake_manager.cancel_window_startup.assert_called_once_with("@44")
+    fake_manager.delete_session.assert_called_once_with("failed")
+    sent_text = "\n".join(
+        str(call.kwargs.get("text", "")) for call in bot.send_message.await_args_list
+    )
+    assert "Not sent to the session: queued only for failed" in sent_text
+
+    active = old_session
+    await capture_startup_message(update, context)
 
 
 @pytest.mark.asyncio
@@ -344,7 +461,8 @@ async def test_old_card_stays_background_until_atomic_new_session_handoff(
     )
     monkeypatch.setattr(_session_create, "paint_card_on_carrier", paint)
     monkeypatch.setattr(
-        "ccbot.startup_queue.bind_startup_queue", lambda _uid, _wid: None
+        "ccbot.startup_queue.bind_startup_queue",
+        lambda _uid, _wid, **_kwargs: None,
     )
 
     await _session_create.create_and_activate_session(
@@ -402,7 +520,8 @@ async def test_new_session_is_created_on_selected_remote_node(monkeypatch):
     monkeypatch.setattr(_session_create, "session_manager", fake_manager)
     monkeypatch.setattr(_session_create, "get_node_runtime", lambda _node_id: runtime)
     monkeypatch.setattr(
-        "ccbot.startup_queue.bind_startup_queue", lambda _uid, _wid: None
+        "ccbot.startup_queue.bind_startup_queue",
+        lambda _uid, _wid, **_kwargs: None,
     )
 
     await _session_create.create_and_activate_session(

@@ -48,6 +48,25 @@ UserPromptSubmit: ~/.ccbot/hooks/user-prompt.py
 Press t to trust all; enter to review hooks; esc to close
 """
 
+MODEL_MIGRATION_PROMPT = """OpenAI Codex (v0.155.1)
+
+Earlier transcript:
+1. Keep this numbered item.
+2. Do not classify transcript content as a modal.
+
+Meet GPT-6 Sol
+
+Our latest Sol is more intelligent and more efficient so your usage limits go
+further. This model is a great daily driver for complex tasks, especially coding.
+
+Choose how you'd like Codex to proceed.
+
+1. Try new model
+2. Use existing model
+
+Use ↑/↓ to move, press enter to confirm
+"""
+
 
 @pytest.mark.asyncio
 async def test_delayed_update_is_handled_before_readiness_is_final() -> None:
@@ -209,6 +228,30 @@ async def test_inline_hooks_review_ignores_resumed_numbered_content_and_trusts()
 
     assert result.updated is False
     assert keys == ["t"]
+
+
+@pytest.mark.asyncio
+async def test_model_migration_prompt_keeps_existing_model_and_reaches_composer() -> (
+    None
+):
+    screens = iter([MODEL_MIGRATION_PROMPT, READY_PROMPT])
+    keys: list[str] = []
+
+    assert classify_codex_screen(MODEL_MIGRATION_PROMPT) is CodexScreen.MODEL_MIGRATION
+
+    result = await drive_codex_startup(
+        command="codex",
+        capture=lambda: _next(screens),
+        current_process=lambda: _value("codex"),
+        send_key=lambda key: _append(keys, key),
+        relaunch=lambda _command: _done(),
+        timeout=1,
+        poll_interval=0,
+        ready_settle_time=0,
+    )
+
+    assert result.updated is False
+    assert keys == ["DOWN", "ENTER"]
 
 
 @pytest.mark.asyncio

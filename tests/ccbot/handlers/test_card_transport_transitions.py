@@ -241,6 +241,108 @@ async def test_active_final_answer_spawns_new_card_and_freezes_open_page(
 
 
 @pytest.mark.asyncio
+async def test_first_final_answer_already_seeded_is_not_rendered_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new session may expose its transcript only at finalization time."""
+    state = CardState()
+    bot = SimpleNamespace(edit_message_reply_markup=AsyncMock(return_value=True))
+    sent: list[str] = []
+
+    async def ensure_seeded(_uid, _sess, target):
+        target.events.extend(
+            [
+                Event(
+                    type="user_msg",
+                    text="test",
+                    started_at=1.0,
+                    is_page_break=True,
+                ),
+                Event(
+                    type="final_text",
+                    text="one answer",
+                    body="one answer",
+                    started_at=2.0,
+                    completed_at=2.0,
+                ),
+            ]
+        )
+
+    async def send_card(_bot, _uid, _sess, target, *, text, reply_markup=None):
+        sent.append(text)
+        target.msg_id = 10
+        return True
+
+    monkeypatch.setattr(card_updates, "get_card_state", lambda _uid, _sess: state)
+    monkeypatch.setattr(card_updates, "_should_buffer", lambda *_args: False)
+    monkeypatch.setattr(
+        card_updates,
+        "_legacy",
+        lambda name: {
+            "_ensure_seeded": ensure_seeded,
+            "_render_card": lambda _sess, target, **_kwargs: "\n".join(
+                event.text for event in target.events
+            ),
+            "build_footer_keyboard": lambda *_args, **_kwargs: SimpleNamespace(),
+            "_send_card": send_card,
+            "_edit_card": AsyncMock(return_value=True),
+        }[name],
+    )
+    session = SimpleNamespace(id="s1", window_id="")
+
+    await card_updates.finalize_task(bot, 42, session, "one answer")
+
+    assert sent == ["test\none answer"]
+    assert [event.text for event in state.events] == ["test", "one answer"]
+
+
+@pytest.mark.asyncio
+async def test_same_answer_in_a_later_turn_is_preserved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = CardState(
+        events=[
+            Event(
+                type="final_text",
+                text="same answer",
+                body="same answer",
+                started_at=1.0,
+                completed_at=1.0,
+            )
+        ]
+    )
+    sent: list[str] = []
+
+    async def send_card(_bot, _uid, _sess, target, *, text, reply_markup=None):
+        sent.append(text)
+        target.msg_id = 10
+        return True
+
+    monkeypatch.setattr(card_updates, "get_card_state", lambda _uid, _sess: state)
+    monkeypatch.setattr(card_updates, "_should_buffer", lambda *_args: False)
+    monkeypatch.setattr(
+        card_updates,
+        "_legacy",
+        lambda name: {
+            "_ensure_seeded": AsyncMock(return_value=None),
+            "_render_card": lambda _sess, target, **_kwargs: "\n".join(
+                event.text for event in target.events
+            ),
+            "build_footer_keyboard": lambda *_args, **_kwargs: SimpleNamespace(),
+            "_send_card": send_card,
+            "_edit_card": AsyncMock(return_value=True),
+        }[name],
+    )
+
+    await card_updates.finalize_task(
+        SimpleNamespace(), 42, SimpleNamespace(id="s1", window_id=""), "same answer"
+    )
+
+    assert sent == ["same answer\nsame answer"]
+    assert [event.text for event in state.events] == ["same answer", "same answer"]
+
+
+@pytest.mark.asyncio
 async def test_older_final_does_not_take_card_from_already_accepted_next_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

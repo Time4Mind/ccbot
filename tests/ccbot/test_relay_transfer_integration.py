@@ -51,6 +51,89 @@ class RecordingExecutor(WorkerInboxMixin, WorkerHistoryMixin):
         return {"ok": True}
 
 
+class EventExecutor:
+    def __init__(self) -> None:
+        self.polls = 0
+
+    async def poll_events(self):
+        self.polls += 1
+        if self.polls == 1:
+            return [
+                {
+                    "event_type": "session_message",
+                    "session_id": "worker-session",
+                    "role": "assistant",
+                    "text": "relay answer",
+                }
+            ]
+        return []
+
+
+@pytest.mark.asyncio
+async def test_worker_event_is_applied_and_acked_across_real_relay(tmp_path: Path):
+    server = RelayServer(
+        credentials={"leader": "leader-secret", "worker-a": "worker-secret"},
+        leader_id="leader",
+    )
+    await server.start("127.0.0.1", 0)
+    leader_rpc = None
+    worker_transport = None
+    worker_task: asyncio.Task[None] | None = None
+    applied = asyncio.Event()
+    handled: list[str] = []
+
+    async def handle_event(message):
+        if message.kind != "event":
+            return
+        handled.append(str((message.payload or {}).get("text", "")))
+        applied.set()
+
+    try:
+        leader_rpc = await connect_leader_rpc(
+            host="127.0.0.1",
+            port=server.port,
+            leader_id="leader",
+            secret="leader-secret",
+            event_handler=handle_event,
+            event_state_path=tmp_path / "leader-events.json",
+        )
+        worker_transport = await connect_relay(
+            "127.0.0.1",
+            server.port,
+            node_id="worker-a",
+            role="worker",
+            secret="worker-secret",
+            leader_id="leader",
+        )
+        executor = EventExecutor()
+        agent = NodeAgent(
+            worker_transport,
+            executor,
+            context_dir=tmp_path / "worker-contexts",
+            node_id="worker-a",
+            display_name="Worker A",
+            backends=("codex",),
+        )
+        worker_task = asyncio.create_task(agent.run())
+
+        await asyncio.wait_for(applied.wait(), timeout=2)
+        while agent._event_pump.pending:
+            await asyncio.sleep(0.01)
+
+        assert handled == ["relay answer"]
+        assert executor.polls >= 1
+        assert not agent._event_pump.pending
+    finally:
+        if worker_task is not None:
+            worker_task.cancel()
+            await asyncio.gather(worker_task, return_exceptions=True)
+        if worker_transport is not None:
+            await worker_transport.close()
+        if leader_rpc is not None:
+            await leader_rpc.close()
+        await server.close()
+
+
 @pytest.mark.asyncio
 async def test_context_transfer_crosses_real_relay_and_worker_agent(tmp_path: Path):
     server = RelayServer(

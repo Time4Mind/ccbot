@@ -179,8 +179,16 @@ class NodeAgent:
         self._boot_id = secrets.token_urlsafe(12)
         self._startup_tasks: set[asyncio.Task[None]] = set()
         self._event_pump = NodeEventPump(
-            node_id, available=callable(getattr(executor, "poll_events", None))
+            node_id,
+            available=callable(getattr(executor, "poll_events", None)),
+            state_path=self._context_dir / f"node-events-{node_id or 'worker'}.json",
         )
+        set_event_cursor_store = getattr(executor, "set_event_cursor_store", None)
+        if callable(set_event_cursor_store):
+            set_event_cursor_store(
+                self._event_pump.cursor_for,
+                self._event_pump.ensure_cursor,
+            )
 
     def attach_transport(self, transport: NodeTransport) -> None:
         self._transport = transport
@@ -205,6 +213,9 @@ class NodeAgent:
         try:
             while True:
                 message = await self._transport.receive()
+                if message.kind == "ack" and message.request_id:
+                    self._event_pump.acknowledge(message.request_id)
+                    continue
                 if message.kind != "command":
                     continue
                 operation = str((message.payload or {}).get("operation", ""))
@@ -212,7 +223,10 @@ class NodeAgent:
                     queue = control_commands
                 else:
                     queue = regular_commands
-                await queue.put(message)
+                try:
+                    queue.put_nowait(message)
+                except asyncio.QueueFull:
+                    await self._send_error(message, "worker command queue is full")
         finally:
             for task in background:
                 task.cancel()

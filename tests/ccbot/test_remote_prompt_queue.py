@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -262,3 +263,43 @@ async def test_queued_dispatch_reuses_preprocessing_after_delivery_retry(monkeyp
         "prepared once",
         "prepared once",
     ]
+
+
+@pytest.mark.asyncio
+async def test_stalled_session_does_not_block_another_session(monkeypatch):
+    monkeypatch.setattr(
+        "ccbot.remote_prompt_queue.safe_reply",
+        AsyncMock(return_value=SimpleNamespace(message_id=1)),
+    )
+    monkeypatch.setattr("ccbot.remote_prompt_queue.safe_edit", AsyncMock())
+    release_a = asyncio.Event()
+    delivered_b = asyncio.Event()
+    queue = RemotePromptQueue(
+        node_available=lambda _node_id: True,
+        autostart=False,
+        poll_interval=0.01,
+    )
+
+    async def deliver_a() -> bool:
+        await release_a.wait()
+        return True
+
+    async def deliver_b() -> bool:
+        delivered_b.set()
+        return True
+
+    for session_id, delivery in (("session-a", deliver_a), ("session-b", deliver_b)):
+        assert await queue.admit(
+            original_message=object(),
+            session_id=session_id,
+            node_id=f"worker-{session_id}",
+            node_name=session_id,
+            deliver=delivery,
+        )
+
+    run = asyncio.create_task(queue._run())
+    try:
+        await asyncio.wait_for(delivered_b.wait(), timeout=0.1)
+    finally:
+        release_a.set()
+        await asyncio.wait_for(run, timeout=1)

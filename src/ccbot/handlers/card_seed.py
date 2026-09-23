@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -31,10 +32,23 @@ logger = logging.getLogger(__name__)
 
 SeedLoader = Callable[..., Awaitable[list[Event]]]
 
+_INBOX_ATTACHMENT_LINE_RE = re.compile(
+    r"(?m)^[ \t]*\.?/?\.ccbot-inbox/[^\s<>`\"']+[ \t]*$"
+)
+
 
 def _prompt_key(text: str) -> str:
     """Normalize only presentation differences when matching a JSONL echo."""
-    return " ".join(_strip_for_card(text).split())
+    # Direct photo/document delivery appends an internal inbox reference to
+    # the user caption before Codex writes the prompt to JSONL.  Telegram's
+    # pending receipt intentionally contains only the user-authored caption,
+    # so omit standalone transport lines when correlating the two views.
+    without_inbox_refs = _INBOX_ATTACHMENT_LINE_RE.sub("", _strip_for_card(text))
+    return " ".join(without_inbox_refs.split())
+
+
+def _inbox_attachment_count(text: str) -> int:
+    return len(_INBOX_ATTACHMENT_LINE_RE.findall(_strip_for_card(text)))
 
 
 def matching_pending_prefix_count(
@@ -42,18 +56,28 @@ def matching_pending_prefix_count(
 ) -> int:
     """Return the exact oldest pending prefix represented by one user row."""
     target = _prompt_key(raw_text)
-    if not target:
+    target_inbox_count = _inbox_attachment_count(raw_text)
+    if not target and not target_inbox_count:
         return 0
     compact = ""
     spaced_parts: list[str] = []
+    expected_inbox_count = 0
     matched = 0
     for index, pending in enumerate(pending_prompts, 1):
         part = _prompt_key(pending.text)
-        if not part:
+        pending_inbox_count = _inbox_attachment_count(pending.text)
+        if not part and not pending.inbox_attachment and not pending_inbox_count:
             break
         compact += part
-        spaced_parts.append(part)
-        if target in (compact, " ".join(spaced_parts)):
+        if part:
+            spaced_parts.append(part)
+        expected_inbox_count += max(
+            pending_inbox_count, 1 if pending.inbox_attachment else 0
+        )
+        if (
+            target in (compact, " ".join(spaced_parts))
+            and target_inbox_count == expected_inbox_count
+        ):
             matched = index
     return matched
 
@@ -94,11 +118,18 @@ def _reconcile_seeded_pending(state: CardState, seeded: list[Event]) -> int:
     search_before = len(seeded)
     for pending in reversed(state.pending_prompts):
         needle = _prompt_key(pending.text)
-        if not needle:
+        if (
+            not needle
+            and not pending.inbox_attachment
+            and not _inbox_attachment_count(pending.text)
+        ):
             continue
         for index in range(search_before - 1, -1, -1):
             event = seeded[index]
-            if event.type != "user_msg" or _prompt_key(event.text) != needle:
+            if (
+                event.type != "user_msg"
+                or matching_pending_prefix_count([pending], event.text) != 1
+            ):
                 continue
             if event.started_at + 30.0 < pending.created_at:
                 # The same words in older history are not proof that the new

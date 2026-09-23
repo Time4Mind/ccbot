@@ -190,6 +190,60 @@ class TestEnsureSeededIdempotent:
         assert state.seed_attempted is True
         assert len(paginate_events_for_card(state, None)) >= 2
 
+    async def test_remote_media_seed_consumes_caption_receipt(
+        self, monkeypatch
+    ) -> None:
+        """Worker history uses the same media-aware turn reconciliation."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        import ccbot.handlers.card_seed as card_seed
+        from ccbot.session import Session
+
+        caption = "Проверь изображение"
+        runtime = SimpleNamespace(
+            seed_session_history=AsyncMock(
+                return_value={
+                    "ok": True,
+                    "version": "1:2",
+                    "entries": [
+                        {
+                            "role": "user",
+                            "text": f"{caption}\n\n.ccbot-inbox/worker-image.jpg",
+                            "content_type": "text",
+                            "timestamp": "2026-09-23T10:00:00Z",
+                        }
+                    ],
+                }
+            )
+        )
+        monkeypatch.setattr(card_seed, "get_node_runtime", lambda _node: runtime)
+        state = CardState(
+            pending_prompts=[
+                PendingPrompt(
+                    request_id="91",
+                    text=caption,
+                    inbox_attachment=True,
+                    created_at=1.0,
+                )
+            ],
+            pending_request_sequences=[(91, 7)],
+        )
+        sess = Session(
+            id="remote-media",
+            name="Remote media",
+            node_id="worker-a",
+            worker_session_id="routing-1",
+            workdir="/worker/project",
+            backend="codex",
+        )
+
+        await _ensure_seeded(42, sess, state)
+
+        assert state.pending_prompts == []
+        assert state.pending_request_sequences == []
+        assert state.active_turn_sequence == 7
+
     async def test_seed_reconciles_pending_prompt_at_its_turn_position(
         self, monkeypatch
     ) -> None:
@@ -243,6 +297,121 @@ class TestEnsureSeededIdempotent:
         rendered = _render_card(sess, state, user_id=1)
         assert rendered.count(prompt) == 1
         assert rendered.index(prompt) < rendered.index("Проверяю данные")
+
+    async def test_seed_reconciles_media_caption_with_inbox_path(
+        self, monkeypatch
+    ) -> None:
+        """A media path appended by ccbot still belongs to the caption turn."""
+        import ccbot.handlers.notifications as notif
+        from ccbot.session import Session
+
+        caption = "Что это за новый режим в кодексе?"
+        delivered = f"{caption}\n\n.ccbot-inbox/1790163336-image.jpg"
+        seeded_prompt = Event(
+            type="user_msg",
+            text=delivered,
+            body=delivered,
+            started_at=2.0,
+            is_page_break=True,
+        )
+
+        async def _seed(_sess, max_turns=0):
+            del max_turns
+            return [seeded_prompt]
+
+        monkeypatch.setattr(notif, "_seed_events_from_jsonl", _seed)
+        state = CardState(
+            pending_prompts=[
+                PendingPrompt(
+                    request_id="4396",
+                    text=caption,
+                    inbox_attachment=True,
+                    created_at=1.0,
+                )
+            ],
+            pending_request_sequences=[(4396, 1)],
+        )
+        sess = Session(id="media", name="media", window_id="@55")
+
+        await _ensure_seeded(1, sess, state)
+
+        assert state.pending_prompts == []
+        assert state.pending_request_sequences == []
+        assert state.active_turn_sequence == 1
+        assert state.events == [seeded_prompt]
+
+    async def test_seed_reconciles_captionless_media_path(self, monkeypatch) -> None:
+        """An image-only prompt consumes its receipt instead of shifting FIFO."""
+        import ccbot.handlers.notifications as notif
+        from ccbot.session import Session
+
+        delivered = ".ccbot-inbox/1790163336-image.jpg"
+        seeded_prompt = Event(
+            type="user_msg",
+            text=delivered,
+            body=delivered,
+            started_at=2.0,
+            is_page_break=True,
+        )
+
+        async def _seed(_sess, max_turns=0):
+            del max_turns
+            return [seeded_prompt]
+
+        monkeypatch.setattr(notif, "_seed_events_from_jsonl", _seed)
+        state = CardState(
+            pending_prompts=[
+                PendingPrompt(
+                    request_id="4396",
+                    text="",
+                    inbox_attachment=True,
+                    created_at=1.0,
+                )
+            ],
+            pending_request_sequences=[(4396, 1)],
+        )
+        sess = Session(id="media", name="media", window_id="@55")
+
+        await _ensure_seeded(1, sess, state)
+
+        assert state.pending_prompts == []
+        assert state.pending_request_sequences == []
+        assert state.active_turn_sequence == 1
+
+    async def test_seed_preserves_user_authored_inbox_path_as_prompt(
+        self, monkeypatch
+    ) -> None:
+        """A manually typed inbox path remains an ordinary exact prompt."""
+        import ccbot.handlers.notifications as notif
+        from ccbot.session import Session
+
+        prompt = ".ccbot-inbox/report.pdf"
+        seeded_prompt = Event(
+            type="user_msg",
+            text=prompt,
+            body=prompt,
+            started_at=2.0,
+            is_page_break=True,
+        )
+
+        async def _seed(_sess, max_turns=0):
+            del max_turns
+            return [seeded_prompt]
+
+        monkeypatch.setattr(notif, "_seed_events_from_jsonl", _seed)
+        state = CardState(
+            pending_prompts=[
+                PendingPrompt(request_id="100", text=prompt, created_at=1.0)
+            ],
+            pending_request_sequences=[(100, 1)],
+        )
+        sess = Session(id="text-path", name="text path", window_id="@57")
+
+        await _ensure_seeded(1, sess, state)
+
+        assert state.pending_prompts == []
+        assert state.pending_request_sequences == []
+        assert state.active_turn_sequence == 1
 
     async def test_seed_reconciles_concatenated_pending_prompt_batch(
         self, monkeypatch

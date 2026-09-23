@@ -149,7 +149,14 @@ def _enqueue(
             completion = getattr(receipt, "completion", None)
             if completion is not None:
                 completion.add_done_callback(_discard_failed_request)
-        if kind == "text" and update.message.text:
+        prompt_text = (
+            update.message.text
+            if kind == "text"
+            else update.message.caption
+            if kind in ("photo", "document")
+            else None
+        )
+        if prompt_text or kind in ("photo", "document"):
             request_id = str(message_id)
             pending_prompts = getattr(state, "pending_prompts", None)
             if pending_prompts is None:
@@ -159,8 +166,9 @@ def _enqueue(
                 pending_prompts.append(
                     PendingPrompt(
                         request_id=request_id,
-                        text=update.message.text,
+                        text=prompt_text or "",
                         user_icon="👤",
+                        inbox_attachment=kind in ("photo", "document"),
                     )
                 )
         state.current_page_idx = None

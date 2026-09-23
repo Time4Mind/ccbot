@@ -189,6 +189,46 @@ def test_model_picker_uses_one_button_per_native_option(
     assert callbacks[3] == "aq:esc:@5"
 
 
+def test_codex_0156_model_picker_uses_one_button_per_native_option(
+    sample_pane_codex_model_picker: str,
+) -> None:
+    keyboard = build_kb_mode_keyboard(
+        42,
+        "@5",
+        ui_name="Settings",
+        prompt_content=sample_pane_codex_model_picker,
+    )
+
+    assert _button_rows(keyboard) == [
+        ["GPT-6-Astra"],
+        ["GPT-6-Sol"],
+        ["GPT-6-Luna"],
+        ["✓ GPT-5.6-Sol"],
+        ["GPT-5.6-Terra"],
+        ["× Cancel"],
+    ]
+
+
+def test_codex_0156_effort_picker_uses_one_button_per_native_option(
+    sample_pane_codex_effort_picker: str,
+) -> None:
+    keyboard = build_kb_mode_keyboard(
+        42,
+        "@5",
+        ui_name="Settings",
+        prompt_content=sample_pane_codex_effort_picker,
+    )
+
+    assert _button_rows(keyboard) == [
+        ["Low"],
+        ["✓ Medium"],
+        ["High"],
+        ["Extra high"],
+        ["More reasoning…"],
+        ["× Cancel"],
+    ]
+
+
 def test_effort_picker_marks_current_value_not_cursor() -> None:
     prompt = (
         "Select Reasoning Level for gpt-5.6-sol\n"

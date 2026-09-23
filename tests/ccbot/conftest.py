@@ -164,5 +164,41 @@ def sample_pane_settings():
 
 
 @pytest.fixture
+def sample_pane_codex_model_picker():
+    """Codex 0.156.1 combined model-and-effort picker captured from tmux."""
+    return (
+        "  Select Model and Effort\n"
+        "\n"
+        "  1. GPT-6-Astra (default)  Frontier intelligence for the most "
+        "demanding work.\n"
+        "  2. GPT-6-Sol              Workhorse model for coding and everyday "
+        "work.\n"
+        "  3. GPT-6-Luna             Fast and affordable model for easier tasks.\n"
+        "› 4. GPT-5.6-Sol (current)  Older coding model for complex work.\n"
+        "  5. GPT-5.6-Terra          Older balanced model for straightforward "
+        "work.\n"
+        "\n"
+        "  enter select · esc back\n"
+    )
+
+
+@pytest.fixture
+def sample_pane_codex_effort_picker():
+    """Codex 0.156.1 reasoning picker captured after choosing a model."""
+    return (
+        "  Select Reasoning Level for GPT-6-Sol\n"
+        "\n"
+        "  1. Low               Fast responses with lighter reasoning\n"
+        "› 2. Medium (default)  Balances speed and reasoning depth for everyday "
+        "tasks\n"
+        "  3. High              Greater reasoning depth for complex problems\n"
+        "  4. Extra high        Extra high reasoning depth for complex problems\n"
+        "  5. More reasoning…   Max and Ultra consume usage limits faster\n"
+        "\n"
+        "  enter default · s session · esc back\n"
+    )
+
+
+@pytest.fixture
 def sample_pane_no_ui():
     return "$ echo hello\nhello\n$\n"

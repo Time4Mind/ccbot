@@ -149,6 +149,35 @@ async def test_infer_status_treats_trailing_user_turn_as_working(
         session_manager.sessions.pop(sess.id, None)
 
 
+@pytest.mark.asyncio
+async def test_infer_status_uses_valid_tail_despite_corrupt_historical_prefix(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transcript = tmp_path / "large-session.jsonl"
+    transcript.write_bytes(
+        b"\xff" * (2 * 1024 * 1024)
+        + b"\n"
+        + json.dumps({"type": "user", "message": {"content": "still working"}}).encode(
+            "utf-8"
+        )
+        + b"\n"
+    )
+    sess = _seed_session("tail-status", "tail-status")
+    sess.claude_session_id = "claude-tail-status"
+    try:
+        from ccbot import session_claude_io
+
+        monkeypatch.setattr(
+            session_claude_io,
+            "build_session_file_path",
+            lambda *_args, **_kwargs: transcript,
+        )
+
+        assert await bg_status.infer_status_from_jsonl(sess) == "working"
+    finally:
+        session_manager.sessions.pop(sess.id, None)
+
+
 def test_legacy_finished_state_migrates_to_seen(isolated_bg) -> None:
     bg_status.load_per_user(
         {

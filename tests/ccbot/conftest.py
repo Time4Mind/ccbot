@@ -164,5 +164,24 @@ def sample_pane_settings():
 
 
 @pytest.fixture
+def sample_pane_codex_model_picker():
+    """Codex 0.156.1 combined model-and-effort picker captured from tmux."""
+    return (
+        "  Select Model and Effort\n"
+        "\n"
+        "  1. GPT-6-Astra (default)  Frontier intelligence for the most "
+        "demanding work.\n"
+        "  2. GPT-6-Sol              Workhorse model for coding and everyday "
+        "work.\n"
+        "  3. GPT-6-Luna             Fast and affordable model for easier tasks.\n"
+        "› 4. GPT-5.6-Sol (current)  Older coding model for complex work.\n"
+        "  5. GPT-5.6-Terra          Older balanced model for straightforward "
+        "work.\n"
+        "\n"
+        "  enter select · esc back\n"
+    )
+
+
+@pytest.fixture
 def sample_pane_no_ui():
     return "$ echo hello\nhello\n$\n"

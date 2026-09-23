@@ -140,6 +140,31 @@ async def test_update_is_installed_then_exact_command_is_relaunched() -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_can_return_directly_to_ready_composer() -> None:
+    screens = [UPDATE_PROMPT, READY_PROMPT]
+    keys: list[str] = []
+    relaunched: list[str] = []
+
+    async def capture() -> str:
+        return screens.pop(0) if screens else READY_PROMPT
+
+    result = await drive_codex_startup(
+        command="env CCBOT_INTERFACE=telegram codex --no-alt-screen resume abc",
+        capture=capture,
+        current_process=lambda: _value("node"),
+        send_key=lambda key: _append(keys, key),
+        relaunch=lambda command: _append(relaunched, command),
+        timeout=0.02,
+        poll_interval=0,
+        ready_settle_time=0,
+    )
+
+    assert result.updated is True
+    assert keys == ["ENTER"]
+    assert relaunched == []
+
+
+@pytest.mark.asyncio
 async def test_repeated_update_prompt_after_relaunch_is_bounded_failure() -> None:
     screens = iter([UPDATE_PROMPT, "shell", READY_PROMPT, UPDATE_PROMPT])
     processes = iter(["codex", "zsh", "codex", "codex"])

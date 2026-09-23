@@ -71,6 +71,12 @@ async def handle(
         if sess is None or sess.state not in ("active", "idle"):
             await query.answer("Session not available", show_alert=True)
             return True
+        # The active-session card is now authoritative. If its callback raced
+        # the asynchronous directory browser, abandon that modal flow before
+        # painting so subsequent input cannot remain trapped in startup FIFO.
+        from .._new_session_flow import cancel_for_active_card
+
+        cancel_for_active_card(user.id, getattr(context, "user_data", None))
         # A completed result stays unread through its first presentation and
         # becomes acknowledged only when the user enters it a second time.
         # Record before painting so that the second entry already has no

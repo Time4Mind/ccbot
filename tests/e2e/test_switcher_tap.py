@@ -21,6 +21,11 @@ from ccbot.handlers import notifications
 from ccbot.handlers.notifications import card_page_info
 from ccbot.node_models import Node
 from ccbot.session import session_manager
+from ccbot.startup_queue import (
+    begin_startup_queue,
+    has_startup_queue,
+    reset_startup_queues_for_test,
+)
 
 from harness import (
     USER_ID,
@@ -47,6 +52,13 @@ def _ctx(fake_bot):
         user_data: dict = {}
 
     return _Ctx()
+
+
+@pytest.fixture(autouse=True)
+def _clean_startup_queue() -> None:
+    reset_startup_queues_for_test()
+    yield
+    reset_startup_queues_for_test()
 
 
 @pytest.mark.asyncio
@@ -197,6 +209,45 @@ async def test_switcher_tap_on_dead_session_alerts(fake_tmux, fake_bot):
     active = session_manager.get_active_session(USER_ID)
     assert active is not None and active.id == "aaaaaaaa"
     assert query.answers and query.answers[-1][1] is True  # show_alert=True
+
+
+@pytest.mark.asyncio
+async def test_switcher_tap_cancels_new_session_flow(
+    fake_tmux, fake_bot, projects_path, no_card_lag
+):
+    fake_tmux.add_window("@100", name="sessA", cwd=WORKDIR_A, pane="idle\n")
+    fake_tmux.add_window("@200", name="sessB", cwd=WORKDIR_B, pane="idle\n")
+    seed_session(
+        session_manager,
+        sid="aaaaaaaa",
+        name="sessA",
+        window_id="@100",
+        workdir=WORKDIR_A,
+        claude_session_id=SID_A,
+        active_for=USER_ID,
+    )
+    seed_session(
+        session_manager,
+        sid="bbbbbbbb",
+        name="sessB",
+        window_id="@200",
+        workdir=WORKDIR_B,
+        claude_session_id=SID_B,
+    )
+    begin_startup_queue(USER_ID)
+    user = FakeUser(USER_ID)
+    query = FakeCallbackQuery(
+        data="sw:bbbbbbbb",
+        user=user,
+        message_id=8000,
+        chat_id=USER_ID,
+        bot=fake_bot,
+    )
+
+    await callback_handler(FakeUpdate(user=user, callback_query=query), _ctx(fake_bot))
+
+    assert not has_startup_queue(USER_ID)
+    assert session_manager.get_active_session(USER_ID).id == "bbbbbbbb"
 
 
 @pytest.mark.asyncio

@@ -61,6 +61,16 @@ def has_startup_queue(user_id: int) -> bool:
     return user_id in _flows
 
 
+def current_startup_flow(user_id: int) -> StartupFlow | None:
+    """Return the flow currently owning this user's Start lifecycle."""
+    return _flows.get(user_id)
+
+
+def is_current_startup_flow(user_id: int, flow: StartupFlow) -> bool:
+    """Return whether ``flow`` still owns this user's Start lifecycle."""
+    return _flows.get(user_id) is flow
+
+
 def pending_startup_count(user_id: int) -> int:
     flow = _flows.get(user_id)
     return len(flow.entries) if flow is not None else 0
@@ -446,10 +456,12 @@ __all__ = [
     "bind_startup_session",
     "bind_startup_queue",
     "cancel_startup_queue",
+    "current_startup_flow",
     "capture_startup_message",
     "enqueue_startup_message",
     "fail_startup_queue",
     "has_startup_queue",
+    "is_current_startup_flow",
     "pending_startup_count",
     "report_failed_startup_entries",
     "track_startup_operation",

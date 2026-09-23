@@ -10,6 +10,19 @@ import pytest
 from ccbot.bot.callbacks import footer
 from ccbot.handlers.callback_data import CB_FT_KILL, CB_PG_NEXT, CB_PG_PREV
 from ccbot.handlers.card_model import CardState
+from ccbot.handlers.directory_browser import BROWSE_PATH_KEY, STATE_KEY
+from ccbot.startup_queue import (
+    begin_startup_queue,
+    has_startup_queue,
+    reset_startup_queues_for_test,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clean_startup_queue() -> None:
+    reset_startup_queues_for_test()
+    yield
+    reset_startup_queues_for_test()
 
 
 @pytest.mark.asyncio
@@ -64,6 +77,35 @@ async def test_pagination_wraps_cyclically(
 
     assert await footer.handle(query, context, user)
     assert state.current_page_idx == expected
+
+
+@pytest.mark.asyncio
+async def test_pagination_cancels_new_session_flow_before_showing_active_card(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query = SimpleNamespace(data=CB_PG_NEXT, answer=AsyncMock())
+    context = SimpleNamespace(
+        bot=SimpleNamespace(),
+        user_data={STATE_KEY: "browsing_directory", BROWSE_PATH_KEY: "/tmp/project"},
+    )
+    user = SimpleNamespace(id=42)
+    session = SimpleNamespace(id="s1")
+    state = CardState(msg_id=9, current_page_idx=0, in_menu_view=True)
+    begin_startup_queue(user.id)
+
+    monkeypatch.setattr(
+        footer.session_manager, "get_active_session", lambda _uid: session
+    )
+    monkeypatch.setattr(footer, "get_card_state", lambda _uid, _sess: state)
+    monkeypatch.setattr(footer, "card_page_info", lambda _state, _uid: (0, 2))
+    monkeypatch.setattr(footer, "refresh_panel", AsyncMock(return_value=True))
+
+    assert await footer.handle(query, context, user)
+
+    assert not has_startup_queue(user.id)
+    assert STATE_KEY not in context.user_data
+    assert BROWSE_PATH_KEY not in context.user_data
+    assert state.in_menu_view is False
 
 
 @pytest.mark.asyncio

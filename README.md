@@ -79,7 +79,7 @@ implementation map is in `doc/dm-multisession-plan.md`.
   authenticate through Telegram on first launch
 - **Python 3.12+**
 - **uv** (recommended) for dependency management
-- macOS (Apple Silicon) or Linux arm64
+- macOS (Apple Silicon) or Linux x86_64/arm64
 
 Optional:
 

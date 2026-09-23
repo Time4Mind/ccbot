@@ -155,15 +155,29 @@ class RemotePromptQueue:
         return delivered
 
     async def _run(self) -> None:
+        draining: dict[str, asyncio.Task[int]] = {}
         try:
-            while self._flows:
+            while self._flows or draining:
+                completed = [
+                    session_id for session_id, task in draining.items() if task.done()
+                ]
+                for session_id in completed:
+                    task = draining.pop(session_id)
+                    await asyncio.gather(task, return_exceptions=True)
                 for session_id in tuple(self._flows):
-                    await self.drain_once(session_id)
-                if self._flows:
+                    if session_id not in draining:
+                        draining[session_id] = asyncio.create_task(
+                            self.drain_once(session_id),
+                            name=f"remote-prompt-drain:{session_id}",
+                        )
+                if self._flows or draining:
                     await asyncio.sleep(self._poll_interval)
         except asyncio.CancelledError:
             raise
         finally:
+            for task in draining.values():
+                task.cancel()
+            await asyncio.gather(*draining.values(), return_exceptions=True)
             self._task = None
 
     def reset(self) -> None:

@@ -214,6 +214,11 @@ async def handle(
         if sess is None:
             await query.answer(t(user.id, "toast.no_session"), show_alert=False)
             return True
+        from .._new_session_flow import cancel_for_active_card
+
+        flow_cancelled = cancel_for_active_card(
+            user.id, getattr(context, "user_data", None)
+        )
         # Stop Telegram's button spinner before rendering or making the edit
         # request. An expired answer must not prevent the actual page paint.
         try:
@@ -221,6 +226,10 @@ async def handle(
         except Exception as e:
             logger.debug("pagination callback answer failed: %s", e)
         state = get_card_state(user.id, sess)
+        if flow_cancelled:
+            # Opening Start pauses the old card. Pagination winning the race
+            # makes that card live again, including its normal input routing.
+            state.in_menu_view = False
         idx, total = card_page_info(state, user.id)
         old_page_idx = state.current_page_idx
         if data == CB_PG_JUMP:

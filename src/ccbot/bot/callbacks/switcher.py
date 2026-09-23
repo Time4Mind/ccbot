@@ -14,11 +14,17 @@ from ...handlers import bg_status
 from ...handlers.card_binding import bind_carrier
 from ...handlers.callback_data import CB_SW_NEW, CB_SW_NOOP, CB_SW_USE
 from ...handlers.card_types import CarrierKind
+from ...handlers.card_registry import (
+    protect_switcher_carrier,
+    release_switcher_carrier,
+)
 from ...handlers.message_sender import safe_edit, safe_send
 from ...handlers.notifications import (
     activate_card_on_carrier,
+    build_footer_keyboard,
     enter_kb_mode,
     get_card_state,
+    is_card_busy,
     paint_card_on_carrier,
     pause_card_view,
     refresh_cached_screenshot,
@@ -71,6 +77,12 @@ async def handle(
         if sess is None or sess.state not in ("active", "idle"):
             await query.answer("Session not available", show_alert=True)
             return True
+        # The active-session card is now authoritative. If its callback raced
+        # the asynchronous directory browser, abandon that modal flow before
+        # painting so subsequent input cannot remain trapped in startup FIFO.
+        from .._new_session_flow import cancel_for_active_card
+
+        cancel_for_active_card(user.id, getattr(context, "user_data", None))
         # A completed result stays unread through its first presentation and
         # becomes acknowledged only when the user enters it a second time.
         # Record before painting so that the second entry already has no
@@ -101,7 +113,10 @@ async def handle(
         old_active = session_manager.get_active_session(user.id)
         old_active_id = old_active.id if old_active is not None else None
         orphan_msg_id: int | None = None
+        protected_carrier_id: int | None = None
         if query.message is not None:
+            protected_carrier_id = query.message.message_id
+            protect_switcher_carrier(user.id, protected_carrier_id)
             orphan_msg_id = await activate_card_on_carrier(
                 user.id,
                 old_active_id,
@@ -234,16 +249,16 @@ async def handle(
                         and get_card_state(user.id, sess).rich_media_file_id
                         == cached_file_id
                     )
-                    await paint_card_on_carrier(
+                    painted = await paint_card_on_carrier(
                         context.bot,
                         user.id,
                         sess,
                         query.message.message_id,
                         refresh_pane=not used_cached_screenshot,
                     )
-                    painted = True
                     if (
-                        used_cached_screenshot
+                        painted
+                        and used_cached_screenshot
                         and time.time() - cached_at > SCREENSHOT_CACHE_FRESH_SECONDS
                     ):
                         import asyncio as _asyncio
@@ -261,9 +276,17 @@ async def handle(
             if not painted:
                 try:
                     preview = await render_session_preview(sess)
-                    await safe_edit(query, preview)
+                    keyboard = build_footer_keyboard(
+                        user.id,
+                        screen="main",
+                        is_busy=is_card_busy(user.id, sess.id),
+                    )
+                    await safe_edit(query, preview, reply_markup=keyboard)
                 except Exception as e:
                     logger.debug("preview safe_edit failed: %s", e)
+
+        if protected_carrier_id is not None:
+            release_switcher_carrier(user.id, protected_carrier_id)
 
         # NB: do NOT call refresh_panel here. The carrier message just
         # got painted with the history view (or the pending interactive

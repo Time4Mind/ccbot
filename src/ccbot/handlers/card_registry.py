@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from telegram import Bot
 
@@ -27,6 +28,8 @@ __all__ = [
     "_user_send_locks",
     "_user_send_lock",
     "_strip_stale_switchers",
+    "protect_switcher_carrier",
+    "release_switcher_carrier",
     "_MSG_REGISTRY_LIMIT",
     "_msg_to_session",
     "_register_msg",
@@ -107,6 +110,34 @@ def _carrier_edit_lock(user_id: int) -> asyncio.Lock:
 # session-lock → user-lock; no path acquires them the other way round.
 _user_send_locks: dict[int, asyncio.Lock] = {}
 
+# A switch callback can wait behind an in-flight card send. Keep its tapped
+# carrier interactive during that short hand-off so the competing send cannot
+# leave the user looking at a buttonless card. Entries self-expire in case the
+# callback is cancelled before the normal release call.
+_PROTECTED_CARRIER_TTL_SECONDS = 30.0
+_protected_switcher_carriers: dict[tuple[int, int], float] = {}
+
+
+def protect_switcher_carrier(user_id: int, message_id: int) -> None:
+    _protected_switcher_carriers[(user_id, message_id)] = (
+        time.monotonic() + _PROTECTED_CARRIER_TTL_SECONDS
+    )
+
+
+def release_switcher_carrier(user_id: int, message_id: int) -> None:
+    _protected_switcher_carriers.pop((user_id, message_id), None)
+
+
+def _switcher_carrier_is_protected(user_id: int, message_id: int) -> bool:
+    key = (user_id, message_id)
+    deadline = _protected_switcher_carriers.get(key)
+    if deadline is None:
+        return False
+    if deadline <= time.monotonic():
+        _protected_switcher_carriers.pop(key, None)
+        return False
+    return True
+
 
 def _user_send_lock(user_id: int) -> asyncio.Lock:
     """Get-or-create the cross-session spawn-serialization lock for a user."""
@@ -146,6 +177,8 @@ async def _strip_stale_switchers(
             if st.msg_id not in targets:
                 targets.append(st.msg_id)
     for msg_id in targets:
+        if _switcher_carrier_is_protected(user_id, msg_id):
+            continue
         try:
             await bot.edit_message_reply_markup(
                 chat_id=user_id, message_id=msg_id, reply_markup=None

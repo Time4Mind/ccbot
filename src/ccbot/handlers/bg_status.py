@@ -34,6 +34,8 @@ after restart.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -229,46 +231,48 @@ async def infer_status_from_jsonl(sess: "Session") -> Status | None:
     )
     if file_path is None or not file_path.exists():
         return None
-    last_stop: str = ""
-    last_role: str = ""
-    import json as _json
-
-    import aiofiles
-
     try:
-        async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
-            async for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = _json.loads(line)
-                except _json.JSONDecodeError:
-                    continue
-                msg_type = obj.get("type")
-                if msg_type == "user":
-                    # A real user/tool-result entry after the last assistant
-                    # message means the turn is not terminal yet.
-                    last_role = "user"
-                    last_stop = ""
-                    continue
-                if msg_type != "assistant":
-                    continue
-                msg = obj.get("message", {})
-                last_role = "assistant"
-                last_stop = msg.get("stop_reason", "") or ""
+        return await asyncio.to_thread(_infer_status_from_jsonl_tail, file_path)
     except OSError as e:
         logger.debug("infer_status: cannot read %s: %s", file_path, e)
         return None
-    if last_role == "user":
+
+
+def _infer_status_from_jsonl_tail(file_path: Any) -> Status | None:
+    """Find the newest user/assistant record without scanning old history."""
+
+    def classify(raw: bytes) -> Status | None:
+        try:
+            obj = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        msg_type = obj.get("type")
+        if msg_type == "user":
+            return "working"
+        if msg_type != "assistant":
+            return None
+        stop_reason = (obj.get("message") or {}).get("stop_reason", "") or ""
+        if stop_reason in ("end_turn", "stop_sequence", "max_tokens"):
+            return "finished"
         return "working"
-    if last_role != "assistant":
-        return None
-    if last_stop in ("end_turn", "stop_sequence", "max_tokens"):
-        return "finished"
-    # ``tool_use`` stop_reason — session was mid-turn when the JSONL
-    # last got a write. Treat as still working.
-    return "working"
+
+    chunk_size = 64 * 1024
+    with open(file_path, "rb") as stream:
+        stream.seek(0, 2)
+        position = stream.tell()
+        partial = b""
+        while position > 0:
+            size = min(chunk_size, position)
+            position -= size
+            stream.seek(position)
+            parts = (stream.read(size) + partial).split(b"\n")
+            partial = parts[0]
+            for raw in reversed(parts[1:]):
+                if raw.strip() and (status := classify(raw)) is not None:
+                    return status
+        if partial.strip():
+            return classify(partial)
+    return None
 
 
 def clear_for_session(session_id: str) -> bool:

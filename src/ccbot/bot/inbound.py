@@ -7,6 +7,7 @@ voice transcription never blocks session-switch callbacks.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from telegram import Update
@@ -17,8 +18,10 @@ from ..default_session import claim_default_session
 from ..handlers.notifications import (
     get_card_state,
     lookup_session_for_message,
+    refresh_session_keyboard,
     schedule_card_after_message,
 )
+from ..handlers import bg_status
 from ..handlers.card_types import PendingPrompt
 from ..handlers.directory_browser import (
     STATE_KEY,
@@ -98,6 +101,16 @@ def _enqueue(
         processor=processor,
     )
     if sess is not None:
+        # Queue admission is the user-visible start of a new turn. Mark the
+        # immutable target session working now, before FIFO delivery or the
+        # first agent event, so a completed-session badge flips to 🔶 at once.
+        if kind in ("text", "photo", "document", "voice") and bg_status.update_status(
+            user.id, sess.id, "working", force=True
+        ):
+            asyncio.create_task(
+                refresh_session_keyboard(context.bot, user.id),
+                name=f"inbound-status:{user.id}:{sess.id}",
+            )
         # A new Telegram request owns the move to the latest page. Do it now,
         # before async queue work: a later pagination tap must stay authoritative
         # even if this request's transcript event arrives after that tap.

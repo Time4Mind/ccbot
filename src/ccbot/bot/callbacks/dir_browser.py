@@ -43,9 +43,11 @@ from ...handlers.message_sender import safe_edit
 from ...handlers.notifications import resume_card_view
 from ...i18n import t
 from ...session import session_manager
+from ...startup_queue import current_startup_flow
 from ...transfer_runtime import get_node_runtime
+from .._new_session_flow import edit_backend_picker, edit_startup_surface
 from .._common import open_more_in_place
-from ..backend_picker import build_backend_picker
+from ..backend_picker import build_backend_picker as build_backend_picker
 from ..messages import create_and_activate_session
 
 
@@ -57,6 +59,7 @@ async def open_new_session_flow(
     origin: str,
 ) -> None:
     """Choose a backend when needed, then open the directory browser."""
+    startup_flow = current_startup_flow(user_id)
     node_id = session_manager.get_selected_node_id(user_id)
     enabled = session_manager.get_effective_backends(user_id, node_id)
     if context.user_data is not None:
@@ -67,8 +70,7 @@ async def open_new_session_flow(
         await safe_edit(query, f"❌ Node {node_id} has no available backend")
         return
     if len(enabled) > 1:
-        keyboard = build_backend_picker(user_id, node_id=node_id)
-        await safe_edit(query, t(user_id, "backend.choose"), reply_markup=keyboard)
+        await edit_backend_picker(query, context, user_id, startup_flow, node_id)
         return
     if context.user_data is not None:
         context.user_data["_new_session_backend"] = only_backend
@@ -81,11 +83,16 @@ async def open_directory_browser(
     user_id: int,
     *,
     node_id: str | None = None,
+    startup_flow: Any | None = None,
 ) -> None:
+    if startup_flow is None:
+        startup_flow = current_startup_flow(user_id)
     msg_text, keyboard, _subdirs = await initialize_directory_browser(
         context, user_id, node_id=node_id
     )
-    await safe_edit(query, msg_text, reply_markup=keyboard)
+    await edit_startup_surface(
+        query, context, user_id, startup_flow, msg_text, keyboard
+    )
 
 
 async def _load_directory_browser(

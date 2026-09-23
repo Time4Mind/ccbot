@@ -1,5 +1,7 @@
 """Selecting a directory starts fresh without old-session recommendations."""
 
+import asyncio
+
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -22,6 +24,14 @@ from ccbot.handlers.directory_browser import (
     build_directory_browser,
 )
 from ccbot.i18n import t
+from ccbot.startup_queue import begin_startup_queue, reset_startup_queues_for_test
+
+
+@pytest.fixture(autouse=True)
+def _clean_startup_queue() -> None:
+    reset_startup_queues_for_test()
+    yield
+    reset_startup_queues_for_test()
 
 
 @pytest.mark.asyncio
@@ -56,7 +66,7 @@ async def test_directory_browser_reads_selected_node_filesystem(monkeypatch):
     )
     monkeypatch.setattr(dir_browser, "get_node_runtime", lambda _node_id: runtime)
     edit = AsyncMock()
-    monkeypatch.setattr(dir_browser, "safe_edit", edit)
+    monkeypatch.setattr("ccbot.bot._new_session_flow.safe_edit", edit)
 
     context = SimpleNamespace(user_data={})
     await dir_browser.open_directory_browser(SimpleNamespace(), context, user_id=42)
@@ -89,6 +99,43 @@ async def test_new_session_uses_selected_worker_backend_not_leader_default(monke
     assert context.user_data["_new_session_node_id"] == "worker-a"
     assert context.user_data["_new_session_backend"] == "codex"
     open_browser.assert_awaited_once_with(query, context, 42, node_id="worker-a")
+
+
+@pytest.mark.asyncio
+async def test_cancelled_slow_directory_browser_cannot_overwrite_active_card(
+    monkeypatch,
+) -> None:
+    from ccbot.bot._new_session_flow import cancel_for_active_card
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def initialize(context, user_id, *, node_id=None):
+        started.set()
+        await release.wait()
+        context.user_data[STATE_KEY] = "browsing_directory"
+        context.user_data[BROWSE_PATH_KEY] = "/tmp/project"
+        return "browser", object(), []
+
+    edit = AsyncMock()
+    monkeypatch.setattr(dir_browser, "initialize_directory_browser", initialize)
+    monkeypatch.setattr("ccbot.bot._new_session_flow.safe_edit", edit)
+    context = SimpleNamespace(user_data={})
+    flow = begin_startup_queue(42)
+
+    task = asyncio.create_task(
+        dir_browser.open_directory_browser(
+            SimpleNamespace(), context, 42, startup_flow=flow
+        )
+    )
+    await started.wait()
+    assert cancel_for_active_card(42, context.user_data)
+    release.set()
+    await task
+
+    edit.assert_not_awaited()
+    assert STATE_KEY not in context.user_data
+    assert BROWSE_PATH_KEY not in context.user_data
 
 
 @pytest.mark.asyncio

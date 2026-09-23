@@ -15,6 +15,7 @@ from ccbot.bot.inbound import (
     voice_intake_handler,
 )
 from ccbot.handlers.card_model import CardState
+from ccbot.handlers import bg_status
 from ccbot.inbound_queue import (
     enqueue_inbound,
     pending_inbound_count,
@@ -388,6 +389,52 @@ async def test_reply_quote_is_pinned_to_quoted_session() -> None:
             await asyncio.sleep(0)
 
     assert seen == ["@B"]
+
+
+@pytest.mark.asyncio
+async def test_reply_marks_finished_target_working_at_intake() -> None:
+    context = _context()
+    update = _update(30, text="continue")
+    update.message.reply_to_message = SimpleNamespace(message_id=99)
+    target = SimpleNamespace(id="sessB", window_id="@B", state="active", name="B")
+    state = CardState()
+    receipt = SimpleNamespace(completion=None)
+    observed: list[str] = []
+
+    bg_status.update_status(42, target.id, "finished", force=True)
+    try:
+        with (
+            patch("ccbot.bot.inbound.is_user_allowed", return_value=True),
+            patch("ccbot.bot.inbound.active_window", return_value="@A"),
+            patch(
+                "ccbot.bot.inbound.lookup_session_for_message", return_value=target.id
+            ),
+            patch("ccbot.bot.inbound.session_manager.get_session", return_value=target),
+            patch(
+                "ccbot.bot.inbound.session_manager.find_session_by_window",
+                return_value=target,
+            ),
+            patch("ccbot.bot.inbound.get_card_state", return_value=state),
+            patch("ccbot.bot.inbound.enqueue_inbound", return_value=receipt),
+            patch(
+                "ccbot.bot.inbound.schedule_card_after_message",
+                side_effect=lambda *_args: observed.append(
+                    bg_status.status_emoji(42, target.id)
+                ),
+            ),
+            patch(
+                "ccbot.bot.inbound.refresh_session_keyboard",
+                new=AsyncMock(return_value=True),
+            ) as refresh_keyboard,
+        ):
+            assert await text_intake_handler(update, context)
+            await asyncio.sleep(0)
+
+        assert observed == ["🔶"]
+        assert bg_status.get_status(42, target.id) == "working"
+        refresh_keyboard.assert_awaited_once_with(context.bot, 42)
+    finally:
+        bg_status.clear_for_user_session(42, target.id)
 
 
 @pytest.mark.asyncio

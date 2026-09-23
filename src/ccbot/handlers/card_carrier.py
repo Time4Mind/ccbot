@@ -511,7 +511,7 @@ async def paint_card_on_carrier(
     carrier_msg_id: int,
     *,
     refresh_pane: bool = True,
-) -> None:
+) -> bool:
     """Claim ``carrier_msg_id`` as ``sess``'s live card and paint it.
 
     Used by Menu → Sessions: the carrier is the menu message the user just
@@ -551,6 +551,8 @@ async def paint_card_on_carrier(
         # switcher rows in chat stop being the canonical surface.
         await _strip_stale_switchers(bot, user_id, carrier_msg_id, sess.id)
         session_manager.set_last_switcher_msg(user_id, carrier_msg_id)
+        return True
+    return False
 
 
 async def refresh_cached_screenshot(

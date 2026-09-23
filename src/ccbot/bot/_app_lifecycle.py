@@ -27,6 +27,7 @@ from ..metrics import metrics_flush_loop
 from ..session import session_manager
 from ..session_monitor import NewMessage, SessionMonitor
 from ._common import CC_COMMANDS
+from ._startup_status import seed_bg_context, seed_lifecycle_statuses
 from .commands.auth import (
     ensure_codex_auth_on_start,
     shutdown_auth_flows,
@@ -142,6 +143,12 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     # window vanished get state=lost and surface in the switcher with a
     # Restore button.
     await session_manager.reconcile_sessions_with_tmux()
+
+    # Persisted lifecycle markers may describe the turn before the one that is
+    # still running in tmux. Reconcile from the transcript tail before any
+    # Telegram card is restored, so restart never paints a stale green check.
+    await seed_lifecycle_statuses()
+    logger.info("Bg-status lifecycle seed complete")
 
     async def _connect_node_runtime() -> None:
         if not config.node_relay_url or not config.node_secret:
@@ -360,56 +367,8 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     asyncio.create_task(_prewarm_history_caches())
     logger.info("History cache pre-warm scheduled")
 
-    # Seed the lifecycle marker for every live session.  Buttons are a full
-    # status view now, not a sparse notification feed: after restart each one
-    # must be either working, finished/ready, or awaiting attention.
-    async def _seed_bg_statuses() -> None:
-        from ..handlers import bg_status
-        from ..handlers.notifications import refresh_panel
-        from ..usage import context_pct_for_session
-
-        for user_id in config.allowed_users:
-            changed = False
-            for sess in list(session_manager.sessions.values()):
-                if sess.state not in ("active", "idle"):
-                    continue
-                try:
-                    inferred = await bg_status.infer_status_from_jsonl(sess)
-                except Exception as e:
-                    logger.debug("infer bg status failed for %s: %s", sess.id, e)
-                    continue
-                current = bg_status.get_status(user_id, sess.id)
-                if inferred == "working":
-                    seed_status: bg_status.Status = "working"
-                elif current in ("finished", "seen_finished", "error"):
-                    # Preserve durable unread/read/error state.
-                    seed_status = current
-                elif current is not None:
-                    # A formerly working/question session that became terminal
-                    # while the bot was down has an unread result.
-                    seed_status = "finished"
-                else:
-                    # Migration/default: old terminal or empty reserve sessions
-                    # have no unread evidence, so do not manufacture ✅ badges.
-                    seed_status = "seen_finished"
-                if bg_status.update_status(user_id, sess.id, seed_status):
-                    changed = True
-                try:
-                    pct = await context_pct_for_session(sess)
-                except Exception as e:
-                    logger.debug("infer bg context failed for %s: %s", sess.id, e)
-                    pct = None
-                if pct is not None:
-                    bg_status.set_context_pct(user_id, sess.id, pct)
-                    changed = True
-            if changed:
-                try:
-                    await refresh_panel(application.bot, user_id)
-                except Exception as e:
-                    logger.debug("refresh_panel after seed failed: %s", e)
-
-    asyncio.create_task(_seed_bg_statuses())
-    logger.info("Bg-status seed scheduled")
+    asyncio.create_task(seed_bg_context(application), name="bg-context-seed")
+    logger.info("Bg-context seed scheduled")
 
     # Repaint each user's persisted live card in place. ``_cards`` is
     # in-memory only, so without this a restart orphans the card message

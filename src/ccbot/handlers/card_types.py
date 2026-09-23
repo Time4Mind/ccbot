@@ -101,6 +101,7 @@ class PendingPrompt:
     text: str
     preprocessed: bool = False
     user_icon: str = ""
+    inbox_attachment: bool = False
     created_at: float = field(default_factory=time.time)
 
 

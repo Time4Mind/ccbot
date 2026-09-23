@@ -10,6 +10,7 @@ import pytest
 
 from ccbot.bot.inbound import (
     command_intake_handler,
+    photo_intake_handler,
     text_intake_handler,
     voice_intake_handler,
 )
@@ -22,13 +23,22 @@ from ccbot.inbound_queue import (
 )
 
 
-def _update(message_id: int, *, text: str | None = None, voice: bool = False):
+def _update(
+    message_id: int,
+    *,
+    text: str | None = None,
+    voice: bool = False,
+    caption: str | None = None,
+    photo: bool = False,
+):
     update = MagicMock()
     update.effective_user = SimpleNamespace(id=42)
     update.message = SimpleNamespace(
         message_id=message_id,
         text=text,
         voice=object() if voice else None,
+        caption=caption,
+        photo=[object()] if photo else None,
     )
     return update
 
@@ -154,6 +164,58 @@ async def test_text_intake_focuses_latest_before_delayed_monitor_event() -> None
     assert [
         (row.request_id, row.text, row.user_icon) for row in state.pending_prompts
     ] == [("12", "next request", "👤")]
+
+
+@pytest.mark.asyncio
+async def test_media_caption_reserves_prompt_before_delayed_transcript() -> None:
+    context = _context()
+    photo = _update(13, caption="Проверь изображение", photo=True)
+    sess = SimpleNamespace(id="s1")
+    state = CardState()
+    receipt = SimpleNamespace(completion=None)
+
+    with (
+        patch("ccbot.bot.inbound.is_user_allowed", return_value=True),
+        patch("ccbot.bot.inbound.active_window", return_value="@A"),
+        patch(
+            "ccbot.bot.inbound.session_manager.find_session_by_window",
+            return_value=sess,
+        ),
+        patch("ccbot.bot.inbound.get_card_state", return_value=state),
+        patch("ccbot.bot.inbound.enqueue_inbound", return_value=receipt),
+        patch("ccbot.bot.inbound.schedule_card_after_message"),
+    ):
+        assert await photo_intake_handler(photo, context)
+
+    assert [(row.request_id, row.text) for row in state.pending_prompts] == [
+        ("13", "Проверь изображение")
+    ]
+    assert state.pending_request_sequences == [(13, 1)]
+
+
+@pytest.mark.asyncio
+async def test_captionless_media_reserves_prompt_before_delayed_transcript() -> None:
+    context = _context()
+    photo = _update(14, caption=None, photo=True)
+    sess = SimpleNamespace(id="s1")
+    state = CardState()
+    receipt = SimpleNamespace(completion=None)
+
+    with (
+        patch("ccbot.bot.inbound.is_user_allowed", return_value=True),
+        patch("ccbot.bot.inbound.active_window", return_value="@A"),
+        patch(
+            "ccbot.bot.inbound.session_manager.find_session_by_window",
+            return_value=sess,
+        ),
+        patch("ccbot.bot.inbound.get_card_state", return_value=state),
+        patch("ccbot.bot.inbound.enqueue_inbound", return_value=receipt),
+        patch("ccbot.bot.inbound.schedule_card_after_message"),
+    ):
+        assert await photo_intake_handler(photo, context)
+
+    assert [(row.request_id, row.text) for row in state.pending_prompts] == [("14", "")]
+    assert state.pending_request_sequences == [(14, 1)]
 
 
 @pytest.mark.asyncio

@@ -173,6 +173,33 @@ class TestStatusPollerSettingsDetection:
         ]
         assert "⏎ Enter" in labels
 
+    @pytest.mark.asyncio
+    async def test_codex_0156_effort_picker_is_surfaced_with_buttons(
+        self, mock_bot: AsyncMock, sample_pane_codex_effort_picker: str
+    ) -> None:
+        """Codex 0.156's effort footer is recognized after model selection."""
+        window_id = "@5"
+        mock_window = MagicMock(window_id=window_id)
+
+        with (
+            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux_poll,
+            patch("ccbot.handlers.interactive_ui.tmux_manager") as mock_tmux_ui,
+        ):
+            mock_tmux_poll.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux_poll.capture_pane = AsyncMock(
+                return_value=sample_pane_codex_effort_picker
+            )
+            mock_tmux_ui.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux_ui.capture_pane = AsyncMock(
+                return_value=sample_pane_codex_effort_picker
+            )
+
+            await update_status_message(mock_bot, user_id=100, window_id=window_id)
+
+        call_kwargs = mock_bot.send_message.await_args.kwargs
+        assert call_kwargs["text"].startswith("Select Reasoning Level")
+        assert call_kwargs["reply_markup"].inline_keyboard
+
 
 @pytest.mark.asyncio
 async def test_pre_resolved_window_skips_second_tmux_lookup(mock_bot: AsyncMock):

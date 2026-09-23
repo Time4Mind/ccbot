@@ -183,5 +183,22 @@ def sample_pane_codex_model_picker():
 
 
 @pytest.fixture
+def sample_pane_codex_effort_picker():
+    """Codex 0.156.1 reasoning picker captured after choosing a model."""
+    return (
+        "  Select Reasoning Level for GPT-6-Sol\n"
+        "\n"
+        "  1. Low               Fast responses with lighter reasoning\n"
+        "› 2. Medium (default)  Balances speed and reasoning depth for everyday "
+        "tasks\n"
+        "  3. High              Greater reasoning depth for complex problems\n"
+        "  4. Extra high        Extra high reasoning depth for complex problems\n"
+        "  5. More reasoning…   Max and Ultra consume usage limits faster\n"
+        "\n"
+        "  enter default · s session · esc back\n"
+    )
+
+
+@pytest.fixture
 def sample_pane_no_ui():
     return "$ echo hello\nhello\n$\n"

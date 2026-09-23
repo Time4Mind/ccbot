@@ -236,6 +236,10 @@ UI_PATTERNS: list[UIPattern] = [
             re.compile(r"Press enter to confirm or esc to go back", re.IGNORECASE),
             # Codex 0.156 combined model-and-effort picker.
             re.compile(r"^\s*enter select\s+·\s+esc back\s*$", re.IGNORECASE),
+            re.compile(
+                r"^\s*enter default\s+·\s+s session\s+·\s+esc back\s*$",
+                re.IGNORECASE,
+            ),
             re.compile(r"^\s*Type to filter"),
         ),
     ),

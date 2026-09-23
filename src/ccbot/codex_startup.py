@@ -158,9 +158,9 @@ async def drive_codex_startup(
 
     A composer must remain continuously ready for ``ready_settle_time`` so a
     delayed startup modal can still be handled. An offered update is accepted
-    once. Codex's updater exits instead of returning to the TUI, so the exact
-    original command is relaunched after the pane returns to its shell. A
-    second update prompt is a bounded error.
+    once. After updating, Codex may either return directly to its composer or
+    exit to the shell. In the latter case, the exact original command is
+    relaunched. A second update prompt is a bounded error.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + max(0.0, timeout)
@@ -174,11 +174,19 @@ async def drive_codex_startup(
         text, process = await asyncio.gather(capture(), current_process())
 
         if waiting_for_updater_exit:
-            ready_since = None
             if _is_shell(process):
                 await relaunch(command)
                 waiting_for_updater_exit = False
                 relaunched_after_update = True
+                ready_since = None
+            elif classify_codex_screen(text) is CodexScreen.READY:
+                now = loop.time()
+                if ready_since is None:
+                    ready_since = now
+                if now - ready_since >= settle_time:
+                    return CodexStartupResult(updated=True)
+            else:
+                ready_since = None
             await asyncio.sleep(max(0.0, poll_interval))
             continue
 

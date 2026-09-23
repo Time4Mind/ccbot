@@ -13,6 +13,8 @@ multi-page count after the tap goes through the real ``callback_handler`` →
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from ccbot.bot.callbacks import callback_handler
@@ -248,6 +250,54 @@ async def test_switcher_tap_cancels_new_session_flow(
 
     assert not has_startup_queue(USER_ID)
     assert session_manager.get_active_session(USER_ID).id == "bbbbbbbb"
+
+
+@pytest.mark.asyncio
+async def test_switcher_keeps_footer_when_live_card_paint_fails(
+    fake_tmux, fake_bot, monkeypatch
+):
+    fake_tmux.add_window("@100", name="sessA", cwd=WORKDIR_A, pane="idle\n")
+    fake_tmux.add_window("@200", name="sessB", cwd=WORKDIR_B, pane="idle\n")
+    seed_session(
+        session_manager,
+        sid="aaaaaaaa",
+        name="sessA",
+        window_id="@100",
+        workdir=WORKDIR_A,
+        claude_session_id=SID_A,
+        active_for=USER_ID,
+    )
+    seed_session(
+        session_manager,
+        sid="bbbbbbbb",
+        name="sessB",
+        window_id="@200",
+        workdir=WORKDIR_B,
+        claude_session_id=SID_B,
+    )
+    monkeypatch.setattr(
+        switcher_callback,
+        "paint_card_on_carrier",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        switcher_callback,
+        "render_session_preview",
+        AsyncMock(return_value="session preview"),
+    )
+    user = FakeUser(USER_ID)
+    query = FakeCallbackQuery(
+        data="sw:bbbbbbbb",
+        user=user,
+        message_id=8000,
+        chat_id=USER_ID,
+        bot=fake_bot,
+    )
+
+    await callback_handler(FakeUpdate(user=user, callback_query=query), _ctx(fake_bot))
+
+    assert fake_bot.edits[-1]["message_id"] == 8000
+    assert fake_bot.edits[-1]["reply_markup"] is not None
 
 
 @pytest.mark.asyncio

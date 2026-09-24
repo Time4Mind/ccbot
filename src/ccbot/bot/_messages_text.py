@@ -373,7 +373,19 @@ async def _dispatch_text_to_active(
                 logger.debug("card repaint failed: %s", e)
         else:
             try:
-                await repost_card(context.bot, user_id, sess)
+                reused_receipt = await repost_card(
+                    context.bot,
+                    user_id,
+                    sess,
+                    after_message_id=update.message.message_id,
+                )
+                if reused_receipt:
+                    await refresh_panel(
+                        context.bot,
+                        user_id,
+                        immediate=True,
+                        refresh_pane=False,
+                    )
             except Exception as e:
                 logger.debug("repost_card failed: %s", e)
         return True

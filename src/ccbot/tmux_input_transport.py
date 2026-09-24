@@ -68,8 +68,12 @@ async def _paste_chunk(
             return False, False
         loaded = True
         try:
+            # tmux otherwise replaces LF with CR, which submits each line as
+            # a separate prompt in an interactive agent TUI. Bracketed paste
+            # keeps embedded newlines literal; only the explicit C-m below
+            # submits the whole request.
             code, stderr = await _run_tmux(
-                "paste-buffer", "-d", "-b", buffer_name, "-t", window_id
+                "paste-buffer", "-d", "-p", "-r", "-b", buffer_name, "-t", window_id
             )
         except Exception as exc:
             logger.error("tmux paste-buffer ambiguous window=%s: %s", window_id, exc)

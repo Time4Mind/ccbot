@@ -201,7 +201,9 @@ def is_active_for_user(user_id: int, sess: Session) -> bool:
     return active is not None and active.id == sess.id
 
 
-async def repost_card(bot: Bot, user_id: int, sess: Session) -> None:
+async def repost_card(
+    bot: Bot, user_id: int, sess: Session, *, after_message_id: int | None = None
+) -> bool:
     """Send a fresh live-card below the user's latest message, and drop
     the previous one if it exists.
 
@@ -221,7 +223,7 @@ async def repost_card(bot: Bot, user_id: int, sess: Session) -> None:
     """
     state = _cards.get((user_id, sess.id))
     if state is not None and state.in_menu_view:
-        return
+        return False
     state = get_card_state(user_id, sess)
     # Seed history from JSONL on first call after a bot restart so the
     # reposted card lands with full context, not an empty body.
@@ -235,6 +237,14 @@ async def repost_card(bot: Bot, user_id: int, sess: Session) -> None:
     # can't see the brief ``msg_id is None`` window and spawn its own
     # card too — Task #50.
     async with _card_lock(user_id, sess.id):
+        # Intake may have started sending its receipt before dispatch checked
+        # card_is_below. Re-check after waiting for the same spawn lock.
+        if (
+            after_message_id is not None
+            and state.msg_id is not None
+            and state.msg_id > after_message_id
+        ):
+            return True
         old_binding = snapshot_carrier(state)
         old_msg_id = clear_carrier(state)  # force a fresh Telegram message
 
@@ -294,3 +304,4 @@ async def repost_card(bot: Bot, user_id: int, sess: Session) -> None:
                 old_msg_id,
                 e,
             )
+    return False

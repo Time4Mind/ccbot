@@ -206,7 +206,7 @@ class CardState:
     last_photo_edit_ts: float = 0.0  # monotonic seconds; 3s throttle
     # Cached context-window fill percentage for the active session, set by
     # session_events whenever a new assistant turn lands. Rendered as a
-    # ``context: N%`` line above the bg-status panel. None = unknown.
+    # model/effort context line above the bg-status panel. None = unknown.
     context_pct: int | None = None
     # JSONL-seed bookkeeping (A6). ``_ensure_seeded`` reads the recent
     # transcript exactly once per (re)set so the live card lands with

@@ -7,6 +7,7 @@ import time
 
 from ..i18n import t
 from ..session import Session
+from . import bg_status
 from .card_budget import _format_hhmmss
 from .card_event_render import render_event
 from .card_pagination import (
@@ -330,21 +331,25 @@ def _render_card(
         parts.append(f"• {state.pane_status}")
     # Everything appended after this point is service metadata. Record the
     # exact raw-text boundary so rich-media transport can place the terminal
-    # screenshot before ``context`` and the background-session panel without
+    # screenshot before the context row and background-session panel without
     # searching for localized/rendered labels.
     state.media_anchor_offset = len("\n\n".join(parts))
     # Active session's own context-fill — single line at the very
     # bottom of the card body, just above the bg-status panel.
     # See ``set_card_context_pct``.
-    if state.context_pct is not None:
+    context_pct = state.context_pct
+    if context_pct is None and user_id is not None:
+        context_pct = bg_status.get_context_pct(user_id, sess.id)
+    if context_pct is not None:
         # Same `` ``-paragraph trick used by ``_EVENT_JOINER``:
         # CommonMark collapses consecutive blank lines into one
         # paragraph break, but a paragraph that contains a
         # non-breaking space survives — visibly DOUBLES the gap above
-        # the ``context: N%`` row so it doesn't read glued onto the
+        # the context row so it doesn't read glued onto the
         # last body event.
         parts.append("\u00a0")
-        parts.append(f"context: {state.context_pct}%")
+        context_label = identity or "context"
+        parts.append(f"─── {context_label}: {context_pct}% ───")
     # Paragraph-break join (``\n\n``) — single ``\n`` is a CommonMark
     # soft break that the rich parser collapses to a space, glueing
     # ``header ───── body ───── footer`` onto one row instead of each

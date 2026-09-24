@@ -477,7 +477,8 @@ ZH: dict[str, str] = {
         "• ❌ error\n"
         "• ❓ needs your attention (交互式提示)\n"
         "活动会话不推送 — 直接更新它的实时卡片。\n\n"
-        "*上下文占用。* 卡片每个会话显示 ``context: N%``。Codex 使用\n"
+        "*上下文占用。* Codex 卡片显示模型、推理强度和占用比例，格式如\n"
+        "``─── 6-sol high: N% ───``；模型未知时显示 ``context``。Codex 使用\n"
         "rollout 中准确的 token usage 和模型窗口;Claude 使用 JSONL\n"
         "估算(最近一次 assistant turn 的 input + cache_read 除以模型窗口)。"
     ),

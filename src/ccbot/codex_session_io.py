@@ -237,6 +237,55 @@ async def context_fill(path: Path) -> tuple[int, int] | None:
     return await asyncio.to_thread(_context_fill_from_rollout, path)
 
 
+def _model_effort_from_rollout(path: Path) -> tuple[str, str] | None:
+    """Read the newest turn identity when a busy TUI hides its footer."""
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            position = handle.tell()
+            remainder = b""
+            while position > 0:
+                start = max(0, position - 64 * 1024)
+                handle.seek(start)
+                block = handle.read(position - start) + remainder
+                position = start
+                lines = block.split(b"\n")
+                if start > 0:
+                    remainder = lines[0]
+                    lines = lines[1:]
+                for raw_line in reversed(lines):
+                    try:
+                        data = json.loads(raw_line)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
+                    if not isinstance(data, dict):
+                        continue
+                    if data.get("type") != "turn_context":
+                        continue
+                    payload = data.get("payload")
+                    if not isinstance(payload, dict):
+                        continue
+                    model = str(payload.get("model") or "").strip()
+                    effort = str(payload.get("effort") or "").strip().lower()
+                    if model and effort in {
+                        "default",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max",
+                        "ultra",
+                    }:
+                        return model, effort
+    except OSError:
+        return None
+    return None
+
+
+async def model_effort(path: Path) -> tuple[str, str] | None:
+    return await asyncio.to_thread(_model_effort_from_rollout, path)
+
+
 async def list_sessions_for_directory(cwd: str) -> list[ClaudeSession]:
     """Return the ten newest Codex sessions whose metadata cwd matches."""
     try:

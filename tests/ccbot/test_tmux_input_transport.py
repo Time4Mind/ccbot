@@ -23,6 +23,52 @@ def test_codex_transport_adds_only_trailing_space() -> None:
 
 
 @pytest.mark.asyncio
+async def test_multiline_paste_preserves_newlines_inside_bracketed_paste() -> None:
+    calls = []
+
+    async def run_tmux(*args, input_bytes=None):
+        calls.append((args, input_bytes))
+        return 0, b""
+
+    with patch("ccbot.tmux_input_transport._run_tmux", new=run_tmux):
+        assert await tmux_input_transport.send_literal_chunked(
+            "@5", "первая строка\n\nвторая 🙂", backend="codex"
+        )
+
+    assert calls[0][1] == "первая строка\n\nвторая 🙂 ".encode()
+    assert calls[1][0][:3] == ("paste-buffer", "-d", "-p")
+    assert "-r" in calls[1][0]
+    assert calls[-1][0] == ("send-keys", "-t", "@5", "C-m")
+
+
+@pytest.mark.asyncio
+async def test_chunked_multiline_paste_keeps_order_and_one_submit() -> None:
+    text = "🙂" * 224 + "\n\n" + "строка" * 180
+    calls = []
+
+    async def run_tmux(*args, input_bytes=None):
+        calls.append((args, input_bytes))
+        return 0, b""
+
+    with (
+        patch("ccbot.tmux_input_transport._run_tmux", new=run_tmux),
+        patch("ccbot.tmux_input_transport.asyncio.sleep", new=AsyncMock()),
+    ):
+        assert await tmux_input_transport.send_literal_chunked(
+            "@5", text, backend="codex"
+        )
+
+    chunks = [payload for args, payload in calls if args[0] == "load-buffer"]
+    pastes = [args for args, _ in calls if args[0] == "paste-buffer"]
+    submits = [args for args, _ in calls if args[0] == "send-keys"]
+    assert len(chunks) > 1
+    assert b"".join(chunks).decode() == text + " "
+    assert all(len(chunk) <= 900 for chunk in chunks)
+    assert all("-p" in args and "-r" in args for args in pastes)
+    assert submits == [("send-keys", "-t", "@5", "C-m")]
+
+
+@pytest.mark.asyncio
 async def test_literal_input_pastes_chunks_in_order_then_one_carriage_return() -> None:
     manager = TmuxManager(session_name="ccbot")
     with (

@@ -19,6 +19,7 @@ operation-scoped RetryAfter cooldowns. Exceptions are re-raised so callers
 
 import io
 import logging
+import time
 from typing import Any
 
 from telegram import Bot, InputMediaPhoto, LinkPreviewOptions, Message
@@ -70,6 +71,7 @@ async def _try_rich_send(
     """
     if not config.rich_messages:
         return None
+    started = time.monotonic()
     try:
         return await rich.send_rich_message(
             bot,  # type: ignore[arg-type]
@@ -80,7 +82,12 @@ async def _try_rich_send(
     except RetryAfter:
         raise
     except Exception as e:
-        logger.warning("rich send failed chat=%s, falling back: %s", chat_id, e)
+        logger.warning(
+            "rich send failed chat=%s error_type=%s elapsed_ms=%d; falling back",
+            chat_id,
+            type(e).__name__,
+            round((time.monotonic() - started) * 1000),
+        )
         return None
 
 
@@ -102,6 +109,7 @@ async def try_rich_edit(
     """
     if not config.rich_messages:
         return False
+    started = time.monotonic()
     try:
         await rich.edit_rich_message(
             bot,
@@ -116,10 +124,20 @@ async def try_rich_edit(
     except BadRequest as e:
         if "message is not modified" in str(e).lower():
             return True
-        logger.warning("rich edit failed msg=%s, falling back: %s", message_id, e)
+        logger.warning(
+            "rich edit failed msg=%s error_type=%s elapsed_ms=%d; falling back",
+            message_id,
+            type(e).__name__,
+            round((time.monotonic() - started) * 1000),
+        )
         return False
     except Exception as e:
-        logger.warning("rich edit failed msg=%s, falling back: %s", message_id, e)
+        logger.warning(
+            "rich edit failed msg=%s error_type=%s elapsed_ms=%d; falling back",
+            message_id,
+            type(e).__name__,
+            round((time.monotonic() - started) * 1000),
+        )
         return False
 
 

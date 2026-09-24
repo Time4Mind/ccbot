@@ -370,6 +370,46 @@ class TestInboundCardSurface:
         assert state.msg_id == 600
         bot.delete_message.assert_awaited_once_with(chat_id=77, message_id=400)
 
+    @pytest.mark.asyncio
+    async def test_late_repost_does_not_replace_receipt_after_lock_wait(self) -> None:
+        bot = AsyncMock()
+        sess = MagicMock(id="surface")
+        state = CardState(msg_id=400)
+        notifications._cards[(77, "surface")] = state
+        sending = asyncio.Event()
+        release = asyncio.Event()
+        sent = []
+
+        async def send_card(_bot, _user_id, _sess, target, **_kwargs):
+            sent.append(600 + len(sent))
+            sending.set()
+            await release.wait()
+            target.msg_id = sent[-1]
+            return True
+
+        with (
+            patch.object(notifications, "_ensure_seeded", new=AsyncMock()),
+            patch.object(notifications, "_render_card", return_value="card"),
+            patch.object(notifications, "_send_card", side_effect=send_card),
+            patch.object(notifications, "is_active_for_user", return_value=True),
+        ):
+            receipt = asyncio.create_task(
+                notifications.surface_card_after_message(bot, 77, sess, 500)
+            )
+            await sending.wait()
+            # Dispatch sees the carrier cleared while receipt send is in flight.
+            assert not notifications.card_is_below(77, "surface", 500)
+            repost = asyncio.create_task(
+                notifications.repost_card(bot, 77, sess, after_message_id=500)
+            )
+            release.set()
+            assert await receipt
+            assert await repost is True
+
+        assert sent == [600]
+        assert state.msg_id == 600
+        bot.delete_message.assert_awaited_once_with(chat_id=77, message_id=400)
+
 
 class TestSingleLiveSwitcher:
     def setup_method(self) -> None:

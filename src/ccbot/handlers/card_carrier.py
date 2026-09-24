@@ -132,7 +132,7 @@ async def cancel_pending_card_edits(timeout: float = 2.0) -> None:
 
 def set_card_context_pct(user_id: int, session_id: str, pct: int) -> None:
     """Stash the latest context-window fill percentage for this session's
-    live card. Read by ``_render_card`` to paint a ``context: N%`` line
+    live card. Read by ``_render_card`` to paint the context percentage line
     above the bg-status panel. No-op when no state exists yet.
     """
     state = _cards.setdefault((user_id, session_id), CardState())

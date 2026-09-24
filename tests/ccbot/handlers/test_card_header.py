@@ -30,6 +30,29 @@ def test_card_header_shows_compact_model_and_effort_before_timestamp() -> None:
     assert "· ccbot · 5.6-sol med ·" in header
 
 
+def test_card_context_row_shows_session_model_and_effort() -> None:
+    sess = Session(id="usage", name="usage", backend="codex", state="active")
+    state = CardState(
+        agent_model="gpt-6-sol",
+        reasoning_effort="high",
+        context_pct=42,
+    )
+
+    card = _render_card(sess, state)
+
+    assert card.endswith("─── 6-sol high: 42% ───")
+    assert "context: 42%" not in card
+
+
+def test_card_context_row_keeps_label_when_identity_is_unknown() -> None:
+    sess = Session(id="usage", name="usage", backend="claude", state="active")
+    state = CardState(context_pct=42)
+
+    card = _render_card(sess, state)
+
+    assert card.endswith("─── context: 42% ───")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("node_id", ["local", "worker-a"])
 async def test_codex_identity_header_is_node_independent(

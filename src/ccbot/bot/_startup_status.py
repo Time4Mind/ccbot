@@ -50,12 +50,13 @@ async def seed_bg_context(application: Any) -> None:
     for user_id in config.allowed_users:
         changed = False
         active = session_manager.get_active_session(user_id)
+        active_id = active.id if active is not None else None
         if active is not None:
             await sync_card_identity(active, get_card_state(user_id, active))
             await refresh_panel(application.bot, user_id)
         sessions = list(session_manager.sessions.values())
-        if active is not None:
-            sessions.sort(key=lambda sess: sess.id != active.id)
+        if active_id is not None:
+            sessions.sort(key=lambda sess: sess.id != active_id)
         for sess in sessions:
             if sess.state not in ("active", "idle"):
                 continue
@@ -67,7 +68,7 @@ async def seed_bg_context(application: Any) -> None:
             if pct is not None:
                 bg_status.set_context_pct(user_id, sess.id, pct)
                 changed = True
-                if active is not None and sess.id == active.id:
+                if sess.id == active_id:
                     await refresh_panel(application.bot, user_id)
         if changed:
             try:

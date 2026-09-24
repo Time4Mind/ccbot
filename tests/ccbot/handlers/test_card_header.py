@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ccbot.handlers import card_terminal
+from ccbot.handlers import bg_status
 from ccbot.handlers.card_layout import _render_card
 from ccbot.handlers.card_types import CardState
 from ccbot.session_models import Session
@@ -51,6 +52,47 @@ def test_card_context_row_keeps_label_when_identity_is_unknown() -> None:
     card = _render_card(sess, state)
 
     assert card.endswith("─── context: 42% ───")
+
+
+def test_card_context_row_recovers_saved_percent_after_restart() -> None:
+    sess = Session(id="restored-usage", name="usage", backend="codex", state="active")
+    state = CardState(agent_model="gpt-6-sol", reasoning_effort="high")
+    bg_status.set_context_pct(42, sess.id, 20)
+    try:
+        card = _render_card(sess, state, user_id=42)
+    finally:
+        bg_status.clear_for_user_session(42, sess.id)
+
+    assert card.endswith("─── 6-sol high: 20% ───")
+
+
+@pytest.mark.asyncio
+async def test_codex_identity_recovers_from_rollout_when_busy_pane_hides_footer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text(
+        '{"type":"turn_context","payload":{"model":"gpt-6-sol","effort":"high"}}\n'
+    )
+    sess = Session(
+        id="restored-identity",
+        name="usage",
+        backend="codex",
+        window_id="@restored",
+        claude_session_id="codex-session-id",
+        workdir=str(tmp_path),
+    )
+    state = CardState()
+    monkeypatch.setattr(
+        card_terminal, "capture_session_pane", AsyncMock(return_value="Working...")
+    )
+    monkeypatch.setattr(
+        "ccbot.codex_session_io.build_session_file_path", lambda *_args: rollout
+    )
+
+    assert await card_terminal.sync_card_identity(sess, state)
+    assert _render_card(sess, state, user_id=42).splitlines()[0].endswith("6-sol high")
 
 
 @pytest.mark.asyncio

@@ -524,10 +524,9 @@ async def paint_card_on_carrier(
     # Menu → Sessions on a fresh post-restart state: seed history first
     # so the user lands on a card with their conversation, not 1/1.
     await _legacy("_ensure_seeded")(user_id, sess, state)
-    if getattr(sess, "node_id", "local") != "local":
-        from .card_terminal import sync_card_identity
+    from .card_terminal import sync_card_identity
 
-        await sync_card_identity(sess, state)
+    await sync_card_identity(sess, state)
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
     state.pending_edit = None

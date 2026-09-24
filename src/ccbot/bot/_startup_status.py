@@ -43,12 +43,20 @@ async def seed_lifecycle_statuses() -> bool:
 async def seed_bg_context(application: Any) -> None:
     """Populate context percentages off the startup-critical path."""
     from ..handlers import bg_status
-    from ..handlers.notifications import refresh_panel
+    from ..handlers.card_terminal import sync_card_identity
+    from ..handlers.notifications import get_card_state, refresh_panel
     from ..usage import context_pct_for_session
 
     for user_id in config.allowed_users:
         changed = False
-        for sess in list(session_manager.sessions.values()):
+        active = session_manager.get_active_session(user_id)
+        if active is not None:
+            await sync_card_identity(active, get_card_state(user_id, active))
+            await refresh_panel(application.bot, user_id)
+        sessions = list(session_manager.sessions.values())
+        if active is not None:
+            sessions.sort(key=lambda sess: sess.id != active.id)
+        for sess in sessions:
             if sess.state not in ("active", "idle"):
                 continue
             try:
@@ -59,6 +67,8 @@ async def seed_bg_context(application: Any) -> None:
             if pct is not None:
                 bg_status.set_context_pct(user_id, sess.id, pct)
                 changed = True
+                if active is not None and sess.id == active.id:
+                    await refresh_panel(application.bot, user_id)
         if changed:
             try:
                 await refresh_panel(application.bot, user_id)

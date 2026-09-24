@@ -210,6 +210,12 @@ def set_context_pct(user_id: int, session_id: str, pct: int) -> None:
     _entry(user_id, session_id).context_pct = pct
 
 
+def get_context_pct(user_id: int, session_id: str) -> int | None:
+    """Return the saved context fill for a session shown on a new card."""
+    entry = _bg.get(user_id, {}).get(session_id)
+    return entry.context_pct if entry is not None else None
+
+
 async def infer_status_from_jsonl(sess: "Session") -> Status | None:
     """Read the last assistant turn from ``sess``'s JSONL and infer
     whether the session is currently working or has finished.

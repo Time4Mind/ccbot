@@ -104,7 +104,16 @@ async def watch_codex_startup_screens(
         return "\n".join(lines) if isinstance(lines, list) else str(lines)
 
     async def current_process() -> str:
-        return str(await to_thread(lambda: getattr(pane, "pane_current_command", "")))
+        def read_live_process() -> str:
+            # libtmux panes cache attributes. This pane was captured before
+            # Codex was sent to the shell, so its original command can remain
+            # "zsh" even while the live pane is running node/npm.
+            refresh = getattr(pane, "refresh", None)
+            if callable(refresh):
+                refresh()
+            return str(getattr(pane, "pane_current_command", ""))
+
+        return await to_thread(read_live_process)
 
     async def send_key(key: str) -> None:
         if key == "DOWN":

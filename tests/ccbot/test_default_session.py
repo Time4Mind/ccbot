@@ -64,7 +64,68 @@ async def test_enabled_default_session_creates_exactly_one_reserve(
     assert first.backend == "codex"
     assert first.default_reserve_user_id == user_id
     assert session_manager.get_active_session(user_id) is first
-    create_window.assert_awaited_once_with(str(project), backend="codex")
+    create_window.assert_awaited_once_with(
+        str(project), backend="codex", wait_for_codex_ready=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_reserve_start_is_bounded_and_does_not_publish_ghost(
+    monkeypatch, tmp_path
+):
+    user_id = 42
+    project = tmp_path / "project"
+    project.mkdir()
+    session_manager.user_settings[user_id] = {
+        "default_session_enabled": True,
+        "default_session_directory": str(project),
+        "default_session_backend": "codex",
+        "enabled_backends": ["codex"],
+    }
+    now = [100.0]
+    monkeypatch.setattr(
+        default_session,
+        "time",
+        SimpleNamespace(monotonic=lambda: now[0]),
+        raising=False,
+    )
+    create_window = AsyncMock(return_value=(False, "unsupported prompt", "", ""))
+    monkeypatch.setattr(default_session.tmux_manager, "create_window", create_window)
+
+    assert (
+        await default_session.ensure_default_session(SimpleNamespace(), user_id) is None
+    )
+    assert (
+        await default_session.ensure_default_session(SimpleNamespace(), user_id) is None
+    )
+    assert create_window.await_count == 1
+    assert session_manager.sessions == {}
+
+    now[0] += 31
+    assert (
+        await default_session.ensure_default_session(SimpleNamespace(), user_id) is None
+    )
+    assert create_window.await_count == 2
+
+    now[0] += 30
+    assert (
+        await default_session.ensure_default_session(SimpleNamespace(), user_id) is None
+    )
+    assert create_window.await_count == 2
+
+    now[0] += 31
+    assert (
+        await default_session.ensure_default_session(SimpleNamespace(), user_id) is None
+    )
+    assert create_window.await_count == 3
+
+    # A changed configuration is a new attempt, not the old failure loop.
+    session_manager.user_settings[user_id]["default_session_backend"] = "claude"
+    session_manager.user_settings[user_id]["enabled_backends"] = ["claude"]
+    assert (
+        await default_session.ensure_default_session(SimpleNamespace(), user_id) is None
+    )
+    assert create_window.await_count == 4
 
 
 @pytest.mark.asyncio

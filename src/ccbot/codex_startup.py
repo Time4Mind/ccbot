@@ -51,6 +51,50 @@ _SHELL_PROCESSES = {
     "zsh",
 }
 CODEX_READY_SETTLE_SECONDS = 3.0
+_UPDATE_TITLE = re.compile(r"^\s*update available\b", re.IGNORECASE)
+_NUMBERED_OPTION = re.compile(r"^\s*(?:[›❯]\s*)?\d+\.\s*(.+?)\s*$")
+_SELECTED_LINE = re.compile(r"^\s*[›❯]\s*(.*)$")
+
+
+def _update_now_is_selected(text: str) -> bool:
+    """Recognize the active update menu by actions, not version or chrome."""
+    # tmux capture-pane includes the unused terminal rows below a short
+    # startup modal. Trim those before taking the recent visible region.
+    lines = text.rstrip().splitlines()[-16:]
+    last_visible = next(
+        (line.strip().casefold() for line in reversed(lines) if line.strip()), ""
+    )
+    if not re.search(r"\benter\b", last_visible):
+        return False
+    selected = [
+        (index, match.group(1))
+        for index, line in enumerate(lines)
+        if (match := _SELECTED_LINE.match(line))
+    ]
+    if not selected:
+        return False
+    selected_index, selected_text = selected[-1]
+    choice = _NUMBERED_OPTION.match(selected_text)
+    if choice is None or not re.match(r"update now\b", choice.group(1), re.I):
+        return False
+    heading = next(
+        (
+            index
+            for index in range(selected_index, -1, -1)
+            if _UPDATE_TITLE.match(lines[index])
+        ),
+        None,
+    )
+    if heading is None or selected_index - heading > 10:
+        return False
+    choices = [
+        match.group(1).casefold()
+        for line in lines[heading : heading + 12]
+        if (match := _NUMBERED_OPTION.match(line))
+    ]
+    return any(choice.startswith("update now") for choice in choices) and (
+        "skip" in choices
+    )
 
 
 def classify_codex_screen(text: str) -> CodexScreen:
@@ -88,12 +132,7 @@ def classify_codex_screen(text: str) -> CodexScreen:
         and "press enter to continue" in lower
     ):
         return CodexScreen.RESUME_DIRECTORY
-    if (
-        "update available!" in lower
-        and "1. update now" in lower
-        and "2. skip" in lower
-        and "press enter to continue" in lower
-    ):
+    if _update_now_is_selected(text):
         return CodexScreen.UPDATE
     if any(
         marker in lower
@@ -104,18 +143,38 @@ def classify_codex_screen(text: str) -> CodexScreen:
         )
     ):
         return CodexScreen.AUTHENTICATION
-    if len(re.findall(r"(?m)^\s*(?:›\s*)?\d+\.\s+", text)) >= 2:
-        return CodexScreen.UNHANDLED_MODAL
     if is_codex_ready(text):
         return CodexScreen.READY
+    if len(re.findall(r"(?m)^\s*(?:›\s*)?\d+\.\s+", text)) >= 2:
+        return CodexScreen.UNHANDLED_MODAL
     return CodexScreen.WAITING
 
 
 def is_codex_ready(text: str) -> bool:
     """Return true only for Codex's real input box, never a modal cursor."""
-    if not text or parse_status_line(text) is not None or is_interactive_ui(text):
+    if not text:
         return False
-    lower = text.lower()
+    lines = text.strip().splitlines()
+    prompt_markers = [
+        index for index, line in enumerate(lines) if line.lstrip().startswith("›")
+    ]
+    if not prompt_markers:
+        return False
+    latest_prompt = prompt_markers[-1]
+    if _NUMBERED_OPTION.match(lines[latest_prompt]):
+        return False
+    title = next(
+        (
+            index
+            for index in range(latest_prompt, -1, -1)
+            if lines[index].strip().lower().startswith("openai codex")
+        ),
+        max(0, latest_prompt - 8),
+    )
+    current = "\n".join(lines[title:])
+    if parse_status_line(current) is not None or is_interactive_ui(current):
+        return False
+    lower = current.lower()
     if any(
         marker in lower
         for marker in (
@@ -125,7 +184,7 @@ def is_codex_ready(text: str) -> bool:
             "sign in with chatgpt",
             "sign in with device code",
             "provide your own api key",
-            "update available!",
+            "update available",
             "hooks need review before they can run",
             "press t to trust all",
             "choose how you'd like codex to proceed",
@@ -133,10 +192,12 @@ def is_codex_ready(text: str) -> bool:
         )
     ):
         return False
-    lines = text.strip().splitlines()
-    if not any(line.lstrip().startswith("›") for line in lines[-6:]):
+    if latest_prompt < len(lines) - 6:
         return False
-    return "openai codex" in lower or parse_codex_model_effort(text) is not None
+    return (
+        "openai codex" in current.lower()
+        or parse_codex_model_effort(current) is not None
+    )
 
 
 def _is_shell(process: str) -> bool:
@@ -187,6 +248,13 @@ async def drive_codex_startup(
                     return CodexStartupResult(updated=True)
             else:
                 ready_since = None
+            await asyncio.sleep(max(0.0, poll_interval))
+            continue
+
+        # A finished updater can leave its old menu in tmux scrollback while
+        # the shell is waiting for a relaunch. It is no longer an active modal.
+        if _is_shell(process):
+            ready_since = None
             await asyncio.sleep(max(0.0, poll_interval))
             continue
 

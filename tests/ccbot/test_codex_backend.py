@@ -171,6 +171,56 @@ async def test_local_codex_update_relaunches_the_exact_startup_command(
 
 
 @pytest.mark.asyncio
+async def test_local_startup_refreshes_cached_pane_process_before_classifying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("ccbot.tmux_manager.config.resume_settle_timeout", 0.05)
+    screens = [
+        [
+            "Update available · 0.156.1 → 0.157.0",
+            "› 1. Update now (runs npm install)",
+            "  2. Skip",
+            "  3. Skip until next version",
+            "enter continue · esc skip",
+        ],
+        ["Installing update"],
+        ["shell"],
+        ["OpenAI Codex", "› Ask anything", "gpt-5.6 medium · ~/project"],
+    ]
+    processes = iter(["node", "npm", "zsh", "node"])
+
+    class Pane:
+        pane_current_command = "zsh"  # Cached before Codex was launched.
+
+        def __init__(self) -> None:
+            self.sent: list[tuple[str, bool]] = []
+            self.refreshes = 0
+
+        def refresh(self) -> None:
+            self.refreshes += 1
+            self.pane_current_command = next(processes, "node")
+
+        def capture_pane(self) -> list[str]:
+            return (
+                screens.pop(0)
+                if screens
+                else ["OpenAI Codex", "› Ask anything", "gpt-5.6 medium · ~/project"]
+            )
+
+        def send_keys(self, value: str, enter: bool = True) -> None:
+            self.sent.append((value, enter))
+
+    pane = Pane()
+    updated = await TmuxManager._watch_codex_startup_screens(
+        pane, command="codex --no-alt-screen", poll_interval=0, ready_settle_time=0
+    )
+
+    assert updated is True
+    assert pane.sent == [("", True), ("codex --no-alt-screen", True)]
+    assert pane.refreshes >= 4
+
+
+@pytest.mark.asyncio
 async def test_local_codex_inline_hooks_review_sends_literal_trust_key() -> None:
     screens = iter(
         [

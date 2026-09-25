@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,20 @@ logger = logging.getLogger(__name__)
 _locks: dict[int, asyncio.Lock] = {}
 _replacement_tasks: set[asyncio.Task[Session | None]] = set()
 RECONCILE_SECONDS = 5.0
+_START_RETRY_SECONDS = 30.0
+_MAX_START_RETRY_SECONDS = 300.0
+_start_retries: dict[int, tuple[tuple[str, str | None], int, float]] = {}
+
+
+def _defer_failed_start(user_id: int, key: tuple[str, str | None]) -> float:
+    previous = _start_retries.get(user_id)
+    failures = previous[1] + 1 if previous and previous[0] == key else 1
+    delay = min(
+        _MAX_START_RETRY_SECONDS,
+        _START_RETRY_SECONDS * 2 ** min(failures - 1, 4),
+    )
+    _start_retries[user_id] = (key, failures, time.monotonic() + delay)
+    return delay
 
 
 def _settings(user_id: int) -> dict[str, Any]:
@@ -99,6 +114,7 @@ async def ensure_default_session(bot: Any, user_id: int) -> Session | None:
                     )
             session_manager.delete_session(stale.id)
         if keep is not None:
+            _start_retries.pop(user_id, None)
             if keep.default_reserve_user_id != user_id:
                 keep.mark_default_reserve(user_id)
                 session_manager.save_state()
@@ -110,6 +126,7 @@ async def ensure_default_session(bot: Any, user_id: int) -> Session | None:
             await _remove_empty_default_orphans(user_id, directory, backend, keep)
             return keep
         if not enabled:
+            _start_retries.pop(user_id, None)
             return None
         if not directory or not Path(directory).is_dir() or backend is None:
             logger.warning(
@@ -129,6 +146,7 @@ async def ensure_default_session(bot: Any, user_id: int) -> Session | None:
             None,
         )
         if orphan is not None:
+            _start_retries.pop(user_id, None)
             orphan.mark_default_reserve(user_id)
             session_manager.save_state()
             logger.info(
@@ -138,19 +156,38 @@ async def ensure_default_session(bot: Any, user_id: int) -> Session | None:
             )
             return orphan
 
-        success, message, _window_name, window_id = await tmux_manager.create_window(
-            directory,
-            backend=backend,
-        )
+        retry_key = (directory, backend)
+        retry = _start_retries.get(user_id)
+        if retry is not None and retry[0] == retry_key and time.monotonic() < retry[2]:
+            return None
+        if retry is not None and retry[0] != retry_key:
+            _start_retries.pop(user_id, None)
+        try:
+            (
+                success,
+                message,
+                _window_name,
+                window_id,
+            ) = await tmux_manager.create_window(
+                directory,
+                backend=backend,
+                wait_for_codex_ready=backend == "codex",
+            )
+        except Exception as exc:
+            success, message, window_id = False, type(exc).__name__, ""
         if not success or not window_id:
+            delay = _defer_failed_start(user_id, retry_key)
             logger.error(
-                "Default session start failed user=%d backend=%s directory=%s: %s",
+                "Default session start failed user=%d backend=%s directory=%s "
+                "retry_in_seconds=%.0f: %s",
                 user_id,
                 backend,
                 directory,
+                delay,
                 message,
             )
             return None
+        _start_retries.pop(user_id, None)
         session_manager.mark_window_starting(
             window_id,
             backend=backend,
@@ -262,6 +299,7 @@ def reset_default_session_tasks_for_test() -> None:
         task.cancel()
     _replacement_tasks.clear()
     _locks.clear()
+    _start_retries.clear()
 
 
 async def shutdown_default_session_tasks() -> None:

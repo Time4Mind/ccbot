@@ -20,12 +20,93 @@ UPDATE_PROMPT = """Update available! 0.147.0 -> 0.151.0
 Press enter to continue
 """
 
+CURRENT_UPDATE_PROMPT = """Update available · 0.156.1 → 0.157.0
+Release notes: https://github.com/openai/codex/releases/latest
+
+› 1. Update now (runs `npm install -g @openai/codex`)
+  2. Skip
+  3. Skip until next version
+
+enter continue · esc skip
+"""
+
 READY_PROMPT = """OpenAI Codex
 
 › Ask anything
 
 gpt-5.6 medium · ~/project
 """
+
+
+@pytest.mark.asyncio
+async def test_current_update_menu_is_accepted_and_reaches_ready_composer() -> None:
+    screens = iter([CURRENT_UPDATE_PROMPT, "Installing update", "shell", READY_PROMPT])
+    processes = iter(["codex", "npm", "zsh", "codex"])
+    keys: list[str] = []
+    relaunched: list[str] = []
+
+    result = await drive_codex_startup(
+        command="codex --no-alt-screen",
+        capture=lambda: _next(screens),
+        current_process=lambda: _next(processes),
+        send_key=lambda key: _append(keys, key),
+        relaunch=lambda command: _append(relaunched, command),
+        timeout=1,
+        poll_interval=0,
+        ready_settle_time=0,
+    )
+
+    assert classify_codex_screen(CURRENT_UPDATE_PROMPT) is CodexScreen.UPDATE
+    assert is_codex_ready(CURRENT_UPDATE_PROMPT) is False
+    assert result.updated is True
+    assert keys == ["ENTER"]
+    assert relaunched == ["codex --no-alt-screen"]
+
+
+def test_update_text_in_terminal_history_is_not_an_active_modal() -> None:
+    assert (
+        classify_codex_screen(CURRENT_UPDATE_PROMPT + READY_PROMPT) is CodexScreen.READY
+    )
+    assert classify_codex_screen(UPDATE_PROMPT + READY_PROMPT) is CodexScreen.READY
+
+
+def test_update_is_not_auto_accepted_when_skip_is_selected() -> None:
+    prompt = CURRENT_UPDATE_PROMPT.replace(
+        "› 1. Update now", "  1. Update now"
+    ).replace("  2. Skip", "› 2. Skip")
+    assert classify_codex_screen(prompt) is CodexScreen.UNHANDLED_MODAL
+
+
+def test_tmux_blank_rows_do_not_hide_active_update_menu() -> None:
+    assert (
+        classify_codex_screen(CURRENT_UPDATE_PROMPT + "\n" * 20) is CodexScreen.UPDATE
+    )
+
+
+@pytest.mark.asyncio
+async def test_old_update_screen_left_above_shell_is_not_confirmed_again() -> None:
+    screens = iter([CURRENT_UPDATE_PROMPT + "➜ workdir codex\n", READY_PROMPT])
+    processes = iter(["zsh", "codex"])
+    keys: list[str] = []
+
+    result = await drive_codex_startup(
+        command="codex",
+        capture=lambda: _next(screens),
+        current_process=lambda: _next(processes),
+        send_key=lambda key: _append(keys, key),
+        relaunch=lambda _command: _done(),
+        timeout=1,
+        poll_interval=0,
+        ready_settle_time=0,
+    )
+
+    assert result.updated is False
+    assert keys == []
+    assert (
+        classify_codex_screen(CURRENT_UPDATE_PROMPT + "➜ workdir codex\n")
+        is not CodexScreen.UPDATE
+    )
+
 
 HOOKS_REVIEW_PROMPT = """Hooks need review
 2 hooks are new or changed.

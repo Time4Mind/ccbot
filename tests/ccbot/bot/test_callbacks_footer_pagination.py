@@ -151,8 +151,9 @@ async def test_answer_pagination_stays_put_when_no_model_text(
 
 
 @pytest.mark.asyncio
-async def test_answer_pagination_jump_targets_latest_answer_before_tool_tail(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("answer_only", [False, True])
+async def test_jump_always_targets_latest_page_even_with_tool_tail(
+    monkeypatch: pytest.MonkeyPatch, answer_only: bool
 ) -> None:
     query = SimpleNamespace(data=CB_PG_JUMP, answer=AsyncMock())
     context = SimpleNamespace(bot=SimpleNamespace())
@@ -171,13 +172,16 @@ async def test_answer_pagination_jump_targets_latest_answer_before_tool_tail(
     monkeypatch.setattr(
         footer.session_manager,
         "get_user_settings",
-        lambda _uid: {"answer_pagination_only": True},
+        lambda _uid: {"answer_pagination_only": answer_only},
     )
     monkeypatch.setattr(footer, "get_card_state", lambda _uid, _sess: state)
     monkeypatch.setattr(footer, "refresh_panel", AsyncMock(return_value=True))
 
     assert await footer.handle(query, context, user)
-    assert state.current_page_idx == 1
+    assert state.current_page_idx is None
+    idx, total = footer.card_page_info(state, user.id)
+    assert total > 1
+    assert idx == total - 1
 
 
 @pytest.mark.asyncio

@@ -75,29 +75,12 @@ class TmuxManager:
         # both messages into one and firing a spurious Enter. See
         # send_keys.
         self._send_locks: dict[str, asyncio.Lock] = {}
-        # Codex directory-trust handling used to block ``create_window`` for
-        # up to 4.5 seconds. Keep the pollers alive in the background instead;
-        # session readiness/queued input is handled independently by
-        # SessionManager's startup gate.
         self._startup_tasks: set[asyncio.Task[bool]] = set()
-        # Keep completed tasks until SessionManager has observed the outcome.
-        # A ready composer can appear before the startup screen watcher ends.
         self._startup_tasks_by_window: dict[str, asyncio.Task[bool]] = {}
         self._control_client = TmuxControlClient(self.session_name)
 
-    async def wait_for_codex_startup(self, window_id: str) -> bool:
-        """Wait for the window's startup checks before user input is sent."""
-        task = self._startup_tasks_by_window.get(window_id)
-        if task is None:
-            return True
-        try:
-            return await task
-        except Exception:
-            # The startup task has already run its rollback callback.
-            return False
-        finally:
-            if self._startup_tasks_by_window.get(window_id) is task:
-                self._startup_tasks_by_window.pop(window_id, None)
+    async def wait_startup(self, window_id: str) -> bool:
+        return await _tmux_window.wait_for_codex_startup(self, window_id)
 
     async def close_control_client(self) -> None:
         """Close the persistent read-only tmux client during shutdown."""

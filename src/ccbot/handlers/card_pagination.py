@@ -415,6 +415,31 @@ def card_page_info(state: CardState, user_id: int | None = None) -> tuple[int, i
     return idx, total
 
 
+def answer_page_indices(pages: list[list[Event]]) -> list[int]:
+    """Physical page indexes containing intermediate or final model text."""
+    return [
+        index
+        for index, page in enumerate(pages)
+        if any(
+            ev.type in ("text", "final_text") and (ev.body.strip() or ev.text.strip())
+            for ev in page
+        )
+    ]
+
+
+def answer_page_target(pages: list[list[Event]], current: int, direction: int) -> int:
+    """Find the next answer page, wrapping in ``direction``."""
+    total = len(pages)
+    if not total:
+        return current
+    answers = set(answer_page_indices(pages))
+    for offset in range(1, total + 1):
+        candidate = (current + direction * offset) % total
+        if candidate in answers:
+            return candidate
+    return current
+
+
 def _is_stale(state: CardState) -> bool:
     if state.msg_id is None or state.last_event_ts <= 0:
         return False

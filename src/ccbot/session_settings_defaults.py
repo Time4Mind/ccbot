@@ -58,6 +58,8 @@ DEFAULT_USER_SETTINGS: dict[str, Any] = {
     "option_button_screenshot": True,
     "option_button_terminal": False,
     "option_button_transfer": False,
+    "option_button_answer_pagination": True,
+    "answer_pagination_only": False,
     # Pane suffix budget and deterministic image profile.
     "screenshot_capture_kib": 48,
     "screenshot_profile": "full8",

@@ -21,6 +21,21 @@ _CODEX_STARTUP_POLL_SECONDS = 0.25
 StartupFailureHandler = Callable[[str, BaseException], Awaitable[None]]
 
 
+async def wait_for_codex_startup(manager: Any, window_id: str) -> bool:
+    """Keep sends gated until this window's startup screen watcher finishes."""
+    task = manager._startup_tasks_by_window.get(window_id)
+    if task is None:
+        return True
+    try:
+        return await task
+    except Exception:
+        # The watcher has already run its rollback callback.
+        return False
+    finally:
+        if manager._startup_tasks_by_window.get(window_id) is task:
+            manager._startup_tasks_by_window.pop(window_id, None)
+
+
 def handle_codex_startup_screen(
     pane: object,
     *,

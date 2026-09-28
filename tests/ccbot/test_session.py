@@ -341,7 +341,7 @@ class TestResumeSettleGate:
         mock_tmux.capture_pane = AsyncMock(side_effect=capture_side_effect)
         mock_tmux.send_keys = AsyncMock(return_value=True)
         mock_tmux.ensure_codex_prompt_submitted = AsyncMock(return_value=True)
-        mock_tmux.wait_for_codex_startup = AsyncMock(return_value=True)
+        mock_tmux.wait_startup = AsyncMock(return_value=True)
         monkeypatch.setattr("ccbot.session.tmux_manager", mock_tmux)
         return mock_tmux
 
@@ -356,7 +356,7 @@ class TestResumeSettleGate:
             await startup_finished.wait()
             return True
 
-        mock_tmux.wait_for_codex_startup.side_effect = wait_for_startup
+        mock_tmux.wait_startup.side_effect = wait_for_startup
         mgr.mark_window_starting("@1", backend="codex", resume=True)
         ok, message = await mgr.send_to_window("@1", "/model")
 
@@ -372,7 +372,7 @@ class TestResumeSettleGate:
         self, mgr: SessionManager, monkeypatch, fast_gate
     ) -> None:
         mock_tmux = self._mock_tmux(monkeypatch, lambda _w: _CODEX_READY_PANE)
-        mock_tmux.wait_for_codex_startup.return_value = False
+        mock_tmux.wait_startup.return_value = False
         mgr.mark_window_starting("@1", backend="codex", resume=True)
         ok, _ = await mgr.send_to_window("@1", "/model")
 

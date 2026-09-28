@@ -46,6 +46,7 @@ Screen = Literal[
     "settings_option_screenshot",
     "settings_option_terminal",
     "settings_option_transfer",
+    "settings_option_answer_pagination",
     "settings_capture",
     "settings_profile",
     "settings_bg_notify_finished",
@@ -156,6 +157,12 @@ _SETTINGS_GROUPS: tuple[tuple[str, str, str, str], ...] = (
         "option_button_transfer",
     ),
     (
+        "option_button_answer_pagination",
+        "settings.group.option_button_answer_pagination",
+        "settings_option_answer_pagination",
+        "option_button_answer_pagination",
+    ),
+    (
         "bg_notify_finished",
         "settings.group.bg_notify_finished",
         "settings_bg_notify_finished",
@@ -257,6 +264,7 @@ SETTINGS_CATEGORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
             "option_button_screenshot",
             "option_button_terminal",
             "option_button_transfer",
+            "option_button_answer_pagination",
         ),
     ),
     (
@@ -298,6 +306,7 @@ _GROUP_TEXT_KEYS: dict[str, str] = {
     "settings_option_screenshot": "settings.option_button_screenshot.body",
     "settings_option_terminal": "settings.option_button_terminal.body",
     "settings_option_transfer": "settings.option_button_transfer.body",
+    "settings_option_answer_pagination": "settings.option_button_answer_pagination.body",
     "settings_capture": "settings.screenshot_capture.body",
     "settings_profile": "settings.screenshot_profile.body",
     "settings_cat_card": "settings.cat.card.body",

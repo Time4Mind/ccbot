@@ -137,8 +137,10 @@ def test_options_discloses_actions_directly_above_sessions(monkeypatch) -> None:
         rows = [
             [button.callback_data for button in row] for row in keyboard.inline_keyboard
         ]
-        assert [SCREENSHOT_CB, CB_FT_TERM] in rows
-        assert rows.index([SCREENSHOT_CB, CB_FT_TERM]) + 1 == rows.index([CB_SW_NOOP])
+        assert [SCREENSHOT_CB, CB_FT_TERM, "ft:answers"] in rows
+        assert rows.index([SCREENSHOT_CB, CB_FT_TERM, "ft:answers"]) + 1 == rows.index(
+            [CB_SW_NOOP]
+        )
     finally:
         menu.close_footer_options(42)
 
@@ -301,6 +303,7 @@ def test_options_respect_configured_button_visibility(monkeypatch) -> None:
             "language": "ru",
             "option_button_screenshot": False,
             "option_button_terminal": True,
+            "option_button_answer_pagination": False,
         },
     )
     menu.toggle_footer_options(42)
@@ -312,6 +315,57 @@ def test_options_respect_configured_button_visibility(monkeypatch) -> None:
         ]
         assert SCREENSHOT_CB not in callbacks
         assert CB_FT_TERM in callbacks
+        assert "ft:answers" not in callbacks
+    finally:
+        menu.close_footer_options(42)
+
+
+@pytest.mark.asyncio
+async def test_options_answer_pagination_button_toggles_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_active(monkeypatch, terminal=False)
+    settings = {
+        "language": "ru",
+        "option_button_screenshot": False,
+        "option_button_answer_pagination": True,
+        "answer_pagination_only": False,
+    }
+    monkeypatch.setattr(session_manager, "get_user_settings", lambda _uid: settings)
+    monkeypatch.setattr(
+        session_manager,
+        "update_user_setting",
+        lambda _uid, key, value: settings.__setitem__(key, value),
+    )
+    refresh = AsyncMock(return_value=True)
+    monkeypatch.setattr(footer, "refresh_panel", refresh)
+    menu.toggle_footer_options(42)
+    try:
+        keyboard = menu.build_footer_keyboard(42, screen="main")
+        button = next(
+            button
+            for row in keyboard.inline_keyboard
+            for button in row
+            if button.callback_data == "ft:answers"
+        )
+        assert "выкл" in button.text.lower()
+
+        query = SimpleNamespace(data="ft:answers", answer=AsyncMock())
+        context = SimpleNamespace(bot=SimpleNamespace())
+        assert await footer.handle(query, context, SimpleNamespace(id=42))
+        assert settings["answer_pagination_only"] is True
+        refresh.assert_awaited_once_with(
+            context.bot, 42, immediate=True, refresh_keyboard=True
+        )
+
+        keyboard = menu.build_footer_keyboard(42, screen="main")
+        button = next(
+            button
+            for row in keyboard.inline_keyboard
+            for button in row
+            if button.callback_data == "ft:answers"
+        )
+        assert "вкл" in button.text.lower()
     finally:
         menu.close_footer_options(42)
 
@@ -325,6 +379,7 @@ def test_options_control_is_hidden_when_no_action_is_available(monkeypatch) -> N
             "language": "ru",
             "option_button_screenshot": False,
             "option_button_terminal": False,
+            "option_button_answer_pagination": False,
         },
     )
 

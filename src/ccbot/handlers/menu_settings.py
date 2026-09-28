@@ -115,6 +115,7 @@ def _format_setting_value(user_id: int, value_key: str, cur: object) -> str:
         "option_button_screenshot",
         "option_button_terminal",
         "option_button_transfer",
+        "option_button_answer_pagination",
     ):
         return t(user_id, "screens.on") if cur else t(user_id, "screens.off")
     if value_key == "screenshot_capture_kib":
@@ -501,6 +502,7 @@ def _settings_option_grid(user_id: int, key: str) -> list[list[InlineKeyboardBut
         "option_button_screenshot": "screenshot",
         "option_button_terminal": "terminal",
         "option_button_transfer": "transfer",
+        "option_button_answer_pagination": "answers",
     }[key]
     return [
         [

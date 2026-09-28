@@ -10,6 +10,7 @@ from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from ...handlers.callback_data import (
+    CB_FT_ANSWER_PAGES,
     CB_CONF_CLEAR_NO,
     CB_CONF_CLEAR_YES,
     CB_CONF_KILL_NO,
@@ -28,6 +29,11 @@ from ...handlers.callback_data import (
     CB_PG_PREV,
 )
 from ...handlers.card_model import TurnPhase
+from ...handlers.card_pagination import (
+    answer_page_indices,
+    answer_page_target,
+    paginate_events_for_card,
+)
 from ...handlers.message_sender import safe_send
 from ...handlers.menu import (
     build_footer_keyboard,
@@ -196,6 +202,14 @@ async def handle(
         await refresh_panel(context.bot, user.id, immediate=True, refresh_keyboard=True)
         return True
 
+    if data == CB_FT_ANSWER_PAGES:
+        settings = session_manager.get_user_settings(user.id)
+        enabled = not bool(settings.get("answer_pagination_only", False))
+        session_manager.update_user_setting(user.id, "answer_pagination_only", enabled)
+        await query.answer()
+        await refresh_panel(context.bot, user.id, immediate=True, refresh_keyboard=True)
+        return True
+
     if data == CB_FT_SCREENSHOT:
         settings = session_manager.get_user_settings(user.id)
         enabled = not bool(settings.get("card_inline_screenshots", False))
@@ -232,7 +246,18 @@ async def handle(
             state.in_menu_view = False
         idx, total = card_page_info(state, user.id)
         old_page_idx = state.current_page_idx
-        if data == CB_PG_JUMP:
+        answer_only = session_manager.get_user_settings(user.id).get(
+            "answer_pagination_only", False
+        )
+        if answer_only:
+            pages = paginate_events_for_card(state, user.id)
+            if data == CB_PG_JUMP:
+                answers = answer_page_indices(pages)
+                state.current_page_idx = answers[-1] if answers else idx
+            else:
+                step = -1 if data == CB_PG_PREV else 1
+                state.current_page_idx = answer_page_target(pages, idx, step)
+        elif data == CB_PG_JUMP:
             # Jump to default-focus (= latest page when no answer-anchor
             # was set explicitly). ``None`` means "stick to latest".
             state.current_page_idx = None

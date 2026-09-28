@@ -13,6 +13,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from ..i18n import t
 from ..session import session_manager
 from .callback_data import (
+    CB_FT_ANSWER_PAGES,
     CB_FT_KILL,
     CB_FT_MORE,
     CB_FT_OPTIONS,
@@ -285,6 +286,14 @@ def _footer_options_row(
                 t(user_id, "mm.transfer"), callback_data=CB_FT_TRANSFER
             )
         )
+    if settings.get("option_button_answer_pagination", True):
+        mode = "on" if settings.get("answer_pagination_only", False) else "off"
+        row.append(
+            InlineKeyboardButton(
+                t(user_id, f"pagination.answers.{mode}"),
+                callback_data=CB_FT_ANSWER_PAGES,
+            )
+        )
     return row
 
 
@@ -402,6 +411,8 @@ def build_footer_keyboard(
         rows.extend(_settings_option_grid(user_id, "option_button_terminal"))
     elif screen == "settings_option_transfer":
         rows.extend(_settings_option_grid(user_id, "option_button_transfer"))
+    elif screen == "settings_option_answer_pagination":
+        rows.extend(_settings_option_grid(user_id, "option_button_answer_pagination"))
     elif screen == "settings_capture":
         rows.extend(_settings_capture_grid(user_id))
     elif screen == "settings_profile":

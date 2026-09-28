@@ -1,4 +1,4 @@
-"""The center pagination button repaints the actual latest card page."""
+"""Answer-mode navigation repaints user requests and the latest card page."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import pytest
 
 from ccbot.bot.callbacks import callback_handler
 from ccbot.handlers import notifications
-from ccbot.handlers.callback_data import CB_PG_JUMP
+from ccbot.handlers.callback_data import CB_PG_JUMP, CB_PG_NEXT
 from ccbot.handlers.card_model import Event
 from ccbot.session import session_manager
 
@@ -14,7 +14,16 @@ from harness import USER_ID, FakeCallbackQuery, FakeUpdate, FakeUser, seed_sessi
 
 
 @pytest.mark.asyncio
-async def test_jump_paints_tool_only_tail_with_answer_mode(fake_tmux, fake_bot):
+@pytest.mark.parametrize(
+    ("callback", "has_tool", "visible_text"),
+    [
+        (CB_PG_JUMP, True, "TailTool"),
+        (CB_PG_NEXT, False, "LatestRequest"),
+    ],
+)
+async def test_answer_mode_navigation_paints_latest_request_page(
+    fake_tmux, fake_bot, callback: str, has_tool: bool, visible_text: str
+):
     fake_tmux.add_window("@100", name="active", cwd="/tmp/active", pane="idle\n")
     sess = seed_session(
         session_manager,
@@ -31,8 +40,11 @@ async def test_jump_paints_tool_only_tail_with_answer_mode(fake_tmux, fake_bot):
         Event(type="user_msg", text="FirstRequest", started_at=1, is_page_break=True),
         Event(type="final_text", text="AnswerPage", started_at=2),
         Event(type="user_msg", text="LatestRequest", started_at=3, is_page_break=True),
-        Event(type="tool_use", text="TailTool", started_at=4, tool_name="Read"),
     ]
+    if has_tool:
+        state.events.append(
+            Event(type="tool_use", text="TailTool", started_at=4, tool_name="Read")
+        )
     state.msg_id = 8000
     state.current_page_idx = 1
     state.last_rendered = notifications._render_card(sess, state, user_id=USER_ID)
@@ -40,7 +52,7 @@ async def test_jump_paints_tool_only_tail_with_answer_mode(fake_tmux, fake_bot):
 
     user = FakeUser(USER_ID)
     query = FakeCallbackQuery(
-        data=CB_PG_JUMP,
+        data=callback,
         user=user,
         message_id=8000,
         chat_id=USER_ID,
@@ -55,6 +67,6 @@ async def test_jump_paints_tool_only_tail_with_answer_mode(fake_tmux, fake_bot):
     assert fake_bot.edits
     edit = fake_bot.edits[-1]
     assert edit["message_id"] == 8000
-    assert "TailTool" in edit["text"]
+    assert visible_text in edit["text"]
     assert "AnswerPage" not in edit["text"]
     assert edit["reply_markup"].inline_keyboard[0][1].text == "3/3"

@@ -25,7 +25,9 @@ from pathlib import Path
 import pytest
 
 from ccbot import rich
+from ccbot.handlers import history
 from ccbot.handlers.history import render_archived_card_pages
+from ccbot.bot.callbacks.archive import _build_inspect_text
 from ccbot.session_models import Session
 from ccbot.transcript_format import EXPANDABLE_HEADED_START
 
@@ -95,6 +97,47 @@ def archived_jsonl(
 
 @pytest.mark.asyncio
 class TestArchivedCardRender:
+    async def test_inspect_reads_tail_and_matches_last_full_page(
+        self, archived_jsonl, monkeypatch
+    ) -> None:
+        pages, _ = await render_archived_card_pages(archived_jsonl, user_id=1)
+        history._archived_card_cache.clear()
+        original_read_text = Path.read_text
+
+        def refuse_full_transcript_read(path: Path, *args, **kwargs):
+            if path.name == "archived.jsonl":
+                raise AssertionError("Inspect read the entire transcript")
+            return original_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", refuse_full_transcript_read)
+        text = await _build_inspect_text(archived_jsonl, user_id=1)
+
+        assert text == pages[-1]
+
+    async def test_inspect_omits_old_turns_but_keeps_final_page(
+        self, archived_jsonl, make_jsonl_entry
+    ) -> None:
+        path = history._session_file_path(archived_jsonl)
+        assert path is not None
+        entries = []
+        for index in range(100):
+            entry = make_jsonl_entry("assistant", f"old turn {index} " + "x" * 1000)
+            entry["message"]["stop_reason"] = "end_turn"
+            entries.append(entry)
+        last = make_jsonl_entry("assistant", "Latest answer from archive")
+        last["message"]["stop_reason"] = "end_turn"
+        entries.append(last)
+        _write_jsonl(path, entries)
+        history._archived_card_cache.clear()
+
+        pages, _ = await render_archived_card_pages(archived_jsonl, user_id=1)
+        text = await _build_inspect_text(archived_jsonl, user_id=1)
+
+        assert len(pages) > 1
+        assert text.endswith(pages[-1])
+        assert "earlier history omitted" in text
+        assert "old turn 0" not in text
+
     async def test_returns_pages_and_event_count(self, archived_jsonl) -> None:
         result = await render_archived_card_pages(archived_jsonl, user_id=1)
         assert result is not None

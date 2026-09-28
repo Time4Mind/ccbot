@@ -27,6 +27,12 @@ def _is_turn_boundary(data: dict[str, Any]) -> bool:
 
 
 def _recent_raw_entries(file_path: Path, max_turns: int) -> list[dict[str, Any]]:
+    return _recent_raw_entries_with_older(file_path, max_turns)[0]
+
+
+def _recent_raw_entries_with_older(
+    file_path: Path, max_turns: int
+) -> tuple[list[dict[str, Any]], bool]:
     """Read backwards until one turn before the requested card history.
 
     The extra boundary supplies pairing/context immediately before the oldest
@@ -70,7 +76,7 @@ def _recent_raw_entries(file_path: Path, max_turns: int) -> list[dict[str, Any]]
                         break
 
     reversed_entries.reverse()
-    return reversed_entries
+    return reversed_entries, boundaries >= wanted_boundaries
 
 
 def load_recent_parsed_entries(file_path: Path, max_turns: int) -> list[ParsedEntry]:
@@ -80,3 +86,14 @@ def load_recent_parsed_entries(file_path: Path, max_turns: int) -> list[ParsedEn
         return []
     parsed, _pending = TranscriptParser.parse_entries(raw_entries, pending_tools=None)
     return parsed
+
+
+def load_recent_parsed_entries_with_older(
+    file_path: Path, max_turns: int
+) -> tuple[list[ParsedEntry], bool]:
+    """Load the card tail and report whether earlier turns were omitted."""
+    raw_entries, has_older = _recent_raw_entries_with_older(file_path, max_turns)
+    if not raw_entries:
+        return [], has_older
+    parsed, _pending = TranscriptParser.parse_entries(raw_entries, pending_tools=None)
+    return parsed, has_older

@@ -1,4 +1,4 @@
-"""Archived transcript rendering helpers for history.
+"""Archived transcript rendering helpers for history and quick inspection.
 
 Caches and path resolution are supplied by handlers.history so its mutable
 state identity and monkeypatch-visible path seam remain unchanged.
@@ -6,17 +6,123 @@ state identity and monkeypatch-visible path seam remain unchanged.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiofiles
 
 from ..session import Session
 from ..telegram_sender import split_message
 from ..transcript_parser import TranscriptParser
+from ..transcript_types import ParsedEntry
+from .card_seed_io import load_recent_parsed_entries_with_older
+
+if TYPE_CHECKING:
+    from .card_model import CardState
+
+
+def _archived_card_state(parsed_list: list[ParsedEntry]) -> CardState:
+    """Convert parsed transcript rows into a completed card event stream."""
+    from ..session_monitor import NewMessage
+    from .card_model import CardState, _apply_tool_result, _build_event
+
+    state = CardState()
+    for p in parsed_list:
+        ct = getattr(p, "content_type", "text")
+        msg = NewMessage(
+            session_id="archive",
+            text=getattr(p, "text", "") or "",
+            is_complete=True,
+            content_type=ct,
+            tool_use_id=getattr(p, "tool_use_id", None),
+            role=getattr(p, "role", "assistant"),
+            tool_name=getattr(p, "tool_name", None),
+            image_data=getattr(p, "image_data", None),
+            stop_reason=getattr(p, "stop_reason", None),
+            timestamp=getattr(p, "timestamp", "") or "",
+            is_error=getattr(p, "is_error", False),
+        )
+        ev = _build_event(msg)
+        if ct == "tool_result" and _apply_tool_result(state, ev):
+            continue
+        state.events.append(ev)
+
+    # Archived events have finished. Otherwise the last event on a page
+    # acquires a spurious live elapsed-time indicator.
+    for ev in state.events:
+        if ev.completed_at is None:
+            ev.completed_at = ev.started_at
+    return state
+
+
+def _archived_card_path(
+    sess: Session, session_file_path: Callable[[Session], Path | None], config: Any
+) -> Path | None:
+    sid = sess.claude_session_id
+    if not sid or not sess.workdir:
+        return None
+    fp = session_file_path(sess)
+    if fp is not None and fp.exists():
+        return fp
+    if sess.backend == "codex":
+        return None
+    matches = list(config.claude_projects_path.glob(f"*/{sid}.jsonl"))
+    return matches[0] if matches else None
+
+
+def _render_archived_card_preview_sync(
+    sess: Session,
+    user_id: int | None,
+    *,
+    session_file_path: Callable[[Session], Path | None],
+    config: Any,
+    logger: logging.Logger,
+) -> tuple[str, bool] | None:
+    fp = _archived_card_path(sess, session_file_path, config)
+    if fp is None:
+        return None
+    try:
+        parsed_list, has_older = load_recent_parsed_entries_with_older(fp, 1)
+    except (OSError, ValueError) as exc:
+        logger.debug("archived card tail read failed for %s: %s", fp, exc)
+        return None
+    if not parsed_list:
+        return None
+
+    from .card_model import paginate_events_for_card, render_page
+
+    state = _archived_card_state(parsed_list)
+    if not state.events:
+        return None
+    pages = paginate_events_for_card(state, user_id)
+    body = render_page(pages[-1], time.time())
+    header = f"📦 [{sess.name or sess.id}]"
+    text = f"{header}\n\n{body}" if body.strip() else header
+    return text, has_older or len(pages) > 1
+
+
+async def render_archived_card_preview_impl(
+    sess: Session,
+    user_id: int | None,
+    *,
+    session_file_path: Callable[[Session], Path | None],
+    config: Any,
+    logger: logging.Logger,
+) -> tuple[str, bool] | None:
+    """Render only the last card page without parsing the full archive."""
+    return await asyncio.to_thread(
+        _render_archived_card_preview_sync,
+        sess,
+        user_id,
+        session_file_path=session_file_path,
+        config=config,
+        logger=logger,
+    )
 
 
 async def render_archived_card_pages_impl(
@@ -28,7 +134,7 @@ async def render_archived_card_pages_impl(
     config: Any,
     logger: logging.Logger,
 ) -> tuple[list[str], int] | None:
-    """Render an archived session's transcript with the live-card engine.
+    """Render all of an archived session's transcript with the live-card engine.
 
     Unlike :func:`render_archived_history_pages` — which flattens every
     message into one page and strips the expandable-quote sentinels, so
@@ -43,18 +149,9 @@ async def render_archived_card_pages_impl(
     resolves (no claude_session_id, missing file, empty transcript).
     """
     sid = sess.claude_session_id
-    if not sid or not sess.workdir:
+    fp = _archived_card_path(sess, session_file_path, config)
+    if fp is None:
         return None
-    fp = session_file_path(sess)
-    if fp is None or not fp.exists():
-        if sess.backend == "codex":
-            return None
-        # Glob fallback — cwd on the record may have shifted since archival.
-        pattern = f"*/{sid}.jsonl"
-        matches = list(config.claude_projects_path.glob(pattern))
-        if not matches:
-            return None
-        fp = matches[0]
 
     try:
         st = fp.stat()
@@ -67,16 +164,7 @@ async def render_archived_card_pages_impl(
 
     # Lazy imports — card_model pulls in the whole notification model layer;
     # keep it off history.py's import-time path (and avoid any cycle).
-    import time as _time
-
-    from ..session_monitor import NewMessage
-    from .card_model import (
-        CardState,
-        _apply_tool_result,
-        _build_event,
-        paginate_events_for_card,
-        render_page,
-    )
+    from .card_model import paginate_events_for_card, render_page
 
     try:
         raw = fp.read_text(encoding="utf-8", errors="replace")
@@ -100,40 +188,11 @@ async def render_archived_card_pages_impl(
     if not parsed_list:
         return None
 
-    # ParsedEntry → NewMessage → Event, folding tool_results into their
-    # matching tool_use (same loop the live-card JSONL seed uses).
-    state = CardState()
-    for p in parsed_list:
-        ct = getattr(p, "content_type", "text")
-        msg = NewMessage(
-            session_id="archive",
-            text=getattr(p, "text", "") or "",
-            is_complete=True,
-            content_type=ct,
-            tool_use_id=getattr(p, "tool_use_id", None),
-            role=getattr(p, "role", "assistant"),
-            tool_name=getattr(p, "tool_name", None),
-            image_data=getattr(p, "image_data", None),
-            stop_reason=getattr(p, "stop_reason", None),
-            timestamp=getattr(p, "timestamp", "") or "",
-            is_error=getattr(p, "is_error", False),
-        )
-        ev = _build_event(msg)
-        if ct == "tool_result" and _apply_tool_result(state, ev):
-            continue
-        state.events.append(ev)
+    state = _archived_card_state(parsed_list)
     if not state.events:
         return None
 
-    # Every event in an archived transcript is finished — nothing is
-    # streaming. Stamp ``completed_at`` so ``_is_in_flight`` never flags
-    # the terminal event of a page as live and renders a bogus ``⏳
-    # 3968:24`` elapsed against ``now`` instead of the entry's HH:MM.
-    for ev in state.events:
-        if ev.completed_at is None:
-            ev.completed_at = ev.started_at
-
-    now = _time.time()
+    now = time.time()
     label = sess.name or sess.id
     header = f"📦 [{label}]"
     pages_events = paginate_events_for_card(state, user_id)
@@ -158,8 +217,7 @@ async def render_archived_history_pages_impl(
     pages + total message count. Returns ``None`` when there's no
     resolvable transcript (no claude_session_id, missing file, etc.).
 
-    Used by the Archive → Inspect view to surface what the session
-    actually did, without requiring a live tmux window.
+    Used for full archived history without requiring a live tmux window.
     """
     sid = sess.claude_session_id
     if not sid or not sess.workdir:

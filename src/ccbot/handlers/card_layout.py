@@ -77,14 +77,33 @@ _EFFORT_HEADER_LABELS = {
 
 
 def _model_effort_label(model: str, effort: str) -> str:
-    """Compact a complete live agent identity for the card header."""
+    """Compact the known live agent identity for the card context row."""
     model = model.strip()
     effort = effort.strip().lower()
-    if not model or not effort:
+    if not model:
         return ""
     if model.lower().startswith("gpt-"):
         model = model[4:]
+    if not effort:
+        return model
     return f"{model} {_EFFORT_HEADER_LABELS.get(effort, effort)}"
+
+
+def _append_context_row(
+    parts: list[str], sess: Session, state: CardState, user_id: int | None
+) -> None:
+    """Keep the model visible even before context usage becomes available."""
+    identity = _model_effort_label(state.agent_model, state.reasoning_effort)
+    context_pct = state.context_pct
+    if context_pct is None and user_id is not None:
+        context_pct = bg_status.get_context_pct(user_id, sess.id)
+    if not identity and context_pct is None:
+        return
+    parts.append("\u00a0")
+    if context_pct is None:
+        parts.append(f"─── {identity} ───")
+    else:
+        parts.append(f"─── {identity or 'context'}: {context_pct}% ───")
 
 
 def _format_kb_prompt(raw: str) -> str:
@@ -210,7 +229,6 @@ def _render_card(
     ts_suffix = ""
     if state.last_event_ts > 0:
         ts_suffix = " · " + _format_hhmmss(state.last_event_ts)
-    identity = _model_effort_label(state.agent_model, state.reasoning_effort)
     name_part = sess.name or sess.id
     completion = "✅ " if state.completion_marker_pending else ""
     header = f"{completion}*{name_part}* · {state_label}{cont_marker}{ts_suffix}"
@@ -249,7 +267,8 @@ def _render_card(
         # title would let the rich parser glue them onto one line.
         rendered = "\n\n".join(parts)
         state.media_anchor_offset = len(rendered)
-        return rendered
+        _append_context_row(parts, sess, state, user_id)
+        return "\n\n".join(parts)
 
     # Budget is in LINES (per user setting ``card_page_lines``).
     line_budget = _resolve_line_budget(user_id)
@@ -330,22 +349,9 @@ def _render_card(
     # screenshot before the context row and background-session panel without
     # searching for localized/rendered labels.
     state.media_anchor_offset = len("\n\n".join(parts))
-    # Active session's own context-fill — single line at the very
-    # bottom of the card body, just above the bg-status panel.
-    # See ``set_card_context_pct``.
-    context_pct = state.context_pct
-    if context_pct is None and user_id is not None:
-        context_pct = bg_status.get_context_pct(user_id, sess.id)
-    if context_pct is not None:
-        # Same `` ``-paragraph trick used by ``_EVENT_JOINER``:
-        # CommonMark collapses consecutive blank lines into one
-        # paragraph break, but a paragraph that contains a
-        # non-breaking space survives — visibly DOUBLES the gap above
-        # the context row so it doesn't read glued onto the
-        # last body event.
-        parts.append("\u00a0")
-        context_label = identity or "context"
-        parts.append(f"─── {context_label}: {context_pct}% ───")
+    # Active session's own model and context fill, above the bg-status panel.
+    # The model remains visible when no percentage has been calculated yet.
+    _append_context_row(parts, sess, state, user_id)
     # Paragraph-break join (``\n\n``) — single ``\n`` is a CommonMark
     # soft break that the rich parser collapses to a space, glueing
     # ``header ───── body ───── footer`` onto one row instead of each

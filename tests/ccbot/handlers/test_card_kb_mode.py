@@ -126,6 +126,25 @@ async def test_enter_kb_mode_spawns_when_no_carrier(monkeypatch):
     assert state.in_kb_mode is True
 
 
+@pytest.mark.asyncio
+async def test_enter_kb_mode_shows_model_on_new_session_card(monkeypatch):
+    from ccbot.handlers import card_terminal
+
+    sess = _make_sess("codex-picker")
+    sess.backend = "codex"
+    monkeypatch.setattr(
+        card_terminal,
+        "capture_session_pane",
+        AsyncMock(return_value="Choose option\n\n  gpt-6-astra medium · /project"),
+    )
+    send = AsyncMock()
+    monkeypatch.setattr(notifications, "_send_card", send)
+
+    await enter_kb_mode(AsyncMock(), 42, sess, "Choose option", "AskUserQuestion")
+
+    assert send.await_args.kwargs["text"].endswith("─── 6-astra med ───")
+
+
 def test_should_buffer_blocks_on_in_kb_mode():
     """Once kb-mode is active, regular claude events must buffer so
     ``update_session_card`` doesn't repaint over the kb keyboard with

@@ -107,6 +107,12 @@ async def surface_card_after_message(
     state.pane_busy = False
     state.turn_phase = TurnPhase.RUNNING
     await _legacy("_ensure_seeded")(user_id, sess, state)
+    if getattr(sess, "backend", None) == "codex" and (
+        not state.agent_model or not state.reasoning_effort
+    ):
+        from .card_terminal import sync_card_identity
+
+        await sync_card_identity(sess, state)
     old_msg_id: int | None = None
     new_msg_id: int | None = None
 

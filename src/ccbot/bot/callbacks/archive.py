@@ -24,7 +24,7 @@ from ...handlers.callback_data import (
     CB_CONF_DEL_YES,
     CB_MM_BACK,
 )
-from ...handlers.history import render_archived_card_pages
+from ...handlers.history import render_archived_card_preview
 from ...handlers.menu import build_footer_keyboard
 from ...handlers.message_sender import safe_edit
 from ...handlers.notifications import paint_card_on_carrier, reset_card
@@ -93,19 +93,18 @@ async def _build_inspect_text(sess: Session, user_id: int | None = None) -> str:
     JSONL).
 
     Only the LAST page is shown — archived JSONLs can be huge and the
-    Inspect keyboard carries no pagination controls. The header notes
-    when older pages were truncated so the user knows to /restore for the
-    full picture. ``user_id`` drives the per-user card line budget.
+    Inspect keyboard carries no pagination controls. A bounded tail read
+    supplies that page without processing the entire archive. The header
+    notes when earlier turns were omitted so the user knows to /restore
+    for the full picture. ``user_id`` drives the per-user card line budget.
     """
-    pages_total = await render_archived_card_pages(sess, user_id)
-    if pages_total is None:
+    preview = await render_archived_card_preview(sess, user_id)
+    if preview is None:
         text = await render_session_preview(sess)
     else:
-        pages, total = pages_total
-        text = pages[-1] if pages else ""
-        if len(pages) > 1:
-            prefix = f"_… {len(pages) - 1} older page(s) — restore to read fully ({total} events)_\n\n"
-            text = prefix + text
+        text, has_older = preview
+        if has_older:
+            text = "_… earlier history omitted - restore to read fully_\n\n" + text
     if sess.node_id != "local":
         node = session_manager.get_node(sess.node_id)
         node_name = node.display_name if node is not None else sess.node_id
@@ -183,6 +182,7 @@ async def handle(
         if sess is None:
             await query.answer(t(user.id, "toast.session_not_found"), show_alert=True)
             return True
+        await query.answer()
         text = await _build_inspect_text(sess, user.id)
         kb = InlineKeyboardMarkup(
             [
@@ -203,7 +203,6 @@ async def handle(
             ]
         )
         await safe_edit(query, text, reply_markup=kb)
-        await query.answer()
         return True
 
     if data.startswith(CB_ARC_BACK):

@@ -97,7 +97,7 @@ class TestArchiveInspectBack:
         sess = _make_archived(7, age_hours=2.0)
         sess.node_id = "worker-a"
         with (
-            patch.object(archive_cb, "render_archived_card_pages", return_value=None),
+            patch.object(archive_cb, "render_archived_card_preview", return_value=None),
             patch.object(
                 archive_cb, "render_session_preview", return_value="session preview"
             ),
@@ -110,6 +110,38 @@ class TestArchiveInspectBack:
             text = await archive_cb._build_inspect_text(sess, 1)
 
         assert "Node: *Worker A*" in text or "Нода: *Worker A*" in text
+
+    @pytest.mark.asyncio
+    async def test_inspect_callback_is_acknowledged_before_render_finishes(
+        self,
+    ) -> None:
+        sess = _make_archived(9, age_hours=2.0)
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocked_inspect(*_args, **_kwargs):
+            entered.set()
+            await release.wait()
+            return "inspect"
+
+        query = _make_query(f"{CB_ARC_INSPECT}0:{sess.id}")
+        with (
+            patch.object(archive_cb.session_manager, "get_session", return_value=sess),
+            patch.object(
+                archive_cb, "_build_inspect_text", side_effect=blocked_inspect
+            ),
+            patch.object(archive_cb, "safe_edit", new_callable=AsyncMock) as edit,
+        ):
+            task = asyncio.create_task(
+                archive_cb.handle(query, _make_context(), _make_user())
+            )
+            try:
+                await entered.wait()
+                query.answer.assert_awaited_once()
+                edit.assert_not_awaited()
+            finally:
+                release.set()
+                await task
 
     @pytest.mark.asyncio
     async def test_back_returns_to_originating_archive_page(self) -> None:

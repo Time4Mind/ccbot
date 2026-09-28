@@ -37,6 +37,7 @@ from .history_page_render import (
     visible_history_messages as _visible_history_messages,
 )
 from .history_archive import (
+    render_archived_card_preview_impl,
     render_archived_card_pages_impl,
     render_archived_history_pages_impl,
 )
@@ -51,19 +52,8 @@ logger = logging.getLogger(__name__)
 HISTORY_STREAM_THRESHOLD_BYTES = 8 * 1024 * 1024
 
 
-# In-memory cache for rendered history pages keyed by ``window_id``.
-# Switcher taps re-parse the entire JSONL on every tap — for a 1.5k-
-# message transcript that's ~800 ms wall-clock, and the user sees the
-# previously-painted content "stuck" for almost a second before the new
-# history lands. Cache the rendered pages so a repeat tap (or rapid
-# back-and-forth between sessions) only pays the Telegram API round-
-# trip (~150 ms).
-#
-# Cached entry holds (file_mtime, file_size, pages_list, total_count).
-# Invalidated automatically when the transcript file grows or its mtime
-# advances — i.e., on the next claude event for that session. The full
-# (un-byte-ranged) case is the only one cached; unread-range reads are
-# rare and parameterised, so they go through the slow path.
+# Rendered history cache, keyed by window and invalidated on file change.
+# Entries contain (file_mtime, file_size, pages, total_count).
 _pages_cache: dict[str, tuple[float, int, HistoryPageStore, int]] = {}
 
 
@@ -71,21 +61,10 @@ _incremental_history: dict[str, IncrementalHistoryState] = {}
 _prewarm_locks: dict[str, asyncio.Lock] = {}
 
 
-# Same cache shape, but keyed by ``claude_session_id`` for archived
-# sessions (we render directly from the JSONL on disk — no window).
-# JSONLs of archived sessions don't grow (the tmux window is dead), so
-# (mtime, size) here is effectively a freeze-tag; we still verify it so
-# a manually-edited file would invalidate the cache.
+# Archived transcript caches, keyed by session ID and invalidated on file change.
 _archived_pages_cache: dict[str, tuple[float, int, list[str], int]] = {}
 
-# Card-engine render cache for archived sessions (Archive → Inspect).
-# Same freeze-tag shape as ``_archived_pages_cache`` but holds the pages
-# produced by the live-card renderer (collapsible thinking / tool
-# spoilers) rather than the flat concat. Keyed by claude_session_id;
-# a page-line-budget change re-keys nothing, so we fold the budget into
-# the value tuple's implicit invalidation by clearing on cache miss only
-# — the budget rarely changes and a stale layout self-heals on the next
-# transcript mutation. Kept separate so both renderers can coexist.
+# Full card-render cache; Inspect uses the bounded tail reader instead.
 _archived_card_cache: dict[str, tuple[float, int, list[str], int]] = {}
 
 
@@ -122,6 +101,19 @@ async def render_archived_card_pages(
         user_id,
         session_file_path=_session_file_path,
         archived_card_cache=_archived_card_cache,
+        config=config,
+        logger=logger,
+    )
+
+
+async def render_archived_card_preview(
+    sess: Session, user_id: int | None = None
+) -> tuple[str, bool] | None:
+    """Render the last archived card page from a bounded transcript tail."""
+    return await render_archived_card_preview_impl(
+        sess,
+        user_id,
+        session_file_path=_session_file_path,
         config=config,
         logger=logger,
     )

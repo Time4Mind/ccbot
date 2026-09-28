@@ -48,6 +48,40 @@ def test_card_context_row_shows_session_model_and_effort() -> None:
     assert "context: 42%" not in card
 
 
+@pytest.mark.parametrize("session_state", ["active", "idle"])
+def test_card_shows_model_without_context_percentage(session_state: str) -> None:
+    sess = Session(id="usage", name="usage", backend="codex", state=session_state)
+    state = CardState(agent_model="gpt-6-sol", reasoning_effort="high")
+
+    card = _render_card(sess, state)
+
+    assert card.endswith("─── 6-sol high ───")
+
+
+def test_card_shows_known_model_without_effort_or_context_percentage() -> None:
+    sess = Session(id="usage", name="usage", backend="codex", state="active")
+    state = CardState(agent_model="gpt-6-sol")
+
+    card = _render_card(sess, state)
+
+    assert card.endswith("─── 6-sol ───")
+
+
+def test_interactive_card_keeps_model_row_without_context_percentage() -> None:
+    sess = Session(id="picker", name="picker", backend="codex", state="active")
+    state = CardState(
+        agent_model="gpt-6-astra",
+        reasoning_effort="medium",
+        in_kb_mode=True,
+        kb_prompt="Choose an option",
+    )
+
+    card = _render_card(sess, state)
+
+    assert "⌨ *Waiting for your input:*" in card
+    assert card.endswith("─── 6-astra med ───")
+
+
 def test_card_context_row_keeps_label_when_identity_is_unknown() -> None:
     sess = Session(id="usage", name="usage", backend="claude", state="active")
     state = CardState(context_pct=42)

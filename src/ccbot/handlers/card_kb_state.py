@@ -97,6 +97,10 @@ async def enter_kb_mode(
     state.in_menu_view = False
     if not sess.window_id:
         return
+    if not state.agent_model or not state.reasoning_effort:
+        from .card_terminal import sync_card_identity
+
+        await sync_card_identity(sess, state)
     text = _legacy("_render_card")(sess, state, user_id=user_id)
     kb = build_kb_mode_keyboard(
         user_id,

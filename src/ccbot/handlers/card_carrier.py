@@ -467,6 +467,10 @@ async def resume_card_view(bot: Bot, user_id: int, sess: Session) -> None:
                     sess.id,
                 )
                 return
+            if not state.agent_model or not state.reasoning_effort:
+                from .card_terminal import sync_card_identity
+
+                await sync_card_identity(sess, state)
             state.in_menu_view = False
             if state.pending_edit is not None and not state.pending_edit.done():
                 state.pending_edit.cancel()
@@ -616,6 +620,9 @@ async def restore_card(bot: Bot, user_id: int, sess: Session, card_msg_id: int) 
     )
     state.last_rendered = ""
     await _legacy("_ensure_seeded")(user_id, sess, state)
+    from .card_terminal import sync_card_identity
+
+    await sync_card_identity(sess, state)
     state.turn_phase = TurnPhase.RUNNING if _card_is_busy(state) else TurnPhase.IDLE
     _register_msg(user_id, card_msg_id, sess.id)
     text = _legacy("_render_card")(sess, state, user_id=user_id)

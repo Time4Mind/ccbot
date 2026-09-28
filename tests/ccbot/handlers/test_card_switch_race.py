@@ -281,3 +281,27 @@ async def test_back_from_new_session_flow_repaints_rich_card(monkeypatch):
 
     edit.assert_awaited_once()
     assert edit.await_args.args[3] == "restored card"
+
+
+@pytest.mark.asyncio
+async def test_resume_idle_codex_card_shows_model_without_usage(monkeypatch):
+    from ccbot.handlers import card_terminal
+
+    user_id = 42
+    sess = _session("session-idle", "idle-session", "@7")
+    sess.backend = "codex"
+    sess.state = "idle"
+    session_manager.sessions[sess.id] = sess
+    session_manager.active_sessions[user_id] = sess.id
+    monkeypatch.setattr(notifications, "_ensure_seeded", AsyncMock())
+    monkeypatch.setattr(
+        card_terminal,
+        "capture_session_pane",
+        AsyncMock(return_value="› Ask anything\n\n  gpt-6-sol high · /project"),
+    )
+    send = AsyncMock()
+    monkeypatch.setattr(notifications, "_send_card", send)
+
+    await notifications.resume_card_view(AsyncMock(), user_id, sess)
+
+    assert send.await_args.kwargs["text"].endswith("─── 6-sol high ───")

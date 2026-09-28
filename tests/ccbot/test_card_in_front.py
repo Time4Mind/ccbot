@@ -345,6 +345,42 @@ class TestInboundCardSurface:
         notifications._cards.clear()
 
     @pytest.mark.asyncio
+    async def test_first_receipt_shows_model_before_context_usage(self) -> None:
+        from ccbot.handlers import card_terminal
+        from ccbot.session_models import Session
+
+        sess = Session(
+            id="new-codex",
+            name="new-codex",
+            backend="codex",
+            state="active",
+            window_id="@1",
+        )
+        sent: list[str] = []
+
+        async def send_card(_bot, _uid, _sess, state, *, text):
+            sent.append(text)
+            state.msg_id = 601
+
+        with (
+            patch.object(notifications, "_ensure_seeded", new=AsyncMock()),
+            patch.object(notifications, "_send_card", side_effect=send_card),
+            patch.object(notifications, "is_active_for_user", return_value=True),
+            patch.object(
+                card_terminal,
+                "capture_session_pane",
+                new=AsyncMock(
+                    return_value="› Ask anything\n\n  gpt-6-sol high · /project"
+                ),
+            ),
+        ):
+            assert await notifications.surface_card_after_message(
+                AsyncMock(), 77, sess, 500
+            )
+
+        assert sent[0].endswith("─── 6-sol high ───")
+
+    @pytest.mark.asyncio
     async def test_burst_converges_on_one_card_below_every_message(self) -> None:
         bot = AsyncMock()
         sess = MagicMock(id="surface")

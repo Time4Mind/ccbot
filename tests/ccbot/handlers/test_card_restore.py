@@ -70,6 +70,29 @@ class TestRestoreCard:
         assert state is not None
         assert state.msg_id == 555
 
+    async def test_restored_idle_codex_card_shows_model_before_usage_arrives(
+        self, monkeypatch
+    ) -> None:
+        from ccbot.handlers import card_terminal
+
+        monkeypatch.setattr(
+            notifications, "_ensure_seeded", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            card_terminal,
+            "capture_session_pane",
+            AsyncMock(return_value="› Ask anything\n\n  gpt-6-sol high · /project"),
+        )
+        edit = AsyncMock(return_value=True)
+        monkeypatch.setattr(notifications, "_edit_card", edit)
+        sess = _make_sess("idle-codex")
+        sess.backend = "codex"
+        sess.state = "idle"
+
+        assert await restore_card(AsyncMock(), 1, sess, 555)
+
+        assert edit.await_args.kwargs["text"].endswith("─── 6-sol high ───")
+
     async def test_clears_pointer_when_message_gone(self, monkeypatch) -> None:
         from ccbot.session import session_manager
 

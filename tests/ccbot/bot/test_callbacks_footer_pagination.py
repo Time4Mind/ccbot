@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ccbot.bot.callbacks import footer
-from ccbot.handlers.callback_data import CB_FT_KILL, CB_PG_NEXT, CB_PG_PREV
-from ccbot.handlers.card_model import CardState
+from ccbot.handlers.callback_data import CB_FT_KILL, CB_PG_JUMP, CB_PG_NEXT, CB_PG_PREV
+from ccbot.handlers.card_model import CardState, Event
 from ccbot.handlers.directory_browser import BROWSE_PATH_KEY, STATE_KEY
 from ccbot.startup_queue import (
     begin_startup_queue,
@@ -77,6 +77,107 @@ async def test_pagination_wraps_cyclically(
 
     assert await footer.handle(query, context, user)
     assert state.current_page_idx == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("callback", "current", "expected"),
+    [
+        (CB_PG_NEXT, 0, 1),
+        (CB_PG_NEXT, 1, 3),
+        (CB_PG_NEXT, 3, 1),
+        (CB_PG_PREV, 3, 1),
+        (CB_PG_PREV, 1, 3),
+    ],
+)
+async def test_answer_pagination_skips_tool_only_pages(
+    monkeypatch: pytest.MonkeyPatch, callback: str, current: int, expected: int
+) -> None:
+    query = SimpleNamespace(data=callback, answer=AsyncMock())
+    context = SimpleNamespace(bot=SimpleNamespace())
+    user = SimpleNamespace(id=42)
+    session = SimpleNamespace(id="s1")
+    state = CardState(msg_id=9, current_page_idx=current)
+    state.events = [
+        Event(type="user_msg", text="Q1", started_at=1, is_page_break=True),
+        Event(type="final_text", text="Answer 1", started_at=2),
+        Event(type="user_msg", text="Q2", started_at=3, is_page_break=True),
+        Event(type="tool_use", text="Read", started_at=4),
+        Event(type="final_text", text="Answer 2", started_at=5),
+    ]
+    monkeypatch.setattr(
+        footer.session_manager, "get_active_session", lambda _uid: session
+    )
+    monkeypatch.setattr(
+        footer.session_manager,
+        "get_user_settings",
+        lambda _uid: {"answer_pagination_only": True},
+    )
+    monkeypatch.setattr(footer, "get_card_state", lambda _uid, _sess: state)
+    monkeypatch.setattr(footer, "refresh_panel", AsyncMock(return_value=True))
+
+    assert await footer.handle(query, context, user)
+    assert state.current_page_idx == expected
+
+
+@pytest.mark.asyncio
+async def test_answer_pagination_stays_put_when_no_model_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query = SimpleNamespace(data=CB_PG_NEXT, answer=AsyncMock())
+    context = SimpleNamespace(bot=SimpleNamespace())
+    user = SimpleNamespace(id=42)
+    session = SimpleNamespace(id="s1")
+    state = CardState(msg_id=9, current_page_idx=0)
+    state.events = [
+        Event(type="user_msg", text="Q1", started_at=1, is_page_break=True),
+        Event(type="tool_use", text="Read", started_at=2),
+        Event(type="user_msg", text="Q2", started_at=3, is_page_break=True),
+        Event(type="tool_use", text="Bash", started_at=4),
+    ]
+    monkeypatch.setattr(
+        footer.session_manager, "get_active_session", lambda _uid: session
+    )
+    monkeypatch.setattr(
+        footer.session_manager,
+        "get_user_settings",
+        lambda _uid: {"answer_pagination_only": True},
+    )
+    monkeypatch.setattr(footer, "get_card_state", lambda _uid, _sess: state)
+    monkeypatch.setattr(footer, "refresh_panel", AsyncMock(return_value=True))
+
+    assert await footer.handle(query, context, user)
+    assert state.current_page_idx == 0
+
+
+@pytest.mark.asyncio
+async def test_answer_pagination_jump_targets_latest_answer_before_tool_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query = SimpleNamespace(data=CB_PG_JUMP, answer=AsyncMock())
+    context = SimpleNamespace(bot=SimpleNamespace())
+    user = SimpleNamespace(id=42)
+    session = SimpleNamespace(id="s1")
+    state = CardState(msg_id=9, current_page_idx=0)
+    state.events = [
+        Event(type="user_msg", text="Q1", started_at=1, is_page_break=True),
+        Event(type="final_text", text="Answer", started_at=2),
+        Event(type="user_msg", text="Q2", started_at=3, is_page_break=True),
+        Event(type="tool_use", text="Read", started_at=4),
+    ]
+    monkeypatch.setattr(
+        footer.session_manager, "get_active_session", lambda _uid: session
+    )
+    monkeypatch.setattr(
+        footer.session_manager,
+        "get_user_settings",
+        lambda _uid: {"answer_pagination_only": True},
+    )
+    monkeypatch.setattr(footer, "get_card_state", lambda _uid, _sess: state)
+    monkeypatch.setattr(footer, "refresh_panel", AsyncMock(return_value=True))
+
+    assert await footer.handle(query, context, user)
+    assert state.current_page_idx == 1
 
 
 @pytest.mark.asyncio

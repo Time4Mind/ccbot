@@ -11,7 +11,7 @@ from ccbot.handlers.card_types import CardState
 from ccbot.session_models import Session
 
 
-def test_card_header_shows_compact_model_and_effort_before_timestamp() -> None:
+def test_card_header_omits_model_but_context_row_keeps_it() -> None:
     sess = Session(
         id="options",
         name="options cleanup",
@@ -19,16 +19,19 @@ def test_card_header_shows_compact_model_and_effort_before_timestamp() -> None:
         state="active",
         backend="codex",
     )
-    state = CardState(last_event_ts=1.0)
-    # CardState does not expose these fields yet: assigning through the public
-    # state object keeps this first TDD step a behavioral render failure rather
-    # than an import/setup failure.
-    state.agent_model = "gpt-5.6-sol"  # type: ignore[attr-defined]
-    state.reasoning_effort = "medium"  # type: ignore[attr-defined]
+    state = CardState(
+        last_event_ts=1.0,
+        agent_model="gpt-5.6-sol",
+        reasoning_effort="medium",
+        context_pct=42,
+    )
 
-    header = _render_card(sess, state).splitlines()[0]
+    card = _render_card(sess, state)
+    header = card.splitlines()[0]
 
-    assert "· ccbot · 5.6-sol med ·" in header
+    assert "· ccbot ·" in header
+    assert "5.6-sol" not in header
+    assert card.endswith("─── 5.6-sol med: 42% ───")
 
 
 def test_card_context_row_shows_session_model_and_effort() -> None:
@@ -92,12 +95,12 @@ async def test_codex_identity_recovers_from_rollout_when_busy_pane_hides_footer(
     )
 
     assert await card_terminal.sync_card_identity(sess, state)
-    assert _render_card(sess, state, user_id=42).splitlines()[0].endswith("6-sol high")
+    assert "6-sol high" not in _render_card(sess, state, user_id=42).splitlines()[0]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("node_id", ["local", "worker-a"])
-async def test_codex_identity_header_is_node_independent(
+async def test_codex_identity_remains_out_of_header_on_each_node(
     monkeypatch: pytest.MonkeyPatch, node_id: str
 ) -> None:
     sess = Session(
@@ -118,8 +121,8 @@ async def test_codex_identity_header_is_node_independent(
 
     assert await card_terminal.sync_card_identity(sess, state)
     first_header = _render_card(sess, state).splitlines()[0]
-    assert "5.6-sol med" in first_header
+    assert "5.6-sol med" not in first_header
 
     assert await card_terminal.sync_card_identity(sess, state)
     changed_header = _render_card(sess, state).splitlines()[0]
-    assert "6-astra high" in changed_header
+    assert "6-astra high" not in changed_header

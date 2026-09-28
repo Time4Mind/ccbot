@@ -341,8 +341,45 @@ class TestResumeSettleGate:
         mock_tmux.capture_pane = AsyncMock(side_effect=capture_side_effect)
         mock_tmux.send_keys = AsyncMock(return_value=True)
         mock_tmux.ensure_codex_prompt_submitted = AsyncMock(return_value=True)
+        mock_tmux.wait_startup = AsyncMock(return_value=True)
         monkeypatch.setattr("ccbot.session.tmux_manager", mock_tmux)
         return mock_tmux
+
+    @pytest.mark.asyncio
+    async def test_codex_request_waits_for_startup_checks_after_composer_is_ready(
+        self, mgr: SessionManager, monkeypatch, fast_gate
+    ) -> None:
+        startup_finished = asyncio.Event()
+        mock_tmux = self._mock_tmux(monkeypatch, lambda _w: _CODEX_READY_PANE)
+
+        async def wait_for_startup(_wid: str) -> bool:
+            await startup_finished.wait()
+            return True
+
+        mock_tmux.wait_startup.side_effect = wait_for_startup
+        mgr.mark_window_starting("@1", backend="codex", resume=True)
+        ok, message = await mgr.send_to_window("@1", "/model")
+
+        assert ok and message.startswith("Queued for ")
+        await asyncio.sleep(0.12)
+        mock_tmux.send_keys.assert_not_awaited()
+        startup_finished.set()
+        await mgr._resume_settle_tasks["@1"]
+        mock_tmux.send_keys.assert_awaited_once_with("@1", "/model", backend="codex")
+
+    @pytest.mark.asyncio
+    async def test_failed_codex_startup_never_drains_queued_request(
+        self, mgr: SessionManager, monkeypatch, fast_gate
+    ) -> None:
+        mock_tmux = self._mock_tmux(monkeypatch, lambda _w: _CODEX_READY_PANE)
+        mock_tmux.wait_startup.return_value = False
+        mgr.mark_window_starting("@1", backend="codex", resume=True)
+        ok, _ = await mgr.send_to_window("@1", "/model")
+
+        assert ok
+        await mgr._resume_settle_tasks["@1"]
+        mock_tmux.send_keys.assert_not_awaited()
+        assert "@1" not in mgr._pending_sends
 
     @pytest.mark.asyncio
     async def test_fresh_codex_start_queues_until_real_prompt(

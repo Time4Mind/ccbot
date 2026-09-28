@@ -211,13 +211,9 @@ def _render_card(
     if state.last_event_ts > 0:
         ts_suffix = " · " + _format_hhmmss(state.last_event_ts)
     identity = _model_effort_label(state.agent_model, state.reasoning_effort)
-    identity_suffix = f" · {identity}" if identity else ""
     name_part = sess.name or sess.id
     completion = "✅ " if state.completion_marker_pending else ""
-    header = (
-        f"{completion}*{name_part}* · {state_label}"
-        f"{identity_suffix}{cont_marker}{ts_suffix}"
-    )
+    header = f"{completion}*{name_part}* · {state_label}{cont_marker}{ts_suffix}"
     if sess.goal:
         header += f"\ngoal: {sess.goal}"
 

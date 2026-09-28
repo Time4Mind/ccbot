@@ -452,9 +452,8 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
 
         Polls the pane via ``_wait_for_resume_settle`` until it settles
         (or the configured timeout elapses), then drains anything
-        ``send_to_window`` buffered into ``_pending_sends`` while the
-        gate was up. Concurrently keeps Telegram's TYPING indicator
-        refreshed so the user sees the bot is still working.
+        ``send_to_window`` buffered while gated. Keeps Telegram's TYPING
+        indicator refreshed so the bot does not appear frozen.
         """
         stop_typing = asyncio.Event()
 
@@ -500,6 +499,9 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                         "TUI readiness is still unproven",
                         window_id,
                     )
+            if backend == "codex" and not await tmux_manager.wait_startup(window_id):
+                logger.warning("startup checks failed for window %s", window_id)
+                return
             logger.info(
                 "startup gate cleared for window %s "
                 "(settled=%s backend=%s resume=%s, background)",

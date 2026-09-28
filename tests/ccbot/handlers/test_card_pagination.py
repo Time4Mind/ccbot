@@ -15,6 +15,7 @@ from ccbot.handlers.notifications import (
     render_event,
 )
 from ccbot.session_monitor import NewMessage
+from ccbot.handlers.card_pagination import answer_page_indices, answer_page_target
 
 
 def _msg(
@@ -161,6 +162,23 @@ class TestResolvedPageIdx:
     def test_clamps_low(self) -> None:
         state = CardState(current_page_idx=-1)
         assert _resolved_page_idx(state, 3) == 0
+
+
+def test_answer_page_index_includes_intermediate_text_but_skips_tool_and_thinking() -> (
+    None
+):
+    pages = [
+        [Event(type="tool_use", text="Read", started_at=1)],
+        [Event(type="text", text="Progress", started_at=2)],
+        [Event(type="thinking", text="Reasoning", started_at=3)],
+        [Event(type="final_text", text="Done", started_at=4)],
+        [Event(type="text", text="  ", started_at=5)],
+    ]
+
+    assert answer_page_indices(pages) == [1, 3]
+    assert answer_page_target(pages, 1, 1) == 3
+    assert answer_page_target(pages, 3, 1) == 1
+    assert answer_page_target(pages, 3, -1) == 1
 
 
 class TestInFlight:

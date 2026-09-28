@@ -197,6 +197,7 @@ def test_options_category_renders_button_visibility_table(
             "language": "ru",
             "option_button_screenshot": True,
             "option_button_terminal": False,
+            "option_button_answer_pagination": True,
         },
     )
 
@@ -207,9 +208,49 @@ def test_options_category_renders_button_visibility_table(
     assert "| 🧑‍💻 Скрин | on |" in rendered
     assert "| 🖥 Терминал | off |" in rendered
     assert "| Перенос сессии | off |" in rendered
+    assert "| 📄 Ответы | on |" in rendered
     assert keyboard is not None
     assert [row[0].text for row in keyboard.inline_keyboard[:-1]] == [
         "🧑‍💻 Скрин",
         "🖥 Терминал",
         "Перенос сессии",
+        "📄 Ответы",
     ]
+
+
+@pytest.mark.asyncio
+async def test_answer_pagination_button_can_be_hidden_without_changing_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from ccbot.bot.callbacks import settings as settings_callback
+    from ccbot.handlers import menu
+
+    values = {
+        "language": "ru",
+        "option_button_answer_pagination": True,
+        "answer_pagination_only": True,
+    }
+    monkeypatch.setattr(session_manager, "get_user_settings", lambda _uid: values)
+    monkeypatch.setattr(
+        session_manager,
+        "update_user_setting",
+        lambda _uid, key, value: values.__setitem__(key, value),
+    )
+    monkeypatch.setattr(menu, "_has_active_session", lambda _uid: True)
+    monkeypatch.setattr(settings_callback, "safe_edit", AsyncMock())
+    query = SimpleNamespace(data="st:opt:answers:off", answer=AsyncMock())
+
+    assert await settings_callback.handle(
+        query, SimpleNamespace(bot=object()), SimpleNamespace(id=42)
+    )
+    assert values["option_button_answer_pagination"] is False
+    assert values["answer_pagination_only"] is True
+    keyboard = menu.build_footer_keyboard(42, screen="main")
+    assert all(
+        button.callback_data != "ft:answers"
+        for row in keyboard.inline_keyboard
+        for button in row
+    )

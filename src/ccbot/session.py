@@ -500,6 +500,11 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                         "TUI readiness is still unproven",
                         window_id,
                     )
+            if backend == "codex" and not await tmux_manager.wait_for_codex_startup(
+                window_id
+            ):
+                logger.warning("startup checks failed for window %s", window_id)
+                return
             logger.info(
                 "startup gate cleared for window %s "
                 "(settled=%s backend=%s resume=%s, background)",

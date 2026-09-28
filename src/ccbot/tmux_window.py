@@ -317,6 +317,7 @@ async def create_window(
             name=f"codex-startup-trust:{result[3]}",
         )
         manager._startup_tasks.add(task)
+        manager._startup_tasks_by_window[result[3]] = task
 
         def _finish_startup_task(done: asyncio.Task[bool]) -> None:
             manager._startup_tasks.discard(done)
@@ -334,7 +335,10 @@ async def create_window(
             except asyncio.CancelledError:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+                manager._startup_tasks_by_window.pop(result[3], None)
                 raise
             except Exception as exc:
+                manager._startup_tasks_by_window.pop(result[3], None)
                 return False, f"Failed to start Codex: {exc}", "", ""
+            manager._startup_tasks_by_window.pop(result[3], None)
     return result

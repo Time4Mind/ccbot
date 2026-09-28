@@ -30,7 +30,6 @@ from ...handlers.callback_data import (
 )
 from ...handlers.card_model import TurnPhase
 from ...handlers.card_pagination import (
-    answer_page_indices,
     answer_page_target,
     paginate_events_for_card,
 )
@@ -249,18 +248,14 @@ async def handle(
         answer_only = session_manager.get_user_settings(user.id).get(
             "answer_pagination_only", False
         )
-        if answer_only:
-            pages = paginate_events_for_card(state, user.id)
-            if data == CB_PG_JUMP:
-                answers = answer_page_indices(pages)
-                state.current_page_idx = answers[-1] if answers else idx
-            else:
-                step = -1 if data == CB_PG_PREV else 1
-                state.current_page_idx = answer_page_target(pages, idx, step)
-        elif data == CB_PG_JUMP:
-            # Jump to default-focus (= latest page when no answer-anchor
-            # was set explicitly). ``None`` means "stick to latest".
+        if data == CB_PG_JUMP:
+            # The middle button always follows the latest physical page,
+            # including a page containing only tools or pending calls.
             state.current_page_idx = None
+        elif answer_only:
+            pages = paginate_events_for_card(state, user.id)
+            step = -1 if data == CB_PG_PREV else 1
+            state.current_page_idx = answer_page_target(pages, idx, step)
         elif data == CB_PG_PREV:
             state.current_page_idx = (idx - 1) % total
         else:  # CB_PG_NEXT

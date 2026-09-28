@@ -416,19 +416,20 @@ def card_page_info(state: CardState, user_id: int | None = None) -> tuple[int, i
 
 
 def answer_page_indices(pages: list[list[Event]]) -> list[int]:
-    """Physical page indexes containing intermediate or final model text."""
+    """Physical pages containing a user request or model response."""
     return [
         index
         for index, page in enumerate(pages)
         if any(
-            ev.type in ("text", "final_text") and (ev.body.strip() or ev.text.strip())
+            ev.type in ("user_msg", "text", "final_text")
+            and (ev.body.strip() or ev.text.strip())
             for ev in page
         )
     ]
 
 
 def answer_page_target(pages: list[list[Event]], current: int, direction: int) -> int:
-    """Find the next answer page, wrapping in ``direction``."""
+    """Find the next user/model text page, wrapping in ``direction``."""
     total = len(pages)
     if not total:
         return current

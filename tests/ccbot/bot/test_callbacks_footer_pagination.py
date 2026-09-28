@@ -84,13 +84,14 @@ async def test_pagination_wraps_cyclically(
     ("callback", "current", "expected"),
     [
         (CB_PG_NEXT, 0, 1),
-        (CB_PG_NEXT, 1, 3),
-        (CB_PG_NEXT, 3, 1),
-        (CB_PG_PREV, 3, 1),
-        (CB_PG_PREV, 1, 3),
+        (CB_PG_NEXT, 1, 2),
+        (CB_PG_NEXT, 2, 3),
+        (CB_PG_NEXT, 3, 0),
+        (CB_PG_PREV, 3, 2),
+        (CB_PG_PREV, 1, 0),
     ],
 )
-async def test_answer_pagination_skips_tool_only_pages(
+async def test_answer_pagination_includes_user_request_pages(
     monkeypatch: pytest.MonkeyPatch, callback: str, current: int, expected: int
 ) -> None:
     query = SimpleNamespace(data=callback, answer=AsyncMock())
@@ -121,7 +122,7 @@ async def test_answer_pagination_skips_tool_only_pages(
 
 
 @pytest.mark.asyncio
-async def test_answer_pagination_stays_put_when_no_model_text(
+async def test_answer_pagination_navigates_requests_without_model_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     query = SimpleNamespace(data=CB_PG_NEXT, answer=AsyncMock())
@@ -147,7 +148,7 @@ async def test_answer_pagination_stays_put_when_no_model_text(
     monkeypatch.setattr(footer, "refresh_panel", AsyncMock(return_value=True))
 
     assert await footer.handle(query, context, user)
-    assert state.current_page_idx == 0
+    assert state.current_page_idx == 1
 
 
 @pytest.mark.asyncio

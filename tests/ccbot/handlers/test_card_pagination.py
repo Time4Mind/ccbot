@@ -164,21 +164,23 @@ class TestResolvedPageIdx:
         assert _resolved_page_idx(state, 3) == 0
 
 
-def test_answer_page_index_includes_intermediate_text_but_skips_tool_and_thinking() -> (
+def test_answer_page_index_includes_user_requests_and_model_text_but_skips_tools() -> (
     None
 ):
     pages = [
         [Event(type="tool_use", text="Read", started_at=1)],
-        [Event(type="text", text="Progress", started_at=2)],
-        [Event(type="thinking", text="Reasoning", started_at=3)],
-        [Event(type="final_text", text="Done", started_at=4)],
-        [Event(type="text", text="  ", started_at=5)],
+        [Event(type="user_msg", text="Prompt", started_at=2)],
+        [Event(type="text", text="Progress", started_at=3)],
+        [Event(type="thinking", text="Reasoning", started_at=4)],
+        [Event(type="final_text", text="Done", started_at=5)],
+        [Event(type="text", text="  ", started_at=6)],
+        [Event(type="user_msg", text="  ", started_at=7)],
     ]
 
-    assert answer_page_indices(pages) == [1, 3]
-    assert answer_page_target(pages, 1, 1) == 3
-    assert answer_page_target(pages, 3, 1) == 1
-    assert answer_page_target(pages, 3, -1) == 1
+    assert answer_page_indices(pages) == [1, 2, 4]
+    assert answer_page_target(pages, 2, 1) == 4
+    assert answer_page_target(pages, 4, 1) == 1
+    assert answer_page_target(pages, 4, -1) == 2
 
 
 class TestInFlight:

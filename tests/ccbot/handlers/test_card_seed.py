@@ -298,6 +298,41 @@ class TestEnsureSeededIdempotent:
         assert rendered.count(prompt) == 1
         assert rendered.index(prompt) < rendered.index("Проверяю данные")
 
+    async def test_seed_discards_unrecorded_prompt_before_newer_user_echo(
+        self, monkeypatch
+    ) -> None:
+        import ccbot.handlers.notifications as notif
+        from ccbot.session import Session
+
+        seeded_prompt = Event(
+            type="user_msg",
+            text="Последний запрос",
+            started_at=3.0,
+            is_page_break=True,
+        )
+
+        async def _seed(_sess, max_turns=0):
+            del max_turns
+            return [seeded_prompt]
+
+        monkeypatch.setattr(notif, "_seed_events_from_jsonl", _seed)
+        state = CardState(
+            pending_prompts=[
+                PendingPrompt(request_id="6199", text=".", created_at=1.0),
+                PendingPrompt(
+                    request_id="6201", text="Последний запрос", created_at=2.0
+                ),
+            ],
+            pending_request_sequences=[(6199, 1), (6201, 2)],
+        )
+        sess = Session(id="reconnect-rule", name="reconnect rule", window_id="@29")
+
+        await _ensure_seeded(42, sess, state)
+
+        assert state.pending_prompts == []
+        assert state.pending_request_sequences == []
+        assert state.active_turn_sequence == 2
+
     async def test_seed_reconciles_media_caption_with_inbox_path(
         self, monkeypatch
     ) -> None:

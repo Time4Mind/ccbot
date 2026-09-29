@@ -82,6 +82,17 @@ def matching_pending_prefix_count(
     return matched
 
 
+def matching_pending_span(
+    pending_prompts: list[PendingPrompt], raw_text: str
+) -> tuple[int, int]:
+    """Find the oldest exact pending run, skipping receipts never echoed."""
+    for start in range(len(pending_prompts)):
+        count = matching_pending_prefix_count(pending_prompts[start:], raw_text)
+        if count:
+            return start, count
+    return 0, 0
+
+
 def _reconcile_seeded_pending(state: CardState, seeded: list[Event]) -> int:
     """Bind pending receipts to their already-seeded user events in place.
 
@@ -101,22 +112,23 @@ def _reconcile_seeded_pending(state: CardState, seeded: list[Event]) -> int:
     for event in seeded:
         if event.type != "user_msg" or len(remaining) < 2:
             continue
-        count = matching_pending_prefix_count(remaining, event.text)
-        if count < 2 or event.started_at + 30.0 < remaining[0].created_at:
+        start, count = matching_pending_span(remaining, event.text)
+        if count < 2 or event.started_at + 30.0 < remaining[start].created_at:
             continue
-        consumed = remaining[:count]
+        consumed = remaining[start : start + count]
         if any(pending.preprocessed for pending in consumed):
             event.user_icon = "👤💻"
         elif consumed[0].user_icon:
             event.user_icon = consumed[0].user_icon
-        del remaining[:count]
+        del remaining[: start + count]
     state.pending_prompts = remaining
     if not state.pending_prompts:
         return original_count
 
-    matched_pending_ids: set[int] = set()
+    matched_prefix_end = -1
     search_before = len(seeded)
-    for pending in reversed(state.pending_prompts):
+    for pending_index in range(len(state.pending_prompts) - 1, -1, -1):
+        pending = state.pending_prompts[pending_index]
         needle = _prompt_key(pending.text)
         if (
             not needle
@@ -141,16 +153,14 @@ def _reconcile_seeded_pending(state: CardState, seeded: list[Event]) -> int:
                 event.user_icon = "👤💻"
             elif pending.user_icon:
                 event.user_icon = pending.user_icon
-            matched_pending_ids.add(id(pending))
+            matched_prefix_end = max(matched_prefix_end, pending_index)
             search_before = index
             break
 
-    if matched_pending_ids:
-        state.pending_prompts = [
-            pending
-            for pending in state.pending_prompts
-            if id(pending) not in matched_pending_ids
-        ]
+    if matched_prefix_end >= 0:
+        # The session FIFO cannot echo an older request after a newer one.
+        # A missing older echo is a stale receipt, not another live turn.
+        del state.pending_prompts[: matched_prefix_end + 1]
     return original_count - len(state.pending_prompts)
 
 

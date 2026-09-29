@@ -89,11 +89,11 @@ def _resolve_format() -> str:
 def configure_logging() -> None:
     """Wire up the root logger. Safe to call multiple times — replaces handlers.
 
-    Always installs a stderr handler. Additionally writes a rotating
-    untruncated log to ``$CCBOT_DIR/logs/bot.log`` (default
+    Writes one rotating, untruncated log to ``$CCBOT_DIR/logs/bot.log`` (default
     ``~/.ccbot/logs/bot.log``) so debugging the bot doesn't depend on
     grepping ``tmux capture-pane`` output, which is wrapped to the
-    pane's column width and drops the rest of each line.
+    pane's column width and drops the rest of each line. Falls back to stderr
+    only when the log file cannot be opened.
     """
     level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
@@ -113,8 +113,6 @@ def configure_logging() -> None:
     # paths may have already attached — keep one consistent stream.
     for h in list(root.handlers):
         root.removeHandler(h)
-    root.addHandler(stderr_handler)
-
     # File handler: untruncated lines, rotated daily, last 7 days kept.
     # Use ``ccbot_dir`` so the path follows ``CCBOT_DIR`` env var (and
     # therefore matches wherever ``state.json`` lives).
@@ -134,6 +132,6 @@ def configure_logging() -> None:
         file_handler.setFormatter(fmt)
         root.addHandler(file_handler)
     except Exception as e:
-        # File logging is best-effort — never block the bot if the path
-        # is unwritable or the rotator can't lock.
+        # Keep one working destination when the file is unavailable.
+        root.addHandler(stderr_handler)
         root.warning("File logging unavailable: %s", e)

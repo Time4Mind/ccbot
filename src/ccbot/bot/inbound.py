@@ -8,6 +8,7 @@ voice transcription never blocks session-switch callbacks.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from telegram import Update
@@ -29,7 +30,9 @@ from ..handlers.directory_browser import (
     STATE_PREPROCESSING_INSTRUCTION,
 )
 from ..inbound_queue import InboundProcessor, enqueue_inbound
+from ..i18n import t
 from ..session import session_manager
+from ..transcribe import resolve_voice_backend
 from ..transfer_queue import capture_transfer_message
 from ._common import active_window, is_user_allowed
 from .messages import (
@@ -40,6 +43,8 @@ from .messages import (
     unsupported_content_handler,
     voice_handler,
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def _run_text(update: Update, context: Any, wid: str) -> bool:
@@ -79,6 +84,7 @@ def _enqueue(
     kind: str,
     processor: InboundProcessor,
     target_window_id: str | None = None,
+    voice_ack_message_id: int | None = None,
 ) -> bool:
     user = update.effective_user
     if user is None or update.message is None or not is_user_allowed(user.id):
@@ -187,12 +193,28 @@ def _enqueue(
         state.current_page_idx = None
         if kind == "voice":
             state.voice_pending = True
-        schedule_card_after_message(
+        surface_task = schedule_card_after_message(
             context.bot,
             user.id,
             sess,
             update.message.message_id,
         )
+        if kind == "voice" and voice_ack_message_id is not None:
+
+            async def remove_ack_after_card() -> None:
+                try:
+                    surfaced = await surface_task
+                    if surfaced:
+                        await context.bot.delete_message(
+                            chat_id=user.id, message_id=voice_ack_message_id
+                        )
+                except Exception as exc:
+                    logger.debug("voice acknowledgement cleanup failed: %s", exc)
+
+            asyncio.create_task(
+                remove_ack_after_card(),
+                name=f"voice-ack-cleanup:{user.id}:{voice_ack_message_id}",
+            )
     return True
 
 
@@ -281,6 +303,45 @@ async def voice_intake_handler(
 ) -> bool:
     if _capture_pending_transfer(update, context):
         return True
+    user = update.effective_user
+    message = update.message
+    if (
+        user is not None
+        and message is not None
+        and message.voice is not None
+        and is_user_allowed(user.id)
+        and resolve_voice_backend(user.id) != "off"
+    ):
+        # Pin the target before Telegram I/O. The first visible reply must
+        # precede transcript seeding, card repainting and transcription.
+        wid = active_window(user.id)
+        if wid is not None:
+            ack_message_id: int | None = None
+            try:
+                ack = await context.bot.send_message(
+                    chat_id=user.id,
+                    text=t(user.id, "voice.transcribing"),
+                    reply_to_message_id=message.message_id,
+                )
+                ack_id = getattr(ack, "message_id", None)
+                if isinstance(ack_id, int):
+                    ack_message_id = ack_id
+            except Exception as exc:
+                logger.warning(
+                    "voice acknowledgement failed user=%d error_type=%s",
+                    user.id,
+                    type(exc).__name__,
+                )
+            if _enqueue(
+                update,
+                context,
+                kind="voice",
+                processor=_run_voice,
+                target_window_id=wid,
+                voice_ack_message_id=ack_message_id,
+            ):
+                return True
+            return await voice_handler(update, context, pinned_wid=wid)
     if _enqueue(update, context, kind="voice", processor=_run_voice):
         return True
     return await voice_handler(update, context)

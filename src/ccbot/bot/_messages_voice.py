@@ -162,7 +162,8 @@ async def _process_voice(
 
     # wid is pinned NOW, before the slow download/transcribe steps — a
     # switch afterwards can't redirect this voice message.
-    await fire_typing(context.bot, user.id, "voice_handler.received", window_id=wid)
+    if surface_pending:
+        await fire_typing(context.bot, user.id, "voice_handler.received", window_id=wid)
 
     # Same immediate reaction a typed message gets: the live card is
     # REPOSTED as a fresh message right now, below the voice the user
@@ -190,11 +191,8 @@ async def _process_voice(
             try:
                 if surface_pending:
                     await repost_card(context.bot, user.id, sess)
-                else:
-                    # Fast intake already moved the card below the voice. Edit
-                    # that carrier to add the pending marker; reposting here
-                    # would create a second acknowledgement card.
-                    await resume_card_view(context.bot, user.id, sess)
+                # Ordered intake has already scheduled its card receipt.
+                # Telegram UI work must not delay voice transcription.
             except Exception as e:
                 logger.debug("voice-pending card surface failed: %s", e)
 
@@ -277,7 +275,7 @@ async def _process_voice(
             PendingPrompt(request_id=request_id, text=text, user_icon="👤")
         )
         card_state.current_page_idx = None
-        if sess is not None and is_active_for_user(user.id, sess):
+        if surface_pending and sess is not None and is_active_for_user(user.id, sess):
             try:
                 await refresh_panel(
                     context.bot,
@@ -292,7 +290,7 @@ async def _process_voice(
     # pinned session is still the one the user is looking at. If they
     # switched away during transcription, the text still goes to the
     # pinned pane but must stay invisible in chat.
-    if sess is not None and is_active_for_user(user.id, sess):
+    if surface_pending and sess is not None and is_active_for_user(user.id, sess):
         await fire_typing(
             context.bot, user.id, "voice_handler.transcribed", window_id=wid
         )

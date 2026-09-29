@@ -90,6 +90,8 @@ async def surface_card_after_message(
     user_id: int,
     sess: Session,
     message_id: int,
+    *,
+    fast: bool = False,
 ) -> bool:
     """Make the active session card the only receipt for an inbound message.
 
@@ -106,13 +108,14 @@ async def surface_card_after_message(
     state.user_stopped = False
     state.pane_busy = False
     state.turn_phase = TurnPhase.RUNNING
-    await _legacy("_ensure_seeded")(user_id, sess, state)
-    if getattr(sess, "backend", None) == "codex" and (
-        not state.agent_model or not state.reasoning_effort
-    ):
-        from .card_terminal import sync_card_identity
+    if not fast:
+        await _legacy("_ensure_seeded")(user_id, sess, state)
+        if getattr(sess, "backend", None) == "codex" and (
+            not state.agent_model or not state.reasoning_effort
+        ):
+            from .card_terminal import sync_card_identity
 
-        await sync_card_identity(sess, state)
+            await sync_card_identity(sess, state)
     old_msg_id: int | None = None
     new_msg_id: int | None = None
 
@@ -152,6 +155,51 @@ async def surface_card_after_message(
         old_msg_id,
         new_msg_id,
     )
+    if fast:
+
+        async def finish_card() -> bool:
+            if old_msg_id and new_msg_id != old_msg_id:
+                try:
+                    await bot.delete_message(chat_id=user_id, message_id=old_msg_id)
+                except Exception as exc:
+                    logger.warning(
+                        "card_surface delete_old_failed user=%s sess=%s msg=%s err=%s",
+                        user_id,
+                        sess.id,
+                        old_msg_id,
+                        exc,
+                    )
+            await _legacy("_ensure_seeded")(user_id, sess, state)
+            if getattr(sess, "backend", None) == "codex" and (
+                not state.agent_model or not state.reasoning_effort
+            ):
+                from .card_terminal import sync_card_identity
+
+                await sync_card_identity(sess, state)
+            if state.msg_id == new_msg_id and _legacy("is_active_for_user")(
+                user_id, sess
+            ):
+                await refresh_panel(bot, user_id, immediate=True, refresh_pane=False)
+            return True
+
+        task = asyncio.create_task(
+            finish_card(), name=f"card-finish:{user_id}:{sess.id}:{message_id}"
+        )
+        _card_surface_tasks.add(task)
+
+        def finished(done: asyncio.Task[bool]) -> None:
+            _card_surface_tasks.discard(done)
+            if not done.cancelled() and (exc := done.exception()) is not None:
+                logger.warning(
+                    "card_surface finish_failed user=%s sess=%s after=%s err=%s",
+                    user_id,
+                    sess.id,
+                    message_id,
+                    exc,
+                )
+
+        task.add_done_callback(finished)
+        return True
     if old_msg_id and new_msg_id != old_msg_id:
         try:
             await bot.delete_message(chat_id=user_id, message_id=old_msg_id)

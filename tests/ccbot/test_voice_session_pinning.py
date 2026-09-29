@@ -490,6 +490,61 @@ class TestVoiceTranscriptConfirmation:
 
 class TestVoiceSessionPinning:
     @pytest.mark.asyncio
+    async def test_ordered_voice_dispatch_does_not_wait_for_card_repaints(self):
+        from ccbot.handlers.card_model import CardState
+
+        update = _make_voice_update()
+        context = _make_context()
+        sess = MagicMock(id="session", node_id="local")
+        state = CardState()
+        manager = MagicMock()
+        manager.find_session_by_window.return_value = sess
+        tmux = MagicMock()
+        tmux.find_window_by_id = AsyncMock(return_value=MagicMock())
+        events = []
+
+        async def download(*_args, **_kwargs):
+            events.append("download")
+            return b"ogg"
+
+        async def transcribe(*_args, **_kwargs):
+            events.append("transcribe")
+            return "recognized request"
+
+        async def dispatch(*_args, **_kwargs):
+            events.append("dispatch")
+            return True
+
+        async def slow_ui(*_args, **_kwargs):
+            raise AssertionError("UI work delayed voice delivery")
+
+        with (
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.resolve_voice_backend", return_value="whisper"),
+            patch("ccbot.bot.messages.session_manager", manager),
+            patch("ccbot.bot.messages.tmux_manager", tmux),
+            patch("ccbot.bot.messages.get_card_state", return_value=state),
+            patch("ccbot.bot.messages.is_active_for_user", return_value=True),
+            patch("ccbot.bot.messages.fire_typing", new=slow_ui),
+            patch("ccbot.bot.messages.resume_card_view", new=slow_ui),
+            patch("ccbot.bot.messages.refresh_panel", new=slow_ui),
+            patch("ccbot.bot.messages._download_voice_bytes", new=download),
+            patch("ccbot.bot.messages.transcribe_voice", new=transcribe),
+            patch(
+                "ccbot.bot.messages._intercept_if_pending_ui",
+                new=AsyncMock(return_value=False),
+            ),
+            patch("ccbot.bot.messages._dispatch_text_to_active", new=dispatch),
+        ):
+            from ccbot.bot.messages import voice_handler
+
+            assert await voice_handler(
+                update, context, pinned_wid="@5", ordered=True, surface_pending=False
+            )
+
+        assert events == ["download", "transcribe", "dispatch"]
+
+    @pytest.mark.asyncio
     async def test_remote_voice_is_transcribed_on_leader_without_local_tmux_lookup(
         self,
     ):

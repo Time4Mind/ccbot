@@ -207,17 +207,21 @@ async def text_intake_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> bool:
     user = update.effective_user
+    is_dot = bool(update.message and (update.message.text or "").strip() == ".")
     state = context.user_data.get(STATE_KEY) if context.user_data else None
-    if state in (STATE_NAMING_DIRECTORY, STATE_PREPROCESSING_INSTRUCTION):
+    if not is_dot and state in (
+        STATE_NAMING_DIRECTORY,
+        STATE_PREPROCESSING_INSTRUCTION,
+    ):
         # Folder names are control-plane input. Do not pin them to the active
         # session or schedule its card below the directory browser.
         return await text_handler(update, context)
-    if _capture_pending_transfer(update, context):
+    if not is_dot and _capture_pending_transfer(update, context):
         return True
     if user is not None and get_flow(user.id) is not None:
         return await text_handler(update, context)
     target_wid = None
-    if user is not None and update.message is not None:
+    if not is_dot and user is not None and update.message is not None:
         reply = getattr(update.message, "reply_to_message", None)
         target_sid = (
             lookup_session_for_message(user.id, reply.message_id)
@@ -234,7 +238,7 @@ async def text_intake_handler(
     if _enqueue(
         update,
         context,
-        kind="text",
+        kind="command" if is_dot else "text",
         processor=_run_text,
         target_window_id=target_wid,
     ):

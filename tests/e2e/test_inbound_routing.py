@@ -12,6 +12,14 @@ from __future__ import annotations
 import pytest
 
 from ccbot.bot.messages import text_handler
+from ccbot.handlers.directory_browser import (
+    STATE_BROWSING_DIRECTORY,
+    STATE_KEY,
+    STATE_NAMING_DIRECTORY,
+    STATE_PREPROCESSING_INSTRUCTION,
+    STATE_SELECTING_SESSION,
+    STATE_SELECTING_WINDOW,
+)
 from ccbot.session import session_manager
 
 from harness import (
@@ -115,3 +123,84 @@ async def test_text_from_unauthorized_user_is_dropped(fake_tmux, fake_bot):
     # Silent drop — no send_keys, no reply.
     assert fake_tmux.sent == []
     assert fake_bot.send_message.call_count == 0
+
+
+@pytest.mark.parametrize(
+    "bot_state",
+    [
+        STATE_SELECTING_SESSION,
+        STATE_SELECTING_WINDOW,
+        STATE_BROWSING_DIRECTORY,
+        STATE_NAMING_DIRECTORY,
+        STATE_PREPROCESSING_INSTRUCTION,
+    ],
+)
+@pytest.mark.asyncio
+async def test_dot_confirms_effort_picker_even_during_bot_picker(
+    fake_tmux, fake_bot, monkeypatch, bot_state
+):
+    from ccbot import terminal_runtime
+
+    monkeypatch.setattr(terminal_runtime, "tmux_manager", fake_tmux)
+    fake_tmux.add_window(
+        "@100",
+        name="active",
+        pane=(
+            "  Select Reasoning Level for GPT-6-Sol\n"
+            "\n"
+            "  1. Low\n"
+            "› 2. Medium (default)\n"
+            "  3. High\n"
+            "\n"
+            "  enter default · s session · esc back\n"
+        ),
+    )
+    seed_session(
+        session_manager,
+        sid="aaaa1111",
+        name="active",
+        window_id="@100",
+        workdir="/tmp/active",
+        claude_session_id="11111111-1111-1111-1111-111111111111",
+        active_for=USER_ID,
+    )
+    msg = FakeReplyMessage(message_id=5004, chat_id=USER_ID, bot=fake_bot, text=".")
+    update = FakeUpdate(user=FakeUser(USER_ID), message=msg)
+    ctx = _ctx(fake_bot)
+    ctx.user_data = {STATE_KEY: bot_state}
+
+    assert await text_handler(update, ctx) is True
+    assert fake_tmux.sent == [("@100", "Enter", False, False)]
+
+
+@pytest.mark.parametrize(
+    "bot_state",
+    [
+        STATE_SELECTING_SESSION,
+        STATE_SELECTING_WINDOW,
+        STATE_BROWSING_DIRECTORY,
+        STATE_NAMING_DIRECTORY,
+        STATE_PREPROCESSING_INSTRUCTION,
+    ],
+)
+@pytest.mark.asyncio
+async def test_dot_reaches_active_session_during_bot_picker(
+    fake_tmux, fake_bot, bot_state
+):
+    fake_tmux.add_window("@100", name="active", pane="Ready\n")
+    seed_session(
+        session_manager,
+        sid="aaaa1111",
+        name="active",
+        window_id="@100",
+        workdir="/tmp/active",
+        claude_session_id="11111111-1111-1111-1111-111111111111",
+        active_for=USER_ID,
+    )
+    msg = FakeReplyMessage(message_id=5005, chat_id=USER_ID, bot=fake_bot, text=".")
+    update = FakeUpdate(user=FakeUser(USER_ID), message=msg)
+    ctx = _ctx(fake_bot)
+    ctx.user_data = {STATE_KEY: bot_state}
+
+    assert await text_handler(update, ctx) is True
+    assert ("@100", ".", True, True) in fake_tmux.sent

@@ -37,7 +37,7 @@ from .card_registry import (
     _should_buffer,
     _legacy,
 )
-from .card_seed import get_card_state, matching_pending_prefix_count
+from .card_seed import get_card_state, matching_pending_span
 from .card_transport import _deferred_edit
 
 logger = logging.getLogger(__name__)
@@ -61,8 +61,9 @@ def _apply_preprocessing_marker(
     normalized = raw_text.strip()
     # Preserve the established one-row FIFO fallback for harmless transcript
     # normalisation that is not an exact textual match.
+    match_start, matched_count = matching_pending_span(state.pending_prompts, raw_text)
     consumed_count = (
-        matching_pending_prefix_count(state.pending_prompts, raw_text) or 1
+        (match_start + matched_count if matched_count else 1)
         if state.pending_prompts
         else 0
     )
@@ -73,26 +74,33 @@ def _apply_preprocessing_marker(
     if state.pending_prompts:
         # Telegram dispatch and Codex transcript append are FIFO for one
         # pinned session. Codex may coalesce several queued Telegram requests
-        # into one transcript row, so consume the entire exact matching prefix;
-        # otherwise its remaining placeholders render as duplicate requests.
+        # into one transcript row. An exact later receipt proves that older
+        # unmatched receipts never produced user rows in this session.
         consumed = state.pending_prompts[:consumed_count]
         del state.pending_prompts[:consumed_count]
-        if any(pending.preprocessed for pending in consumed):
+        matched = consumed[match_start:] if matched_count else consumed
+        if any(pending.preprocessed for pending in matched):
             event.user_icon = "👤💻"
-        elif consumed and consumed[0].user_icon:
-            event.user_icon = consumed[0].user_icon
-        if consumed_count > 1:
+        elif matched and matched[0].user_icon:
+            event.user_icon = matched[0].user_icon
+        if match_start:
+            logger.info(
+                "discarded stale pending receipts sess=%s count=%d",
+                sess.id,
+                match_start,
+            )
+        if matched_count > 1:
             logger.debug(
                 "pending prompt batch matched sess=%s count=%d requests=%s",
                 sess.id,
-                consumed_count,
-                [pending.request_id for pending in consumed],
+                matched_count,
+                [pending.request_id for pending in matched],
             )
-        elif consumed and consumed[0].text.strip() != normalized:
+        elif matched and matched[0].text.strip() != normalized:
             logger.debug(
                 "pending prompt matched by fifo sess=%s request=%s",
                 sess.id,
-                consumed[0].request_id,
+                matched[0].request_id,
             )
         return
     if sess.was_preprocessed_prompt(normalized):

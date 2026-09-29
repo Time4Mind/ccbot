@@ -588,6 +588,33 @@ def test_concatenated_identical_prompts_are_reconciled_fifo() -> None:
     assert state.active_turn_sequence == 22
 
 
+def test_new_user_echo_clears_older_unrecorded_prompt_before_matching_receipt() -> None:
+    state = CardState(
+        pending_prompts=[
+            PendingPrompt(
+                request_id="6199", text=".", preprocessed=True, created_at=1.0
+            ),
+            PendingPrompt(
+                request_id="6232", text="Новый голосовой запрос", created_at=2.0
+            ),
+        ],
+        pending_request_sequences=[(6199, 1), (6232, 2)],
+    )
+    sess = Session(id="reconnect-rule", name="reconnect rule")
+    event = Event(type="user_msg", text="Новый голосовой запрос", started_at=3.0)
+
+    _apply_preprocessing_marker(sess, state, event, event.text)
+    state.events.append(event)
+    rendered = _render_card(sess, state, user_id=42)
+
+    assert state.pending_prompts == []
+    assert state.pending_request_sequences == []
+    assert state.active_turn_sequence == 2
+    assert event.user_icon == "👤"
+    assert rendered.count("Новый голосовой запрос") == 1
+    assert "👤 ." not in rendered
+
+
 def test_remote_user_rows_reconcile_two_prompts_before_completed_answer() -> None:
     state = CardState(
         pending_prompts=[

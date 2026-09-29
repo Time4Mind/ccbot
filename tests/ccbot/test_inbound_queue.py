@@ -280,6 +280,31 @@ async def test_local_command_does_not_shift_next_prompt_focus_receipt() -> None:
 
 
 @pytest.mark.asyncio
+async def test_dot_confirmation_does_not_create_a_second_pending_request() -> None:
+    context = _context()
+    dot = _update(20, text=".")
+    sess = SimpleNamespace(id="s1")
+    state = CardState()
+    receipt = SimpleNamespace(completion=None)
+
+    with (
+        patch("ccbot.bot.inbound.is_user_allowed", return_value=True),
+        patch("ccbot.bot.inbound.active_window", return_value="@A"),
+        patch(
+            "ccbot.bot.inbound.session_manager.find_session_by_window",
+            return_value=sess,
+        ),
+        patch("ccbot.bot.inbound.get_card_state", return_value=state),
+        patch("ccbot.bot.inbound.enqueue_inbound", return_value=receipt),
+        patch("ccbot.bot.inbound.schedule_card_after_message"),
+    ):
+        assert await text_intake_handler(dot, context)
+
+    assert state.pending_prompts == []
+    assert state.pending_request_sequences == []
+
+
+@pytest.mark.asyncio
 async def test_failed_intake_drops_only_its_focus_receipt() -> None:
     context = _context()
     failed = _update(31, text="failed")

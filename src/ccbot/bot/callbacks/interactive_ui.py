@@ -76,6 +76,15 @@ async def _send_window_key(window_id: str, key: str) -> bool:
     return await tmux_manager.send_keys(w.window_id, key, enter=False, literal=False)
 
 
+async def confirm_interactive_selection(bot: Any, user_id: int, window_id: str) -> bool:
+    """Press Enter in a session's native picker and refresh its Telegram controls."""
+    if not await _send_window_key(window_id, "Enter"):
+        return False
+    await asyncio.sleep(0.5)
+    await _refresh_after_key(bot, user_id, window_id)
+    return True
+
+
 async def handle(
     query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
 ) -> bool:

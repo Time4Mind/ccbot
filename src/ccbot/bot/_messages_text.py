@@ -412,8 +412,9 @@ async def text_handler(
         return False
 
     text = update.message.text
+    is_dot = text.strip() == "."
     state = context.user_data.get(STATE_KEY) if context.user_data else None
-    if state == STATE_PREPROCESSING_INSTRUCTION:
+    if not is_dot and state == STATE_PREPROCESSING_INSTRUCTION:
         instruction = text.strip()
         if (
             not instruction
@@ -439,7 +440,7 @@ async def text_handler(
             ),
         )
         return True
-    if state == STATE_NAMING_DIRECTORY:
+    if not is_dot and state == STATE_NAMING_DIRECTORY:
         current_path = (
             context.user_data.get(BROWSE_PATH_KEY) if context.user_data else None
         )
@@ -539,11 +540,11 @@ async def text_handler(
     # A pending /login flow owns the next message: it's the OAuth code, not a
     # prompt. Must run before session routing — the code would otherwise be
     # typed into a pane (and echoed into that session's transcript).
-    if await maybe_consume_code(update, context):
+    if not is_dot and await maybe_consume_code(update, context):
         return True
 
     # Ignore text while a picker UI is mid-flight.
-    if state in (
+    if not is_dot and state in (
         STATE_SELECTING_WINDOW,
         STATE_BROWSING_DIRECTORY,
         STATE_SELECTING_SESSION,
@@ -551,7 +552,11 @@ async def text_handler(
         await safe_reply(update.message, "Please use the picker above, or tap Cancel.")
         return False
 
-    if pinned_wid is None and await _route_reply_quote(update, user.id, text):
+    if (
+        pinned_wid is None
+        and not is_dot
+        and await _route_reply_quote(update, user.id, text)
+    ):
         return True
 
     wid = await _resolve_active_window(
@@ -559,6 +564,21 @@ async def text_handler(
     )
     if wid is None:
         return False
+
+    if is_dot:
+        from ._messages_dot import route_dot
+
+        dot_result = await route_dot(
+            update.message,
+            context.bot,
+            user.id,
+            wid,
+            manager=session_manager,
+            tmux=tmux_manager,
+            runtime_getter=get_node_runtime,
+        )
+        if dot_result is not None:
+            return dot_result
 
     await fire_typing(context.bot, user.id, "text_handler", window_id=wid)
 

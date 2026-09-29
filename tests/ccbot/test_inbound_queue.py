@@ -118,8 +118,10 @@ async def test_voice_intake_marks_recognition_before_fifo_runs() -> None:
     state = SimpleNamespace(voice_pending=False, current_page_idx=3)
     observed: list[tuple[bool, object]] = []
 
-    def surface(_bot, _uid, _sess, _message_id):
+    async def surface(_bot, _uid, _sess, _message_id, *, fast=False):
+        assert fast
         observed.append((state.voice_pending, state.current_page_idx))
+        return True
 
     with (
         patch("ccbot.bot.inbound.is_user_allowed", return_value=True),
@@ -128,17 +130,23 @@ async def test_voice_intake_marks_recognition_before_fifo_runs() -> None:
             "ccbot.bot.inbound.session_manager.find_session_by_window",
             return_value=sess,
         ),
+        patch("ccbot.bot.inbound.resolve_voice_backend", return_value="parakeet"),
+        patch("ccbot.bot.inbound.claim_default_session"),
         patch("ccbot.bot.inbound.get_card_state", return_value=state, create=True),
-        patch("ccbot.bot.inbound.schedule_card_after_message", side_effect=surface),
+        patch("ccbot.bot.inbound.surface_card_after_message", side_effect=surface),
+        patch("ccbot.bot.inbound.schedule_card_after_message") as scheduled,
         patch("ccbot.bot.inbound.enqueue_inbound"),
     ):
         assert await voice_intake_handler(voice, context)
 
     assert observed == [(True, None)]
+    scheduled.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_voice_replies_before_queue_and_keeps_original_session_pin() -> None:
+async def test_voice_surfaces_card_before_queue_and_keeps_original_session_pin() -> (
+    None
+):
     from ccbot.bot import inbound
 
     context = _context()
@@ -146,17 +154,17 @@ async def test_voice_replies_before_queue_and_keeps_original_session_pin() -> No
     active = "@A"
     events: list[object] = []
 
-    async def reply_first(**kwargs):
+    async def card_first(_bot, _user_id, _sess, _message_id, *, fast=False):
         nonlocal active
-        events.append(("reply", kwargs["reply_to_message_id"]))
+        events.append(("card", fast))
         active = "@B"
-        return SimpleNamespace(message_id=99)
+        return True
 
-    def enqueue_after_reply(*_args, **kwargs):
+    def enqueue_after_card(*_args, **kwargs):
         events.append(("enqueue", kwargs.get("target_window_id")))
         return True
 
-    context.bot.send_message.side_effect = reply_first
+    context.bot.send_message.side_effect = AssertionError("extra voice reply")
     with (
         patch("ccbot.bot.inbound.is_user_allowed", return_value=True),
         patch(
@@ -166,50 +174,26 @@ async def test_voice_replies_before_queue_and_keeps_original_session_pin() -> No
         ),
         patch("ccbot.bot.inbound.active_window", side_effect=lambda _uid: active),
         patch("ccbot.bot.inbound._capture_pending_transfer", return_value=False),
-        patch("ccbot.bot.inbound._enqueue", side_effect=enqueue_after_reply),
-    ):
-        assert await inbound.voice_intake_handler(voice, context)
-
-    assert events == [("reply", 12), ("enqueue", "@A")]
-
-
-@pytest.mark.asyncio
-async def test_voice_reply_is_removed_after_card_takes_over() -> None:
-    from ccbot.bot import inbound
-
-    context = _context()
-    context.bot.send_message.return_value = SimpleNamespace(message_id=99)
-    voice = _update(12, voice=True)
-    state = CardState()
-    sess = SimpleNamespace(id="s1")
-    surface_done = asyncio.get_running_loop().create_future()
-    delivery_done = asyncio.get_running_loop().create_future()
-    receipt = SimpleNamespace(completion=delivery_done)
-
-    with (
-        patch("ccbot.bot.inbound.is_user_allowed", return_value=True),
-        patch("ccbot.bot.inbound.resolve_voice_backend", return_value="parakeet"),
-        patch("ccbot.bot.inbound.active_window", return_value="@A"),
-        patch("ccbot.bot.inbound._capture_pending_transfer", return_value=False),
-        patch("ccbot.bot.inbound.enqueue_inbound", return_value=receipt),
-        patch("ccbot.bot.inbound.claim_default_session"),
-        patch("ccbot.bot.inbound.bg_status.update_status", return_value=False),
         patch(
             "ccbot.bot.inbound.session_manager.find_session_by_window",
-            return_value=sess,
+            return_value=SimpleNamespace(id="s1"),
         ),
-        patch("ccbot.bot.inbound.get_card_state", return_value=state),
         patch(
-            "ccbot.bot.inbound.schedule_card_after_message", return_value=surface_done
+            "ccbot.bot.inbound.claim_default_session",
+            side_effect=lambda *_args: events.append("claim"),
         ),
+        patch("ccbot.bot.inbound.get_card_state", return_value=CardState()),
+        patch(
+            "ccbot.bot.inbound.surface_card_after_message",
+            side_effect=card_first,
+            create=True,
+        ),
+        patch("ccbot.bot.inbound._enqueue", side_effect=enqueue_after_card),
     ):
         assert await inbound.voice_intake_handler(voice, context)
-        context.bot.delete_message.assert_not_awaited()
-        surface_done.set_result(True)
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
 
-    context.bot.delete_message.assert_awaited_once_with(chat_id=42, message_id=99)
+    assert events == [("card", True), "claim", ("enqueue", "@A")]
+    context.bot.send_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -345,6 +345,47 @@ class TestInboundCardSurface:
         notifications._cards.clear()
 
     @pytest.mark.asyncio
+    async def test_fast_voice_card_is_sent_before_slow_seed(self) -> None:
+        from ccbot.handlers import card_surface
+
+        bot = AsyncMock()
+        sess = MagicMock(id="surface", backend="claude")
+        state = CardState(msg_id=400, voice_pending=True)
+        notifications._cards[(77, "surface")] = state
+        release_seed = asyncio.Event()
+        events: list[str] = []
+
+        async def slow_seed(_user_id, _sess, _state):
+            events.append("seed")
+            await release_seed.wait()
+
+        async def send_card(_bot, _uid, _sess, target, *, text):
+            events.append("card")
+            target.msg_id = 600
+
+        with (
+            patch.object(notifications, "_ensure_seeded", side_effect=slow_seed),
+            patch.object(notifications, "_render_card", return_value="🎙 pending"),
+            patch.object(notifications, "_send_card", side_effect=send_card),
+            patch.object(notifications, "is_active_for_user", return_value=True),
+            patch.object(card_surface, "refresh_panel", new=AsyncMock()) as refreshed,
+        ):
+            try:
+                assert await asyncio.wait_for(
+                    notifications.surface_card_after_message(
+                        bot, 77, sess, 500, fast=True
+                    ),
+                    timeout=0.5,
+                )
+                assert events[0] == "card"
+                assert state.msg_id == 600
+            finally:
+                release_seed.set()
+                await asyncio.gather(*list(card_surface._card_surface_tasks))
+
+        refreshed.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_first_receipt_shows_model_before_context_usage(self) -> None:
         from ccbot.handlers import card_terminal
         from ccbot.session_models import Session

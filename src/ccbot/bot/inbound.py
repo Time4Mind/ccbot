@@ -21,6 +21,7 @@ from ..handlers.notifications import (
     lookup_session_for_message,
     refresh_session_keyboard,
     schedule_card_after_message,
+    surface_card_after_message,
 )
 from ..handlers import bg_status
 from ..handlers.card_types import PendingPrompt
@@ -30,7 +31,6 @@ from ..handlers.directory_browser import (
     STATE_PREPROCESSING_INSTRUCTION,
 )
 from ..inbound_queue import InboundProcessor, enqueue_inbound
-from ..i18n import t
 from ..session import session_manager
 from ..transcribe import resolve_voice_backend
 from ..transfer_queue import capture_transfer_message
@@ -84,7 +84,7 @@ def _enqueue(
     kind: str,
     processor: InboundProcessor,
     target_window_id: str | None = None,
-    voice_ack_message_id: int | None = None,
+    card_already_surfaced: bool = False,
 ) -> bool:
     user = update.effective_user
     if user is None or update.message is None or not is_user_allowed(user.id):
@@ -193,27 +193,12 @@ def _enqueue(
         state.current_page_idx = None
         if kind == "voice":
             state.voice_pending = True
-        surface_task = schedule_card_after_message(
-            context.bot,
-            user.id,
-            sess,
-            update.message.message_id,
-        )
-        if kind == "voice" and voice_ack_message_id is not None:
-
-            async def remove_ack_after_card() -> None:
-                try:
-                    surfaced = await surface_task
-                    if surfaced:
-                        await context.bot.delete_message(
-                            chat_id=user.id, message_id=voice_ack_message_id
-                        )
-                except Exception as exc:
-                    logger.debug("voice acknowledgement cleanup failed: %s", exc)
-
-            asyncio.create_task(
-                remove_ack_after_card(),
-                name=f"voice-ack-cleanup:{user.id}:{voice_ack_message_id}",
+        if not card_already_surfaced:
+            schedule_card_after_message(
+                context.bot,
+                user.id,
+                sess,
+                update.message.message_id,
             )
     return True
 
@@ -312,33 +297,41 @@ async def voice_intake_handler(
         and is_user_allowed(user.id)
         and resolve_voice_backend(user.id) != "off"
     ):
-        # Pin the target before Telegram I/O. The first visible reply must
-        # precede transcript seeding, card repainting and transcription.
+        # Pin the target before Telegram I/O. The card must appear before
+        # transcript seeding, default-session bookkeeping and transcription.
         wid = active_window(user.id)
         if wid is not None:
-            ack_message_id: int | None = None
-            try:
-                ack = await context.bot.send_message(
-                    chat_id=user.id,
-                    text=t(user.id, "voice.transcribing"),
-                    reply_to_message_id=message.message_id,
-                )
-                ack_id = getattr(ack, "message_id", None)
-                if isinstance(ack_id, int):
-                    ack_message_id = ack_id
-            except Exception as exc:
-                logger.warning(
-                    "voice acknowledgement failed user=%d error_type=%s",
-                    user.id,
-                    type(exc).__name__,
-                )
+            sess = session_manager.find_session_by_window(wid)
+            card_surfaced = False
+            if sess is not None:
+                # The card itself is the first reply. Mark the pending voice
+                # before sending it; transcript seeding and identity reads
+                # continue after the card is visible.
+                state = get_card_state(user.id, sess)
+                state.voice_pending = True
+                state.current_page_idx = None
+                try:
+                    card_surfaced = await surface_card_after_message(
+                        context.bot,
+                        user.id,
+                        sess,
+                        message.message_id,
+                        fast=True,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "voice card receipt failed user=%d error_type=%s",
+                        user.id,
+                        type(exc).__name__,
+                    )
+                claim_default_session(context.bot, user.id, sess)
             if _enqueue(
                 update,
                 context,
                 kind="voice",
                 processor=_run_voice,
                 target_window_id=wid,
-                voice_ack_message_id=ack_message_id,
+                card_already_surfaced=card_surfaced,
             ):
                 return True
             return await voice_handler(update, context, pinned_wid=wid)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,6 +10,75 @@ from ccbot.bot.callbacks import settings as settings_callback
 from ccbot.handlers.archive import idle_archive_sweep
 from ccbot.handlers.menu import build_footer_keyboard
 from ccbot.session import session_manager
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "expire_active,keep_other,view,has_context",
+    [
+        (True, True, "sessions", True),
+        (False, True, "sessions", True),
+        (True, False, "sessions", True),
+        (True, True, "sessions", False),
+        (True, True, "menu", True),
+        (True, True, "picker", True),
+    ],
+)
+async def test_ttl_refreshes_only_the_visible_sessions_keyboard(
+    monkeypatch, expire_active, keep_other, view, has_context
+) -> None:
+    from ccbot.handlers import archive, card_surface, menu, switcher
+    from ccbot.handlers.card_types import CardState
+    from ccbot.session import SessionManager
+    from ccbot.session_models import Session
+
+    manager = SessionManager()
+    monkeypatch.setattr(manager, "save_state", lambda: None)
+    expired = Session(
+        id="expired",
+        name="expired",
+        window_id="@1",
+        last_event_at=time.time() - 7 * 3600,
+    )
+    keeper = Session(
+        id="keeper", name="keeper", window_id="@2", last_event_at=time.time()
+    )
+    manager.sessions = {expired.id: expired}
+    if keep_other:
+        manager.sessions[keeper.id] = keeper
+    visible_id = expired.id if expire_active else keeper.id
+    manager.active_sessions[42] = visible_id
+    manager.active_history[42] = [keeper.id] if expire_active and keep_other else []
+    manager.last_switcher_msg_id[42] = 100
+    manager.user_settings[42] = {"session_idle_hours": 6}
+    state = CardState(
+        msg_id=100, in_menu_view=view == "menu", in_kb_mode=view == "picker"
+    )
+    for module in (archive, card_surface, menu, switcher):
+        monkeypatch.setattr(module, "session_manager", manager)
+    monkeypatch.setattr(archive, "teardown_session_runtime", AsyncMock())
+    monkeypatch.setattr(
+        archive, "_archive_context_status", AsyncMock(return_value=has_context)
+    )
+    bot = AsyncMock()
+
+    with patch.dict(card_surface._cards, {(42, visible_id): state}, clear=True):
+        await archive.idle_archive_sweep(bot, 42)
+
+    if view != "sessions":
+        bot.edit_message_reply_markup.assert_not_awaited()
+        return
+    assert bot.edit_message_reply_markup.await_args is not None
+    kwargs = bot.edit_message_reply_markup.await_args.kwargs
+    assert kwargs["message_id"] == 100
+    callbacks = {
+        button.callback_data
+        for row in kwargs["reply_markup"].inline_keyboard
+        for button in row
+    }
+    assert "sw:expired" not in callbacks
+    assert ("sw:keeper" in callbacks) == keep_other
+    bot.edit_message_text.assert_not_awaited()
 
 
 def test_idle_archive_settings_screen_has_supported_choices(

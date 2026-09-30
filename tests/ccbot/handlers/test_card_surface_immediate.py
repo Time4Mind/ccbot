@@ -117,6 +117,9 @@ async def test_status_keyboard_refresh_does_not_edit_card_text(monkeypatch) -> N
     monkeypatch.setattr(
         card_surface.session_manager, "get_active_session", lambda _uid: session
     )
+    monkeypatch.setattr(
+        card_surface.session_manager, "get_last_switcher_msg", lambda _uid: 7
+    )
     keyboard = SimpleNamespace(inline_keyboard=[[SimpleNamespace(text="✅ target")]])
     monkeypatch.setattr(
         card_surface,

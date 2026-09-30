@@ -85,10 +85,11 @@ def build_switcher_keyboard(
     if not sessions:
         return None
 
-    # Switcher buttons read oldest -> newest so a session keeps a stable slot
-    # as newer sessions are appended to the right (list_user_sessions returns
-    # them active-first / by-name, which is not what the switcher wants).
-    sessions = sorted(sessions, key=lambda s: (s.created_at, s.id))
+    # Ordinary sessions keep their chronological slots. The user's default
+    # reserve stays last even when it was created before newer sessions.
+    sessions = sorted(
+        sessions, key=lambda s: (reserve_owner(s) == user_id, s.created_at, s.id)
+    )
 
     active_sess = session_manager.get_active_session(user_id)
     active_id = active_sess.id if active_sess else ""

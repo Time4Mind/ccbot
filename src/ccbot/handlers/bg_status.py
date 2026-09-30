@@ -11,7 +11,7 @@ Status states (driven only by ``handle_new_message`` transitions):
   - "error"        ❌  error event while bg
   - "needs_action" ❓  AskUserQuestion / ExitPlanMode / permission
                        prompt detected on bg session
-  - "stalled"      ⚠️  unfinished turn stayed silent past its threshold
+  - "stalled"      ❗  legacy silent-turn warning retained from persisted state
 
 The pending interactive UI itself is detected and remembered here
 (``pending_interactive_ui``) so the switcher-tap handler can render

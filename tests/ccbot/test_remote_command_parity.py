@@ -24,7 +24,7 @@ class _Repost:
 
 
 @asynccontextmanager
-async def _bracket(*_args):
+async def _bracket(*_args, **_kwargs):
     yield _Repost()
 
 
@@ -46,7 +46,7 @@ async def test_forwarded_slash_command_never_uses_leader_tmux(monkeypatch) -> No
     sess = _remote_session()
     update = SimpleNamespace(
         effective_user=SimpleNamespace(id=42),
-        message=SimpleNamespace(text="/model"),
+        message=SimpleNamespace(text="/model", message_id=10),
     )
     context = SimpleNamespace(bot=object())
     sent = AsyncMock(return_value=(True, "ok"))
@@ -85,7 +85,7 @@ async def test_forwarded_clear_resets_worker_provider_binding(monkeypatch) -> No
     sess = _remote_session()
     update = SimpleNamespace(
         effective_user=SimpleNamespace(id=42),
-        message=SimpleNamespace(text="/clear"),
+        message=SimpleNamespace(text="/clear", message_id=10),
     )
     context = SimpleNamespace(bot=object())
     sent = AsyncMock(return_value=(True, "ok"))

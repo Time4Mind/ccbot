@@ -33,6 +33,52 @@ def _make_context() -> MagicMock:
 
 class TestForwardCommand:
     @pytest.mark.asyncio
+    async def test_model_keeps_the_card_already_sent_by_intake(self):
+        from ccbot.handlers import notifications
+        from ccbot.session_models import Session
+
+        update = _make_update("/model")
+        update.message.message_id = 90
+        context = _make_context()
+        sess = Session(id="model-receipt", name="project", window_id="@5")
+        state = notifications.CardState(msg_id=100)
+        sent_cards = []
+
+        async def send_card(_bot, _uid, _sess, target, **kwargs):
+            sent_cards.append(kwargs["text"])
+            target.msg_id = 101
+
+        with (
+            patch.dict(notifications._cards, {(1, sess.id): state}, clear=True),
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.is_active_for_user", return_value=True),
+            patch("ccbot.bot.messages.session_manager") as manager,
+            patch("ccbot.bot._common.session_manager", manager),
+            patch(
+                "ccbot.bot.messages.session_is_reachable",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "ccbot.bot.messages._intercept_if_pending_ui",
+                new=AsyncMock(return_value=False),
+            ),
+            patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
+            patch("ccbot.bot.messages.resume_card_view", new=AsyncMock()),
+            patch.object(notifications, "_ensure_seeded", new=AsyncMock()),
+            patch.object(notifications, "_render_card", return_value="model picker"),
+            patch.object(notifications, "_send_card", side_effect=send_card),
+        ):
+            manager.get_active_window.return_value = "@5"
+            manager.find_session_by_window.return_value = sess
+            manager.send_to_window = AsyncMock(return_value=(True, "ok"))
+            from ccbot.bot import forward_command_handler
+
+            assert await forward_command_handler(update, context, pinned_wid="@5")
+
+        assert state.msg_id == 100
+        assert sent_cards == []
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "command", ["history", "done", "memory", "compact", "effort"]
     )

@@ -25,6 +25,7 @@ from ..handlers.notifications import (
     end_repost_intent,
     get_card_state,
     is_active_for_user,
+    refresh_panel,
     repost_card,
     resume_card_view,
 )
@@ -370,7 +371,11 @@ class _RepostHandle:
 
 @asynccontextmanager
 async def _card_repost_bracket(
-    bot: Bot, user_id: int, sess: Session | None
+    bot: Bot,
+    user_id: int,
+    sess: Session | None,
+    *,
+    after_message_id: int | None = None,
 ) -> AsyncGenerator[_RepostHandle, None]:
     """Bracket a send-to-pane operation with the live-card repost machinery.
 
@@ -396,7 +401,14 @@ async def _card_repost_bracket(
         if handle.do_repost and is_active_for_user(user_id, sess):
             try:
                 get_card_state(user_id, sess).turn_phase = TurnPhase.RUNNING
-                await repost_card(bot, user_id, sess)
+                if after_message_id is None:
+                    await repost_card(bot, user_id, sess)
+                elif await repost_card(
+                    bot, user_id, sess, after_message_id=after_message_id
+                ):
+                    await refresh_panel(
+                        bot, user_id, immediate=True, refresh_pane=False
+                    )
             except Exception as e:
                 logger.debug("repost_card failed: %s", e)
         end_repost_intent(user_id, sess.id)
@@ -460,7 +472,12 @@ async def forward_command_handler(
         wait_until_clear=pinned_wid is not None,
     ):
         return False
-    async with _card_repost_bracket(context.bot, user.id, sess) as repost:
+    async with _card_repost_bracket(
+        context.bot,
+        user.id,
+        sess,
+        after_message_id=update.message.message_id,
+    ) as repost:
         success, message = await _send_with_delivery_proof(wid, cc_slash, sess)
         if success:
             # /clear: drop the session association so we re-detect once a

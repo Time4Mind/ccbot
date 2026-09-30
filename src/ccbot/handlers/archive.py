@@ -756,10 +756,7 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
 
 
 async def idle_archive_sweep(bot: Bot, user_id: int) -> int:
-    """Archive sessions that exceeded the user's selected idle TTL.
-
-    Returns number of sessions archived.
-    """
+    """Archive sessions past the selected idle TTL; return the archived count."""
     raw_hours = session_manager.get_user_settings(user_id).get(
         "session_idle_hours", DEFAULT_IDLE_ARCHIVE_HOURS
     )
@@ -775,6 +772,10 @@ async def idle_archive_sweep(bot: Bot, user_id: int) -> int:
         await teardown_session_runtime(user_id, sess, bot)
         if await archive_or_delete_session(sess, completed=False):
             archived += 1
+    if candidates:
+        from .notifications import refresh_session_keyboard
+
+        await refresh_session_keyboard(bot, user_id)
     if archived:
         logger.info("Archived %d idle sessions", archived)
     return archived

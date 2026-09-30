@@ -338,12 +338,13 @@ def _render_card(
         parts.append("─────")
         parts.append(footer)
     # The changing terminal state belongs to the live textual content. Keep it
-    # only on the actual latest page, detached from the last request, and place
+    # on the latest page (compaction on any open page), and place
     # it before the rich-media anchor so a screenshot is inserted immediately
-    # below it.  status_polling clears it when the background terminal exits.
-    if state.pane_status and is_latest_page:
+    # below it. Status polling clears it when ongoing work ends.
+    if state.pane_status and (is_latest_page or state.compacting):
         parts.append("\u00a0")
-        parts.append(f"• {state.pane_status}")
+        prefix = "▷" if state.compacting else "•"
+        parts.append(f"{prefix} {state.pane_status}")
     # Everything appended after this point is service metadata. Record the
     # exact raw-text boundary so rich-media transport can place the terminal
     # screenshot before the context row and background-session panel without

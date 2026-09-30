@@ -46,6 +46,19 @@ class TestParseCodexModelEffort:
 
 
 class TestParseStatusLine:
+    @pytest.mark.parametrize(
+        "pane",
+        [
+            "• Compacting context (18s • esc to interrupt)\nWorked for 20s\n› Ask Codex",
+            "The model is Compacting context (18s • esc to interrupt)\n› Ask Codex",
+            "• Compacting context is mentioned in the answer\n› Ask Codex",
+        ],
+    )
+    def test_codex_compaction_is_not_inferred_from_finished_or_ordinary_text(
+        self, pane
+    ):
+        assert parse_status_line(pane) is None
+
     def test_codex_background_terminal_status_without_chrome(self) -> None:
         pane = (
             "tool output\n\n"

@@ -407,24 +407,15 @@ async def _drive_typing_indicator(
 ) -> None:
     """Compute busy signals, run the stalled-session rescue, and fire
     the Telegram ``typing…`` chat-action for the active session."""
-    # Telegram chat-action "typing…" — fired every poll cycle for the
-    # active session while it's busy. Two signals combine:
-    #
-    #   * ``is_card_busy``: a recent claude event arrived (within
-    #     ``2 × CARD_EDIT_LAG``) AND the tail event isn't a terminal
-    #     one. Bridges intra-turn gaps and prevents post-completion
-    #     stickiness.
-    #   * pane spinner (``parse_status_line``): claude TUI is showing
-    #     ``⠋ Working…``. Picks up the long-thinking case where no
-    #     JSONL events arrive for 20+ s — without this the indicator
-    #     would go dark even though claude is genuinely working.
-    #
-    # Both gated on ``not is_bg_session`` (bg sessions don't surface
-    # the chat-header typing badge) and not in_menu_view (user is
-    # browsing menu screens; typing there is noise).
+    # Transcript activity and the live pane bridge silent gaps between events.
     status_line = parse_status_line(pane_text) or ""
-    pane_busy = bool(status_line) and _pane_status_is_changing(
-        user_id, sess.id if sess else window_id, status_line
+    compacting = status_line.startswith("Compacting context (")
+    pane_busy = (
+        compacting
+        or bool(status_line)
+        and _pane_status_is_changing(
+            user_id, sess.id if sess else window_id, status_line
+        )
     )
     in_menu = sess is not None and is_card_in_menu_view(user_id, sess.id)
     background_match = _BACKGROUND_TERMINAL_RE.search(status_line)
@@ -444,20 +435,17 @@ async def _drive_typing_indicator(
         # Escape can leave the last TUI spinner visible for several polls.
         # Explicit user intent wins until a new inbound request clears it.
         pane_busy = False
+        compacting = False
         background_match = None
         background_work = False
     card_busy = sess is not None and is_card_busy(user_id, sess.id)
-    # When the card is finalized (last event = ``final_text`` /
-    # ``error``), pane_busy is a lie — the spinner line is just
-    # scrollback that hasn't scrolled off yet (observed: ``Sautéed
-    # for 11m 16s · 1 shell still running`` sticks around after the
-    # turn ends because a background shell is still attached). Trust
-    # the JSONL signal in that case.
+    # A final transcript overrides stale spinners, except explicit ongoing work.
     if (
         pane_busy
         and sess is not None
         and is_card_finalized(user_id, sess.id)
         and not background_work
+        and not compacting
     ):
         pane_busy = False
 
@@ -465,7 +453,18 @@ async def _drive_typing_indicator(
         prior_status = state.pane_status
         prior_pane_busy = state.pane_busy
         state.pane_busy = pane_busy
-        if background_match is not None:
+        state.compacting = compacting
+        if compacting:
+            elapsed = (
+                status_line.split("(", 1)[1]
+                .split("•", 1)[0]
+                .split("·", 1)[0]
+                .rstrip(") ")
+            )
+            state.pane_status = f"Compact · ⏳ {elapsed}"
+            state.turn_phase = TurnPhase.RUNNING
+            state.completion_marker_pending = False
+        elif background_match is not None:
             count_text = background_match.group(1).lower()
             state.pane_status = f"Working · {count_text}"
             state.turn_phase = TurnPhase.RUNNING

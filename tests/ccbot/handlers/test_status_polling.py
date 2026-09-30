@@ -22,6 +22,75 @@ from ccbot.tmux_manager import TmuxWindow
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("page", [0, None])
+async def test_compaction_pane_is_visible_on_current_card_page_and_clears(
+    monkeypatch, page
+) -> None:
+    from ccbot.handlers import notifications, status_polling
+    from ccbot.handlers.card_layout import _render_card
+    from ccbot.session_models import Session
+
+    sess = Session(id="compact", name="harness audit", window_id="@1", backend="codex")
+    events = [
+        Event(type="user_msg", text="first", started_at=1.0, is_page_break=True),
+        Event(type="final_text", text="first answer", started_at=2.0),
+        Event(type="user_msg", text="second", started_at=3.0, is_page_break=True),
+        Event(type="final_text", text="second answer", started_at=4.0),
+    ]
+    state = CardState(
+        msg_id=9, events=events, current_page_idx=page, turn_phase=TurnPhase.IDLE
+    )
+    painted = []
+
+    async def refresh(_bot, uid, **_kwargs):
+        painted.append(_render_card(sess, state, user_id=uid))
+        return True
+
+    monkeypatch.setattr(
+        status_polling.session_manager, "find_session_by_window", lambda _w: sess
+    )
+    monkeypatch.setattr(
+        status_polling.session_manager, "get_active_session", lambda _u: sess
+    )
+    monkeypatch.setattr(status_polling, "get_interactive_window", lambda _u: None)
+    monkeypatch.setattr(status_polling, "_pane_status_is_changing", lambda *_a: False)
+    monkeypatch.setattr(status_polling, "refresh_panel", refresh)
+    monkeypatch.setattr(status_polling, "fire_typing", AsyncMock())
+    with patch.dict(notifications._cards, {(42, sess.id): state}, clear=True):
+
+        async def poll(pane):
+            await update_status_message(
+                AsyncMock(),
+                42,
+                "@1",
+                window=SimpleNamespace(window_id="@1"),
+                pane_text=pane,
+            )
+
+        await poll(
+            "• Compacting context (3m 41s • esc to interrupt)\n\n› Ask Codex to do anything"
+        )
+        assert painted, "ongoing compaction must repaint the live card"
+        assert "▷ Compact · ⏳ 3m 41s" in painted[-1]
+        assert _card_is_busy(state) is True
+        assert state.current_page_idx == page
+
+        state.in_menu_view = True
+        count = len(painted)
+        await poll(
+            "• Compacting context (3m 42s • esc to interrupt)\n\n› Ask Codex to do anything"
+        )
+        assert len(painted) == count
+        state.in_menu_view = False
+
+        await poll("Worked for 4m 12s\n\n› Ask Codex to do anything")
+        assert "Compact" not in painted[-1]
+        assert _card_is_busy(state) is False
+        assert state.current_page_idx == page
+        assert state.events == events
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("snapshot", [None, ("Approve?", "Permission")])
 async def test_dismissed_prompt_clears_attention_even_without_saved_snapshot(
     monkeypatch, snapshot

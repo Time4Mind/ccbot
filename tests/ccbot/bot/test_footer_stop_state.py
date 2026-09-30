@@ -15,8 +15,10 @@ from ccbot.handlers.card_surface import surface_card_after_message
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("compacting", [False, True])
 async def test_stop_immediately_makes_session_closable_and_survives_stale_working_pane(
     monkeypatch: pytest.MonkeyPatch,
+    compacting: bool,
 ) -> None:
     sess = SimpleNamespace(id="s1", window_id="@1")
     state = CardState(
@@ -25,6 +27,8 @@ async def test_stop_immediately_makes_session_closable_and_survives_stale_workin
         last_event_ts=time.time(),
         turn_phase=TurnPhase.RUNNING,
     )
+    state.compacting = compacting
+    state.pane_status = "Compact · ⏳ 18s" if compacting else ""
     query = SimpleNamespace(data=CB_FT_STOP, answer=AsyncMock())
     context = SimpleNamespace(bot=object())
     user = SimpleNamespace(id=42)
@@ -40,6 +44,8 @@ async def test_stop_immediately_makes_session_closable_and_survives_stale_workin
     assert await footer.handle(query, context, user) is True
     send_keys.assert_awaited_once_with(sess, "Escape")
     assert _card_is_busy(state) is False
+    assert state.pane_status == ""
+    assert state.compacting is False
     refresh.assert_awaited_once_with(
         context.bot, 42, immediate=True, refresh_keyboard=True
     )
@@ -47,7 +53,10 @@ async def test_stop_immediately_makes_session_closable_and_survives_stale_workin
     from ccbot.handlers import status_polling
 
     monkeypatch.setattr(status_polling, "get_card_state", lambda *_a: state)
-    monkeypatch.setattr(status_polling, "parse_status_line", lambda _p: "Working (18s)")
+    stale_status = (
+        "Compacting context (18s • esc to interrupt)" if compacting else "Working (18s)"
+    )
+    monkeypatch.setattr(status_polling, "parse_status_line", lambda _p: stale_status)
     monkeypatch.setattr(status_polling, "is_card_in_menu_view", lambda *_a: False)
     monkeypatch.setattr(status_polling, "is_card_busy", lambda *_a: False)
     monkeypatch.setattr(status_polling, "is_card_finalized", lambda *_a: False)
@@ -64,6 +73,8 @@ async def test_stop_immediately_makes_session_closable_and_survives_stale_workin
     )
 
     assert _card_is_busy(state) is False
+    assert state.pane_status == ""
+    assert state.compacting is False
     fire_typing.assert_not_awaited()
 
 

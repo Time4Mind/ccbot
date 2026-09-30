@@ -194,6 +194,8 @@ class CardState:
     # Live pane activity bridges silent gaps between transcript events. It is
     # state-only: unlike ``pane_status`` it is not rendered in the card body.
     pane_busy: bool = False
+    # Live compaction is visible even on a historical card page.
+    compacting: bool = False
     # A user Stop is authoritative until the next inbound request. The pane
     # may keep showing a stale Working spinner after Escape; polling must not
     # resurrect Stop or prevent the session from being closed/archived.
@@ -233,8 +235,7 @@ class CardState:
     # warning. Status polling refreshes its live pane for the active session.
     stall_watch_active: bool = False
     last_stall_pane_refresh_ts: float = 0.0
-    # Normalized Codex TUI status for work that outlives the parent answer,
-    # e.g. ``Working · 1 background terminal running``.
+    # Normalized live Codex compaction/background-terminal status.
     pane_status: str = ""
     # Set by voice_handler right when a voice message is pinned to this
     # session, before download/transcribe (which can take many seconds).

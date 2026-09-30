@@ -110,6 +110,7 @@ async def handle(
             state = get_card_state(user.id, sess)
             state.user_stopped = True
             state.pane_busy = False
+            state.compacting = False
             state.pane_status = ""
             state.turn_phase = TurnPhase.IDLE
             state.stall_watch_active = False

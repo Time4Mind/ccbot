@@ -121,6 +121,26 @@ def normalize_codex_entry(data: dict[str, Any]) -> dict[str, Any] | None:
     timestamp = data.get("timestamp")
     if top_type == "event_msg":
         event_type = payload.get("type")
+        if event_type == "task_complete" and payload.get("error"):
+            error = payload["error"]
+            if isinstance(error, dict):
+                text = str(error.get("message") or "Codex task failed")
+                code = error.get("codex_error_info")
+            else:
+                text = str(error)
+                code = None
+            return {
+                "type": "assistant",
+                "timestamp": timestamp,
+                "isApiErrorMessage": True,
+                "error": code
+                if isinstance(code, str) and code
+                else "codex_task_failed",
+                "message": {
+                    "content": [{"type": "text", "text": text}],
+                    "stop_reason": "end_turn",
+                },
+            }
         if event_type == "user_message":
             text = str(payload.get("message") or "")
             if is_injected_user_text(text):

@@ -26,8 +26,8 @@ async def seed_lifecycle_statuses() -> bool:
                 logger.debug("infer bg status failed for %s: %s", sess.id, exc)
                 continue
             current = bg_status.get_status(user_id, sess.id)
-            if inferred == "working":
-                seed_status: bg_status.Status = "working"
+            if inferred in ("working", "error"):
+                seed_status: bg_status.Status = inferred
             elif current in ("finished", "seen_finished", "error"):
                 seed_status = current
             elif current is not None:

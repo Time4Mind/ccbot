@@ -225,6 +225,7 @@ plus an inline `≡ Menu` button on the most recent bot message:
 | `/menu`    | Open the inline ≡ Menu screen |
 | `/help`    | Inline mini-doc with section buttons |
 | `/model`   | Open the active backend's model picker |
+| `/fast`    | Toggle Fast mode in the active Codex session |
 
 A few more commands work when typed but stay out of the `/`-menu:
 `/new`, `/kill`, `/stop`, `/archive`, `/usage`, `/clear`, `/cost`,

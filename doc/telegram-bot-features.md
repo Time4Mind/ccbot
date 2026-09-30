@@ -148,13 +148,14 @@
 
 ## 3. Agent Slash Commands
 
-### Published pickers
+### Published agent commands
 
 These commands are registered in Telegram's quick-command menu and forwarded to the active backend:
 
 | Command | Bot Menu Description | Function |
 |---------|---------------------|----------|
 | `/model` | ↗ Switch AI model | Opens the model picker, followed by reasoning effort when the backend asks for it |
+| `/fast` | ↗ Toggle Codex Fast mode | Toggles Fast mode in the active Codex session |
 
 Other supported agent commands, including `/clear` and `/cost`, remain available
 when typed manually.

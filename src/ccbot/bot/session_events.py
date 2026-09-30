@@ -126,7 +126,14 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         new_status: bg_status.Status = (
             "error" if msg.api_error else "finished" if is_terminal_text else "working"
         )
-        status_changed = bg_status.update_status(user_id, sess.id, new_status)
+        status_changed = bg_status.update_status(
+            user_id,
+            sess.id,
+            new_status,
+            # Successful completion proves that a prior backend error has
+            # recovered, including retries without a new user request.
+            force=is_terminal_text and not msg.api_error,
+        )
         if is_active and status_changed and new_status == "finished":
             # The freshly delivered final card is the first presentation.
             # Keep ✅ until the user enters this completed session again.

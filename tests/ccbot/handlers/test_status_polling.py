@@ -21,6 +21,40 @@ from ccbot.handlers.card_pagination import _card_is_busy
 from ccbot.tmux_manager import TmuxWindow
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("snapshot", [None, ("Approve?", "Permission")])
+async def test_dismissed_prompt_clears_attention_even_without_saved_snapshot(
+    monkeypatch, snapshot
+) -> None:
+    from ccbot.handlers import bg_status, status_polling
+    from ccbot.session_models import Session
+
+    sess = Session(id="dismissed", name="dismissed", window_id="@5")
+    monkeypatch.setattr(
+        status_polling.session_manager, "find_session_by_window", lambda _wid: sess
+    )
+    monkeypatch.setattr(
+        status_polling.session_manager,
+        "get_active_session",
+        lambda _uid: SimpleNamespace(id="other"),
+    )
+    monkeypatch.setattr(status_polling, "get_interactive_window", lambda _uid: None)
+    monkeypatch.setattr(status_polling, "refresh_panel", AsyncMock())
+    monkeypatch.setattr(status_polling, "_drive_typing_indicator", AsyncMock())
+    with patch.dict(bg_status._bg, {}, clear=True):
+        bg_status.update_status(42, sess.id, "needs_action", interactive_ui=snapshot)
+        assert bg_status.status_emoji(42, sess.id) == "❗"
+        await update_status_message(
+            AsyncMock(),
+            42,
+            "@5",
+            window=SimpleNamespace(window_id="@5"),
+            pane_text="› Ask Codex to do anything",
+        )
+        assert bg_status.status_emoji(42, sess.id) == "🔶"
+        assert bg_status.get_pending_interactive_ui(42, sess.id) is None
+
+
 @pytest.fixture
 def mock_bot():
     bot = AsyncMock()

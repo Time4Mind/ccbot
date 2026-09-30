@@ -154,6 +154,12 @@ async def maybe_finalize_stalled(
         return False
     if (active and state.in_menu_view) or state.in_kb_mode:
         return False
+    # The transcript callback records completion before awaiting keyboard
+    # refresh and final-card rendering. A concurrent poll can still see the
+    # previous progress event here; it must not overwrite that completion.
+    if bg_status.get_status(user_id, sess.id) in ("finished", "seen_finished"):
+        state.stall_watch_active = False
+        return False
     # Already finalized — nothing frozen to rescue.
     tail_type = state.events[-1].type
     if tail_type in ("final_text", "error"):

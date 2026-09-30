@@ -192,7 +192,9 @@ def clear_pending_ui(user_id: int, session_id: str) -> bool:
     the badge doesn't claim "needs action" on a session that no longer
     has a prompt. Returns True if any visible state changed."""
     entry = _bg.get(user_id, {}).get(session_id)
-    if entry is None or entry.pending_interactive_ui is None:
+    if entry is None or (
+        entry.status != "needs_action" and entry.pending_interactive_ui is None
+    ):
         return False
     entry.pending_interactive_ui = None
     if entry.status == "needs_action":
@@ -246,12 +248,15 @@ async def infer_status_from_jsonl(sess: "Session") -> Status | None:
 
 def _infer_status_from_jsonl_tail(file_path: Any) -> Status | None:
     """Find the newest user/assistant record without scanning old history."""
+    from ..transcript_codex import normalize_codex_entry
 
     def classify(raw: bytes) -> Status | None:
         try:
             obj = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError):
             return None
+        if obj.get("type") in ("response_item", "event_msg"):
+            obj = normalize_codex_entry(obj) or {}
         msg_type = obj.get("type")
         if msg_type == "user":
             return "working"

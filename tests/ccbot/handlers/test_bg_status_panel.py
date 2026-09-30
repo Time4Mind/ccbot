@@ -116,6 +116,77 @@ class TestPanelHardBreaks:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tail,expected",
+    [
+        ([], "finished"),
+        (
+            [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{"type": "output_text", "text": "working"}],
+                }
+            ],
+            "working",
+        ),
+        (
+            [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "next request"}],
+                }
+            ],
+            "working",
+        ),
+        (
+            [
+                {
+                    "type": "function_call",
+                    "name": "Bash",
+                    "call_id": "call-1",
+                    "arguments": "{}",
+                }
+            ],
+            "working",
+        ),
+    ],
+)
+async def test_infer_codex_completion_and_later_work(
+    tmp_path, monkeypatch, tail, expected
+):
+    from ccbot import session_claude_io
+
+    final = {
+        "type": "message",
+        "role": "assistant",
+        "phase": "final_answer",
+        "content": [{"type": "output_text", "text": "done"}],
+    }
+    transcript = tmp_path / "rollout.jsonl"
+    transcript.write_text(
+        "\n".join(
+            json.dumps({"type": "response_item", "ordinal": i, "payload": payload})
+            for i, payload in enumerate([final, *tail], start=1)
+        )
+    )
+    monkeypatch.setattr(
+        session_claude_io, "build_session_file_path", lambda *_a: transcript
+    )
+    sess = Session(
+        id="codex-status",
+        name="codex-status",
+        backend="codex",
+        claude_session_id="codex-id",
+        workdir="/tmp",
+    )
+
+    assert await bg_status.infer_status_from_jsonl(sess) == expected
+
+
+@pytest.mark.asyncio
 async def test_infer_status_treats_trailing_user_turn_as_working(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -165,8 +165,8 @@ async def handle(
                     logger.debug("infer bg status failed: %s", e)
                     return
                 changed = False
-                if inferred == "working":
-                    changed = bg_status.update_status(user.id, old_sess.id, "working")
+                if inferred in ("working", "error"):
+                    changed = bg_status.update_status(user.id, old_sess.id, inferred)
                 elif (
                     inferred == "finished"
                     and bg_status.get_status(user.id, old_sess.id) is None

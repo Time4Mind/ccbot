@@ -286,6 +286,8 @@ def _infer_status_from_jsonl_tail(file_path: Any) -> Status | None:
             return "working"
         if msg_type != "assistant":
             return None
+        if obj.get("isApiErrorMessage"):
+            return "error"
         stop_reason = (obj.get("message") or {}).get("stop_reason", "") or ""
         if stop_reason in ("end_turn", "stop_sequence", "max_tokens"):
             return "finished"

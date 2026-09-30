@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import json
 from unittest.mock import ANY, AsyncMock
 
 import pytest
 
 from ccbot.bot import session_events
 from ccbot.handlers import bg_status
+from ccbot.handlers.callback_data import CB_SW_USE
 from ccbot.session_models import Session
 from ccbot.session_monitor import NewMessage
+from ccbot.transcript_parser import TranscriptParser
 
 
 @pytest.fixture(autouse=True)
@@ -126,6 +129,119 @@ async def test_terminal_api_error_sets_sticky_attention_marker(monkeypatch) -> N
     )
 
     assert bg_status._bg[42][sess.id].status == "error"
+    assert bg_status.status_emoji(42, sess.id) == "❗"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("active", [True, False])
+@pytest.mark.parametrize("failed", [True, False])
+async def test_codex_task_completion_drives_session_button(
+    monkeypatch, active, failed
+) -> None:
+    from ccbot.handlers.switcher import build_switcher_keyboard
+
+    sess = _session()
+    sess.backend = "codex"
+    _patch_route(monkeypatch, sess, active=active)
+    manager = session_events.session_manager
+    monkeypatch.setattr(
+        manager, "get_active_session", lambda _uid: sess if active else None
+    )
+    monkeypatch.setattr(manager, "list_user_sessions", lambda *_a, **_kw: [sess])
+    monkeypatch.setattr(
+        manager,
+        "get_user_settings",
+        lambda _uid: {"bg_notify_error": False, "bg_notify_finished": False},
+    )
+    monkeypatch.setattr(session_events, "refresh_session_keyboard", AsyncMock())
+    rows = [
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "agent_message",
+                "message": "progress" if failed else "done",
+                "phase": "commentary" if failed else "final_answer",
+            },
+        },
+        {
+            "timestamp": "2026-09-30T13:12:32.170Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "error": {
+                    "message": "Selected model is at capacity. Please try a different model.",
+                    "codex_error_info": "server_overloaded",
+                }
+                if failed
+                else None,
+            },
+        },
+    ]
+    parsed, _pending = TranscriptParser.parse_entries(rows)
+    for entry in parsed:
+        await session_events.handle_new_message(
+            NewMessage(
+                session_id="claude-1",
+                text=entry.text,
+                is_complete=True,
+                role=entry.role,
+                content_type=entry.content_type,
+                stop_reason=entry.stop_reason,
+                api_error=entry.api_error,
+            ),
+            AsyncMock(),
+        )
+    keyboard = build_switcher_keyboard(42)
+    label = next(
+        b.text
+        for row in keyboard.inline_keyboard
+        for b in row
+        if b.callback_data == CB_SW_USE + sess.id
+    )
+    assert ("❗" if failed else "✅") in label
+    assert len(parsed) == (2 if failed else 1)
+    if failed:
+        assert (
+            parsed[-1].text
+            == "Selected model is at capacity. Please try a different model."
+        )
+
+
+@pytest.mark.asyncio
+async def test_startup_restores_codex_task_failure_from_transcript(
+    monkeypatch, tmp_path
+) -> None:
+    from ccbot.bot._startup_status import seed_lifecycle_statuses
+    from ccbot import session_claude_io
+
+    sess = _session()
+    sess.backend = "codex"
+    transcript = tmp_path / "rollout.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "error": {
+                        "message": "Selected model is at capacity. Please try a different model.",
+                        "codex_error_info": "server_overloaded",
+                    },
+                },
+            }
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(
+        session_claude_io, "build_session_file_path", lambda *_a: transcript
+    )
+    monkeypatch.setattr(session_events.config, "allowed_users", {42})
+    monkeypatch.setattr(session_events.session_manager, "sessions", {sess.id: sess})
+    monkeypatch.setattr(session_events.session_manager, "save_state", lambda: None)
+    bg_status.update_status(42, sess.id, "working")
+
+    await seed_lifecycle_statuses()
+
     assert bg_status.status_emoji(42, sess.id) == "❗"
 
 

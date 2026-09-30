@@ -115,6 +115,7 @@ async def surface_card_after_message(
     message_id: int,
     *,
     fast: bool = False,
+    preserve_turn: bool = False,
 ) -> bool:
     """Make the active session card the only receipt for an inbound message.
 
@@ -124,13 +125,15 @@ async def surface_card_after_message(
     one burst converge on one newest card instead of spawning one per task.
     """
     state = get_card_state(user_id, sess)
+    state.receipt_after_message_id = max(state.receipt_after_message_id, message_id)
     # Intake, rather than a later transcript event, is the boundary that
     # releases an explicit Stop latch. This makes a new request visibly
     # working at once while late output from the interrupted turn cannot
     # resurrect the Stop button by itself.
-    state.user_stopped = False
-    state.pane_busy = False
-    state.turn_phase = TurnPhase.RUNNING
+    if not preserve_turn:
+        state.user_stopped = False
+        state.pane_busy = False
+        state.turn_phase = TurnPhase.RUNNING
     if not fast:
         await _legacy("_ensure_seeded")(user_id, sess, state)
         if getattr(sess, "backend", None) == "codex" and (
@@ -146,7 +149,9 @@ async def surface_card_after_message(
         async with _carrier_edit_lock(user_id):
             if not _legacy("is_active_for_user")(user_id, sess):
                 return False
+            message_id = max(message_id, state.receipt_after_message_id)
             if state.msg_id is not None and state.msg_id > message_id:
+                state.receipt_after_message_id = 0
                 return True
 
             if state.pending_edit is not None and not state.pending_edit.done():
@@ -166,6 +171,8 @@ async def surface_card_after_message(
                 # later events can recover instead of orphaning a valid card.
                 restore_carrier(state, old_binding)
                 return False
+            if new_msg_id > state.receipt_after_message_id:
+                state.receipt_after_message_id = 0
             state.last_rendered = text
             state.last_edit_ts = time.monotonic()
             state.last_event_ts = time.time()
@@ -244,6 +251,8 @@ def schedule_card_after_message(
     message_id: int,
 ) -> asyncio.Task[bool]:
     """Schedule a non-blocking card receipt for Telegram intake."""
+    state = get_card_state(user_id, sess)
+    state.receipt_after_message_id = max(state.receipt_after_message_id, message_id)
     task = asyncio.create_task(
         surface_card_after_message(bot, user_id, sess, message_id),
         name=f"card-surface:{user_id}:{sess.id}:{message_id}",

@@ -345,6 +345,75 @@ class TestInboundCardSurface:
         notifications._cards.clear()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("return_carrier", [400, 700])
+    @pytest.mark.parametrize("stopped", [False, True])
+    async def test_deferred_receipt_is_recovered_when_session_returns(
+        self, return_carrier, stopped
+    ) -> None:
+        from ccbot.handlers import card_terminal
+        from ccbot.handlers.card_types import TurnPhase
+        from ccbot.session_models import Session
+
+        bot = AsyncMock()
+        sess = Session(id="surface", name="archive recovery", window_id="@1")
+        state = CardState(msg_id=400)
+        notifications._cards[(77, sess.id)] = state
+        active = True
+        seeding = asyncio.Event()
+        release = asyncio.Event()
+        sent = []
+
+        async def seed(*_args):
+            seeding.set()
+            await release.wait()
+
+        async def send(_bot, _uid, _sess, target, **_kwargs):
+            sent.append(600)
+            target.msg_id = 600
+
+        with (
+            patch.object(notifications, "_ensure_seeded", side_effect=seed),
+            patch.object(
+                notifications, "_render_card", return_value="request and answer"
+            ),
+            patch.object(notifications, "_send_card", side_effect=send),
+            patch.object(notifications, "_edit_card", new=AsyncMock(return_value=True)),
+            patch.object(notifications, "build_footer_keyboard", return_value=None),
+            patch.object(
+                notifications, "is_active_for_user", side_effect=lambda *_a: active
+            ),
+            patch.object(card_terminal, "sync_card_identity", new=AsyncMock()),
+            patch(
+                "ccbot.handlers.card_carrier._strip_stale_switchers", new=AsyncMock()
+            ),
+            patch("ccbot.handlers.card_carrier.session_manager.set_card_msg"),
+            patch("ccbot.handlers.card_carrier.session_manager.set_last_switcher_msg"),
+        ):
+            pending = asyncio.create_task(
+                notifications.surface_card_after_message(bot, 77, sess, 500)
+            )
+            await seeding.wait()
+            active = False
+            release.set()
+            assert await pending is False
+            assert sent == []  # Never send the background session's card.
+            state.user_stopped = stopped
+            state.turn_phase = TurnPhase.IDLE
+            active = True
+            assert await notifications.paint_card_on_carrier(
+                bot, 77, sess, return_carrier
+            )
+            assert state.msg_id > 500
+            assert sent == ([600] if return_carrier == 400 else [])
+            assert state.user_stopped is stopped
+            assert state.turn_phase is TurnPhase.IDLE
+            # A subsequent repaint cannot send a duplicate receipt.
+            assert await notifications.paint_card_on_carrier(
+                bot, 77, sess, state.msg_id
+            )
+            assert sent == ([600] if return_carrier == 400 else [])
+
+    @pytest.mark.asyncio
     async def test_fast_voice_card_is_sent_before_slow_seed(self) -> None:
         from ccbot.handlers import card_surface
 

@@ -14,6 +14,7 @@ from ...handlers import bg_status
 from ...handlers.card_binding import bind_carrier
 from ...handlers.callback_data import CB_SW_NEW, CB_SW_NOOP, CB_SW_USE
 from ...handlers.card_types import CarrierKind
+from ...handlers.card_pagination import _card_is_busy
 from ...handlers.card_registry import (
     protect_switcher_carrier,
     release_switcher_carrier,
@@ -87,7 +88,17 @@ async def handle(
         # becomes acknowledged only when the user enters it a second time.
         # Record before painting so that the second entry already has no
         # unread-completion glyph.
-        bg_status.record_finished_view(user.id, target_id)
+        old_active = session_manager.get_active_session(user.id)
+        if not bg_status.acknowledge_manual_check(user.id, target_id):
+            if (
+                old_active is not None
+                and old_active.id == target_id
+                and bg_status.get_status(user.id, target_id) == "seen_finished"
+                and not _card_is_busy(get_card_state(user.id, sess))
+            ):
+                bg_status.toggle_check(user.id, target_id)
+            else:
+                bg_status.record_finished_view(user.id, target_id)
         logger.info(
             "sw_use user=%d target=%s name=%s state=%s carrier_msg=%s",
             user.id,
@@ -110,7 +121,6 @@ async def handle(
         # drains an old editMessageText already in flight, then pauses FROM,
         # claims TO, and flips ``active_sessions`` atomically so a late update
         # from FROM cannot overwrite the target after it is painted.
-        old_active = session_manager.get_active_session(user.id)
         old_active_id = old_active.id if old_active is not None else None
         orphan_msg_id: int | None = None
         protected_carrier_id: int | None = None

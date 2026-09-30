@@ -14,7 +14,13 @@ from telegram import Bot, Update
 from telegram.ext import ContextTypes
 
 from .._common import is_user_allowed
-from ...handlers.notifications import get_card_state, refresh_panel
+from ...handlers import bg_status
+from ...handlers.callback_data import CB_SW_USE
+from ...handlers.notifications import (
+    get_card_state,
+    refresh_panel,
+    refresh_session_keyboard,
+)
 from ...session import session_manager
 from ...user_activity import record as record_user_activity
 from . import (
@@ -50,9 +56,14 @@ def _acknowledge_completion_marker(user_id: int) -> tuple[str, int] | None:
 
 
 async def _repaint_acknowledged_marker(
-    bot: Bot, user_id: int, acknowledged: tuple[str, int] | None
+    bot: Bot,
+    user_id: int,
+    acknowledged: tuple[str, int] | None,
+    manual_acknowledged: bool = False,
 ) -> None:
     """Remove the marker visually if the tap left its live card in place."""
+    if manual_acknowledged:
+        await refresh_session_keyboard(bot, user_id)
     if acknowledged is None:
         return
     session_id, message_id = acknowledged
@@ -105,18 +116,33 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Every allowed button tap is an explicit user action, including noop
     # buttons that only dismiss Telegram's spinner.
     record_user_activity(user.id)
+    manual_acknowledged = False
+    # Session selection acknowledges its explicit target in the switcher;
+    # consuming it here would make the same tap immediately enable it again.
+    if not query.data.startswith(CB_SW_USE):
+        active = session_manager.get_active_session(user.id)
+        if active is not None:
+            manual_acknowledged = bg_status.acknowledge_manual_check(user.id, active.id)
+            if manual_acknowledged:
+                session_manager.save_state()
     acknowledged = _acknowledge_completion_marker(user.id)
 
     if query.data == "noop":
         await query.answer()
-        await _repaint_acknowledged_marker(context.bot, user.id, acknowledged)
+        await _repaint_acknowledged_marker(
+            context.bot, user.id, acknowledged, manual_acknowledged
+        )
         return
 
     for h in _HANDLERS:
         if await h(query, context, user):
-            await _repaint_acknowledged_marker(context.bot, user.id, acknowledged)
+            await _repaint_acknowledged_marker(
+                context.bot, user.id, acknowledged, manual_acknowledged
+            )
             return
 
     logger.debug("unhandled callback data: %s", query.data)
     await query.answer()
-    await _repaint_acknowledged_marker(context.bot, user.id, acknowledged)
+    await _repaint_acknowledged_marker(
+        context.bot, user.id, acknowledged, manual_acknowledged
+    )

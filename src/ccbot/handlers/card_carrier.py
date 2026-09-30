@@ -531,6 +531,15 @@ async def paint_card_on_carrier(
     from .card_terminal import sync_card_identity
 
     await sync_card_identity(sess, state)
+    if (
+        state.receipt_after_message_id
+        and carrier_msg_id <= state.receipt_after_message_id
+    ):
+        from .card_surface import surface_card_after_message
+
+        return await surface_card_after_message(
+            bot, user_id, sess, state.receipt_after_message_id, preserve_turn=True
+        )
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
     state.pending_edit = None
@@ -548,6 +557,8 @@ async def paint_card_on_carrier(
     if not refresh_pane:
         edit_kwargs["refresh_pane"] = False
     if await _legacy("_edit_card")(bot, user_id, state, **edit_kwargs):
+        if carrier_msg_id > state.receipt_after_message_id:
+            state.receipt_after_message_id = 0
         state.last_rendered = text
         state.last_edit_ts = time.monotonic()
         # Migrate the switcher pointer onto the new carrier so previous

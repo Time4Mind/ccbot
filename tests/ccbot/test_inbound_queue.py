@@ -613,3 +613,37 @@ async def test_ordered_voice_uses_intake_card_as_its_only_receipt() -> None:
         "ordered": True,
         "surface_pending": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_command_intake_acknowledges_manual_check_on_pinned_session_only() -> (
+    None
+):
+    context = _context()
+    command = _update(88, text="/model")
+    sess = SimpleNamespace(id="pinned")
+    receipt = SimpleNamespace(completion=None)
+    with (
+        patch.dict(bg_status._bg, {}, clear=True),
+        patch("ccbot.bot.inbound.is_user_allowed", return_value=True),
+        patch("ccbot.bot.inbound.active_window", return_value="@A"),
+        patch("ccbot.bot.inbound._capture_pending_transfer", return_value=False),
+        patch(
+            "ccbot.bot.inbound.session_manager.find_session_by_window",
+            return_value=sess,
+        ),
+        patch("ccbot.bot.inbound.session_manager.save_state"),
+        patch("ccbot.bot.inbound.claim_default_session"),
+        patch("ccbot.bot.inbound.get_card_state", return_value=CardState()),
+        patch("ccbot.bot.inbound.enqueue_inbound", return_value=receipt),
+        patch("ccbot.bot.inbound.schedule_card_after_message"),
+        patch("ccbot.bot.inbound.refresh_session_keyboard", new_callable=AsyncMock),
+    ):
+        for sid in ("pinned", "other"):
+            bg_status.update_status(42, sid, "seen_finished")
+            bg_status.toggle_check(42, sid)
+        assert await command_intake_handler(command, context)
+        assert bg_status.status_emoji(42, "pinned") == ""
+        assert bg_status.status_emoji(42, "other") == "✅"
+        assert bg_status.get_status(42, "pinned") == "seen_finished"
+        await asyncio.sleep(0)

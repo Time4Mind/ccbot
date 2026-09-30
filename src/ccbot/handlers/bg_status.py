@@ -96,6 +96,8 @@ class BgStatus:
     # session. The unread marker survives the first presentation and becomes
     # acknowledged only on the second one.
     finished_views: int = 0
+    # User-toggled button check; independent of the actual worker lifecycle.
+    manual_checked: bool = False
 
 
 # Per-user, per-session BgStatus.
@@ -132,6 +134,9 @@ def update_status(
     # user request (or another confirmed recovery path) passes ``force=True``.
     if old_status == "error" and status != "error" and not force:
         return False
+    was_checked = entry.manual_checked
+    if old_status != status or force:
+        entry.manual_checked = False
     entry.status = status
     if status == "finished" and old_status != "finished":
         entry.finished_views = 0
@@ -142,7 +147,7 @@ def update_status(
     elif status != "needs_action":
         entry.pending_interactive_ui = None
     _touch(entry)
-    return is_new_entry or old_status != status
+    return is_new_entry or old_status != status or was_checked != entry.manual_checked
 
 
 def get_pending_interactive_ui(user_id: int, session_id: str) -> tuple[str, str] | None:
@@ -164,7 +169,7 @@ def status_emoji(user_id: int, session_id: str) -> str:
     entry = _bg.get(user_id, {}).get(session_id)
     if entry is None:
         return ""
-    return _STATUS_EMOJI.get(entry.status, "")
+    return "✅" if entry.manual_checked else _STATUS_EMOJI.get(entry.status, "")
 
 
 def get_status(user_id: int, session_id: str) -> Status | None:
@@ -182,6 +187,25 @@ def record_finished_view(user_id: int, session_id: str) -> bool:
         _touch(entry)
         return False
     entry.status = "seen_finished"
+    _touch(entry)
+    return True
+
+
+def toggle_check(user_id: int, session_id: str) -> None:
+    """Toggle the session button check without declaring a turn finished."""
+    entry = _bg.get(user_id, {}).get(session_id)
+    if entry is None or entry.status != "seen_finished":
+        return
+    entry.manual_checked = not entry.manual_checked
+    _touch(entry)
+
+
+def acknowledge_manual_check(user_id: int, session_id: str) -> bool:
+    """The action following manual activation consumes only that UI check."""
+    entry = _bg.get(user_id, {}).get(session_id)
+    if entry is None or not entry.manual_checked:
+        return False
+    entry.manual_checked = False
     _touch(entry)
     return True
 
@@ -398,6 +422,7 @@ def serialize_per_user() -> dict[str, dict[str, dict[str, Any]]]:
                 "last_change": entry.last_change,
                 "context_pct": entry.context_pct,
                 "finished_views": entry.finished_views,
+                "manual_checked": entry.manual_checked,
             }
         if row:
             out[str(uid)] = row
@@ -461,4 +486,7 @@ def load_per_user(raw: dict[str, Any] | None) -> None:
                 last_change=last_change,
                 context_pct=ctx_pct,
                 finished_views=finished_views,
+                manual_checked=(
+                    data.get("manual_checked") is True and status_val == "seen_finished"
+                ),
             )

@@ -110,9 +110,16 @@ def _enqueue(
         # Queue admission is the user-visible start of a new turn. Mark the
         # immutable target session working now, before FIFO delivery or the
         # first agent event, so a completed-session badge flips to 🔶 at once.
-        if kind in ("text", "photo", "document", "voice") and bg_status.update_status(
-            user.id, sess.id, "working", force=True
-        ):
+        manual_acknowledged = bg_status.acknowledge_manual_check(user.id, sess.id)
+        if manual_acknowledged:
+            session_manager.save_state()
+        status_changed = kind in (
+            "text",
+            "photo",
+            "document",
+            "voice",
+        ) and bg_status.update_status(user.id, sess.id, "working", force=True)
+        if manual_acknowledged or status_changed:
             asyncio.create_task(
                 refresh_session_keyboard(context.bot, user.id),
                 name=f"inbound-status:{user.id}:{sess.id}",

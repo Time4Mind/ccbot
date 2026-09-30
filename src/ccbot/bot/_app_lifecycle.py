@@ -131,7 +131,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
         BotCommand("menu", "Open menu"),
         BotCommand("help", "Quick guide / inline doc"),
     ]
-    for cmd_name in ("model",):
+    for cmd_name in ("model", "fast"):
         if cmd_name in CC_COMMANDS:
             bot_commands.append(BotCommand(cmd_name, CC_COMMANDS[cmd_name]))
 

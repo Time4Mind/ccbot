@@ -172,6 +172,7 @@ Published:
 | `/menu` | Open the inline Menu surface with its quota table and four actions: Sessions / Archive / New / Settings. |
 | `/help` | Inline mini-doc with section buttons. |
 | `/model` | Open the active backend's native model picker. |
+| `/fast` | Toggle Fast mode in the active Codex session. |
 
 Hidden (typed only):
 

@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # slash commands can still pass through the generic terminal route.
 CC_COMMANDS: dict[str, str] = {
     "model": "↗ Switch AI model",
+    "fast": "↗ Toggle Codex Fast mode",
     "clear": "↗ Clear conversation history",
 }
 

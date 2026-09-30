@@ -84,7 +84,7 @@ async def test_published_command_menu_omits_hidden_commands(monkeypatch) -> None
         await _app_lifecycle.post_init(application)
 
     published = [command.command for command in sync.await_args.args[1]]
-    assert published == ["menu", "help", "model"]
+    assert published == ["menu", "help", "model", "fast"]
     assert not {"history", "done", "memory", "compact", "effort"} & set(published)
 
 

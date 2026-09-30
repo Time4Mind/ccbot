@@ -194,6 +194,8 @@ class CardState:
     # Live pane activity bridges silent gaps between transcript events. It is
     # state-only: unlike ``pane_status`` it is not rendered in the card body.
     pane_busy: bool = False
+    # Receipt move deferred by a focus switch; retry when this session returns.
+    receipt_after_message_id: int = 0
     # Live compaction is visible even on a historical card page.
     compacting: bool = False
     # A user Stop is authoritative until the next inbound request. The pane

@@ -498,7 +498,7 @@ async def _drive_typing_indicator(
                 state.last_stall_pane_refresh_ts = refresh_now
 
     # Silent unfinished turn: keep the active session's live pane refreshing;
-    # for a background session expose only a ⚠️ row in the active card panel.
+    # background sessions keep their actual lifecycle marker while silent.
     # No synthetic final answer and no separate Telegram push are emitted.
     if sess is not None:
         from .notifications import has_pending_kb

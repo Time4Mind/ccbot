@@ -76,12 +76,23 @@ async def test_active_stall_keeps_running_pane_without_warning(
 
 
 @pytest.mark.asyncio
-async def test_background_stall_sets_only_warning_badge(
+@pytest.mark.parametrize(
+    "status,glyph",
+    [
+        ("working", "🔶"),
+        ("error", "❗"),
+        ("needs_action", "❗"),
+    ],
+)
+async def test_background_silence_keeps_lifecycle_badge(
     monkeypatch: pytest.MonkeyPatch,
+    status: bg_status.Status,
+    glyph: str,
 ) -> None:
     user_id, sess = 42, _session("bg")
     state = _seed(user_id, sess)
     state.in_menu_view = True
+    bg_status.update_status(user_id, sess.id, status)
     active = _session("active")
     refresh = AsyncMock(return_value=True)
     monkeypatch.setattr(
@@ -104,9 +115,9 @@ async def test_background_stall_sets_only_warning_badge(
         in_menu=True,
     )
 
-    assert bg_status._bg[user_id][sess.id].status == "stalled"
-    assert "❗" in bg_status.render_panel(user_id, active_session_id=active.id)
-    refresh.assert_awaited_once()
+    assert bg_status.status_emoji(user_id, sess.id) == glyph
+    assert bg_status.get_status(user_id, sess.id) == status
+    refresh.assert_not_awaited()
     notifications._edit_card.assert_not_awaited()
 
 

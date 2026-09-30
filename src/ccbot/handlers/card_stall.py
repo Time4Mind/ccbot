@@ -116,7 +116,7 @@ async def maybe_finalize_stalled(
 ) -> bool:
     """Keep an active silent turn RUNNING and refresh only its live pane.
 
-    Fires (returns True after finalising) ONLY when ALL hold:
+    Observes an unfinished turn (returns True) only when all hold:
 
       * a card exists for this (user, session) with at least one event;
       * the card is NOT already finalized (tail event is non-terminal —
@@ -134,12 +134,13 @@ async def maybe_finalize_stalled(
     turn keeps the pane spinner changing, so ``pane_busy`` is True and we
     bail; a tool_use legitimately awaiting a slow result either keeps the
     spinner alive or lands its result well before the window elapses. We
-    only trip when the spinner has died AND the transcript stopped
-    growing — the exact fingerprint of a stalled / exited subprocess.
+    observe when the spinner is absent or unchanged AND the transcript
+    stopped growing. This can also happen during normal reasoning, so it
+    is not evidence of a failed or exited subprocess.
 
     No final event and no Telegram push are produced. An active session keeps
-    its pane visible; a background session gets only the ``stalled`` status
-    marker used by the background-session panel.
+    its pane visible. Background sessions retain their transcript/prompt
+    status: elapsed silence alone does not prove a failure or need for action.
     """
     state = _cards.get((user_id, sess.id))
     active = is_active_for_user(user_id, sess)
@@ -187,8 +188,6 @@ async def maybe_finalize_stalled(
     state.stall_watch_active = True
     state.turn_phase = TurnPhase.RUNNING
     if not active:
-        if bg_status.update_status(user_id, sess.id, "stalled"):
-            await _legacy("refresh_panel")(bot, user_id)
         return True
     if state.msg_id is None:
         return False

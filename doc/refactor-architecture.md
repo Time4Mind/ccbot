@@ -41,7 +41,7 @@ implementation by reason to change. Historical modules such as
 | Send or edit a Telegram card | `handlers/card_transport.py` |
 | Change RUNNING-only inline-pane placement or rich photo reuse | `handlers/card_rich_media.py` |
 | Apply/finalize session events | `handlers/card_updates.py` |
-| Keep silent turns observable / mark bg stalls | `handlers/card_stall.py` |
+| Keep silent unfinished turns observable without inferring attention from silence | `handlers/card_stall.py` |
 | Change card timer/panel scheduling | `handlers/card_surface.py` |
 | Change archived-session history rendering | `handlers/history_archive.py` |
 | Change live history cache/presentation | `handlers/history.py` |

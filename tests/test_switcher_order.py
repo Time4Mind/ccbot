@@ -6,6 +6,8 @@ by-name order that ``list_user_sessions`` returns.
 
 from __future__ import annotations
 
+import pytest
+
 from ccbot.handlers import bg_status
 from ccbot.handlers.switcher import build_switcher_keyboard
 from ccbot.session import session_manager
@@ -33,6 +35,30 @@ def _button_names(markup: object) -> list[str]:
             # Strip leading state/selection glyphs -> plain name.
             names.append(btn.text.split(" ")[-1])
     return names
+
+
+@pytest.mark.parametrize("reserve_created_at", [0.0, 150.0, 400.0])
+def test_default_reserve_is_last_without_reordering_other_sessions(
+    monkeypatch, reserve_created_at
+) -> None:
+    reserve = _session("reserve", "reserve", reserve_created_at)
+    reserve.mark_default_reserve(42)
+    sessions = [
+        _session("c", "newest", 200.0),
+        reserve,
+        _session("b", "middle", 200.0),
+        _session("plain", "default", 50.0),
+        _session("a", "oldest", 100.0),
+    ]
+    monkeypatch.setattr(session_manager, "sessions", {s.id: s for s in sessions})
+    monkeypatch.setattr(session_manager, "active_sessions", {42: reserve.id})
+    monkeypatch.setattr(session_manager, "get_selected_node_id", lambda _uid: "local")
+
+    markup = build_switcher_keyboard(42)
+
+    assert markup is not None
+    assert _button_names(markup) == ["default", "oldest", "middle", "newest", "reserve"]
+    assert markup.inline_keyboard[-1][0].callback_data == "swn"
 
 
 def test_switcher_orders_oldest_to_newest() -> None:

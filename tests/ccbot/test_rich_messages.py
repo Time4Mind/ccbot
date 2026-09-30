@@ -13,6 +13,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from telegram.error import BadRequest, NetworkError, TimedOut
 
 from ccbot import rich
 from ccbot.file_actions import resolve_file_button
@@ -569,6 +570,39 @@ def rich_off(monkeypatch: pytest.MonkeyPatch):
 
 class TestSafeSendRichPath:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error", [TimeoutError("ack lost"), TimedOut(), NetworkError("connection lost")]
+    )
+    async def test_uncertain_rich_delivery_does_not_send_again(
+        self, rich_on: None, error: Exception
+    ) -> None:
+        bot = _FakeBot(post_error=error)
+        with pytest.raises(type(error)):
+            await message_sender.safe_send(bot, 449, "task complete")  # type: ignore[arg-type]
+        assert len(bot.posts) == 1
+        bot.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_delayed_rich_acknowledgement_does_not_send_duplicate(
+        self, rich_on: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bot = _FakeBot(post_result=_sent_message_json())
+        post = bot._post
+
+        async def delayed_post(*args, **kwargs):
+            result = await post(*args, **kwargs)
+            await asyncio.sleep(0.03)
+            return result
+
+        monkeypatch.setattr(bot, "_post", delayed_post)
+        monkeypatch.setattr(rich, "RICH_FALLBACK_DEADLINE_SECONDS", 0.01)
+        msg = await message_sender.safe_send(bot, 449, "task complete")  # type: ignore[arg-type]
+
+        assert len(bot.posts) == 1
+        bot.send_message.assert_not_called()
+        assert msg is not None and msg.message_id == 42
+
+    @pytest.mark.asyncio
     async def test_rich_send_used_when_enabled(self, rich_on: None) -> None:
         bot = _FakeBot(post_result=_sent_message_json())
         msg = await message_sender.safe_send(bot, 449, "a < b")  # type: ignore[arg-type]
@@ -592,7 +626,7 @@ class TestSafeSendRichPath:
 
     @pytest.mark.asyncio
     async def test_fallback_to_markdownv2_on_rich_error(self, rich_on: None) -> None:
-        bot = _FakeBot(post_error=RuntimeError("boom"))
+        bot = _FakeBot(post_error=BadRequest("unsupported rich format"))
         msg = await message_sender.safe_send(bot, 449, "hello")  # type: ignore[arg-type]
         assert msg == "md-fallback-message"
         bot.send_message.assert_called_once()

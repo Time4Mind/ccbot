@@ -39,8 +39,8 @@ from .file_actions import FileButtonContext, add_file_buttons
 
 # Rich messages cap (Bot API 10.2): 32768 UTF-8 chars of text.
 RICH_MAX_CHARS = 32768
-# Rich transport is an enhancement. A stalled experimental endpoint must not
-# hold menus, receipts, or agent replies behind PTB's much longer HTTP timeout.
+# Edits are safe to retry against the same message and keep a short deadline.
+# New sends use the transport timeout because their delivery may be ambiguous.
 RICH_FALLBACK_DEADLINE_SECONDS = 0.75
 # Invisible opt-out marker for tables whose contents must keep normal font.
 # It remains invisible in Markdown fallback and is stripped on the rich path.
@@ -475,10 +475,9 @@ async def send_rich_message(
         data["disable_notification"] = disable_notification
     if upload is not None:
         data[_RICH_PHOTO_UPLOAD_FIELD] = upload
-    result = await asyncio.wait_for(
-        bot._post("sendRichMessage", data),  # pyright: ignore[reportPrivateUsage]
-        timeout=RICH_FALLBACK_DEADLINE_SECONDS,
-    )
+    # Sending creates a new message. An early deadline cannot establish that
+    # Telegram rejected it and must not cause a second formatting attempt.
+    result = await bot._post("sendRichMessage", data)  # pyright: ignore[reportPrivateUsage]
     msg = Message.de_json(cast(dict[str, Any], result), bot)
     return msg
 

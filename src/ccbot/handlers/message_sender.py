@@ -23,7 +23,7 @@ import time
 from typing import Any
 
 from telegram import Bot, InputMediaPhoto, LinkPreviewOptions, Message
-from telegram.error import BadRequest, RetryAfter
+from telegram.error import BadRequest, NetworkError, RetryAfter
 
 from .. import rich
 from ..config import config
@@ -82,6 +82,16 @@ async def _try_rich_send(
     except RetryAfter:
         raise
     except Exception as e:
+        if isinstance(e, (TimeoutError, NetworkError)) and not isinstance(
+            e, BadRequest
+        ):
+            logger.warning(
+                "rich send delivery unknown chat=%s error_type=%s elapsed_ms=%d; no fallback",
+                chat_id,
+                type(e).__name__,
+                round((time.monotonic() - started) * 1000),
+            )
+            raise
         logger.warning(
             "rich send failed chat=%s error_type=%s elapsed_ms=%d; falling back",
             chat_id,

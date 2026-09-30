@@ -22,6 +22,57 @@ from ccbot.tmux_manager import TmuxWindow
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("auto", ["on", "off"])
+async def test_codex_mcp_permission_obeys_autoapproval(monkeypatch, auto):
+    from ccbot.handlers import status_polling, notifications
+    from ccbot.session_models import Session
+
+    pane = (
+        "Field 1/1\n"
+        'Allow the yabro_agent_tools MCP server to run tool "browser_status"?\n'
+        "› 1. Allow                   Run the tool and continue\n"
+        "  2. Allow for this session  Run the tool and remember this choice for this\n"
+        "                             session\n"
+        "  3. Always allow            Run the tool and remember this choice for\n"
+        "                             future tool calls\n"
+        "  4. Cancel                  Cancel this tool call\n"
+        "enter to submit | esc to cancel\n"
+    )
+    sess = Session(id="mcp", name="browser control", window_id="@57", backend="codex")
+    send = AsyncMock(return_value=True)
+    manual = AsyncMock()
+    monkeypatch.setattr(
+        status_polling.session_manager, "find_session_by_window", lambda _w: sess
+    )
+    monkeypatch.setattr(
+        status_polling.session_manager, "get_active_session", lambda _u: sess
+    )
+    monkeypatch.setattr(
+        status_polling.session_manager,
+        "get_user_settings",
+        lambda _u: {"auto_approve": auto},
+    )
+    monkeypatch.setattr(status_polling, "get_interactive_window", lambda _u: None)
+    monkeypatch.setattr(status_polling.tmux_manager, "send_keys", send)
+    monkeypatch.setattr(notifications, "enter_kb_mode", manual)
+    monkeypatch.setattr(status_polling, "_drive_typing_indicator", AsyncMock())
+    with patch.dict(status_polling._auto_approve_attempts, {}, clear=True):
+        await update_status_message(
+            AsyncMock(),
+            42,
+            "@57",
+            window=SimpleNamespace(window_id="@57"),
+            pane_text=pane,
+        )
+    if auto == "on":
+        send.assert_awaited_once_with("@57", "2", enter=True, literal=False)
+        manual.assert_not_awaited()
+    else:
+        send.assert_not_awaited()
+        assert manual.await_args.args[-1] == "CodexMcpApproval"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("page", [0, None])
 async def test_compaction_pane_is_visible_on_current_card_page_and_clears(
     monkeypatch, page

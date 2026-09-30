@@ -8,6 +8,7 @@ from ccbot.terminal_parser import (
     extract_usage_breakdown,
     is_interactive_ui,
     parse_codex_model_effort,
+    parse_codex_fast_mode,
     parse_status_line,
     parse_usage_output,
     strip_pane_chrome,
@@ -15,6 +16,17 @@ from ccbot.terminal_parser import (
 
 
 class TestParseCodexModelEffort:
+    @pytest.mark.parametrize(
+        "footer, mode",
+        [
+            ("GPT-6.1-Sol high fast · Fast on · /private/tmp", True),
+            ("GPT-6.1-Sol high · ~/fast", False),
+            ("GPT-6.1-Sol high fast · ~/workdir\nquoted example", None),
+        ],
+    )
+    def test_fast_mode_requires_live_footer(self, footer, mode) -> None:
+        assert parse_codex_fast_mode(footer) is mode
+
     def test_reads_live_footer(self) -> None:
         pane = (
             "• Finished the task\n\n"

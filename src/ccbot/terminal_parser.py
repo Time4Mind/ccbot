@@ -21,7 +21,8 @@ from . import terminal_usage as _terminal_usage
 
 _CODEX_MODEL_EFFORT_FOOTER_RE = re.compile(
     r"^\s*(?P<model>\S+)\s+"
-    r"(?P<effort>default|low|medium|high|xhigh|max|ultra)\s+·\s+"
+    r"(?P<effort>default|low|medium|high|xhigh|max|ultra)"
+    r"(?:\s+(?P<fast>fast))?\s+·\s+(?:Fast (?:on|off)\s+·\s+)?"
     r"(?:~(?=/|\s*(?:·|$))|/)",
     re.IGNORECASE,
 )
@@ -41,6 +42,13 @@ def parse_codex_model_effort(pane_text: str) -> tuple[str, str] | None:
     if match is not None:
         return match.group("model"), match.group("effort").lower()
     return None
+
+
+def parse_codex_fast_mode(pane_text: str) -> bool | None:
+    """Read Fast only from a complete live identity footer, not scrollback."""
+    lines = [line for line in pane_text.splitlines() if line.strip()]
+    match = _CODEX_MODEL_EFFORT_FOOTER_RE.match(lines[-1]) if lines else None
+    return bool(match.group("fast")) if match is not None else None
 
 
 @dataclass
@@ -113,6 +121,13 @@ UI_PATTERNS: list[UIPattern] = [
             re.compile(r"^\s*Do you want to delete \S"),
         ),
         bottom=(re.compile(r"^\s*Esc to cancel"),),
+    ),
+    UIPattern(
+        name="CodexMcpApproval",
+        top=(re.compile(r"^\s*Allow the .+ MCP server to run tool\s+", re.IGNORECASE),),
+        bottom=(
+            re.compile(r"^\s*enter to submit\s*\|\s*esc to cancel", re.IGNORECASE),
+        ),
     ),
     UIPattern(
         # Codex command approval. Enterprise/MDM requirements may force

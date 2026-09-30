@@ -160,3 +160,30 @@ async def test_codex_identity_remains_out_of_header_on_each_node(
     assert await card_terminal.sync_card_identity(sess, state)
     changed_header = _render_card(sess, state).splitlines()[0]
     assert "6-astra high" not in changed_header
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page", [0, None])
+async def test_fast_identity_follows_live_mode_and_survives_partial_pane(
+    monkeypatch, page
+) -> None:
+    sess = Session(id="fast", name="fast", backend="codex", window_id="@1")
+    state = CardState(current_page_idx=page, context_pct=42)
+    monkeypatch.setattr(
+        card_terminal,
+        "capture_session_pane",
+        AsyncMock(
+            side_effect=[
+                "› Ask Codex to do anything\n\n  GPT-6.1-Sol high fast · ~/workdir",
+                "Working...",
+                "› Ask Codex to do anything\n\n  GPT-6.1-Sol high · ~/workdir",
+            ]
+        ),
+    )
+
+    assert await card_terminal.sync_card_identity(sess, state)
+    assert _render_card(sess, state).endswith("─── 6.1-Sol high Fast: 42% ───")
+    await card_terminal.sync_card_identity(sess, state)
+    assert _render_card(sess, state).endswith("─── 6.1-Sol high Fast: 42% ───")
+    assert await card_terminal.sync_card_identity(sess, state)
+    assert _render_card(sess, state).endswith("─── 6.1-Sol high: 42% ───")

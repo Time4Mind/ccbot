@@ -248,6 +248,22 @@ async def test_codex_approval_uses_documented_y_hotkey_without_enter():
 
 
 @pytest.mark.asyncio
+async def test_allow_word_in_regular_question_is_not_autoapproved():
+    pane = "Choose a filter\n❯ 1. Allow matching rows\n  2. Cancel\nEnter to select\n"
+    send_keys = AsyncMock()
+    with (
+        patch.object(
+            status_polling.session_manager,
+            "get_user_settings",
+            lambda _u: {"auto_approve": "on"},
+        ),
+        patch.object(status_polling.tmux_manager, "send_keys", send_keys),
+    ):
+        assert await _maybe_auto_approve(1, "@1", pane) is False
+    send_keys.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_truncated_codex_approval_uses_documented_y_hotkey_without_enter():
     pane = (
         "tail of a long command preview\n"

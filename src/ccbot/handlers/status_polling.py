@@ -35,12 +35,14 @@ from ..terminal_parser import (
     extract_interactive_content,
     is_interactive_ui,
     parse_codex_model_effort,
+    parse_codex_fast_mode,
     parse_status_line,
 )
 from ..tmux_manager import tmux_manager
 from . import bg_status
 from .archive import idle_archive_sweep, purge_sweep
 from .cleanup import clear_session_state
+from .card_terminal import apply_card_identity
 from .card_types import TurnPhase
 from .inbox import inbox_sweep
 from .interactive_ui import (
@@ -144,7 +146,12 @@ async def _maybe_auto_approve(user_id: int, window_id: str, pane_text: str) -> b
     # Its printed option number is not the documented hotkey, unlike Claude's
     # numbered menus, so send ``y`` without an extra Enter.
     codex_approval = content is not None and content.name == "CodexApproval"
-    digit = "y" if codex_approval else _parse_best_yes_option(pane_text)
+    if codex_approval:
+        digit = "y"
+    elif content is not None and content.name == "CodexMcpApproval":
+        digit = _parse_best_yes_option(content.content, allow_labels=True)
+    else:
+        digit = _parse_best_yes_option(pane_text)
     if digit is None:
         return False
 
@@ -425,12 +432,9 @@ async def _drive_typing_indicator(
     if state is not None and getattr(sess, "backend", "") == "codex":
         identity = parse_codex_model_effort(pane_text)
         if identity is not None:
-            model, effort = identity
-            identity_changed = (
-                state.agent_model != model or state.reasoning_effort != effort
+            identity_changed = apply_card_identity(
+                state, identity, parse_codex_fast_mode(pane_text)
             )
-            state.agent_model = model
-            state.reasoning_effort = effort
     if state is not None and state.user_stopped:
         # Escape can leave the last TUI spinner visible for several polls.
         # Explicit user intent wins until a new inbound request clears it.

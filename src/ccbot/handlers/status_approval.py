@@ -16,7 +16,7 @@ class InteractiveContent(Protocol):
 _OPTION_LINE_RE = re.compile(r"^[\s❯›>]*?(\d+)\.\s+(.+?)\s*$")
 _DIGIT_RUN_RE = re.compile(r"\d+")
 _DURABLE_YES_RE = re.compile(
-    r"during this session|don'?t ask again|allow all|always allow|for the rest of",
+    r"during this session|for this session|don'?t ask again|allow all|always allow|for the rest of",
     re.IGNORECASE,
 )
 
@@ -26,7 +26,7 @@ def auto_approve_progress(pane_text: str) -> str:
     return _DIGIT_RUN_RE.sub("#", pane_text)
 
 
-def parse_best_yes_option(pane_text: str) -> str | None:
+def parse_best_yes_option(pane_text: str, *, allow_labels: bool = False) -> str | None:
     """Prefer a durable Yes menu option, falling back to the first Yes."""
     first_yes: str | None = None
     for raw in pane_text.splitlines():
@@ -34,7 +34,10 @@ def parse_best_yes_option(pane_text: str) -> str | None:
         if not match:
             continue
         number, label = match.group(1), match.group(2)
-        if not label.lower().startswith("yes"):
+        affirmative = (
+            r"^(?:yes\b|allow\b|always allow\b)" if allow_labels else r"^yes\b"
+        )
+        if not re.match(affirmative, label, re.IGNORECASE):
             continue
         if first_yes is None:
             first_yes = number

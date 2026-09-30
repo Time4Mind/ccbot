@@ -152,6 +152,7 @@ class CardState:
     # only when both values are known.
     agent_model: str = ""
     reasoning_effort: str = ""
+    fast_mode: bool = False
     last_rendered: str = ""  # last text we sent to TG; skips no-op edits
     last_edit_ts: float = 0.0  # monotonic seconds; gate for CARD_EDIT_LAG coalescing
     pending_edit: asyncio.Task[None] | None = None  # one deferred edit task at most

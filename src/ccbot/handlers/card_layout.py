@@ -94,6 +94,8 @@ def _append_context_row(
 ) -> None:
     """Keep the model visible even before context usage becomes available."""
     identity = _model_effort_label(state.agent_model, state.reasoning_effort)
+    if identity and state.fast_mode:
+        identity += " Fast"
     context_pct = state.context_pct
     if context_pct is None and user_id is not None:
         context_pct = bg_status.get_context_pct(user_id, sess.id)

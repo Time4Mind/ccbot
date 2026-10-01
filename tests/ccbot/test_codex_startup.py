@@ -37,6 +37,38 @@ READY_PROMPT = """OpenAI Codex
 gpt-5.6 medium · ~/project
 """
 
+BOOTSTRAP_ERROR = """>_ OpenAI Codex (v0.159.3)
+  ~/workdir
+› Error: account/read failed during TUI bootstrap: account/read failed: workspace
+routing discovery timed out (code -32603)
+"""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("after_update", [False, True])
+async def test_bootstrap_error_fails_startup_without_reaching_ready(
+    after_update,
+) -> None:
+    assert not is_codex_ready(BOOTSTRAP_ERROR)
+    screens = iter(
+        [UPDATE_PROMPT, BOOTSTRAP_ERROR] if after_update else [BOOTSTRAP_ERROR]
+    )
+    with pytest.raises(CodexStartupError, match="account/read failed"):
+        await drive_codex_startup(
+            command="codex",
+            capture=lambda: _next(screens),
+            current_process=lambda: _next(iter(["codex"])),
+            send_key=lambda _key: _done(),
+            relaunch=lambda _command: _done(),
+            timeout=0.02,
+            poll_interval=0,
+            ready_settle_time=0,
+        )
+
+
+def test_historical_bootstrap_error_does_not_block_a_live_composer() -> None:
+    assert is_codex_ready(BOOTSTRAP_ERROR + READY_PROMPT)
+
 
 @pytest.mark.asyncio
 async def test_current_update_menu_is_accepted_and_reaches_ready_composer() -> None:

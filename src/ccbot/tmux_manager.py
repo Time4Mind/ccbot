@@ -488,7 +488,7 @@ class TmuxManager:
         *,
         backend: str = "",
     ) -> bool:
-        if literal and enter and not text.startswith("!"):
+        if literal and enter and (backend == "codex" or not text.startswith("!")):
             return await tmux_input_transport.send_literal_chunked(
                 window_id, text, backend=backend
             )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import secrets
 
 logger = logging.getLogger(__name__)
@@ -11,6 +12,29 @@ logger = logging.getLogger(__name__)
 _CHUNK_BYTES = 900
 _CHUNK_PACE = 0.025
 _CODEX_LITERAL_INPUT_BARRIER = " "
+
+
+async def codex_process_is_running(window_id: str) -> bool:
+    """Fail closed when an agent pane has returned to its shell or disappeared."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tmux",
+            "display-message",
+            "-p",
+            "-t",
+            window_id,
+            "#{pane_current_command}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await proc.communicate()
+        process = os.path.basename(stdout.decode(errors="replace").strip()).lower()
+        return proc.returncode == 0 and (
+            process in {"codex", "node"} or process.startswith("codex-")
+        )
+    except Exception as exc:
+        logger.warning("Cannot verify Codex process window=%s: %s", window_id, exc)
+        return False
 
 
 def terminal_input_chunks(text: str, *, backend: str = "") -> list[bytes]:
@@ -112,18 +136,28 @@ async def _send_carriage_return(window_id: str) -> bool:
 
 
 async def send_literal_chunked(window_id: str, text: str, *, backend: str = "") -> bool:
+    codex = backend.strip().lower() == "codex"
+    if codex and not await codex_process_is_running(window_id):
+        logger.warning("Codex input blocked: agent is not running window=%s", window_id)
+        return False
     chunks = terminal_input_chunks(text, backend=backend)
     operation = f"ccbot-{secrets.token_hex(8)}"
     pasted = 0
     for index, chunk in enumerate(chunks):
+        if index and codex and not await codex_process_is_running(window_id):
+            return False
         name = operation if index == 0 else f"{operation}-{index}"
         ok, ambiguous = await _paste_chunk(window_id, name, chunk)
         if not ok:
             if pasted or ambiguous:
+                if codex and not await codex_process_is_running(window_id):
+                    return False
                 if backend.strip().lower() == "codex" and not chunk.endswith(b" "):
                     await _paste_chunk(window_id, f"{operation}-barrier", b" ")
                 await _send_carriage_return(window_id)
             return False
         pasted += 1
         await asyncio.sleep(_CHUNK_PACE)
+    if codex and not await codex_process_is_running(window_id):
+        return False
     return await _send_carriage_return(window_id)

@@ -733,7 +733,7 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
         success = await tmux_manager.send_keys(window.window_id, text, backend=backend)
         if success:
             return True, f"Sent to {display}"
-        return False, "Failed to send keys"
+        return False, "Failed to send input; the agent may have stopped."
 
     # --- Message history ---
 

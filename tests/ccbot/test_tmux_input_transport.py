@@ -8,6 +8,78 @@ from ccbot import tmux_input_transport
 from ccbot.tmux_manager import TmuxManager
 
 
+@pytest.fixture
+def running_codex(monkeypatch):
+    monkeypatch.setattr(
+        tmux_input_transport, "codex_process_is_running", AsyncMock(return_value=True)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command, allowed",
+    [
+        (b"zsh", False),
+        (b"bash", False),
+        (b"", False),
+        (b"python", False),
+        (b"codex", True),
+        (b"node", True),
+    ],
+)
+async def test_codex_request_never_reaches_a_shell_after_agent_exit(
+    command, allowed
+) -> None:
+    manager = TmuxManager(session_name="ccbot")
+    process = MagicMock(returncode=0)
+    process.communicate = AsyncMock(return_value=(command, b""))
+    with (
+        patch(
+            "ccbot.tmux_input_transport.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ),
+        patch(
+            "ccbot.tmux_input_transport._paste_chunk",
+            new=AsyncMock(return_value=(True, False)),
+        ) as paste,
+        patch(
+            "ccbot.tmux_input_transport._send_carriage_return",
+            new=AsyncMock(return_value=True),
+        ) as submit,
+    ):
+        assert (
+            await manager.send_keys("@67", "Пересчитай пайплайн", backend="codex")
+            is allowed
+        )
+    if not allowed:
+        paste.assert_not_awaited()
+        submit.assert_not_awaited()
+    else:
+        submit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_codex_exit_after_paste_never_submits_text_to_shell() -> None:
+    process = MagicMock(returncode=0)
+    process.communicate = AsyncMock(side_effect=[(b"codex", b""), (b"zsh", b"")])
+    with (
+        patch(
+            "ccbot.tmux_input_transport.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ),
+        patch(
+            "ccbot.tmux_input_transport._paste_chunk",
+            new=AsyncMock(return_value=(True, False)),
+        ),
+        patch(
+            "ccbot.tmux_input_transport._send_carriage_return",
+            new=AsyncMock(return_value=True),
+        ) as submit,
+    ):
+        assert not await TmuxManager().send_keys("@67", "request", backend="codex")
+    submit.assert_not_awaited()
+
+
 def test_terminal_input_chunks_preserve_utf8_and_byte_limit() -> None:
     text = "абв🙂" * 400
     chunks = tmux_input_transport.terminal_input_chunks(text, backend="claude")
@@ -23,7 +95,9 @@ def test_codex_transport_adds_only_trailing_space() -> None:
 
 
 @pytest.mark.asyncio
-async def test_multiline_paste_preserves_newlines_inside_bracketed_paste() -> None:
+async def test_multiline_paste_preserves_newlines_inside_bracketed_paste(
+    running_codex,
+) -> None:
     calls = []
 
     async def run_tmux(*args, input_bytes=None):
@@ -42,7 +116,9 @@ async def test_multiline_paste_preserves_newlines_inside_bracketed_paste() -> No
 
 
 @pytest.mark.asyncio
-async def test_chunked_multiline_paste_keeps_order_and_one_submit() -> None:
+async def test_chunked_multiline_paste_keeps_order_and_one_submit(
+    running_codex,
+) -> None:
     text = "🙂" * 224 + "\n\n" + "строка" * 180
     calls = []
 
@@ -69,7 +145,9 @@ async def test_chunked_multiline_paste_keeps_order_and_one_submit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_literal_input_pastes_chunks_in_order_then_one_carriage_return() -> None:
+async def test_literal_input_pastes_chunks_in_order_then_one_carriage_return(
+    running_codex,
+) -> None:
     manager = TmuxManager(session_name="ccbot")
     with (
         patch.object(
@@ -98,7 +176,7 @@ async def test_literal_input_pastes_chunks_in_order_then_one_carriage_return() -
 
 
 @pytest.mark.asyncio
-async def test_ambiguous_paste_is_not_retried_and_finalizes_once() -> None:
+async def test_ambiguous_paste_is_not_retried_and_finalizes_once(running_codex) -> None:
     manager = TmuxManager(session_name="ccbot")
     with (
         patch.object(

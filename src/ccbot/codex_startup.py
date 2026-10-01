@@ -152,7 +152,7 @@ def classify_codex_screen(text: str) -> CodexScreen:
 
 def is_codex_ready(text: str) -> bool:
     """Return true only for Codex's real input box, never a modal cursor."""
-    if not text:
+    if not text or codex_bootstrap_error(text) is not None:
         return False
     lines = text.strip().splitlines()
     prompt_markers = [
@@ -200,6 +200,17 @@ def is_codex_ready(text: str) -> bool:
     )
 
 
+def codex_bootstrap_error(text: str) -> str | None:
+    """Read a current bootstrap failure without reviving historical errors."""
+    for line in reversed(text.rstrip().splitlines()):
+        if line.lstrip().startswith("›"):
+            content = line.lstrip().removeprefix("›").strip()
+            if content.startswith("Error:") and "during TUI bootstrap" in content:
+                return content
+            return None
+    return None
+
+
 def _is_shell(process: str) -> bool:
     return os.path.basename(process.strip()).lower() in _SHELL_PROCESSES
 
@@ -233,6 +244,9 @@ async def drive_codex_startup(
 
     while loop.time() <= deadline:
         text, process = await asyncio.gather(capture(), current_process())
+        failure = codex_bootstrap_error(text)
+        if failure is not None:
+            raise CodexStartupError(failure)
 
         if waiting_for_updater_exit:
             if _is_shell(process):

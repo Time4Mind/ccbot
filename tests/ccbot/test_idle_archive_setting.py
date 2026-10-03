@@ -10,6 +10,7 @@ from ccbot.bot.callbacks import settings as settings_callback
 from ccbot.handlers.archive import idle_archive_sweep
 from ccbot.handlers.menu import build_footer_keyboard
 from ccbot.session import session_manager
+from ccbot.session_models import Session
 
 
 @pytest.mark.asyncio
@@ -222,7 +223,12 @@ async def test_idle_archive_sweep_uses_user_setting() -> None:
 
 @pytest.mark.asyncio
 async def test_idle_archive_cancels_startup_watcher() -> None:
-    sess = SimpleNamespace(window_id="@9", claude_session_id="", id="deadbeef")
+    sess = Session(
+        id="deadbeef",
+        name="expired",
+        window_id="@9",
+        last_event_at=time.time() - 13 * 3600,
+    )
     teardown = AsyncMock()
     with (
         patch.object(
@@ -247,7 +253,9 @@ async def test_idle_archive_cancels_startup_watcher() -> None:
 
 @pytest.mark.asyncio
 async def test_idle_archive_deletes_proven_empty_session() -> None:
-    sess = SimpleNamespace(window_id="@9", claude_session_id="", id="empty")
+    sess = Session(
+        id="empty", name="empty", window_id="@9", last_event_at=time.time() - 13 * 3600
+    )
     with (
         patch.object(
             session_manager,

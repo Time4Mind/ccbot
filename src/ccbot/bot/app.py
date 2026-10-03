@@ -165,6 +165,15 @@ def _liveness_watchdog_tick() -> None:
         _terminate_for_sustained_conflict()
         return
     poll_status, poll_age = polling_health.status()
+    outbound_status, outbound_age = polling_health.outbound_status()
+    if outbound_status == "stale" and polling_health.claim_terminal():
+        logger.critical(
+            "Telegram outbound requests failing for %.0fs despite polling progress - "
+            "forcing bot restart; agent runtimes remain running.",
+            outbound_age,
+        )
+        _terminate_for_sustained_conflict()
+        return
     network_errors_active = (
         _network_last_seen is not None
         and time.monotonic() - _network_last_seen <= NETWORK_GAP_SECONDS

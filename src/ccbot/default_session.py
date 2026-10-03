@@ -238,6 +238,7 @@ def claim_default_session(bot: Any, user_id: int, sess: Session) -> bool:
 
     if reserve_owner(sess) != user_id:
         return False
+    session_manager.touch_session(sess.id)
     sess.clear_default_reserve()
     sess.name = _claimed_name(sess.workdir, sess.id)
     session_manager.save_state()

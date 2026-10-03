@@ -12,6 +12,7 @@ import logging
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -55,6 +56,29 @@ class _Lane:
 
 
 _lanes: dict[tuple[int, str], _Lane] = {}
+_admissions: dict[str, int] = {}
+
+
+@contextmanager
+def hold_inbound_admission(window_id: str):
+    """Protect a pinned target during the immediate voice-card await."""
+    _admissions[window_id] = _admissions.get(window_id, 0) + 1
+    try:
+        yield
+    finally:
+        remaining = _admissions[window_id] - 1
+        if remaining:
+            _admissions[window_id] = remaining
+        else:
+            _admissions.pop(window_id, None)
+
+
+def has_pending_inbound(window_id: str) -> bool:
+    """Include admission, queued updates and the currently running handler."""
+    return bool(_admissions.get(window_id)) or any(
+        lane.window_id == window_id and (lane.active is not None or lane.entries)
+        for lane in _lanes.values()
+    )
 
 
 def enqueue_inbound(
@@ -132,6 +156,11 @@ async def _drain_lane(key: tuple[int, str], lane: _Lane) -> None:
                     },
                 )
             finally:
+                from .session import session_manager
+
+                sess = session_manager.find_session_by_window(entry.target_window_id)
+                if sess is not None:
+                    session_manager.touch_session(sess.id)
                 if not entry.completion.done():
                     entry.completion.set_result(delivered)
                 lane.active = None

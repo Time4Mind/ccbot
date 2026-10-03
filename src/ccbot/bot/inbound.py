@@ -30,7 +30,7 @@ from ..handlers.directory_browser import (
     STATE_NAMING_DIRECTORY,
     STATE_PREPROCESSING_INSTRUCTION,
 )
-from ..inbound_queue import InboundProcessor, enqueue_inbound
+from ..inbound_queue import InboundProcessor, enqueue_inbound, hold_inbound_admission
 from ..session import session_manager
 from ..transcribe import resolve_voice_backend
 from ..transfer_queue import capture_transfer_message
@@ -94,6 +94,7 @@ def _enqueue(
         return False
     sess = session_manager.find_session_by_window(wid)
     if sess is not None:
+        session_manager.touch_session(sess.id)
         # Promotion is deliberately synchronous and happens before the FIFO
         # owns the update. A session switch immediately after this point can
         # never redirect the request or make a second message claim it.
@@ -308,40 +309,43 @@ async def voice_intake_handler(
         # transcript seeding, default-session bookkeeping and transcription.
         wid = active_window(user.id)
         if wid is not None:
-            sess = session_manager.find_session_by_window(wid)
-            card_surfaced = False
-            if sess is not None:
-                # The card itself is the first reply. Mark the pending voice
-                # before sending it; transcript seeding and identity reads
-                # continue after the card is visible.
-                state = get_card_state(user.id, sess)
-                state.voice_pending = True
-                state.current_page_idx = None
-                try:
-                    card_surfaced = await surface_card_after_message(
-                        context.bot,
-                        user.id,
-                        sess,
-                        message.message_id,
-                        fast=True,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "voice card receipt failed user=%d error_type=%s",
-                        user.id,
-                        type(exc).__name__,
-                    )
-                claim_default_session(context.bot, user.id, sess)
-            if _enqueue(
-                update,
-                context,
-                kind="voice",
-                processor=_run_voice,
-                target_window_id=wid,
-                card_already_surfaced=card_surfaced,
-            ):
-                return True
-            return await voice_handler(update, context, pinned_wid=wid)
+            with hold_inbound_admission(wid):
+                sess = session_manager.find_session_by_window(wid)
+                if sess is not None:
+                    session_manager.touch_session(sess.id)
+                card_surfaced = False
+                if sess is not None:
+                    # The card itself is the first reply. Mark the pending voice
+                    # before sending it; transcript seeding and identity reads
+                    # continue after the card is visible.
+                    state = get_card_state(user.id, sess)
+                    state.voice_pending = True
+                    state.current_page_idx = None
+                    try:
+                        card_surfaced = await surface_card_after_message(
+                            context.bot,
+                            user.id,
+                            sess,
+                            message.message_id,
+                            fast=True,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "voice card receipt failed user=%d error_type=%s",
+                            user.id,
+                            type(exc).__name__,
+                        )
+                    claim_default_session(context.bot, user.id, sess)
+                if _enqueue(
+                    update,
+                    context,
+                    kind="voice",
+                    processor=_run_voice,
+                    target_window_id=wid,
+                    card_already_surfaced=card_surfaced,
+                ):
+                    return True
+                return await voice_handler(update, context, pinned_wid=wid)
     if _enqueue(update, context, kind="voice", processor=_run_voice):
         return True
     return await voice_handler(update, context)

@@ -8,7 +8,6 @@ from __future__ import annotations
 import socket
 from typing import Any, TYPE_CHECKING, cast
 
-import httpx
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -19,7 +18,8 @@ from telegram.ext import (
 
 from ..startup_queue import capture_startup_message
 from ..telegram_rate_limit import PersistentEndpointRateLimiter
-from ..telegram_polling_health import PollingHeartbeatRequest
+from ..telegram_polling_health import PollingHeartbeatRequest, OutboundHealthRequest
+from ..telegram_proxy_transport import telegram_transport
 
 from ..config import config
 from .callbacks import callback_handler
@@ -75,12 +75,9 @@ def _request_pair() -> tuple[Any, PollingHeartbeatRequest]:
     from telegram.request import HTTPXRequest
 
     def request(*, pool_size: int, read_timeout: float) -> Any:
-        transport = httpx.AsyncHTTPTransport(
-            limits=httpx.Limits(
-                max_connections=pool_size,
-                max_keepalive_connections=pool_size,
-            ),
-            proxy=config.tg_proxy_url or None,
+        transport = telegram_transport(
+            pool_size=pool_size,
+            proxy_url=config.tg_proxy_url,
             socket_options=_socket_options(),
         )
         return HTTPXRequest(
@@ -93,7 +90,7 @@ def _request_pair() -> tuple[Any, PollingHeartbeatRequest]:
 
     general = request(pool_size=16, read_timeout=20.0)
     polling = request(pool_size=4, read_timeout=15.0)
-    return general, PollingHeartbeatRequest(
+    return OutboundHealthRequest(general, polling_health), PollingHeartbeatRequest(
         polling, polling_health, on_success=_record_poll_success
     )
 

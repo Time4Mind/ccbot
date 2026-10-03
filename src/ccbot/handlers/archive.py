@@ -18,9 +18,11 @@ import aiofiles
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from ..config import config
+from ..inbound_queue import has_pending_inbound
 from ..i18n import get_user_lang, t
 from ..rich import RICH_TABLE_NORMAL_FONT
 from ..session_models import reserve_owner
+from ..session_state import is_idle_session
 from ..session import (
     DEFAULT_IDLE_ARCHIVE_HOURS,
     IDLE_ARCHIVE_HOUR_CHOICES,
@@ -248,6 +250,10 @@ async def _archive_blurb(sess: Session, user_id: int | None = None) -> str:
 
 async def _archive_context_status(sess: Session) -> bool | None:
     """Return whether a session has user context, or None if unreadable."""
+    if has_pending_inbound(sess.window_id) or getattr(
+        sess, "pending_preprocessing", []
+    ):
+        return None
     if not sess.claude_session_id:
         if getattr(sess, "node_id", "local") != "local" and getattr(
             sess, "worker_session_id", ""
@@ -769,6 +775,8 @@ async def idle_archive_sweep(bot: Bot, user_id: int) -> int:
     candidates = session_manager.find_idle_to_archive(idle_hours * 3600.0)
     archived = 0
     for sess in candidates:
+        if not is_idle_session(sess, idle_hours * 3600.0):
+            continue
         await teardown_session_runtime(user_id, sess, bot)
         if await archive_or_delete_session(sess, completed=False):
             archived += 1
@@ -783,17 +791,9 @@ async def idle_archive_sweep(bot: Bot, user_id: int) -> int:
 
 def purge_sweep() -> int:
     """Drop state.json records past ARCHIVE_PURGE_AFTER. Returns number purged."""
-    if config.archive_purge_after <= 0:
-        return 0
-    candidates = session_manager.find_archive_to_purge(config.archive_purge_after)
-    purged = 0
-    for sess in candidates:
-        if session_manager.delete_session(sess.id):
-            purged += 1
+    ttl = config.archive_purge_after
+    candidates = session_manager.find_archive_to_purge(ttl)
+    purged = sum(session_manager.delete_session(sess.id) for sess in candidates)
     if purged:
-        logger.info(
-            "Purged %d archive records older than %.0fs",
-            purged,
-            config.archive_purge_after,
-        )
+        logger.info("Purged %d archive records older than %.0fs", purged, ttl)
     return purged

@@ -21,6 +21,22 @@ from .session_models import reserve_owner, Session, SessionState
 logger = logging.getLogger("ccbot.session")
 
 
+def is_idle_session(
+    sess: Session, idle_seconds: float, *, now: float | None = None
+) -> bool:
+    """One predicate for selection and the last check before idle teardown."""
+    from .inbound_queue import has_pending_inbound
+
+    if idle_seconds <= 0 or sess.state not in ("active", "idle") or reserve_owner(sess):
+        return False
+    if has_pending_inbound(sess.window_id) or sess.pending_preprocessing:
+        return False
+    anchor = sess.last_event_at or sess.created_at
+    return bool(
+        anchor and ((time.time() if now is None else now) - anchor) >= idle_seconds
+    )
+
+
 class SessionStateMixin(NodeSessionStateMixin):
     """DM routing and persisted session-state operations."""
 
@@ -342,19 +358,12 @@ class SessionStateMixin(NodeSessionStateMixin):
 
     def find_idle_to_archive(self, idle_seconds: float) -> list["Session"]:
         """Return active/idle sessions that have crossed the idle TTL threshold."""
-        if idle_seconds <= 0:
-            return []
         now = time.time()
-        out: list[Session] = []
-        for s in self.sessions.values():
-            if s.state not in ("active", "idle"):
-                continue
-            if reserve_owner(s):
-                continue
-            anchor = s.last_event_at or s.created_at
-            if anchor and (now - anchor) >= idle_seconds:
-                out.append(s)
-        return out
+        return [
+            s
+            for s in self.sessions.values()
+            if is_idle_session(s, idle_seconds, now=now)
+        ]
 
     def find_archive_to_purge(self, purge_after_seconds: float) -> list["Session"]:
         """Return archived/completed/lost sessions older than the purge threshold."""

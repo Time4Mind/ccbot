@@ -100,6 +100,32 @@ async def test_worker_health_auto_registers_remote_node_and_runtime(monkeypatch)
     )
     assert persisted == [True, False]
     assert registered_runtimes == ["worker-a"]
+    for ready in ([], ["codex"], []):
+        await handler(
+            NodeEnvelope(
+                kind="health",
+                payload={
+                    "node_id": "worker-a",
+                    "display_name": "Worker A",
+                    "state": "ready" if ready else "online",
+                    "backends": ready,
+                    "configured_backends": ["claude", "codex"],
+                    "backend_status": {
+                        backend: "ready" if backend in ready else "unavailable"
+                        for backend in ("claude", "codex")
+                    },
+                    "capabilities": {"event_stream": True},
+                },
+            )
+        )
+        node = known_nodes["worker-a"]
+        assert node.is_connected()
+        assert node.is_selectable()
+        assert node.is_available() is bool(ready)
+        assert node.backends == ready
+        assert node.configured_backends == ["claude", "codex"]
+        assert node.backend_status["claude"] == "unavailable"
+    assert registered_runtimes == ["worker-a"]
     await node_runtime.shutdown_remote_runtimes()
 
 

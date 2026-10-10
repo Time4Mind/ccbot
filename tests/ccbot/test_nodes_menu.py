@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import time
+
+import pytest
+
 from ccbot.handlers import nodes
 from ccbot.node_models import Node
 from ccbot.session import session_manager
@@ -126,3 +130,95 @@ def test_disabled_node_remains_registered_but_cannot_accept_work(monkeypatch) ->
     assert session_manager.get_node("office") is node
     assert node.enabled is False
     assert node.is_available(now=100.0) is False
+
+
+@pytest.mark.parametrize(
+    "language, online, not_ready",
+    [("en", "online", "not ready"), ("ru", "онлайн", "не готов")],
+)
+def test_connected_node_without_ready_backends_is_visible_and_selectable(
+    monkeypatch, language, online, not_ready
+) -> None:
+    node = Node(
+        "worker-a",
+        "Worker A",
+        state="online",
+        last_seen_at=time.time(),
+        configured_backends=["claude", "codex"],
+        backend_status={"claude": "unavailable", "codex": "unavailable"},
+        capabilities={"event_stream": True},
+    )
+    monkeypatch.setattr(
+        session_manager, "nodes", {"local": Node.local(), node.id: node}
+    )
+    monkeypatch.setattr(session_manager, "selected_node_ids", {})
+    monkeypatch.setattr(
+        session_manager, "get_user_settings", lambda _uid: {"language": language}
+    )
+
+    text = nodes.render_nodes_text(42)
+    button = nodes.build_nodes_keyboard(42).inline_keyboard[1][0]
+
+    assert f"| Worker A | {online} |" in text
+    assert f"claude: {not_ready}" in text
+    assert f"codex: {not_ready}" in text
+    assert "auth" not in text.lower()
+    assert button.text == "Worker A"
+    assert button.callback_data == "nd:use:worker-a"
+
+
+@pytest.mark.parametrize(
+    "state, last_seen, enabled, capabilities, expected",
+    [
+        ("pending", 0.0, True, {}, "connecting"),
+        ("ready", 0.0, True, {}, "offline"),
+        ("ready", 1.0, True, {}, "offline"),
+        ("online", None, False, {}, "online (disabled)"),
+        (
+            "online",
+            None,
+            True,
+            {"event_stream": False},
+            "online (event stream unavailable)",
+        ),
+    ],
+)
+def test_node_menu_distinguishes_connectivity_and_operation_limits(
+    monkeypatch, state, last_seen, enabled, capabilities, expected
+) -> None:
+    node = Node(
+        "worker-a",
+        "Worker A",
+        state=state,
+        last_seen_at=time.time() if last_seen is None else last_seen,
+        enabled=enabled,
+        capabilities=capabilities,
+    )
+    monkeypatch.setattr(session_manager, "nodes", {node.id: node})
+    monkeypatch.setattr(session_manager, "selected_node_ids", {})
+    monkeypatch.setattr(
+        session_manager, "get_user_settings", lambda _uid: {"language": "en"}
+    )
+
+    assert f"| Worker A | {expected} |" in nodes.render_nodes_text(42)
+
+
+def test_menu_shows_ready_codex_and_unready_claude_independently(monkeypatch):
+    node = Node(
+        "worker-a",
+        "Worker A",
+        state="ready",
+        last_seen_at=time.time(),
+        configured_backends=["claude", "codex"],
+        backends=["codex"],
+    )
+    monkeypatch.setattr(session_manager, "nodes", {node.id: node})
+    monkeypatch.setattr(session_manager, "selected_node_ids", {})
+    monkeypatch.setattr(
+        session_manager, "get_user_settings", lambda _uid: {"language": "en"}
+    )
+    assert (
+        "| Worker A | ready | claude: not ready, codex: ready |"
+        in nodes.render_nodes_text(42)
+    )
+    assert session_manager.get_effective_backends(42, node.id) == ("codex",)

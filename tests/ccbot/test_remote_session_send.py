@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -10,7 +11,8 @@ from ccbot.session import SessionManager
 
 
 @pytest.mark.asyncio
-async def test_send_to_window_routes_remote_session_through_worker(monkeypatch):
+@pytest.mark.parametrize("state", ["ready", "online"])
+async def test_send_to_window_routes_remote_session_through_worker(monkeypatch, state):
     session = SimpleNamespace(
         node_id="worker-a",
         worker_session_id="routing-8",
@@ -22,7 +24,10 @@ async def test_send_to_window_routes_remote_session_through_worker(monkeypatch):
         find_session_by_window=lambda _window_id: session,
         get_display_name=lambda window_id: window_id,
         get_node=lambda _node_id: Node(
-            id="worker-a", display_name="Worker A", state="ready"
+            id="worker-a",
+            display_name="Worker A",
+            state=state,
+            last_seen_at=time.time(),
         ),
     )
     monkeypatch.setattr(

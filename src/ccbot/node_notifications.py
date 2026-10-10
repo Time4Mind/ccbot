@@ -39,7 +39,10 @@ class NodeNotificationMonitor:
                 ):
                     continue
                 key = (user_id, node.id)
-                available = node.is_available(now=now)
+                if not node.enabled:
+                    self._notified.discard(key)
+                    continue
+                available = node.is_connected(now=now)
                 if available:
                     if key in self._notified:
                         await bot.send_message(

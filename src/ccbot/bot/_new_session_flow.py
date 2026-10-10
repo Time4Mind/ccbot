@@ -1,15 +1,27 @@
-"""Lifecycle helpers for abandoning the modal new-session flow."""
+"""Directory loading and lifecycle helpers for the modal new-session flow."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
+
+from telegram import InlineKeyboardMarkup
 
 from ..handlers.card_registry import _carrier_edit_lock
+from ..handlers.callback_data import (
+    CB_DIR_UP,
+    CB_DIR_CONFIRM,
+    CB_DIR_CREATE,
+    CB_DIR_SELECT,
+    CB_DIR_PAGE,
+)
 from ..handlers.directory_browser import (
+    BROWSE_NODE_KEY,
     PENDING_TEXT_KEY,
     SESSIONS_PAGE_KEY,
+    build_directory_browser,
     clear_browse_state,
     clear_session_picker_state,
     clear_window_picker_state,
@@ -22,6 +34,56 @@ from ..startup_queue import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def reject_unavailable_directory_callback(
+    query: Any, context: Any, manager: Any
+) -> bool:
+    """Recheck access before a stale browser button can issue remote work."""
+    data = query.data or ""
+    node_id = (context.user_data or {}).get(BROWSE_NODE_KEY, "local")
+    if node_id != "local" and (
+        data in (CB_DIR_UP, CB_DIR_CONFIRM, CB_DIR_CREATE)
+        or data.startswith((CB_DIR_SELECT, CB_DIR_PAGE))
+    ):
+        node = manager.get_node(str(node_id))
+        if node is None or not node.can_operate("directory_browser"):
+            await query.answer(
+                "Directory browsing is unavailable on this node", show_alert=True
+            )
+            return True
+    return False
+
+
+async def load_directory_browser(
+    *,
+    manager: Any,
+    runtime_lookup: Callable[[str], Any],
+    node_id: str,
+    current_path: str,
+    page: int,
+    user_id: int,
+) -> tuple[str, InlineKeyboardMarkup, list[str], str]:
+    """Browse a connected node's filesystem independently of backend auth."""
+    if node_id == "local":
+        path = current_path or str(Path.home())
+        text, keyboard, subdirs = await build_directory_browser(
+            path, page, user_id=user_id
+        )
+        return text, keyboard, subdirs, path
+    node = manager.get_node(node_id)
+    if node is None or not node.can_operate("directory_browser"):
+        raise RuntimeError("Directory browsing is unavailable on this node")
+    runtime = runtime_lookup(node_id)
+    if runtime is None:
+        raise RuntimeError(f"Node runtime is not connected: {node_id}")
+    result = await runtime.list_directories(node_id, current_path)
+    path = str(result.get("path") or current_path or "/")
+    subdirs = [str(name) for name in result.get("directories", [])]
+    text, keyboard, _ = await build_directory_browser(
+        path, page, user_id=user_id, remote_subdirs=subdirs, remote=True
+    )
+    return text, keyboard, subdirs, path
 
 
 def clear_new_session_state(user_data: dict[str, Any] | None) -> None:

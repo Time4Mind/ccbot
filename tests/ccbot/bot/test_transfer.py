@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -68,10 +69,22 @@ def test_transfer_node_picker_hides_unavailable_nodes_and_backends(monkeypatch):
         "list_nodes",
         lambda: [
             Node.local(),
-            Node("ready", "Рабочий Mac", state="ready", backends=["codex"]),
+            Node(
+                "ready",
+                "Рабочий Mac",
+                state="ready",
+                backends=["codex"],
+                last_seen_at=time.time(),
+            ),
             Node("offline", "Оффлайн", state="offline", backends=["claude"]),
             Node("pending", "Подключается", state="pending", backends=["codex"]),
-            Node("empty", "Без backend", state="ready", backends=[]),
+            Node(
+                "empty",
+                "Без backend",
+                state="ready",
+                backends=[],
+                last_seen_at=time.time(),
+            ),
         ],
     )
 
@@ -88,7 +101,13 @@ def test_transfer_node_picker_hides_unavailable_nodes_and_backends(monkeypatch):
 @pytest.mark.asyncio
 async def test_transfer_flow_is_node_then_backend_then_confirmation(monkeypatch):
     source = _session()
-    target = Node("remote", "Удалённый Mac", state="ready", backends=["codex"])
+    target = Node(
+        "remote",
+        "Удалённый Mac",
+        state="ready",
+        backends=["codex"],
+        last_seen_at=time.time(),
+    )
     monkeypatch.setattr(
         transfer.session_manager, "get_active_session", lambda _uid: source
     )

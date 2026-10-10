@@ -205,7 +205,7 @@ async def _dispatch_text_to_active(
         node_id = initial_node_id
         node = session_manager.get_node(node_id)
         if remote_prompt_queue.has_pending(initial_session.id) or (
-            node is None or not node.is_available()
+            node is None or not node.can_send_input()
         ):
             queued_prepared_dispatch: Any = None
 

@@ -43,9 +43,14 @@ from ...handlers.message_sender import safe_edit
 from ...handlers.notifications import resume_card_view
 from ...i18n import t
 from ...session import session_manager
-from ...startup_queue import current_startup_flow
+from ...startup_queue import cancel_startup_queue, current_startup_flow
 from ...transfer_runtime import get_node_runtime
-from .._new_session_flow import edit_backend_picker, edit_startup_surface
+from .._new_session_flow import (
+    edit_backend_picker,
+    edit_startup_surface,
+    load_directory_browser,
+    reject_unavailable_directory_callback,
+)
 from .._common import open_more_in_place
 from ..backend_picker import build_backend_picker as build_backend_picker
 from ..messages import create_and_activate_session
@@ -67,6 +72,7 @@ async def open_new_session_flow(
         context.user_data["_new_session_node_id"] = node_id
     only_backend = next(iter(enabled), None)
     if only_backend is None:
+        cancel_startup_queue(user_id)
         await safe_edit(query, f"❌ Node {node_id} has no available backend")
         return
     if len(enabled) > 1:
@@ -87,9 +93,14 @@ async def open_directory_browser(
 ) -> None:
     if startup_flow is None:
         startup_flow = current_startup_flow(user_id)
-    msg_text, keyboard, _subdirs = await initialize_directory_browser(
-        context, user_id, node_id=node_id
-    )
+    try:
+        msg_text, keyboard, _subdirs = await initialize_directory_browser(
+            context, user_id, node_id=node_id
+        )
+    except RuntimeError as exc:
+        cancel_startup_queue(user_id)
+        await safe_edit(query, f"❌ {exc}")
+        return
     await edit_startup_surface(
         query, context, user_id, startup_flow, msg_text, keyboard
     )
@@ -98,26 +109,14 @@ async def open_directory_browser(
 async def _load_directory_browser(
     *, node_id: str, current_path: str, page: int, user_id: int
 ) -> tuple[str, InlineKeyboardMarkup, list[str], str]:
-    if node_id == "local":
-        path = current_path or str(Path.home())
-        text, keyboard, subdirs = await build_directory_browser(
-            path, page, user_id=user_id
-        )
-        return text, keyboard, subdirs, path
-    runtime = get_node_runtime(node_id)
-    if runtime is None:
-        raise RuntimeError(f"Node runtime is not connected: {node_id}")
-    result = await runtime.list_directories(node_id, current_path)
-    path = str(result.get("path") or current_path or "/")
-    subdirs = [str(name) for name in result.get("directories", [])]
-    text, keyboard, _ = await build_directory_browser(
-        path,
-        page,
+    return await load_directory_browser(
+        manager=session_manager,
+        runtime_lookup=get_node_runtime,
+        node_id=node_id,
+        current_path=current_path,
+        page=page,
         user_id=user_id,
-        remote_subdirs=subdirs,
-        remote=True,
     )
-    return text, keyboard, subdirs, path
 
 
 async def initialize_directory_browser(
@@ -189,6 +188,8 @@ async def handle(
     query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
 ) -> bool:
     data = query.data or ""
+    if await reject_unavailable_directory_callback(query, context, session_manager):
+        return True
 
     if data.startswith(CB_NEW_BACKEND):
         backend = data[len(CB_NEW_BACKEND) :]

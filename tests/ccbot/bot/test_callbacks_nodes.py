@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -25,6 +26,67 @@ async def test_unavailable_node_primary_button_only_shows_alert(monkeypatch):
 
     query.answer.assert_awaited_once_with("Node is unavailable", show_alert=True)
     manager.set_selected_node.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_connected_node_without_ready_backends_can_be_selected(monkeypatch):
+    query = MagicMock(spec=CallbackQuery)
+    query.data = "nd:use:worker-a"
+    query.answer = AsyncMock()
+    manager = MagicMock()
+    manager.get_node.return_value = Node(
+        "worker-a",
+        "Worker A",
+        state="online",
+        last_seen_at=time.time(),
+        configured_backends=["claude", "codex"],
+        backends=[],
+    )
+    open_sessions = AsyncMock()
+    monkeypatch.setattr(nodes, "session_manager", manager)
+    monkeypatch.setattr(nodes, "open_sessions_in_place", open_sessions)
+    context = SimpleNamespace(bot=object(), user_data={})
+
+    assert await nodes.handle(query, context, SimpleNamespace(id=42))
+
+    manager.set_selected_node.assert_called_once_with(42, "worker-a")
+    query.answer.assert_awaited_once_with()
+    open_sessions.assert_awaited_once_with(query, context.bot, 42)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state, last_seen, enabled",
+    [
+        ("pending", 0.0, True),
+        ("ready", 0.0, True),
+        ("online", 1.0, True),
+        ("online", None, False),
+    ],
+)
+async def test_node_selection_preserves_connection_and_admin_guards(
+    monkeypatch, state, last_seen, enabled
+):
+    query = MagicMock(spec=CallbackQuery)
+    query.data = "nd:use:worker-a"
+    query.answer = AsyncMock()
+    manager = MagicMock()
+    manager.get_node.return_value = Node(
+        "worker-a",
+        "Worker A",
+        state=state,
+        enabled=enabled,
+        last_seen_at=time.time() if last_seen is None else last_seen,
+    )
+    monkeypatch.setattr(nodes, "session_manager", manager)
+    monkeypatch.setattr(nodes, "open_sessions_in_place", AsyncMock())
+
+    assert await nodes.handle(
+        query, SimpleNamespace(bot=object(), user_data={}), SimpleNamespace(id=42)
+    )
+
+    manager.set_selected_node.assert_not_called()
+    assert query.answer.await_args.kwargs["show_alert"] is True
 
 
 @pytest.mark.asyncio

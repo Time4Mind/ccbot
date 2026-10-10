@@ -42,7 +42,7 @@ _tasks: set[asyncio.Task[None]] = set()
 
 
 def _available_backends(user_id: int, node: Any) -> tuple[str, ...]:
-    if not node.is_available():
+    if not node.is_available() or not node.can_operate("context_transfer"):
         return ()
     if node.id == "local":
         return session_manager.get_effective_backends(user_id, node.id)

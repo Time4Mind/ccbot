@@ -1,6 +1,7 @@
 """Selecting a directory starts fresh without old-session recommendations."""
 
 import asyncio
+import time
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -62,7 +63,16 @@ async def test_directory_browser_reads_selected_node_filesystem(monkeypatch):
     monkeypatch.setattr(
         dir_browser,
         "session_manager",
-        SimpleNamespace(get_selected_node_id=lambda _uid: "worker-a"),
+        SimpleNamespace(
+            get_selected_node_id=lambda _uid: "worker-a",
+            get_node=lambda _nid: Node(
+                "worker-a",
+                "Worker A",
+                state="online",
+                last_seen_at=time.time(),
+                capabilities={"directory_browser": True},
+            ),
+        ),
     )
     monkeypatch.setattr(dir_browser, "get_node_runtime", lambda _node_id: runtime)
     edit = AsyncMock()
@@ -198,6 +208,13 @@ async def test_remote_directory_confirm_passes_target_node(monkeypatch, tmp_path
     user = SimpleNamespace(id=42)
     create = AsyncMock(side_effect=lambda *_args, **_kwargs: order.append("create"))
     monkeypatch.setattr(dir_browser, "create_and_activate_session", create)
+    monkeypatch.setattr(
+        dir_browser.session_manager,
+        "get_node",
+        lambda _nid: Node(
+            "worker-a", "Worker A", state="online", last_seen_at=time.time()
+        ),
+    )
 
     assert await dir_browser.handle(query, context, user)
     create.assert_awaited_once_with(

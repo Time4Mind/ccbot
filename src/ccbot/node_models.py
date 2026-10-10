@@ -41,18 +41,36 @@ class Node:
     health_reason: str = ""
     enabled: bool = True
 
-    def is_available(self, *, now: float | None = None) -> bool:
-        """Return whether this node is currently safe to admit new work."""
+    def is_connected(self, *, now: float | None = None) -> bool:
+        """Fresh health proves connectivity, independently of backend readiness."""
         if self.id == "local":
             return True
-        if not self.enabled:
+        if self.state not in ("online", "ready") or self.last_seen_at <= 0:
             return False
-        if self.state != "ready":
-            return False
-        if self.last_seen_at <= 0:
-            return True
         current = time.time() if now is None else now
         return current - self.last_seen_at < NODE_HEALTH_STALE_SECONDS
+
+    def is_selectable(self, *, now: float | None = None) -> bool:
+        """Selecting a connected node does not require a ready backend."""
+        return self.enabled and self.is_connected(now=now)
+
+    def can_operate(self, capability: str, *, now: float | None = None) -> bool:
+        """Gate backend-independent RPCs; absent capabilities support old workers."""
+        return self.is_selectable(now=now) and self.capabilities.get(capability, True)
+
+    def is_available(self, *, now: float | None = None) -> bool:
+        """Return whether this node can admit a new backend session."""
+        return (
+            self.can_operate("create_session", now=now)
+            and (self.id == "local" or self.state == "ready")
+            and self.capabilities.get("event_stream", True)
+        )
+
+    def can_send_input(self, *, now: float | None = None) -> bool:
+        """An existing TUI can accept input after new-launch auth expires."""
+        return self.can_operate("send_text", now=now) and self.capabilities.get(
+            "event_stream", True
+        )
 
     @classmethod
     def local(cls) -> "Node":

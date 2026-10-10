@@ -10,6 +10,32 @@ from .session_models import Session
 from .transfer_models import SessionTransfer
 
 
+async def send_to_remote_session(
+    manager: Any, session: Session, display: str, text: str
+) -> tuple[bool, str]:
+    """Route existing-session input without depending on new-launch readiness."""
+    from .transfer_runtime import get_node_runtime
+
+    node_id = session.node_id
+    node: Node | None = manager.get_node(node_id)
+    if node is None or not node.is_connected():
+        return False, "Remote node is offline; message was not sent"
+    if not node.enabled:
+        return False, "Remote node is disabled; message was not sent"
+    if not node.can_send_input():
+        return False, "Remote node input is unavailable; message was not sent"
+    runtime = get_node_runtime(node_id)
+    routing_id = getattr(session, "worker_session_id", "") or getattr(
+        session, "claude_session_id", ""
+    )
+    if runtime is None or not routing_id:
+        return False, "Remote node session is not available"
+    result = await runtime.send_text(node_id, routing_id, text)
+    if result.get("ok", True):
+        return True, f"Sent to {display}"
+    return False, str(result.get("error", "Failed to send to remote node"))
+
+
 class NodeSessionStateMixin:
     """Persisted node registry and leader-side transfer lifecycle."""
 
@@ -127,7 +153,7 @@ class NodeSessionStateMixin:
             # Persisted legacy state has no local capability snapshot. Once a
             # local readiness publisher fills ``Node.backends``, intersect it
             # with the user's local preferences exactly like a remote node.
-            if node.backends:
+            if node.backends or node.configured_backends or node.backend_status:
                 return tuple(
                     backend for backend in preferences if backend in node.backends
                 )
@@ -167,6 +193,8 @@ class NodeSessionStateMixin:
             raise ValueError("Only a live session can be transferred")
         if target is None:
             raise KeyError(f"Unknown target node: {target_node_id}")
+        if not target.can_operate("context_transfer"):
+            raise ValueError("Context transfer is unavailable on the target node")
         target_backends = self.get_effective_backends(user_id, target_node_id)
         if target_backend not in target_backends:
             raise ValueError("Target backend is unavailable on the target node")

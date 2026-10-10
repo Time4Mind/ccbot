@@ -19,12 +19,26 @@ NODES_ORIGIN_KEY = "_nodes_origin"
 
 
 def _node_state_text(user_id: int, node: Node) -> str:
-    state = node.state if node.is_available() or node.id == "local" else "offline"
-    return t(user_id, f"nodes.state.{state}")
+    state = node.state if node.state == "pending" or node.is_connected() else "offline"
+    text = t(user_id, f"nodes.state.{state}")
+    if not node.enabled:
+        text += f" ({t(user_id, 'nodes.state.disabled')})"
+    if node.is_connected() and node.capabilities.get("event_stream") is False:
+        text += f" ({t(user_id, 'nodes.event_stream.unavailable')})"
+    return text
 
 
-def _node_backends(user_id: int, node: Node) -> tuple[str, ...]:
-    return session_manager.get_effective_backends(user_id, node.id)
+def _node_backends(user_id: int, node: Node) -> str:
+    configured = tuple(dict.fromkeys(node.configured_backends + node.backends))
+    if not configured:
+        # Legacy local records predate the readiness health publisher.
+        return (
+            ", ".join(session_manager.get_effective_backends(user_id, node.id)) or "-"
+        )
+    return ", ".join(
+        f"{backend}: {t(user_id, 'nodes.backend.ready' if backend in node.backends else 'nodes.backend.unavailable')}"
+        for backend in configured
+    )
 
 
 def render_nodes_text(user_id: int) -> str:
@@ -44,7 +58,7 @@ def render_nodes_text(user_id: int) -> str:
     selected_id = session_manager.get_selected_node_id(user_id)
     for node in nodes:
         marker = "✓ " if node.id == selected_id else ""
-        backends = ", ".join(_node_backends(user_id, node)) or "-"
+        backends = _node_backends(user_id, node)
         lines.append(
             f"| {marker}{node.display_name or node.id} | "
             f"{_node_state_text(user_id, node)} | {backends} |"
@@ -67,7 +81,7 @@ def build_nodes_keyboard(user_id: int) -> InlineKeyboardMarkup:
             if node.id != "local"
             else None
         )
-        if not node.is_available():
+        if not node.is_selectable():
             row = [
                 InlineKeyboardButton(
                     f"⚪ {label}", callback_data=f"{CB_NODE_USE}{node.id}"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -42,6 +43,7 @@ def _manager(monkeypatch) -> SessionManager:
             display_name="Worker A",
             state="ready",
             backends=["claude", "codex"],
+            last_seen_at=time.time(),
         )
     )
     monkeypatch.setattr(archive, "session_manager", manager)

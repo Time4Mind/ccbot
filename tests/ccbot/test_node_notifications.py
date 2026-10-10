@@ -64,3 +64,30 @@ async def test_irrelevant_node_does_not_notify():
     await monitor.poll_once(bot, [42])
 
     bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconnected_node_notifies_without_waiting_for_backend_auth():
+    node = Node("worker", "Worker", state="offline", last_seen_at=100.0)
+    manager = SimpleNamespace(
+        list_nodes=lambda: [node],
+        get_user_settings=lambda _uid: {"bg_notify_node_status": True},
+        get_selected_node_id=lambda _uid: node.id,
+        active_sessions_by_node={},
+    )
+    bot = SimpleNamespace(send_message=AsyncMock())
+    monitor = NodeNotificationMonitor(manager=manager, now=lambda: 161.0)
+    await monitor.poll_once(bot, [42])
+    assert bot.send_message.await_count == 1
+    node.state = "online"
+    node.last_seen_at = 160.0
+    await monitor.poll_once(bot, [42])
+    assert bot.send_message.await_count == 2
+    assert "восстановлена" in bot.send_message.await_args.kwargs["text"]
+    node.state = "ready"
+    node.backends = ["codex"]
+    await monitor.poll_once(bot, [42])
+    node.state = "online"
+    node.backends = []
+    await monitor.poll_once(bot, [42])
+    assert bot.send_message.await_count == 2

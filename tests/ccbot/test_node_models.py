@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from ccbot.node_models import Node
 from ccbot.session import SessionManager
 from ccbot.session_models import Session, WindowState
@@ -179,6 +180,7 @@ def test_context_transfer_creates_independent_target_and_keeps_source_live(
             display_name="Office",
             state="ready",
             backends=["codex"],
+            last_seen_at=time.time(),
         )
     )
     source = manager.create_session(name="same title", backend="claude")
@@ -239,6 +241,7 @@ def test_effective_backends_are_scoped_to_target_node(monkeypatch) -> None:
             display_name="Worker A",
             state="ready",
             backends=["codex"],
+            last_seen_at=time.time(),
         )
     )
 
@@ -253,7 +256,13 @@ def test_heterogeneous_nodes_keep_independent_backend_sets(monkeypatch) -> None:
     manager.agent_backend = "claude"
     manager.user_settings[42] = {"enabled_backends": ["claude"]}
     manager.register_node(
-        Node("worker-a", "Worker A", state="ready", backends=["codex"])
+        Node(
+            "worker-a",
+            "Worker A",
+            state="ready",
+            backends=["codex"],
+            last_seen_at=time.time(),
+        )
     )
     manager.register_node(
         Node(
@@ -261,6 +270,7 @@ def test_heterogeneous_nodes_keep_independent_backend_sets(monkeypatch) -> None:
             "Worker B",
             state="ready",
             backends=["claude", "codex"],
+            last_seen_at=time.time(),
         )
     )
 

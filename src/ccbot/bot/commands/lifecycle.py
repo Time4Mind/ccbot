@@ -25,7 +25,11 @@ from ...handlers.message_sender import safe_reply
 from ...i18n import t
 from ...session import Session, session_manager
 from ...tmux_manager import tmux_manager
-from ...startup_queue import begin_startup_queue, bind_startup_queue
+from ...startup_queue import (
+    begin_startup_queue,
+    bind_startup_queue,
+    cancel_startup_queue,
+)
 from .._common import (
     active_window,
     is_user_allowed,
@@ -64,8 +68,6 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if path_arg:
         if node_id != "local":
-            from ...startup_queue import cancel_startup_queue
-
             cancel_startup_queue(user.id)
             await safe_reply(
                 update.message,
@@ -74,8 +76,6 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
         if not enabled_backends:
-            from ...startup_queue import cancel_startup_queue
-
             cancel_startup_queue(user.id)
             await safe_reply(update.message, "❌ No available backend on local node")
             return
@@ -189,7 +189,8 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data["_pending_session_name"] = name_arg
     only_backend = next(iter(enabled_backends), None)
     if only_backend is None:
-        await safe_reply(update.message, "❌ No enabled backend")
+        cancel_startup_queue(user.id)
+        await safe_reply(update.message, f"❌ Node {node_id} has no available backend")
         return
     if len(enabled_backends) > 1:
         from ..callbacks.dir_browser import build_backend_picker

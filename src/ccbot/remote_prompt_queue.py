@@ -39,7 +39,7 @@ def _default_node_available(node_id: str) -> bool:
     from .session import session_manager
 
     node = session_manager.get_node(node_id)
-    return node is not None and node.is_available()
+    return node is not None and node.can_send_input()
 
 
 class RemotePromptQueue:

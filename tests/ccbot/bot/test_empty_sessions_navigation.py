@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call
 
@@ -56,7 +57,9 @@ async def test_empty_sessions_omits_nodes_with_only_local_node(monkeypatch) -> N
 async def test_empty_node_can_switch_to_another_node_directly(monkeypatch) -> None:
     registered = {
         "local": Node.local(),
-        "worker-a": Node("worker-a", "Worker A", state="ready"),
+        "worker-a": Node(
+            "worker-a", "Worker A", state="ready", last_seen_at=time.time()
+        ),
     }
     manager = MagicMock()
     manager.get_node.side_effect = registered.get

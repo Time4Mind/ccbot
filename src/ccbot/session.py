@@ -42,6 +42,7 @@ from .session_defaults import DEFAULT_IDLE_ARCHIVE_HOURS, IDLE_ARCHIVE_HOUR_CHOI
 from .session_keys import key_matches_window
 from .session_map import SessionMapMixin
 from .session_models import ClaudeSession, Session, SessionState, WindowState
+from .session_node_state import send_to_remote_session
 from .session_state import SessionStateMixin
 from .terminal_parser import is_interactive_ui, parse_status_line
 from .tmux_manager import tmux_manager
@@ -699,22 +700,7 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
         )
         sess = self.find_session_by_window(window_id)
         if sess is not None and getattr(sess, "node_id", "local") != "local":
-            from .transfer_runtime import get_node_runtime
-
-            node_id = getattr(sess, "node_id", "local")
-            node = self.get_node(node_id)
-            if node is None or not node.is_available():
-                return False, "Remote node is offline; message was not sent"
-            runtime = get_node_runtime(node_id)
-            routing_id = getattr(sess, "worker_session_id", "") or getattr(
-                sess, "claude_session_id", ""
-            )
-            if runtime is None or not routing_id:
-                return False, "Remote node session is not available"
-            result = await runtime.send_text(node_id, routing_id, text)
-            if result.get("ok", True):
-                return True, f"Sent to {display}"
-            return False, str(result.get("error", "Failed to send to remote node"))
+            return await send_to_remote_session(self, sess, display, text)
         window = await tmux_manager.find_window_by_id(window_id)
         if not window:
             return False, "Window not found (may have been closed)"

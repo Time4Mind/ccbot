@@ -184,7 +184,7 @@ async def handle(
     if node is None:
         await query.answer("Node not found", show_alert=True)
         return True
-    if not node.is_available():
+    if not node.is_selectable():
         await query.answer("Node is unavailable", show_alert=True)
         return True
     _pop_nodes_origin(context)

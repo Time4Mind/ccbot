@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from telegram import InlineKeyboardMarkup
 
 from ccbot.config import config
 from ccbot.handlers import (
@@ -32,6 +33,90 @@ def _assert_text_carrier(state: CardState, *, message_id: int) -> None:
     assert state.rich_media_file_id == ""
     assert state.last_pane_hash == ""
     assert state.last_photo_edit_ts == 0.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delay", [0.9, 1.8])
+async def test_slow_rich_table_edit_keeps_native_layout(
+    monkeypatch: pytest.MonkeyPatch, delay: float
+) -> None:
+    monkeypatch.setattr(config, "rich_messages", True)
+    monkeypatch.setattr(card_transport, "_inline_screens_enabled", lambda _uid: False)
+    table = "| Model | Band |\n|---|---|\n| OnePlus | n78 |"
+    delivered = []
+
+    async def delayed_post(endpoint, data):
+        await asyncio.sleep(delay)
+        delivered.append((endpoint, data))
+        return True
+
+    bot = SimpleNamespace(_post=delayed_post, edit_message_text=AsyncMock())
+    state = CardState(msg_id=9)
+    markup = InlineKeyboardMarkup([])
+
+    assert await card_transport._edit_card_unlocked(
+        bot, 42, state, text=table, reply_markup=markup
+    )
+
+    assert delivered == [
+        (
+            "editMessageText",
+            {
+                "chat_id": 42,
+                "message_id": 9,
+                "rich_message": {
+                    "markdown": (
+                        "| <sub>Model</sub> | <sub>Band</sub> |\n"
+                        "|---|---|\n"
+                        "| <sub>OnePlus</sub> | <sub>n78</sub> |"
+                    )
+                },
+                "reply_markup": markup,
+            },
+        )
+    ]
+    bot.edit_message_text.assert_not_awaited()
+    assert state.msg_id == 9
+
+
+@pytest.mark.asyncio
+async def test_stalled_rich_table_edit_falls_back_after_two_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config, "rich_messages", True)
+    monkeypatch.setattr(card_transport, "_inline_screens_enabled", lambda _uid: False)
+    cancelled = asyncio.Event()
+
+    async def stalled_post(_endpoint, _data):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    bot = SimpleNamespace(_post=stalled_post, edit_message_text=AsyncMock())
+    state = CardState(msg_id=9)
+    started = asyncio.get_running_loop().time()
+
+    assert await asyncio.wait_for(
+        card_transport._edit_card_unlocked(
+            bot,
+            42,
+            state,
+            text="| Model | Band |\n|---|---|\n| OnePlus | n78 |",
+            reply_markup=InlineKeyboardMarkup([]),
+        ),
+        timeout=3.0,
+    )
+
+    assert asyncio.get_running_loop().time() - started >= 2.0
+    assert cancelled.is_set()
+    bot.edit_message_text.assert_awaited_once()
+    fallback = bot.edit_message_text.call_args.kwargs
+    assert fallback["chat_id"] == 42
+    assert fallback["message_id"] == 9
+    assert fallback["parse_mode"] == "MarkdownV2"
+    assert "OnePlus" in fallback["text"]
+    assert state.msg_id == 9
 
 
 @pytest.mark.asyncio

@@ -41,7 +41,7 @@ from .file_actions import FileButtonContext, add_file_buttons
 RICH_MAX_CHARS = 32768
 # Edits are safe to retry against the same message and keep a short deadline.
 # New sends use the transport timeout because their delivery may be ambiguous.
-RICH_FALLBACK_DEADLINE_SECONDS = 0.75
+RICH_FALLBACK_DEADLINE_SECONDS = 2.0
 # Invisible opt-out marker for tables whose contents must keep normal font.
 # It remains invisible in Markdown fallback and is stripped on the rich path.
 RICH_TABLE_NORMAL_FONT = "\u2060"

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
 
-from telegram import CallbackQuery
-from telegram.error import BadRequest
+from telegram import CallbackQuery, Update
+from telegram.error import BadRequest, NetworkError, TelegramError
 from telegram.ext import ContextTypes
 
 from ...handlers import bg_status
@@ -28,13 +29,16 @@ from ...handlers.notifications import (
     is_card_busy,
     paint_card_on_carrier,
     pause_card_view,
+    refresh_session_keyboard,
     refresh_cached_screenshot,
 )
 from ...handlers.card_carrier import SCREENSHOT_CACHE_FRESH_SECONDS
 from ...session import session_manager
 from ...terminal_parser import extract_interactive_content, is_interactive_ui
 from .interactive_ui import capture_window
-from .._common import render_session_preview
+from .._common import render_session_preview, is_user_allowed
+from ...session_models import Session
+from ...user_activity import record as record_user_activity
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +67,39 @@ async def _strip_orphan_switcher_if_current(
     return False
 
 
+async def session_switch_intake_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Accept a selection before later updates, paint it outside intake."""
+    query, user = update.callback_query, update.effective_user
+    if query is None or user is None or not is_user_allowed(user.id):
+        return
+    target_id = (query.data or "")[len(CB_SW_USE) :]
+    target = session_manager.get_session(target_id)
+    if target is None or target.state not in ("active", "idle"):
+        context.application.create_task(handle(query, context, user), update=update)
+        return
+    from . import _acknowledge_completion_marker  # pyright: ignore[reportPrivateUsage]
+    from .._new_session_flow import cancel_for_active_card
+
+    previous = session_manager.get_active_session(user.id)
+    _acknowledge_completion_marker(user.id)
+    cancel_for_active_card(user.id, getattr(context, "user_data", None))
+    record_user_activity(user.id)
+    session_manager.select_session(user.id, target_id)
+    context.application.create_task(
+        handle(query, context, user, previous_session=previous, route_selected=True),
+        update=update,
+    )
+
+
 async def handle(
-    query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
+    query: CallbackQuery,
+    context: ContextTypes.DEFAULT_TYPE,
+    user: Any,
+    *,
+    previous_session: Session | None = None,
+    route_selected: bool = False,
 ) -> bool:
     data = query.data or ""
 
@@ -83,12 +118,20 @@ async def handle(
         # painting so subsequent input cannot remain trapped in startup FIFO.
         from .._new_session_flow import cancel_for_active_card
 
+        if route_selected:
+            current = session_manager.get_active_session(user.id)
+            if current is None or current.id != target_id:
+                return True
         cancel_for_active_card(user.id, getattr(context, "user_data", None))
         # A completed result stays unread through its first presentation and
         # becomes acknowledged only when the user enters it a second time.
-        # Record before painting so that the second entry already has no
-        # unread-completion glyph.
-        old_active = session_manager.get_active_session(user.id)
+        # Failed paints are not presentations and must not consume the badge.
+        count_finished_view = False
+        old_active = (
+            previous_session
+            if route_selected
+            else session_manager.get_active_session(user.id)
+        )
         if not bg_status.acknowledge_manual_check(user.id, target_id):
             if (
                 old_active is not None
@@ -98,7 +141,7 @@ async def handle(
             ):
                 bg_status.toggle_check(user.id, target_id)
             else:
-                bg_status.record_finished_view(user.id, target_id)
+                count_finished_view = True
         logger.info(
             "sw_use user=%d target=%s name=%s state=%s carrier_msg=%s",
             user.id,
@@ -124,188 +167,225 @@ async def handle(
         old_active_id = old_active.id if old_active is not None else None
         orphan_msg_id: int | None = None
         protected_carrier_id: int | None = None
-        if query.message is not None:
-            protected_carrier_id = query.message.message_id
-            protect_switcher_carrier(user.id, protected_carrier_id)
-            orphan_msg_id = await activate_card_on_carrier(
-                user.id,
-                old_active_id,
-                target_id,
-                query.message.message_id,
-            )
-        else:
-            session_manager.select_session(user.id, target_id)
-        # Dismiss Telegram's tap spinner before any screenshot render/upload.
-        # The carrier is already atomically owned by the target session here.
-        await query.answer(f"→ {sess.name or sess.id}")
-        # The TO session already had a live card on a DIFFERENT message
-        # (typical after a voice message pinned to it finished landing
-        # while the user was elsewhere). It just lost ownership to the
-        # carrier, so nothing will ever edit it again — strip its
-        # keyboard, otherwise the chat keeps two tappable switchers and
-        # the next tap repaints whichever one the user happened to hit.
-        await _strip_orphan_switcher_if_current(context.bot, user.id, orphan_msg_id)
+        try:
+            if query.message is not None:
+                protected_carrier_id = query.message.message_id
+                protect_switcher_carrier(user.id, protected_carrier_id)
+                orphan_msg_id = await activate_card_on_carrier(
+                    user.id,
+                    old_active_id,
+                    target_id,
+                    query.message.message_id,
+                )
+            else:
+                session_manager.select_session(user.id, target_id)
+            current = session_manager.get_active_session(user.id)
+            if current is None or current.id != target_id:
+                return True
+            # Dismiss Telegram's tap spinner before any screenshot render/upload.
+            # The carrier is already atomically owned by the target session here.
+            try:
+                await query.answer(f"→ {sess.name or sess.id}")
+            except (TelegramError, TimeoutError) as exc:
+                logger.debug("switch acknowledgement failed: %s", type(exc).__name__)
+            # The TO session already had a live card on a DIFFERENT message
+            # (typical after a voice message pinned to it finished landing
+            # while the user was elsewhere). It just lost ownership to the
+            # carrier, so nothing will ever edit it again — strip its
+            # keyboard, otherwise the chat keeps two tappable switchers and
+            # the next tap repaints whichever one the user happened to hit.
+            await _strip_orphan_switcher_if_current(context.bot, user.id, orphan_msg_id)
+            current = session_manager.get_active_session(user.id)
+            if current is None or current.id != target_id:
+                return True
 
-        # The session we just LEFT remains represented in the switcher. Seed
-        # its current lifecycle from JSONL; finished is a state now, not a
-        # dismissible notification.
-        if (
-            old_active is not None
-            and old_active.id != target_id
-            and old_active.window_id
-        ):
-            import asyncio as _asyncio
+            # The session we just LEFT remains represented in the switcher. Seed
+            # its current lifecycle from JSONL; finished is a state now, not a
+            # dismissible notification.
+            if (
+                old_active is not None
+                and old_active.id != target_id
+                and old_active.window_id
+            ):
+                import asyncio as _asyncio
 
-            from ...session_models import Session as _Session
+                from ...session_models import Session as _Session
 
-            async def _seed_bg_status(old_sess: _Session) -> None:
-                try:
-                    inferred = await bg_status.infer_status_from_jsonl(old_sess)
-                except Exception as e:
-                    logger.debug("infer bg status failed: %s", e)
-                    return
-                changed = False
-                if inferred in ("working", "error"):
-                    changed = bg_status.update_status(user.id, old_sess.id, inferred)
-                elif (
-                    inferred == "finished"
-                    and bg_status.get_status(user.id, old_sess.id) is None
-                ):
-                    # Legacy/migration fallback only. A tracked ``finished``
-                    # stays unread until its own carrier/session is tapped.
-                    changed = bg_status.update_status(
-                        user.id, old_sess.id, "seen_finished"
-                    )
-                if inferred == "working":
+                async def _seed_bg_status(old_sess: _Session) -> None:
                     try:
-                        from ...usage import context_pct_for_session
-
-                        pct = await context_pct_for_session(old_sess)
+                        inferred = await bg_status.infer_status_from_jsonl(old_sess)
                     except Exception as e:
-                        logger.debug("infer bg context failed: %s", e)
-                        pct = None
-                    if pct is not None:
-                        bg_status.set_context_pct(user.id, old_sess.id, pct)
-                        changed = True
-                if changed:
-                    try:
-                        from ...handlers.notifications import refresh_panel
-
-                        await refresh_panel(context.bot, user.id)
-                    except Exception as e:
-                        logger.debug("refresh_panel after seed failed: %s", e)
-
-            _asyncio.create_task(_seed_bg_status(old_active))
-
-        # The switcher tap always lands the user on the session's
-        # history view, regardless of which view fired it (main card,
-        # history and other card views). The Menu button anchored to the bottom row
-        # keeps the layout visually stable across the transition.
-
-        # If this bg session has a stashed AskUserQuestion / ExitPlanMode /
-        # permission prompt, paint kb-mode on the carrier directly.
-        # Re-verify against the live pane first — claude may have moved
-        # on while the badge was up.
-        showed_interactive_ui = False
-        pending_ui = bg_status.get_pending_interactive_ui(user.id, target_id)
-        if pending_ui is not None and sess.window_id and query.message is not None:
-            pane = await capture_window(sess.window_id)
-            if pane and is_interactive_ui(pane):
-                content_obj = extract_interactive_content(pane)
-                if content_obj is not None:
-                    # Claim the carrier as the live card msg, then
-                    # flip it into kb-mode view. paint_card_on_carrier
-                    # sets msg_id; enter_kb_mode then edits in place.
-                    try:
-                        state = get_card_state(user.id, sess)
-                        bind_carrier(
-                            state,
-                            query.message.message_id,
-                            CarrierKind.TEXT,
+                        logger.debug("infer bg status failed: %s", e)
+                        return
+                    changed = False
+                    if inferred in ("working", "error"):
+                        changed = bg_status.update_status(
+                            user.id, old_sess.id, inferred
                         )
-                        state.in_menu_view = False
-                        await enter_kb_mode(
-                            context.bot,
-                            user.id,
-                            sess,
-                            content_obj.content,
-                            content_obj.name,
-                        )
-                        showed_interactive_ui = True
-                    except Exception as e:
-                        logger.debug("pending UI kb_mode failed: %s", e)
-
-        if not showed_interactive_ui:
-            # Switcher tap unifies with Menu → Sessions: the carrier
-            # becomes the target session's LIVE CARD. No frozen JSONL
-            # transcript, no release_card_message, no second message
-            # spawning below on the next event.
-            #
-            # ``paint_card_on_carrier`` claims the carrier, seeds JSONL
-            # history if state.events is empty, and renders the full
-            # live-card surface (header + paginated body + bg-panel +
-            # main footer). Subsequent claude events edit the same msg.
-            #
-            # Fallback: session has no window (lost/archived restore in
-            # flight) → fall through to a short preview so the user at
-            # least sees the header.
-            painted = False
-            if sess.window_id and query.message is not None:
-                try:
-                    cached_file_id = getattr(sess, "screenshot_file_id", "")
-                    cached_at = float(getattr(sess, "screenshot_cached_at", 0.0))
-                    used_cached_screenshot = bool(
-                        cached_file_id
-                        and get_card_state(user.id, sess).rich_media_file_id
-                        == cached_file_id
-                    )
-                    painted = await paint_card_on_carrier(
-                        context.bot,
-                        user.id,
-                        sess,
-                        query.message.message_id,
-                        refresh_pane=not used_cached_screenshot,
-                    )
-                    if (
-                        painted
-                        and used_cached_screenshot
-                        and time.time() - cached_at > SCREENSHOT_CACHE_FRESH_SECONDS
+                    elif (
+                        inferred == "finished"
+                        and bg_status.get_status(user.id, old_sess.id) is None
                     ):
-                        import asyncio as _asyncio
+                        # Legacy/migration fallback only. A tracked ``finished``
+                        # stays unread until its own carrier/session is tapped.
+                        changed = bg_status.update_status(
+                            user.id, old_sess.id, "seen_finished"
+                        )
+                    if inferred == "working":
+                        try:
+                            from ...usage import context_pct_for_session
 
-                        _asyncio.create_task(
-                            refresh_cached_screenshot(
+                            pct = await context_pct_for_session(old_sess)
+                        except Exception as e:
+                            logger.debug("infer bg context failed: %s", e)
+                            pct = None
+                        if pct is not None:
+                            bg_status.set_context_pct(user.id, old_sess.id, pct)
+                            changed = True
+                    if changed:
+                        try:
+                            from ...handlers.notifications import refresh_panel
+
+                            await refresh_panel(context.bot, user.id)
+                        except Exception as e:
+                            logger.debug("refresh_panel after seed failed: %s", e)
+
+                _asyncio.create_task(_seed_bg_status(old_active))
+
+            # The switcher tap always lands the user on the session's
+            # history view, regardless of which view fired it (main card,
+            # history and other card views). The Menu button anchored to the bottom row
+            # keeps the layout visually stable across the transition.
+
+            # If this bg session has a stashed AskUserQuestion / ExitPlanMode /
+            # permission prompt, paint kb-mode on the carrier directly.
+            # Re-verify against the live pane first — claude may have moved
+            # on while the badge was up.
+            showed_interactive_ui = False
+            pending_ui = bg_status.get_pending_interactive_ui(user.id, target_id)
+            if pending_ui is not None and sess.window_id and query.message is not None:
+                pane = await capture_window(sess.window_id)
+                if pane and is_interactive_ui(pane):
+                    content_obj = extract_interactive_content(pane)
+                    if content_obj is not None:
+                        # Claim the carrier as the live card msg, then
+                        # flip it into kb-mode view. paint_card_on_carrier
+                        # sets msg_id; enter_kb_mode then edits in place.
+                        try:
+                            state = get_card_state(user.id, sess)
+                            bind_carrier(
+                                state,
+                                query.message.message_id,
+                                CarrierKind.TEXT,
+                            )
+                            state.in_menu_view = False
+                            await enter_kb_mode(
                                 context.bot,
                                 user.id,
                                 sess,
-                                query.message.message_id,
+                                content_obj.content,
+                                content_obj.name,
+                            )
+                            showed_interactive_ui = True
+                        except Exception as e:
+                            logger.debug("pending UI kb_mode failed: %s", e)
+
+            if not showed_interactive_ui:
+                # Switcher tap unifies with Menu → Sessions: the carrier
+                # becomes the target session's LIVE CARD. No frozen JSONL
+                # transcript, no release_card_message, no second message
+                # spawning below on the next event.
+                #
+                # ``paint_card_on_carrier`` claims the carrier, seeds JSONL
+                # history if state.events is empty, and renders the full
+                # live-card surface (header + paginated body + bg-panel +
+                # main footer). Subsequent claude events edit the same msg.
+                #
+                # Fallback: session has no window (lost/archived restore in
+                # flight) → fall through to a short preview so the user at
+                # least sees the header.
+                painted = False
+                delivery_unknown = False
+                if sess.window_id and query.message is not None:
+                    try:
+                        cached_file_id = getattr(sess, "screenshot_file_id", "")
+                        cached_at = float(getattr(sess, "screenshot_cached_at", 0.0))
+                        used_cached_screenshot = bool(
+                            cached_file_id
+                            and get_card_state(user.id, sess).rich_media_file_id
+                            == cached_file_id
+                        )
+                        painted = await paint_card_on_carrier(
+                            context.bot,
+                            user.id,
+                            sess,
+                            query.message.message_id,
+                            refresh_pane=not used_cached_screenshot,
+                        )
+                        if (
+                            painted
+                            and used_cached_screenshot
+                            and time.time() - cached_at > SCREENSHOT_CACHE_FRESH_SECONDS
+                        ):
+                            import asyncio as _asyncio
+
+                            _asyncio.create_task(
+                                refresh_cached_screenshot(
+                                    context.bot,
+                                    user.id,
+                                    sess,
+                                    query.message.message_id,
+                                )
+                            )
+                    except (NetworkError, TimeoutError) as e:
+                        delivery_unknown = True
+                        logger.debug(
+                            "card paint delivery unknown: %s", type(e).__name__
+                        )
+                        from ...handlers.card_transport import _deferred_edit
+
+                        state = get_card_state(user.id, sess)
+                        state.pending_edit = asyncio.create_task(
+                            _deferred_edit(
+                                context.bot,
+                                user.id,
+                                sess,
+                                state,
+                                0.0,
+                                force=True,
+                                retry_delays=(1.0, 2.0, 4.0),
                             )
                         )
-                except Exception as e:
-                    logger.debug("paint_card_on_carrier failed: %s", e)
-            if not painted:
-                try:
-                    preview = await render_session_preview(sess)
-                    keyboard = build_footer_keyboard(
-                        user.id,
-                        screen="main",
-                        is_busy=is_card_busy(user.id, sess.id),
-                    )
-                    await safe_edit(query, preview, reply_markup=keyboard)
-                except Exception as e:
-                    logger.debug("preview safe_edit failed: %s", e)
+                    except Exception as e:
+                        logger.debug("paint_card_on_carrier failed: %s", e)
+                current = session_manager.get_active_session(user.id)
+                still_selected = current is not None and current.id == target_id
+                if painted and still_selected and count_finished_view:
+                    if bg_status.record_finished_view(user.id, target_id):
+                        await refresh_session_keyboard(context.bot, user.id)
+                if not painted and not delivery_unknown and still_selected:
+                    try:
+                        preview = await render_session_preview(sess)
+                        keyboard = build_footer_keyboard(
+                            user.id,
+                            screen="main",
+                            is_busy=is_card_busy(user.id, sess.id),
+                        )
+                        await safe_edit(query, preview, reply_markup=keyboard)
+                    except Exception as e:
+                        logger.debug("preview safe_edit failed: %s", e)
 
-        if protected_carrier_id is not None:
-            release_switcher_carrier(user.id, protected_carrier_id)
-
-        # NB: do NOT call refresh_panel here. The carrier message just
-        # got painted with the history view (or the pending interactive
-        # UI). refresh_panel re-renders the live card on the same
-        # message_id with the fresh-session state, whose ``lines`` is
-        # empty — overwriting the history we just put there with a
-        # header-only card. The next real claude event for the active
-        # session will re-render the card naturally; the panel update
-        # arrives with it.
+            # NB: do NOT call refresh_panel here. The carrier message just
+            # got painted with the history view (or the pending interactive
+            # UI). refresh_panel re-renders the live card on the same
+            # message_id with the fresh-session state, whose ``lines`` is
+            # empty — overwriting the history we just put there with a
+            # header-only card. The next real claude event for the active
+            # session will re-render the card naturally; the panel update
+            # arrives with it.
+        finally:
+            if protected_carrier_id is not None:
+                release_switcher_carrier(user.id, protected_carrier_id)
 
         return True
 

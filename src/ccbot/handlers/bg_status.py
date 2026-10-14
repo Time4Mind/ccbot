@@ -191,6 +191,16 @@ def record_finished_view(user_id: int, session_id: str) -> bool:
     return True
 
 
+def record_finished_delivery(user_id: int, session_id: str) -> None:
+    """Count the first completion presentation only after a successful render.
+
+    Delivery retries must not consume a result the user has already seen once.
+    """
+    entry = _bg.get(user_id, {}).get(session_id)
+    if entry is not None and entry.status == "finished" and entry.finished_views == 0:
+        record_finished_view(user_id, session_id)
+
+
 def toggle_check(user_id: int, session_id: str) -> None:
     """Toggle the session button check without declaring a turn finished."""
     entry = _bg.get(user_id, {}).get(session_id)

@@ -121,14 +121,18 @@ async def test_failed_proxy_connections_do_not_block_replies_after_network_recov
 
 
 @pytest.mark.asyncio
-async def test_actual_rich_edit_deadlines_do_not_exhaust_outbound_pool(monkeypatch):
+async def test_cancelled_rich_edits_do_not_exhaust_outbound_pool(monkeypatch):
     application, backend = application_with_backend(monkeypatch, "tls_cancel")
     try:
         for _ in range(16):
-            with pytest.raises(TimeoutError):
-                # Keep the production .75s deadline: integration must exercise
-                # the exact cancellation seam that triggered the incident.
-                await rich.edit_rich_message(application.bot, 1, 1, "card")
+            backend.tls_started.clear()
+            request = asyncio.create_task(
+                rich.edit_rich_message(application.bot, 1, 1, "card")
+            )
+            await asyncio.wait_for(backend.tls_started.wait(), 1)
+            request.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request
         backend.mode = "healthy"
         reply = await application.bot.send_message(1, "recovered", pool_timeout=0.01)
         assert reply.text == "reply"

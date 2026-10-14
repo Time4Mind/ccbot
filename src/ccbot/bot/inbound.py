@@ -21,7 +21,6 @@ from ..handlers.notifications import (
     lookup_session_for_message,
     refresh_session_keyboard,
     schedule_card_after_message,
-    surface_card_after_message,
 )
 from ..handlers import bg_status
 from ..handlers.card_types import PendingPrompt
@@ -30,9 +29,8 @@ from ..handlers.directory_browser import (
     STATE_NAMING_DIRECTORY,
     STATE_PREPROCESSING_INSTRUCTION,
 )
-from ..inbound_queue import InboundProcessor, enqueue_inbound, hold_inbound_admission
+from ..inbound_queue import InboundProcessor, enqueue_inbound
 from ..session import session_manager
-from ..transcribe import resolve_voice_backend
 from ..transfer_queue import capture_transfer_message
 from ._common import active_window, is_user_allowed
 from .messages import (
@@ -202,12 +200,14 @@ def _enqueue(
         if kind == "voice":
             state.voice_pending = True
         if not card_already_surfaced:
-            schedule_card_after_message(
-                context.bot,
-                user.id,
-                sess,
-                update.message.message_id,
-            )
+            if kind == "voice":
+                schedule_card_after_message(
+                    context.bot, user.id, sess, update.message.message_id, fast=True
+                )
+            else:
+                schedule_card_after_message(
+                    context.bot, user.id, sess, update.message.message_id
+                )
     return True
 
 
@@ -296,56 +296,8 @@ async def voice_intake_handler(
 ) -> bool:
     if _capture_pending_transfer(update, context):
         return True
-    user = update.effective_user
-    message = update.message
-    if (
-        user is not None
-        and message is not None
-        and message.voice is not None
-        and is_user_allowed(user.id)
-        and resolve_voice_backend(user.id) != "off"
-    ):
-        # Pin the target before Telegram I/O. The card must appear before
-        # transcript seeding, default-session bookkeeping and transcription.
-        wid = active_window(user.id)
-        if wid is not None:
-            with hold_inbound_admission(wid):
-                sess = session_manager.find_session_by_window(wid)
-                if sess is not None:
-                    session_manager.touch_session(sess.id)
-                card_surfaced = False
-                if sess is not None:
-                    # The card itself is the first reply. Mark the pending voice
-                    # before sending it; transcript seeding and identity reads
-                    # continue after the card is visible.
-                    state = get_card_state(user.id, sess)
-                    state.voice_pending = True
-                    state.current_page_idx = None
-                    try:
-                        card_surfaced = await surface_card_after_message(
-                            context.bot,
-                            user.id,
-                            sess,
-                            message.message_id,
-                            fast=True,
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "voice card receipt failed user=%d error_type=%s",
-                            user.id,
-                            type(exc).__name__,
-                        )
-                    claim_default_session(context.bot, user.id, sess)
-                if _enqueue(
-                    update,
-                    context,
-                    kind="voice",
-                    processor=_run_voice,
-                    target_window_id=wid,
-                    card_already_surfaced=card_surfaced,
-                ):
-                    return True
-                return await voice_handler(update, context, pinned_wid=wid)
+    # _enqueue pins the window and marks voice_pending synchronously. Telegram
+    # receipt work belongs to the background lane, never the update dispatcher.
     if _enqueue(update, context, kind="voice", processor=_run_voice):
         return True
     return await voice_handler(update, context)

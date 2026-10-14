@@ -61,7 +61,7 @@ _admissions: dict[str, int] = {}
 
 @contextmanager
 def hold_inbound_admission(window_id: str):
-    """Protect a pinned target during the immediate voice-card await."""
+    """Protect a pinned target while its inbound receipt is pending."""
     _admissions[window_id] = _admissions.get(window_id, 0) + 1
     try:
         yield

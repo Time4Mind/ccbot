@@ -134,10 +134,6 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             # recovered, including retries without a new user request.
             force=is_terminal_text and not msg.api_error,
         )
-        if is_active and status_changed and new_status == "finished":
-            # The freshly delivered final card is the first presentation.
-            # Keep ✅ until the user enters this completed session again.
-            bg_status.record_finished_view(user_id, sess.id)
         if not is_active and status_changed:
             await refresh_session_keyboard(bot, user_id)
 

@@ -10,6 +10,7 @@ from telegram import Bot
 from telegram.error import BadRequest
 
 from ..config import config
+from ..inbound_queue import hold_inbound_admission
 from ..session import Session, session_manager
 from ..telegram_rate_limit import background_telegram_request
 from ..user_activity import effective_live_lag
@@ -164,7 +165,14 @@ async def surface_card_after_message(
             old_binding = snapshot_carrier(state)
             old_msg_id = clear_carrier(state)
             text = _legacy("_render_card")(sess, state, user_id=user_id)
-            await _legacy("_send_card")(bot, user_id, sess, state, text=text)
+            try:
+                await _legacy("_send_card")(bot, user_id, sess, state, text=text)
+            except BaseException:
+                # A timed-out send must not orphan the previous live carrier.
+                # If the send already bound a new message, keep that identity.
+                if state.msg_id is None:
+                    restore_carrier(state, old_binding)
+                raise
             new_msg_id = state.msg_id
             if new_msg_id is None:
                 # Telegram send failed: retain the existing carrier binding so
@@ -249,12 +257,28 @@ def schedule_card_after_message(
     user_id: int,
     sess: Session,
     message_id: int,
+    *,
+    fast: bool = False,
 ) -> asyncio.Task[bool]:
     """Schedule a non-blocking card receipt for Telegram intake."""
     state = get_card_state(user_id, sess)
     state.receipt_after_message_id = max(state.receipt_after_message_id, message_id)
+
+    window_id = getattr(sess, "window_id", "")
+
+    async def receipt() -> bool:
+        with hold_inbound_admission(window_id):
+            try:
+                if fast:
+                    return await surface_card_after_message(
+                        bot, user_id, sess, message_id, fast=True
+                    )
+                return await surface_card_after_message(bot, user_id, sess, message_id)
+            finally:
+                session_manager.touch_session(sess.id)
+
     task = asyncio.create_task(
-        surface_card_after_message(bot, user_id, sess, message_id),
+        receipt(),
         name=f"card-surface:{user_id}:{sess.id}:{message_id}",
     )
     _card_surface_tasks.add(task)

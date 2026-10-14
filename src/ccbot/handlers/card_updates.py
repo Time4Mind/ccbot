@@ -454,6 +454,10 @@ async def _retry_final_render(
                 finally:
                     state.pending_edit_in_flight = False
                 if delivered:
+                    from . import bg_status
+
+                    if not _should_buffer(user_id, sess.id, state):
+                        bg_status.record_finished_delivery(user_id, sess.id)
                     state.last_rendered = text
                     state.last_edit_ts = time.monotonic()
                     logger.info(
@@ -638,6 +642,10 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
                 finally:
                     state.pending_edit_in_flight = False
                 if delivered:
+                    from . import bg_status
+
+                    if not _should_buffer(user_id, sess.id, state):
+                        bg_status.record_finished_delivery(user_id, sess.id)
                     state.last_rendered = text
                     state.last_edit_ts = time.monotonic()
                     logger.info(

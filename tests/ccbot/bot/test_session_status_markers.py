@@ -47,7 +47,14 @@ def _patch_route(
     monkeypatch.setattr(session_events, "is_active_for_user", lambda *_args: active)
     monkeypatch.setattr(session_events, "fire_typing", AsyncMock())
     monkeypatch.setattr(session_events, "update_session_card", AsyncMock())
-    monkeypatch.setattr(session_events, "finalize_task", AsyncMock())
+
+    async def delivered_final(*_args):
+        if active:
+            bg_status.record_finished_delivery(42, sess.id)
+
+    monkeypatch.setattr(
+        session_events, "finalize_task", AsyncMock(side_effect=delivered_final)
+    )
     monkeypatch.setattr(
         session_events, "context_pct_for_session", AsyncMock(return_value=None)
     )

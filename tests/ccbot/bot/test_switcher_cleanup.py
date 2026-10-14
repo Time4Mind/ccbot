@@ -45,3 +45,19 @@ async def test_inflight_switch_carrier_is_not_stripped(monkeypatch) -> None:
         bot.edit_message_reply_markup.assert_not_awaited()
     finally:
         card_registry.release_switcher_carrier(42, 88)
+
+
+@pytest.mark.asyncio
+async def test_old_switch_release_keeps_newer_carrier_protected(monkeypatch):
+    bot = SimpleNamespace(edit_message_reply_markup=AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        card_registry.session_manager, "get_last_switcher_msg", lambda uid: 88
+    )
+    card_registry.protect_switcher_carrier(42, 88)
+    card_registry.protect_switcher_carrier(42, 88)
+    try:
+        card_registry.release_switcher_carrier(42, 88)
+        await card_registry._strip_stale_switchers(bot, 42, 99, "target")
+        bot.edit_message_reply_markup.assert_not_awaited()
+    finally:
+        card_registry.release_switcher_carrier(42, 88)

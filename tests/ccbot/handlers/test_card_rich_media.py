@@ -358,22 +358,23 @@ async def test_rich_media_timeout_keeps_existing_carrier_for_next_update(
         last_photo_edit_ts=10.0,
     )
 
-    assert await card_rich_media.edit_rich_media_card(
-        SimpleNamespace(),
-        42,
-        state,
-        text="next",
-        reply_markup=None,
-        min_photo_interval=2.5,
-        refresh_pane=False,
-    )
+    with pytest.raises(TimedOut):
+        await card_rich_media.edit_rich_media_card(
+            SimpleNamespace(),
+            42,
+            state,
+            text="next",
+            reply_markup=None,
+            min_photo_interval=2.5,
+            refresh_pane=False,
+        )
     assert state.is_rich_media_msg is True
     assert state.rich_media_file_id == "cached-pane"
     capture.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_short_rich_deadline_requests_immediate_text_fallback(
+async def test_unknown_rich_delivery_preserves_format_without_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _wire_session(monkeypatch)
@@ -389,15 +390,17 @@ async def test_short_rich_deadline_requests_immediate_text_fallback(
         last_photo_edit_ts=10.0,
     )
 
-    assert not await card_rich_media.edit_rich_media_card(
-        SimpleNamespace(),
-        42,
-        state,
-        text="next",
-        reply_markup=None,
-        min_photo_interval=2.5,
-        refresh_pane=False,
-    )
+    with pytest.raises(TimeoutError):
+        await card_rich_media.edit_rich_media_card(
+            SimpleNamespace(),
+            42,
+            state,
+            text="next",
+            reply_markup=None,
+            min_photo_interval=2.5,
+            refresh_pane=False,
+        )
+    assert state.rich_media_file_id == "cached-pane"
 
 
 @pytest.mark.asyncio

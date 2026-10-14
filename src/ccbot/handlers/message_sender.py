@@ -141,6 +141,15 @@ async def try_rich_edit(
             round((time.monotonic() - started) * 1000),
         )
         return False
+    except (NetworkError, TimeoutError) as e:
+        # The server may already have committed this rich edit. Retrying in a
+        # different format both destroys native tables and races the old edit.
+        logger.warning(
+            "rich edit delivery unknown msg=%s error_type=%s; preserving format",
+            message_id,
+            type(e).__name__,
+        )
+        raise
     except Exception as e:
         logger.warning(
             "rich edit failed msg=%s error_type=%s elapsed_ms=%d; falling back",

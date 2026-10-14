@@ -7,7 +7,7 @@ import logging
 import time
 
 from telegram import Bot, InlineKeyboardMarkup
-from telegram.error import BadRequest, RetryAfter
+from telegram.error import BadRequest, NetworkError, RetryAfter
 
 from ..config import config
 from ..file_actions import file_button_context_for_session
@@ -191,9 +191,14 @@ async def _edit_card(
     text: str,
     reply_markup: InlineKeyboardMarkup | None = None,
     refresh_pane: bool = True,
+    expected_session_id: str | None = None,
 ) -> bool:
     """Serialize Telegram edits with cross-session carrier hand-offs."""
     async with _carrier_edit_lock(user_id):
+        if expected_session_id is not None:
+            active = session_manager.get_active_session(user_id)
+            if active is None or active.id != expected_session_id:
+                return False
         return await _edit_card_unlocked(
             bot,
             user_id,
@@ -442,13 +447,14 @@ async def _deferred_edit(
                 if text == state.last_rendered and not force:
                     return
                 state.pending_edit_in_flight = True
-                if await _legacy("_edit_card")(
-                    bot,
-                    user_id,
-                    state,
-                    text=text,
-                    refresh_pane=refresh_pane,
-                ):
+                try:
+                    delivered = await _legacy("_edit_card")(
+                        bot, user_id, state, text=text, refresh_pane=refresh_pane
+                    )
+                except (NetworkError, TimeoutError) as exc:
+                    logger.debug("rich card delivery pending: %s", type(exc).__name__)
+                    delivered = False
+                if delivered:
                     state.last_rendered = text
                     state.last_edit_ts = time.monotonic()
                     return

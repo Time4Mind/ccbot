@@ -61,8 +61,8 @@ def _session(session_id: str, name: str, window_id: str) -> Session:
 
 
 @pytest.mark.asyncio
-async def test_atomic_handoff_persists_card_and_active_session_once(monkeypatch):
-    """One switch checkpoint must contain both carrier and routing changes."""
+async def test_handoff_persists_route_before_visual_ownership(monkeypatch):
+    """The route is durable before the visual carrier hand-off completes."""
     user_id = 42
     carrier_msg_id = 8000
     old = _session("session-a", "old-session", "@1")
@@ -72,8 +72,17 @@ async def test_atomic_handoff_persists_card_and_active_session_once(monkeypatch)
     notifications._cards[(user_id, old.id)] = CardState(msg_id=carrier_msg_id)
     notifications._cards[(user_id, target.id)] = CardState(msg_id=7000)
 
-    saves: list[None] = []
-    monkeypatch.setattr(session_manager, "save_state", lambda: saves.append(None))
+    saves = []
+    monkeypatch.setattr(
+        session_manager,
+        "save_state",
+        lambda: saves.append(
+            (
+                session_manager.get_active_session(user_id).id,
+                notifications._cards[(user_id, target.id)].msg_id,
+            )
+        ),
+    )
 
     orphan_msg_id = await notifications.activate_card_on_carrier(
         user_id,
@@ -85,12 +94,12 @@ async def test_atomic_handoff_persists_card_and_active_session_once(monkeypatch)
     assert orphan_msg_id == 7000
     assert session_manager.get_card_msg(user_id) == carrier_msg_id
     assert session_manager.get_active_session(user_id) is target
-    assert len(saves) == 1
+    assert saves == [(target.id, 7000), (target.id, carrier_msg_id)]
 
 
 @pytest.mark.asyncio
 async def test_inflight_old_edit_finishes_before_target_owns_carrier(monkeypatch):
-    """A delayed edit from A must complete before B is activated and painted."""
+    """A delayed edit finishes before B is painted; routing changes at once."""
     user_id = 42
     carrier_msg_id = 8000
     old = _session("session-a", "old-session", "@1")
@@ -142,7 +151,8 @@ async def test_inflight_old_edit_finishes_before_target_owns_carrier(monkeypatch
 
     # The switch cannot claim the carrier while A's Telegram edit is in flight.
     assert not hand_off.done()
-    assert session_manager.get_active_session(user_id) is old
+    assert session_manager.get_active_session(user_id) is target
+    assert target_state.msg_id == 7000
 
     release_old_edit.set()
     await old_edit

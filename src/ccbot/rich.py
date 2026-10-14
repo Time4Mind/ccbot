@@ -20,7 +20,6 @@ Core responsibilities:
 Key functions: to_rich_markdown, send_rich_message, edit_rich_message.
 """
 
-import asyncio
 import html
 import re
 from typing import Any, cast
@@ -39,9 +38,6 @@ from .file_actions import FileButtonContext, add_file_buttons
 
 # Rich messages cap (Bot API 10.2): 32768 UTF-8 chars of text.
 RICH_MAX_CHARS = 32768
-# Edits are safe to retry against the same message and keep a short deadline.
-# New sends use the transport timeout because their delivery may be ambiguous.
-RICH_FALLBACK_DEADLINE_SECONDS = 2.0
 # Invisible opt-out marker for tables whose contents must keep normal font.
 # It remains invisible in Markdown fallback and is stripped on the rich path.
 RICH_TABLE_NORMAL_FONT = "\u2060"
@@ -505,12 +501,9 @@ async def edit_rich_message(
         data["reply_markup"] = reply_markup
     if upload is not None:
         data[_RICH_PHOTO_UPLOAD_FIELD] = upload
-    result = await asyncio.wait_for(
-        bot._post(  # pyright: ignore[reportPrivateUsage]
-            "editMessageText", data
-        ),
-        timeout=RICH_FALLBACK_DEADLINE_SECONDS,
-    )
+    # Request duration says nothing about format support. Use the transport's
+    # result, never an independent deadline that downgrades native tables.
+    result = await bot._post("editMessageText", data)  # pyright: ignore[reportPrivateUsage]
     if isinstance(result, Message):
         return result
     if isinstance(result, dict):

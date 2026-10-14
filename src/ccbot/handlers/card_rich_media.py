@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from telegram import InlineKeyboardMarkup, Message
-from telegram.error import BadRequest, RetryAfter, TimedOut
+from telegram.error import BadRequest, NetworkError, RetryAfter
 
 from .. import rich
 from ..config import config
@@ -208,23 +208,6 @@ async def edit_rich_media_card(
         )
     except RetryAfter:
         raise
-    except TimedOut:
-        # The server may have applied the idempotent edit before the client-side
-        # timeout. Keep the rich carrier and let the next normal update converge;
-        # downgrading it to text here causes the visible layout shift.
-        logger.info(
-            "rich-media card edit timed out msg=%s; keeping carrier", state.msg_id
-        )
-        return True
-    except TimeoutError:
-        # Our short rich-transport deadline is intentional: unlike PTB's
-        # ambiguous full request timeout, it should immediately release the
-        # normal text path so an agent response cannot remain visually stale.
-        logger.info(
-            "rich-media short deadline expired msg=%s; using text fallback",
-            state.msg_id,
-        )
-        return False
     except BadRequest as exc:
         error = str(exc)
         if "message is not modified" in error.lower():
@@ -268,14 +251,15 @@ async def edit_rich_media_card(
                     )
                 except RetryAfter:
                     raise
-                except TimedOut:
+                except NetworkError as retry_exc:
                     if invalidated_session:
                         session_manager.save_state()
-                    logger.info(
-                        "rich-media fresh-photo retry timed out msg=%s; keeping carrier",
-                        state.msg_id,
+                    if not isinstance(retry_exc, BadRequest):
+                        raise
+                    logger.warning(
+                        "rich-media fresh photo rejected msg=%s", state.msg_id
                     )
-                    return True
+                    return False
                 except Exception as retry_exc:
                     if invalidated_session:
                         session_manager.save_state()
@@ -301,6 +285,10 @@ async def edit_rich_media_card(
                 "rich-media card edit failed msg=%s: %s", state.msg_id, error
             )
             return False
+    except (NetworkError, TimeoutError):
+        # Preserve the carrier without claiming delivery. The caller can retry
+        # the same rich request; it must not cache an unconfirmed render.
+        raise
     except Exception as exc:
         # Transport/read failures do not prove that the carrier is invalid.
         # Keep the last screenshot in place; the status-driven refresh retries

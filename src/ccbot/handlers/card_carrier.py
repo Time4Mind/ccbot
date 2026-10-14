@@ -215,7 +215,25 @@ def transfer_card_to_carrier(
     A's lingering ``msg_id`` clobbered B's preview every time A emitted
     a tool call — falls out naturally because A is now paused.
     """
-    if from_session_id == to_session_id:
+    # A superseded switch may have changed the route without moving its
+    # carrier. Pause every previous owner of the shared message, not just the
+    # session named in the most recent route snapshot.
+    for (uid, sid), candidate in _cards.items():
+        if (
+            uid == user_id
+            and sid != to_session_id
+            and candidate.msg_id == target_message_id
+        ):
+            candidate.in_menu_view = True
+            if candidate.pending_edit is not None and not candidate.pending_edit.done():
+                candidate.pending_edit.cancel()
+            candidate.pending_edit = None
+    target_state = _cards.get((user_id, to_session_id))
+    if (
+        from_session_id == to_session_id
+        and target_state is not None
+        and target_state.msg_id == target_message_id
+    ):
         logger.info(
             "card_transfer skip user=%d sess=%s reason=same_session",
             user_id,
@@ -293,19 +311,22 @@ async def activate_card_on_carrier(
     to_session_id: str,
     target_message_id: int,
 ) -> int | None:
-    """Atomically hand the live carrier to a newly-active session.
+    """Accept the route immediately; serialize the visual carrier hand-off.
 
-    The carrier-edit lock is a barrier against an edit from the previous
-    active session that is already in flight.  Once the barrier opens, pause
-    the old card, claim the carrier for the target, and flip ``active_sessions``
-    before another card edit can start.  The caller paints the target after
-    this returns; any queued old-session edit then sees the paused state and
-    becomes a no-op.
+    The carrier-edit lock drains an old Telegram edit without holding up
+    input routing. After it opens, only the newest selected session may claim
+    the carrier. Queued edits of the old owner then observe its paused state.
 
     Returns the target session's orphaned previous card message id, matching
     :func:`transfer_card_to_carrier`.
     """
+    # Routing is control-plane state: accept the user's newest selection before
+    # waiting for old Telegram edits. The barrier only protects visual ownership.
+    session_manager.select_session(user_id, to_session_id)
     async with _carrier_edit_lock(user_id):
+        active = session_manager.get_active_session(user_id)
+        if active is None or active.id != to_session_id:
+            return None  # A newer tap superseded this visual hand-off.
         orphan_msg_id = transfer_card_to_carrier(
             user_id,
             from_session_id,
@@ -313,8 +334,7 @@ async def activate_card_on_carrier(
             target_message_id,
             False,
         )
-        # One durable checkpoint contains both the new carrier and active route.
-        session_manager.select_session(user_id, to_session_id)
+        session_manager.save_state()
         return orphan_msg_id
 
 
@@ -531,6 +551,8 @@ async def paint_card_on_carrier(
     from .card_terminal import sync_card_identity
 
     await sync_card_identity(sess, state)
+    if not _legacy("is_active_for_user")(user_id, sess):
+        return False
     if (
         state.receipt_after_message_id
         and carrier_msg_id <= state.receipt_after_message_id
@@ -553,7 +575,11 @@ async def paint_card_on_carrier(
     keyboard = _legacy("build_footer_keyboard")(
         user_id, screen="main", is_busy=_card_is_busy(state)
     )
-    edit_kwargs = {"text": text, "reply_markup": keyboard}
+    edit_kwargs = {
+        "text": text,
+        "reply_markup": keyboard,
+        "expected_session_id": sess.id,
+    }
     if not refresh_pane:
         edit_kwargs["refresh_pane"] = False
     if await _legacy("_edit_card")(bot, user_id, state, **edit_kwargs):

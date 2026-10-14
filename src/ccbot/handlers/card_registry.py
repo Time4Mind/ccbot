@@ -116,16 +116,30 @@ _user_send_locks: dict[int, asyncio.Lock] = {}
 # callback is cancelled before the normal release call.
 _PROTECTED_CARRIER_TTL_SECONDS = 30.0
 _protected_switcher_carriers: dict[tuple[int, int], float] = {}
+_protected_carrier_users: dict[tuple[int, int], int] = {}
 
 
 def protect_switcher_carrier(user_id: int, message_id: int) -> None:
-    _protected_switcher_carriers[(user_id, message_id)] = (
+    key = (user_id, message_id)
+    count = (
+        _protected_carrier_users.get(key, 0)
+        if _switcher_carrier_is_protected(user_id, message_id)
+        else 0
+    )
+    _protected_carrier_users[key] = count + 1
+    _protected_switcher_carriers[key] = (
         time.monotonic() + _PROTECTED_CARRIER_TTL_SECONDS
     )
 
 
 def release_switcher_carrier(user_id: int, message_id: int) -> None:
-    _protected_switcher_carriers.pop((user_id, message_id), None)
+    key = (user_id, message_id)
+    count = _protected_carrier_users.get(key, 0)
+    if count > 1:
+        _protected_carrier_users[key] = count - 1
+        return
+    _protected_carrier_users.pop(key, None)
+    _protected_switcher_carriers.pop(key, None)
 
 
 def _switcher_carrier_is_protected(user_id: int, message_id: int) -> bool:
@@ -135,6 +149,7 @@ def _switcher_carrier_is_protected(user_id: int, message_id: int) -> bool:
         return False
     if deadline <= time.monotonic():
         _protected_switcher_carriers.pop(key, None)
+        _protected_carrier_users.pop(key, None)
         return False
     return True
 

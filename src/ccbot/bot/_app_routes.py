@@ -23,6 +23,8 @@ from ..telegram_proxy_transport import telegram_transport
 
 from ..config import config
 from .callbacks import callback_handler
+from .callbacks.switcher import session_switch_intake_handler
+from ..handlers.callback_data import CB_SW_USE
 from .activity import record_user_message_activity
 from .commands.auth import (
     login_command,
@@ -149,6 +151,11 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     # /login stays out of setMyCommands: it is an emergency path surfaced by the
     # "authorization expired" notice (text + 🔐 button), not day-to-day UI.
     application.add_handler(CommandHandler("login", login_command))
+    # Selection stays ordered with later messages; its Telegram paint runs in
+    # a tracked background task and cannot hold the serial update dispatcher.
+    application.add_handler(
+        CallbackQueryHandler(session_switch_intake_handler, pattern="^" + CB_SW_USE)
+    )
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Forward any other /command to Claude Code.
     application.add_handler(MessageHandler(filters.COMMAND, command_intake_handler))

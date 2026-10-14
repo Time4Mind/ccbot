@@ -595,9 +595,7 @@ class TestSafeSendRichPath:
             return result
 
         monkeypatch.setattr(bot, "_post", delayed_post)
-        monkeypatch.setattr(rich, "RICH_FALLBACK_DEADLINE_SECONDS", 0.01)
         msg = await message_sender.safe_send(bot, 449, "task complete")  # type: ignore[arg-type]
-
         assert len(bot.posts) == 1
         bot.send_message.assert_not_called()
         assert msg is not None and msg.message_id == 42
@@ -699,7 +697,7 @@ class _FakeMessage:
 
 class TestSafeEditRichPath:
     @pytest.mark.asyncio
-    async def test_hanging_rich_edit_falls_back_before_transport_timeout(
+    async def test_pending_rich_edit_does_not_start_different_format(
         self, rich_on: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         release = asyncio.Event()
@@ -711,16 +709,13 @@ class TestSafeEditRichPath:
         bot._post = hanging_post  # type: ignore[method-assign]
         bot.edit_message_text = AsyncMock()  # type: ignore[attr-defined]
         target = _FakeMessage(bot)
-        monkeypatch.setattr(rich, "RICH_FALLBACK_DEADLINE_SECONDS", 0.01)
-
-        try:
-            await asyncio.wait_for(
-                message_sender.safe_edit(target, "hello"), timeout=0.1
-            )
-        finally:
-            release.set()
-
-        bot.edit_message_text.assert_called_once()  # type: ignore[attr-defined]
+        task = asyncio.create_task(message_sender.safe_edit(target, "hello"))
+        await asyncio.sleep(0)
+        assert not task.done()
+        bot.edit_message_text.assert_not_awaited()  # type: ignore[attr-defined]
+        release.set()
+        await task
+        bot.edit_message_text.assert_not_awaited()  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_rich_edit_used_when_enabled(self, rich_on: None) -> None:

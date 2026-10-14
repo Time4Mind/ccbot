@@ -12,7 +12,7 @@ from ccbot import default_session
 from ccbot.bot import inbound, messages
 from ccbot.handlers import archive
 from ccbot.handlers.card_model import CardState
-from ccbot.inbound_queue import pending_inbound_count, shutdown_inbound_queues
+from ccbot.inbound_queue import has_pending_inbound, shutdown_inbound_queues
 from ccbot.session import session_manager
 from ccbot.session_models import Session
 
@@ -71,7 +71,6 @@ async def test_first_voice_survives_idle_sweep_and_delivers_to_its_pin(
     monkeypatch.setattr(inbound, "is_user_allowed", lambda _: True)
     monkeypatch.setattr(messages, "is_user_allowed", lambda _: True)
     monkeypatch.setattr(inbound, "active_window", session_manager.get_active_window)
-    monkeypatch.setattr(inbound, "resolve_voice_backend", lambda _: "whisper")
     monkeypatch.setattr(messages, "resolve_voice_backend", lambda _: "whisper")
     monkeypatch.setattr(inbound, "_capture_pending_transfer", lambda *_: False)
     state = CardState()
@@ -116,7 +115,9 @@ async def test_first_voice_survives_idle_sweep_and_delivers_to_its_pin(
         await delay("transcribe")
         return "one request"
 
-    monkeypatch.setattr(inbound, "surface_card_after_message", receipt)
+    monkeypatch.setattr(
+        "ccbot.handlers.card_surface.surface_card_after_message", receipt
+    )
     monkeypatch.setattr(messages, "transcribe_voice", transcribe)
     delivered = []
 
@@ -139,8 +140,7 @@ async def test_first_voice_survives_idle_sweep_and_delivers_to_its_pin(
     intake = asyncio.create_task(inbound.voice_intake_handler(update, context))
     try:
         await asyncio.wait_for(reached.wait(), 1)
-        # Even work lasting longer than TTL must remain protected, including
-        # the first card await before the request enters the FIFO.
+        # Admission protects the original pin while receipt/STT run separately.
         now[0] += 13 * 3600
         assert await archive._archive_context_status(reserve) is not False
         await archive.idle_archive_sweep(context.bot, 42)
@@ -152,7 +152,7 @@ async def test_first_voice_survives_idle_sweep_and_delivers_to_its_pin(
         session_manager.active_sessions[42] = unused.id
         release.set()
         assert await asyncio.wait_for(intake, 1)
-        while pending_inbound_count(42, "@A"):
+        while has_pending_inbound("@A"):
             await asyncio.sleep(0)
         assert delivered == [("@A", "one request")]
         assert reserve.last_event_at == now[0]
@@ -170,3 +170,6 @@ async def test_first_voice_survives_idle_sweep_and_delivers_to_its_pin(
         await asyncio.gather(intake, return_exceptions=True)
         await shutdown_inbound_queues()
         await default_session.shutdown_default_session_tasks()
+        from ccbot.handlers.card_surface import shutdown_card_surface_tasks
+
+        await shutdown_card_surface_tasks()

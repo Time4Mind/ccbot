@@ -42,6 +42,7 @@ from ..tmux_manager import tmux_manager
 from . import bg_status
 from .archive import idle_archive_sweep, purge_sweep
 from .cleanup import clear_session_state
+from .codex_wait import dismiss_codex_wait_prompt
 from .card_terminal import apply_card_identity
 from .card_types import TurnPhase
 from .inbox import inbox_sweep
@@ -142,6 +143,8 @@ async def _maybe_auto_approve(user_id: int, window_id: str, pane_text: str) -> b
     if mode != "on":
         return False
     content = extract_interactive_content(pane_text)
+    if content is not None and content.name == "CodexSlowRequest":
+        return False  # Never apply permission hotkeys to a model-selection menu.
     # Codex exposes explicit one-key shortcuts (``Yes, proceed (y)``).
     # Its printed option number is not the documented hotkey, unlike Claude's
     # numbered menus, so send ``y`` without an extra Enter.
@@ -569,6 +572,9 @@ async def update_status_message(
     if not pane_text:
         return
 
+    if await dismiss_codex_wait_prompt(sess, pane_text):
+        return
+
     interactive_window = get_interactive_window(user_id)
     should_check_new_ui = await _resolve_existing_interactive(
         bot, user_id, window_id, pane_text, interactive_window
@@ -577,10 +583,7 @@ async def update_status_message(
         return
 
     active = session_manager.get_active_session(user_id)
-    # Treat orphan windows (no session record) as "active-like": there's
-    # no bg-status row to flip, so falling through to the legacy handler
-    # is the safer default. Only suppress when we know this is a
-    # background-session window for a different active session.
+    # Orphan windows have no background row; retain their legacy UI handler.
     is_bg_session = sess is not None and active is not None and active.id != sess.id
 
     # Check for permission prompt (interactive UI not triggered via JSONL).

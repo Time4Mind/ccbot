@@ -381,6 +381,11 @@ def extract_interactive_content(pane_text: str) -> InteractiveUIContent | None:
     if not pane_text:
         return None
 
+    from .codex_wait_prompt import parse_codex_wait_prompt
+
+    if prompt := parse_codex_wait_prompt(pane_text):
+        return InteractiveUIContent(prompt.content, "CodexSlowRequest")
+
     lines = pane_text.strip().split("\n")
     for pattern in UI_PATTERNS:
         result = _try_extract(lines, pattern)

@@ -30,6 +30,12 @@ from ...handlers.message_sender import safe_edit
 from ...handlers.notifications import paint_card_on_carrier, reset_card
 from ...i18n import t
 from ...session import Session, session_manager
+from ...startup_queue import (
+    bind_startup_queue,
+    bind_startup_session,
+    current_startup_flow,
+    is_current_startup_flow,
+)
 from .._common import render_session_preview
 
 logger = logging.getLogger(__name__)
@@ -43,6 +49,14 @@ async def _restore_and_update(
     sess: Session,
 ) -> None:
     """Restore outside Telegram's callback deadline, then converge the surface."""
+    # A message received without an active session opens the directory picker.
+    # Restoring an archive is another way to finish that same selection flow.
+    # Only adopt its unbound queue; a separate creation already owns bound ones.
+    startup_flow = current_startup_flow(user.id)
+    if startup_flow is not None and (
+        startup_flow.session_id is not None or startup_flow.window_id is not None
+    ):
+        startup_flow = None
     try:
         ok, msg = await restore_session(context.bot, user.id, sess)
     except Exception as exc:
@@ -58,6 +72,15 @@ async def _restore_and_update(
     if ok:
         if query.message is not None:
             reset_card(user.id, sess.id)
+        if (
+            startup_flow is not None
+            and is_current_startup_flow(user.id, startup_flow)
+            and startup_flow.session_id is None
+            and startup_flow.window_id is None
+        ):
+            bind_startup_session(user.id, sess.id)
+            bind_startup_queue(user.id, sess.window_id, flow=startup_flow)
+        if query.message is not None:
             await paint_card_on_carrier(
                 context.bot, user.id, sess, query.message.message_id
             )

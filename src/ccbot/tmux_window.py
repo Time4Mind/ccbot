@@ -27,7 +27,10 @@ async def wait_for_codex_startup(manager: Any, window_id: str) -> bool:
     if task is None:
         return True
     try:
-        return await task
+        # The task result says whether Codex updated, not whether it is ready.
+        # Successful completion proves readiness in both cases; failures raise.
+        await task
+        return True
     except Exception:
         # The watcher has already run its rollback callback.
         return False

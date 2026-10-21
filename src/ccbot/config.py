@@ -286,6 +286,26 @@ class Config:
         # host is on a network that cannot reach api.telegram.org directly
         # (e.g. RU-blocked IPs). Accepts http://host:port or socks5://host:port.
         self.tg_proxy_url: str = os.getenv("TG_PROXY_URL", "").strip()
+        # Explicitly opt in for direct Telegram requests only. Keep the old
+        # candidate's key as a migration alias; the canonical setting wins.
+        disable_ipv6 = (
+            os.getenv("TG_DISABLE_IPV6", os.getenv("TG_FORCE_IPV4", "false"))
+            .strip()
+            .lower()
+        )
+        if disable_ipv6 not in (
+            "",
+            "0",
+            "false",
+            "no",
+            "off",
+            "1",
+            "true",
+            "yes",
+            "on",
+        ):
+            raise ValueError("TG_DISABLE_IPV6 (legacy TG_FORCE_IPV4) must be a boolean")
+        self.tg_disable_ipv6: bool = disable_ipv6 in ("1", "true", "yes", "on")
         self.poll_stale_seconds: float = max(
             1.0, float(os.getenv("CCBOT_POLL_STALE_SECONDS", "180"))
         )

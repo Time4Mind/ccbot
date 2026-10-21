@@ -101,6 +101,65 @@ def application_with_backend(monkeypatch, mode):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("request_index", [0, 1])
+async def test_direct_ipv4_override_avoids_ipv6_tls_stall(monkeypatch, request_index):
+    monkeypatch.setattr(config, "tg_proxy_url", "")
+    monkeypatch.setattr(config, "tg_disable_ipv6", True, raising=False)
+    application = create_bot()
+
+    class FamilyBackend(FakeBackend):
+        async def connect_tcp(
+            self, host, port, timeout=None, local_address=None, socket_options=None
+        ):
+            # Both families establish TCP, but only the IPv4 route completes
+            # TLS. This is the failure observed in the live controlled probe.
+            self.mode = "healthy" if local_address == "0.0.0.0" else "tls_timeout"
+            return await super().connect_tcp(
+                host, port, timeout, local_address, socket_options
+            )
+
+    backend = FamilyBackend("healthy")
+    request = application.bot._request[request_index]
+    request.delegate._client._transport._pool._network_backend = backend
+    try:
+        reply = await request.post("https://api.telegram.org/botplaceholder/getMe")
+        assert reply["text"] == "reply"
+    finally:
+        await application.bot.request.shutdown()
+        await application.bot._request[0].shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "proxy,disable_ipv6", [("", False), ("http://proxy.invalid:1081", True)]
+)
+async def test_ipv4_override_preserves_auto_and_proxy_routes(
+    monkeypatch, proxy, disable_ipv6
+):
+    monkeypatch.setattr(config, "tg_proxy_url", proxy)
+    monkeypatch.setattr(config, "tg_disable_ipv6", disable_ipv6)
+    application = create_bot()
+
+    class UnboundBackend(FakeBackend):
+        async def connect_tcp(
+            self, host, port, timeout=None, local_address=None, socket_options=None
+        ):
+            self.mode = "healthy" if local_address is None else "tls_timeout"
+            return await super().connect_tcp(
+                host, port, timeout, local_address, socket_options
+            )
+
+    backend = UnboundBackend("healthy")
+    application.bot.request.delegate._client._transport._pool._network_backend = backend
+    try:
+        reply = await application.bot.send_message(1, "voice received")
+        assert reply.text == "reply"
+    finally:
+        await application.bot.request.shutdown()
+        await application.bot._request[0].shutdown()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["tls_cancel", "tls_timeout", "connect_cancel"])
 async def test_failed_proxy_connections_do_not_block_replies_after_network_recovers(
     monkeypatch, mode

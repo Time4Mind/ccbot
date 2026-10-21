@@ -368,6 +368,37 @@ class TestResumeSettleGate:
         mock_tmux.send_keys.assert_awaited_once_with("@1", "/model", backend="codex")
 
     @pytest.mark.asyncio
+    async def test_codex_without_update_delivers_prompt_after_successful_startup(
+        self, mgr: SessionManager, monkeypatch, fast_gate
+    ) -> None:
+        from ccbot.tmux_manager import TmuxManager
+        from ccbot.tmux_window import watch_codex_startup_screens
+
+        pane = MagicMock()
+        pane.capture_pane.return_value = _CODEX_READY_PANE.splitlines()
+        pane.pane_current_command = "node"
+        real_tmux = TmuxManager()
+        real_tmux._startup_tasks_by_window["@1"] = asyncio.create_task(
+            watch_codex_startup_screens(
+                pane,
+                command="codex",
+                timeout=1,
+                to_thread=asyncio.to_thread,
+                poll_interval=0,
+                ready_settle_time=0,
+            )
+        )
+        mock_tmux = self._mock_tmux(monkeypatch, lambda _w: _CODEX_READY_PANE)
+        mock_tmux.wait_startup.side_effect = real_tmux.wait_startup
+        mgr.mark_window_starting("@1", backend="codex", resume=True)
+        ok, _ = await mgr.send_to_window("@1", "keep this prompt")
+        assert ok
+        await mgr._resume_settle_tasks["@1"]
+        mock_tmux.send_keys.assert_awaited_once_with(
+            "@1", "keep this prompt", backend="codex"
+        )
+
+    @pytest.mark.asyncio
     async def test_failed_codex_startup_never_drains_queued_request(
         self, mgr: SessionManager, monkeypatch, fast_gate
     ) -> None:

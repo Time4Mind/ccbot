@@ -71,13 +71,22 @@ class _ClosingProxy(httpcore.AsyncHTTPProxy):
 
 
 def telegram_transport(
-    *, pool_size: int, proxy_url: str, socket_options: list[tuple[int, int, int]]
+    *,
+    pool_size: int,
+    proxy_url: str,
+    socket_options: list[tuple[int, int, int]],
+    disable_ipv6: bool = False,
 ) -> httpx.AsyncHTTPTransport:
     limits = httpx.Limits(
         max_connections=pool_size, max_keepalive_connections=pool_size
     )
     transport = httpx.AsyncHTTPTransport(
-        limits=limits, proxy=proxy_url or None, socket_options=socket_options
+        limits=limits,
+        proxy=proxy_url or None,
+        socket_options=socket_options,
+        # An IPv4 source address constrains direct connections to IPv4.
+        # Proxy routing and DNS remain under the proxy's control.
+        local_address="0.0.0.0" if disable_ipv6 and not proxy_url else None,
     )
     if proxy_url and isinstance(transport._pool, httpcore.AsyncHTTPProxy):
         proxy = httpx.Proxy(proxy_url)

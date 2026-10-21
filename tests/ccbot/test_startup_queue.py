@@ -627,3 +627,116 @@ async def test_prompt_left_in_input_fails_without_retyping_text() -> None:
     assert not ok
     assert "input field" in message
     assert fake_manager.send_to_window.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("node_id", ["local", "worker-a"])
+async def test_archive_restore_delivers_waiting_picker_messages_in_order(node_id):
+    from ccbot.bot.callbacks import archive
+
+    context = MagicMock(user_data={})
+    sess = SimpleNamespace(id="restored", window_id="@restored", node_id=node_id)
+    query = SimpleNamespace(message=None)
+    delivered = []
+    complete = asyncio.Event()
+
+    async def receive(update, _context, *, pinned_wid):
+        delivered.append((update.message.text, pinned_wid))
+        if len(delivered) == 2:
+            complete.set()
+        return True
+
+    begin_startup_queue(42)
+    enqueue_startup_message(_update(10, text="first"), context)
+    enqueue_startup_message(_update(11, text="second"), context)
+    with (
+        patch.object(archive, "restore_session", AsyncMock(return_value=(True, "ok"))),
+        patch.object(
+            archive, "render_session_preview", AsyncMock(return_value="ready")
+        ),
+        patch.object(archive, "build_footer_keyboard", return_value=None),
+        patch.object(archive, "safe_edit", AsyncMock()),
+        patch("ccbot.session.session_manager.get_session", return_value=sess),
+        patch(
+            "ccbot.session.session_manager.find_session_by_window", return_value=sess
+        ),
+        patch(
+            "ccbot.session.session_manager.wait_for_window_ready",
+            AsyncMock(return_value=True),
+        ),
+        patch("ccbot.handlers.notifications.get_card_state", return_value=CardState()),
+        patch("ccbot.handlers.notifications.schedule_card_after_message"),
+        patch("ccbot.bot.messages.text_handler", side_effect=receive),
+    ):
+        await archive._restore_and_update(query, context, SimpleNamespace(id=42), sess)
+        await asyncio.wait_for(complete.wait(), timeout=0.5)
+
+    assert delivered == [("first", "@restored"), ("second", "@restored")]
+    assert not has_startup_queue(42)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "other_flow",
+    [
+        "already_bound",
+        "bound_during_restore",
+        "replaced_during_restore",
+        "restore_failed",
+    ],
+)
+async def test_archive_restore_does_not_steal_or_drop_another_selection(other_flow):
+    from ccbot.bot.callbacks import archive
+
+    context = MagicMock(user_data={})
+    sess = SimpleNamespace(id="restored", window_id="@restored", node_id="local")
+    delivered = []
+
+    async def receive(update, _context, *, pinned_wid):
+        delivered.append((update.message.text, pinned_wid))
+        return True
+
+    begin_startup_queue(42)
+
+    async def restore(*_args):
+        if other_flow == "replaced_during_restore":
+            cancel_startup_queue(42)
+            begin_startup_queue(42)
+            enqueue_startup_message(_update(12, text="current selection"), context)
+        elif other_flow == "bound_during_restore":
+            bind_startup_session(42, "other")
+        return other_flow != "restore_failed", "result"
+
+    with (
+        patch.object(archive, "restore_session", side_effect=restore),
+        patch.object(
+            archive, "render_session_preview", AsyncMock(return_value="ready")
+        ),
+        patch.object(archive, "build_footer_keyboard", return_value=None),
+        patch.object(archive, "safe_edit", AsyncMock()),
+        patch("ccbot.session.session_manager.get_session", return_value=sess),
+        patch(
+            "ccbot.session.session_manager.find_session_by_window", return_value=sess
+        ),
+        patch(
+            "ccbot.session.session_manager.wait_for_window_ready",
+            AsyncMock(return_value=True),
+        ),
+        patch("ccbot.handlers.notifications.get_card_state", return_value=CardState()),
+        patch("ccbot.handlers.notifications.schedule_card_after_message"),
+        patch("ccbot.bot.messages.text_handler", side_effect=receive),
+    ):
+        if other_flow == "already_bound":
+            bind_startup_session(42, "other")
+        enqueue_startup_message(_update(10, text="current selection"), context)
+        await archive._restore_and_update(
+            SimpleNamespace(message=None), context, SimpleNamespace(id=42), sess
+        )
+        await asyncio.sleep(0)
+        assert delivered == []
+        task = bind_startup_queue(42, "@other")
+        assert task is not None
+        await task
+
+    assert delivered == [("current selection", "@other")]
+    assert not has_startup_queue(42)

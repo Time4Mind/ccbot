@@ -102,6 +102,24 @@ curl -s --max-time 8 -x "$TG_PROXY_URL" \
 # -> {"ok":true,...} means TG is reachable through the proxy
 ```
 
+## Direct Telegram IPv4 configuration
+
+Leave `TG_DISABLE_IPV6=false` (the default) to use the system's automatic
+IPv4/IPv6 selection. On a host whose direct IPv6 route stalls, set
+`TG_DISABLE_IPV6=true` in that host's ccbot `.env` and restart ccbot. The same
+setting applies to outbound Bot API requests and long polling. It does not
+change macOS/Linux network settings or connections from agent processes.
+
+The older candidate's `TG_FORCE_IPV4` remains a fallback alias. Migrate by
+setting `TG_DISABLE_IPV6` and removing `TG_FORCE_IPV4`; an explicit canonical
+value, including `false`, overrides the alias. Accepted boolean values are
+`true/false`, `1/0`, `yes/no`, and `on/off` (case insensitive); an empty value
+means false, and an invalid value fails configuration validation.
+
+When `TG_PROXY_URL` is set, proxy routing takes precedence and this flag does
+not constrain the proxy connection or the proxy's upstream address family.
+Environment variables supplied by the process supervisor override `.env`.
+
 ## Voice backend
 
 - `VOICE_BACKEND=auto` (default) → Parakeet through NeMo-Speech.cpp, matching

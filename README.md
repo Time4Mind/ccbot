@@ -142,6 +142,7 @@ Most-frequently-tweaked optionals:
 | `CCBOT_RICH_MESSAGES`       | `on`         | `off` disables Bot API 10.3 rich messages (MarkdownV2 only) |
 | `CCBOT_HOST`                | hostname     | deployment label exported to sessions as `CCBOT_HOST` |
 | `TG_PROXY_URL`              | _(unset)_    | outbound proxy for the Bot API (`socks5://…` or `http://…`) |
+| `TG_DISABLE_IPV6`           | `false`      | use IPv4 for direct Bot API requests and polling; leaves proxy routing unchanged (`TG_FORCE_IPV4` is a legacy alias) |
 | `CCBOT_POLL_STALE_SECONDS`  | `180`        | exit non-zero when real `getUpdates` has not completed successfully for this long |
 | `CCBOT_POLL_STARTUP_GRACE_SECONDS` | `180` | grace before the first successful poll is required |
 | `CCBOT_POLL_HEALTH_FILE`    | `~/.ccbot/poll-health.json` | atomic local polling-health state; use `/run/ccbot/poll-health.json` in Docker |

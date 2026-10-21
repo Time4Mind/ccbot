@@ -81,6 +81,7 @@ def _request_pair() -> tuple[Any, PollingHeartbeatRequest]:
             pool_size=pool_size,
             proxy_url=config.tg_proxy_url,
             socket_options=_socket_options(),
+            disable_ipv6=config.tg_disable_ipv6,
         )
         return HTTPXRequest(
             read_timeout=read_timeout,

@@ -151,3 +151,45 @@ class TestSensitiveEnvScrub:
 
         assert cfg.node_secret == "leader-secret"
         assert os.environ.get("CCBOT_NODE_SECRET") is None
+
+
+@pytest.mark.usefixtures("_base_env")
+class TestTelegramIPConfig:
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (None, False),
+            ("", False),
+            ("true", True),
+            ("1", True),
+            (" YES ", True),
+            ("on", True),
+            ("false", False),
+            ("0", False),
+            ("no", False),
+            ("off", False),
+        ],
+    )
+    def test_disable_ipv6_configuration(self, monkeypatch, value, expected):
+        monkeypatch.delenv("TG_FORCE_IPV4", raising=False)
+        monkeypatch.delenv("TG_DISABLE_IPV6", raising=False)
+        if value is not None:
+            monkeypatch.setenv("TG_DISABLE_IPV6", value)
+        assert Config().tg_disable_ipv6 is expected
+
+    def test_legacy_ipv4_setting_remains_compatible(self, monkeypatch):
+        monkeypatch.delenv("TG_DISABLE_IPV6", raising=False)
+        monkeypatch.setenv("TG_FORCE_IPV4", "1")
+        assert Config().tg_disable_ipv6 is True
+
+    def test_explicit_setting_overrides_legacy_alias(self, monkeypatch):
+        monkeypatch.setenv("TG_DISABLE_IPV6", "false")
+        monkeypatch.setenv("TG_FORCE_IPV4", "1")
+        assert Config().tg_disable_ipv6 is False
+
+    def test_invalid_setting_fails_instead_of_silently_changing_route(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("TG_DISABLE_IPV6", "treu")
+        with pytest.raises(ValueError, match="TG_DISABLE_IPV6"):
+            Config()

@@ -162,6 +162,81 @@ async def test_slow_keyboard_request_cannot_block_session_switch(setup, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_voice_receipt_does_not_wait_for_redundant_status_keyboard(
+    setup, monkeypatch
+):
+    """Admission must send a receipt while recognition is still pending."""
+    from ccbot.inbound_queue import shutdown_inbound_queues
+
+    sess, state, manager, active = setup
+    active[0] = sess
+    recognizing, recognized, visible = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    release_keyboard = asyncio.Event()
+    rendered = []
+
+    async def slow_recognition(*args):
+        recognizing.set()
+        await recognized.wait()
+        return True
+
+    async def slow_keyboard(**kwargs):
+        await release_keyboard.wait()
+        raise TimedOut()
+
+    async def send_receipt(bot, uid, target, card, *, text):
+        rendered.append(text)
+        card.msg_id = 102
+        manager.get_last_switcher_msg.return_value = 102
+        visible.set()
+        return True
+
+    monkeypatch.setattr(inbound, "_capture_pending_transfer", lambda *a: False)
+    monkeypatch.setattr(inbound, "is_user_allowed", lambda uid: True)
+    monkeypatch.setattr(inbound, "active_window", lambda uid: sess.window_id)
+    monkeypatch.setattr(inbound, "get_card_state", lambda *a: state)
+    monkeypatch.setattr(inbound, "claim_default_session", lambda *a: None)
+    monkeypatch.setattr(inbound, "_run_voice", slow_recognition)
+    monkeypatch.setattr(
+        inbound, "refresh_session_keyboard", card_surface.refresh_session_keyboard
+    )
+    monkeypatch.setattr(card_surface, "get_card_state", lambda *a: state)
+    monkeypatch.setattr(
+        card_surface,
+        "_legacy",
+        lambda name: {
+            "is_active_for_user": lambda *a: True,
+            "build_footer_keyboard": lambda *a, **kw: None,
+            "_render_card": lambda *a, **kw: (
+                "voice recognizing" if state.voice_pending else "no voice"
+            ),
+            "_send_card": send_receipt,
+            "_ensure_seeded": AsyncMock(),
+        }[name],
+    )
+    # Keep the follow-up identity sync off the real pane.
+    state.agent_model = "gpt-6.1-sol"
+    state.reasoning_effort = "high"
+    bot = AsyncMock()
+    bot.edit_message_reply_markup.side_effect = slow_keyboard
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=42),
+        message=SimpleNamespace(voice=object(), message_id=101),
+    )
+    try:
+        assert await inbound.voice_intake_handler(update, SimpleNamespace(bot=bot))
+        await asyncio.wait_for(recognizing.wait(), 1)
+        await asyncio.wait_for(visible.wait(), 0.2)
+        assert not recognized.is_set()
+        assert rendered == ["voice recognizing"]
+        assert state.msg_id > update.message.message_id
+    finally:
+        release_keyboard.set()
+        recognized.set()
+        await shutdown_inbound_queues()
+        await card_surface.shutdown_card_surface_tasks()
+
+
+@pytest.mark.asyncio
 async def test_voice_intake_returns_and_pins_before_slow_telegram_receipt(
     setup, monkeypatch
 ):

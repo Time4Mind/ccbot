@@ -83,6 +83,11 @@ async def refresh_session_keyboard(bot: Bot, user_id: int) -> bool:
                 or state.in_menu_view
                 or state.in_kb_mode
                 or (current_carrier is not None and state.msg_id != current_carrier)
+                # Intake already reserved a fresh card below the request. It
+                # includes the current keyboard, so editing the old one is
+                # redundant and can hold both locks until a network timeout,
+                # leaving the voice receipt invisible throughout recognition.
+                or state.receipt_after_message_id >= state.msg_id
             ):
                 return False
             current = session_manager.get_active_session(user_id)

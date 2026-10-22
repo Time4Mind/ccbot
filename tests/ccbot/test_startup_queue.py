@@ -630,6 +630,70 @@ async def test_prompt_left_in_input_fails_without_retyping_text() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pane", "text", "accepted"),
+    [
+        (
+            "› Ask Codex to do anything\n\n"
+            "  GPT-6.1-Sol high fast · ~/workdir · Проверь удале…\n\n",
+            "Проверь",
+            True,
+        ),
+        (
+            "› Ask Codex to do anything\n\n"
+            "  GPT-6.1-Sol high fast · ~/workdir · session",
+            "GPT-6.1-Sol",
+            True,
+        ),
+        (
+            "› Проверь\n\n  GPT-6.1-Sol high fast · ~/workdir · Working",
+            "Проверь",
+            False,
+        ),
+        (
+            "› Проверь\n\n  GPT-6.1-Sol high fast · ~/workdir · Проверь удале…",
+            "Проверь",
+            False,
+        ),
+        (
+            "› first line\n\n  second line\n\n"
+            "  GPT-6.1-Sol high fast · ~/workdir · session",
+            "first line\n\nsecond line",
+            False,
+        ),
+    ],
+    ids=["title-only", "model-only", "working-in-title", "pending", "multiline"],
+)
+async def test_codex_prompt_delivery_ignores_identity_footer(
+    pane: str,
+    text: str,
+    accepted: bool,
+) -> None:
+    from ccbot.bot.messages import _send_with_delivery_proof
+
+    fake_manager = MagicMock()
+    fake_manager.send_to_window = AsyncMock(return_value=(True, "Sent"))
+    fake_session = SimpleNamespace(backend="codex", node_id="local")
+    with (
+        patch("ccbot.bot.messages.session_manager", fake_manager),
+        patch(
+            "ccbot.bot.messages.tmux_manager.capture_pane",
+            new=AsyncMock(return_value=pane),
+        ),
+        patch(
+            "ccbot.bot.messages.tmux_manager.send_keys",
+            new=AsyncMock(return_value=True),
+        ),
+        patch("asyncio.sleep", new=AsyncMock()),
+    ):
+        ok, message = await _send_with_delivery_proof("@9", text, fake_session)
+
+    assert ok is accepted
+    if not accepted:
+        assert "input field" in message
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("node_id", ["local", "worker-a"])
 async def test_archive_restore_delivers_waiting_picker_messages_in_order(node_id):
     from ccbot.bot.callbacks import archive

@@ -30,6 +30,7 @@ import libtmux
 from . import tmux_input_transport
 from . import tmux_window as _tmux_window
 from .config import SENSITIVE_ENV_VARS, config
+from .terminal_parser import parse_codex_model_effort
 from .tmux_control import TmuxControlClient
 from .tmux_process import kill_orphan_processes
 
@@ -582,14 +583,13 @@ class TmuxManager:
     @staticmethod
     def _codex_prompt_contains(pane_text: str, text: str) -> bool:
         """Whether Codex still shows ``text`` in its bottom input prompt."""
-        lines = pane_text.splitlines()
+        lines = pane_text.rstrip().splitlines()
+        # The live footer includes a session title, not pending input.
+        if parse_codex_model_effort(pane_text) is not None:
+            lines.pop()
         prompt_idx = -1
-        # Long voice transcriptions can wrap to far more than 20 terminal
-        # rows.  Looking only at the pane tail then misses the opening ``>``
-        # even though the entire transcription is still sitting unsent in
-        # the input field.  The last prompt marker in the captured pane is
-        # the live input; submitted turns are followed by a newer, empty
-        # prompt once Codex returns to idle.
+        # Scan all rows for long wrapped input. The last prompt marker is
+        # the live field; submitted turns leave a newer, empty prompt.
         for i in range(len(lines) - 1, -1, -1):
             if re.match(r"^\s*[›>](?:\s|$)", lines[i]):
                 prompt_idx = i

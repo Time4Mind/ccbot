@@ -44,6 +44,9 @@ logger = logging.getLogger(__name__)
 
 
 __all__ = [
+    "_render_with_final_proof",
+    "_legacy",
+    "_should_buffer",
     "update_session_card",
     "_apply_preprocessing_marker",
     "_update_session_card_locked",
@@ -402,78 +405,9 @@ def _render_with_final_proof(
     return None
 
 
-async def _retry_final_render(
-    bot: Bot, user_id: int, sess: Session, state: CardState
+async def finalize_task(
+    bot: Bot, user_id: int, sess: Session, final_text: str, *, event_key: str = ""
 ) -> None:
-    """Retry only final delivery; events were already committed exactly once."""
-    current = asyncio.current_task()
-    try:
-        for delay in (1.0, 2.0, 4.0):
-            await asyncio.sleep(delay)
-            if state.turn_phase is not TurnPhase.IDLE:
-                return
-            async with _card_lock(user_id, sess.id):
-                if state.turn_phase is not TurnPhase.IDLE:
-                    return
-                final_event = None
-                for event in reversed(state.events):
-                    if event.type != "final_text":
-                        break
-                    final_event = event
-                if final_event is None:
-                    return
-                text = _render_with_final_proof(sess, state, user_id, final_event)
-                if text is None:
-                    continue
-                keyboard = _legacy("build_footer_keyboard")(
-                    user_id, screen="main", is_busy=False
-                )
-                state.pending_edit_in_flight = True
-                try:
-                    if state.msg_id is None:
-                        sent = await _legacy("_send_card")(
-                            bot,
-                            user_id,
-                            sess,
-                            state,
-                            text=text,
-                            reply_markup=keyboard,
-                        )
-                        delivered = sent is not False and state.msg_id is not None
-                    else:
-                        delivered = await _legacy("_edit_card")(
-                            bot,
-                            user_id,
-                            state,
-                            text=text,
-                            reply_markup=keyboard,
-                        )
-                except Exception as exc:
-                    logger.warning("final card retry failed sess=%s: %s", sess.id, exc)
-                    delivered = False
-                finally:
-                    state.pending_edit_in_flight = False
-                if delivered:
-                    from . import bg_status
-
-                    if not _should_buffer(user_id, sess.id, state):
-                        bg_status.record_finished_delivery(user_id, sess.id)
-                    state.last_rendered = text
-                    state.last_edit_ts = time.monotonic()
-                    logger.info(
-                        "final card retry delivered sess=%s msg_id=%s page=%s chars=%s",
-                        sess.id,
-                        state.msg_id,
-                        state.current_page_idx,
-                        len(final_event.text),
-                    )
-                    return
-    finally:
-        if state.pending_edit is current:
-            state.pending_edit = None
-
-
-async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) -> None:
     """Append the final assistant answer to the current live card.
 
     Appends the answer to the page anchored by the user's request, so one
@@ -505,164 +439,134 @@ async def finalize_task(bot: Bot, user_id: int, sess: Session, final_text: str) 
             for chunk in chunks
         ]
 
-    buffered = False
-    delivered = True
-    async with _card_lock(user_id, sess.id):
-        # Recover and seed under the same lock as final mutation/render so a
-        # next-turn event cannot interleave a stale snapshot.
-        event_ids_before_seed = {id(event) for event in state.events}
-        await _legacy("_ensure_seeded")(user_id, sess, state)
-        seeded_final = next(
-            (
-                event
-                for event in reversed(state.events)
-                if id(event) not in event_ids_before_seed
-                and event.type == "final_text"
-                and event.text == stripped_full
-            ),
-            None,
+    from ..final_delivery import final_delivery_queue
+    from .card_final_delivery import deliver_final, final_payload
+
+    if event_key and final_delivery_queue.contains_event(event_key):
+        final_delivery_queue.kick()
+        return
+
+    # Journal the answer before seeding, UI locks or network work can yield.
+    # A restart during those steps can deliver this minimal snapshot alone.
+    item = None
+    if final_events:
+        initial = CardState(
+            events=final_events, last_event_ts=final_events[0].started_at
         )
-        append_final_events = final_events
-        if seeded_final is not None:
-            # A brand-new session can reach its first terminal monitor event
-            # only after the transcript already contains that answer.  The
-            # initial seed therefore owns the authoritative copy; appending
-            # the synthetic completion event would render it twice.
-            final_events = [seeded_final]
-            append_final_events = []
-        newer_request_pending = any(
-            sequence > state.active_turn_sequence
-            for _message_id, sequence in state.pending_request_sequences
+        item = final_delivery_queue.enqueue(
+            user_id,
+            sess.id,
+            final_payload(initial, final_events[0], state.msg_id),
+            preparing=True,
+            event_key=event_key,
         )
-        # A later Telegram prompt already owns the live tail even when its
-        # transcript row has not appeared yet. The older final still belongs
-        # in history, but must not freeze/spawn the visible card above it.
-        state.turn_phase = (
-            TurnPhase.RUNNING if newer_request_pending else TurnPhase.IDLE
-        )
-        state.stall_watch_active = False
-        state.last_stall_pane_refresh_ts = 0.0
-        await _drain_pending_edit(state)
-        buffered = _should_buffer(user_id, sess.id, state) or newer_request_pending
 
-        old_card_msg_id = state.msg_id
-        if final_events and not buffered and old_card_msg_id is not None:
-            # Freeze the page exactly as the user left it. Only remove its
-            # controls; the final answer gets a brand-new live carrier.
-            try:
-                await bot.edit_message_reply_markup(
-                    chat_id=user_id,
-                    message_id=old_card_msg_id,
-                    reply_markup=None,
-                )
-            except Exception as exc:
-                logger.debug("final card keyboard strip failed: %s", exc)
-            clear_carrier(state)
-
-        if final_events:
-            state.events.extend(append_final_events)
-            if len(state.events) > CARD_MAX_EVENTS:
-                del state.events[: len(state.events) - CARD_MAX_EVENTS]
-            state.last_event_ts = final_events[0].started_at
-            # Focus the first answer chunk. Budget pagination may produce a
-            # different number of sub-pages than chunks, so arithmetic based
-            # on ``len(final_events)`` is not a valid page lookup.
-            if not newer_request_pending:
-                pages_after = paginate_events_for_card(state, user_id)
-                first_final = final_events[0]
-                state.current_page_idx = next(
-                    (
-                        index
-                        for index, page in enumerate(pages_after)
-                        if any(event is first_final for event in page)
-                    ),
-                    None,
-                )
-            else:
-                logger.info(
-                    "final card focus deferred sess=%s active_turn=%s pending=%s",
-                    sess.id,
-                    state.active_turn_sequence,
-                    [
-                        sequence
-                        for _message_id, sequence in state.pending_request_sequences
-                    ],
-                )
-            if not buffered:
-                state.completion_marker_pending = True
-
-        if not buffered and sess.window_id:
-            try:
-                from .history import prewarm_pages_cache
-
-                await prewarm_pages_cache(sess.window_id)
-            except Exception as exc:
-                logger.debug("finalize_task prewarm failed: %s", exc)
-
-        if not buffered and (state.msg_id is not None or final_events):
-            done_kb = _legacy("build_footer_keyboard")(
-                user_id, screen="main", is_busy=False
+    try:
+        buffered = False
+        async with _card_lock(user_id, sess.id):
+            # Recover and seed under the same lock as final mutation/render so a
+            # next-turn event cannot interleave a stale snapshot.
+            event_ids_before_seed = {id(event) for event in state.events}
+            await _legacy("_ensure_seeded")(user_id, sess, state)
+            seeded_final = next(
+                (
+                    event
+                    for event in reversed(state.events)
+                    if id(event) not in event_ids_before_seed
+                    and event.type == "final_text"
+                    and event.text == stripped_full
+                ),
+                None,
             )
-            text = (
-                _render_with_final_proof(sess, state, user_id, final_events[0])
-                if final_events
-                else _legacy("_render_card")(sess, state, user_id=user_id)
+            append_final_events = final_events
+            if seeded_final is not None:
+                # A brand-new session can reach its first terminal monitor event
+                # only after the transcript already contains that answer.  The
+                # initial seed therefore owns the authoritative copy; appending
+                # the synthetic completion event would render it twice.
+                final_events = [seeded_final]
+                append_final_events = []
+            newer_request_pending = any(
+                sequence > state.active_turn_sequence
+                for _message_id, sequence in state.pending_request_sequences
             )
-            if text is None:
-                delivered = False
-                # Leave the committed event in state; the retry path below
-                # will render it again instead of sending a stale page.
-                logger.error("final card delivery deferred sess=%s", sess.id)
-            else:
-                state.pending_edit_in_flight = True
-                try:
-                    if final_events or state.msg_id is None:
-                        sent = await _legacy("_send_card")(
-                            bot,
-                            user_id,
-                            sess,
-                            state,
-                            text=text,
-                            reply_markup=done_kb,
-                        )
-                        delivered = sent is not False and state.msg_id is not None
-                    else:
-                        delivered = await _legacy("_edit_card")(
-                            bot,
-                            user_id,
-                            state,
-                            text=text,
-                            reply_markup=done_kb,
-                        )
-                except Exception as exc:
-                    logger.warning(
-                        "final card delivery failed sess=%s: %s", sess.id, exc
+            # A later Telegram prompt already owns the live tail even when its
+            # transcript row has not appeared yet. The older final still belongs
+            # in history, but must not freeze/spawn the visible card above it.
+            state.turn_phase = (
+                TurnPhase.RUNNING if newer_request_pending else TurnPhase.IDLE
+            )
+            state.stall_watch_active = False
+            state.last_stall_pane_refresh_ts = 0.0
+            await _drain_pending_edit(state)
+            buffered = _should_buffer(user_id, sess.id, state) or newer_request_pending
+
+            old_card_msg_id = state.msg_id
+            if final_events:
+                state.events.extend(append_final_events)
+                if len(state.events) > CARD_MAX_EVENTS:
+                    del state.events[: len(state.events) - CARD_MAX_EVENTS]
+                state.last_event_ts = final_events[0].started_at
+                # Focus the first answer chunk. Budget pagination may produce a
+                # different number of sub-pages than chunks, so arithmetic based
+                # on ``len(final_events)`` is not a valid page lookup.
+                if not newer_request_pending:
+                    pages_after = paginate_events_for_card(state, user_id)
+                    first_final = final_events[0]
+                    state.current_page_idx = next(
+                        (
+                            index
+                            for index, page in enumerate(pages_after)
+                            if any(event is first_final for event in page)
+                        ),
+                        None,
                     )
-                    delivered = False
-                finally:
-                    state.pending_edit_in_flight = False
-                if delivered:
-                    from . import bg_status
-
-                    if not _should_buffer(user_id, sess.id, state):
-                        bg_status.record_finished_delivery(user_id, sess.id)
-                    state.last_rendered = text
-                    state.last_edit_ts = time.monotonic()
+                else:
                     logger.info(
-                        "final card delivered sess=%s msg_id=%s page=%s chars=%s",
+                        "final card focus deferred sess=%s active_turn=%s pending=%s",
                         sess.id,
-                        state.msg_id,
-                        state.current_page_idx,
-                        len(final_events[0].text) if final_events else 0,
+                        state.active_turn_sequence,
+                        [
+                            sequence
+                            for _message_id, sequence in state.pending_request_sequences
+                        ],
                     )
+                if not buffered:
+                    state.completion_marker_pending = True
 
-    if attachments:
-        await _legacy("_send_attachments")(bot, user_id, attachments)
-    if not buffered and not delivered:
-        state.pending_edit = asyncio.create_task(
-            _retry_final_render(bot, user_id, sess, state),
-            name=f"card-final-retry:{user_id}:{sess.id}",
-        )
+            if not buffered and sess.window_id:
+                try:
+                    from .history import prewarm_pages_cache
+
+                    await prewarm_pages_cache(sess.window_id)
+                except Exception as exc:
+                    logger.debug("finalize_task prewarm failed: %s", exc)
+
+            if final_events and item is not None:
+                prepared = final_payload(state, final_events[0], old_card_msg_id)
+                if event_key:
+                    prepared["event_key"] = event_key
+                item.payload = prepared
+                if not buffered:
+                    await final_delivery_queue.attempt(
+                        item,
+                        lambda entry: deliver_final(bot, entry, sess=sess, live=state),
+                    )
+                if item.status == "preparing":
+                    item.status = "pending"
+                    final_delivery_queue.save()
+                final_delivery_queue.kick()
+            elif not buffered and state.msg_id is not None:
+                text = _legacy("_render_card")(sess, state, user_id=user_id)
+                await _legacy("_edit_card")(bot, user_id, state, text=text)
+
+        if attachments:
+            await _legacy("_send_attachments")(bot, user_id, attachments)
+    finally:
+        if item is not None and item.status == "preparing":
+            item.status = "pending"
+            final_delivery_queue.save()
+            final_delivery_queue.kick()
 
 
 async def _send_attachments(

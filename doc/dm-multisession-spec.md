@@ -184,6 +184,7 @@ Hidden (typed only):
 | `/archive` | Show archived sessions, paginated, last 20d. |
 | `/usage` | Live account limits: Claude `/usage` modal or Codex app-server rate limits. |
 | `/health` | Uptime, queue stats, latency, counters. |
+| `/delivery` | Inspect pending final answers; reconcile an unacknowledged send after checking the chat. |
 | `/login` | Re-authenticate the selected backend. Claude takes its OAuth code back through chat; Codex uses the official device URL/code and waits for app-server completion without receiving the code in chat. |
 | `/restore-file <msg_id>` | _(Planned — no handler implemented yet.)_ Re-fetch a previously-uploaded inbox file from Telegram. |
 
@@ -420,6 +421,30 @@ Install footprint:
 ---
 
 ## 9. Recovery (F2 + F3)
+
+Final-answer delivery is independent of model completion and transcript offsets.
+`final-deliveries.json` journals an immutable per-turn snapshot before any await.
+It is atomically saved with private file permissions and resumed at startup.
+Retries remain queued after the fast sequence: delays after failed attempts are
+1, 2, 4, 8, 15 seconds, then 15 seconds; no jitter. Telegram `RetryAfter` is the
+exception and its persisted cooldown cannot be bypassed by an ordinary retry.
+A failed replacement keeps the prior carrier and its controls. Background
+sessions remain quiet until selected; a newer request in the same session keeps
+its controls while an older queued final can be delivered as a passive message.
+Finals for a session are delivered in FIFO order. Source events with a stable
+timestamp are deduplicated across pending delivery and recent receipt history.
+
+Only typed connection/pool failures establish that a send was not submitted.
+Read/write timeouts and generic network errors on a new send leave its delivery
+unknown; they do not trigger alternate-format fallback or blind resends. The
+pending obligation remains visible in `/delivery`, `/health` and card headers.
+The user checks the chat, then confirms receipt or explicitly permits a resend.
+A returned message ID is journaled before UI bookkeeping, so a crash after the
+acknowledgement cannot create another card. In-flight sends without an ID are
+reconciled after restart; known identities can be safely reconciled without a
+new send. UI debounce cancellation, menu navigation and new requests do not
+remove delivery obligations.
+
 
 ### Auto-recover on bot start (F2)
 

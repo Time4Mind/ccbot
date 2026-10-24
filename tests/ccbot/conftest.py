@@ -202,3 +202,14 @@ def sample_pane_codex_effort_picker():
 @pytest.fixture
 def sample_pane_no_ui():
     return "$ echo hello\nhello\n$\n"
+
+
+@pytest.fixture(autouse=True)
+async def isolated_final_deliveries(tmp_path, monkeypatch):
+    """Keep durable obligations and workers isolated from other tests/runtime."""
+    from ccbot import final_delivery
+
+    queue = final_delivery.FinalDeliveryQueue(tmp_path / "final-deliveries.json")
+    monkeypatch.setattr(final_delivery, "final_delivery_queue", queue)
+    yield queue
+    await queue.shutdown()

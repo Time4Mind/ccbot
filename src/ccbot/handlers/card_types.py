@@ -122,6 +122,8 @@ class CarrierKind(str, Enum):
 @dataclass
 class CardState:
     msg_id: int | None = None
+    # Non-empty only on an immutable durable-final transport snapshot.
+    delivery_id: str = ""
     events: list[Event] = field(default_factory=list)
     pending_prompts: list[PendingPrompt] = field(default_factory=list)
     # Completed logical pages are immutable while the current turn streams.

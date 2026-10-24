@@ -24,6 +24,7 @@ from .card_model import (
     _is_stale,
     _resolve_line_budget,
     _strip_for_card,
+    _parse_timestamp,
     paginate_events_for_card,
 )
 from .card_binding import clear_carrier
@@ -406,7 +407,13 @@ def _render_with_final_proof(
 
 
 async def finalize_task(
-    bot: Bot, user_id: int, sess: Session, final_text: str, *, event_key: str = ""
+    bot: Bot,
+    user_id: int,
+    sess: Session,
+    final_text: str,
+    *,
+    event_key: str = "",
+    source_timestamp: str = "",
 ) -> None:
     """Append the final assistant answer to the current live card.
 
@@ -424,7 +431,7 @@ async def finalize_task(
         cleaned = formatted.text
         attachments = formatted.attachments
 
-        now = time.time()
+        now = _parse_timestamp(source_timestamp) if source_timestamp else time.time()
         stripped_full = _strip_for_card(cleaned)
         chunks = _chunk_final_text(stripped_full, _resolve_line_budget(user_id))
         final_events = [

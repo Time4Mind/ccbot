@@ -374,14 +374,14 @@ async def build_archive_page(
         for idx, sess in enumerate(chunk, start=start + 1):
             # Preserve the historical completed-state badge for old records.
             label = "✓ " if sess.state == "completed" else ""
-            ts = sess.archived_at or sess.last_event_at
+            ts = sess.created_at if sess.created_at_known else 0.0
             age = _format_age(user_id, ts) if ts else "?"
             display_name = _display_name(sess)
             # ``(lost)`` tag for sessions that hit the lost state before
             # archival (tmux window vanished externally; user never
             # ran Restore). Without it the row reads identical to a
             # clean archive and the recovery-skipped fact is invisible.
-            lost_tag = " _(lost)_" if sess.was_lost else ""
+            lost_tag = " _(lost)_" if sess.state == "lost" or sess.was_lost else ""
             # Bold-wrap the index AND join sub-lines with ``  \n`` (hard
             # line break in CommonMark — two trailing spaces before the
             # newline). Without the hard break the rich parser treats

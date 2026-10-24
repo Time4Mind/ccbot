@@ -54,7 +54,7 @@ class FinalDelivery:
     created_at: float = field(default_factory=time.time)
 
 
-Driver = Callable[[FinalDelivery], Awaitable[bool]]
+Driver = Callable[[FinalDelivery], Awaitable[bool | None]]
 
 
 class FinalDeliveryQueue:
@@ -68,6 +68,7 @@ class FinalDeliveryQueue:
         self._locks: dict[str, asyncio.Lock] = {}
         self._loaded = False
         self._driver: Driver | None = None
+        self._ready: Callable[[FinalDelivery], bool] | None = None
 
     def load(self) -> None:
         if self._loaded:
@@ -167,7 +168,7 @@ class FinalDeliveryQueue:
             "final_delivery_confirmed id=%s session=%s", item.id, item.session_id
         )
 
-    async def attempt(self, item: FinalDelivery, driver: Driver) -> bool:
+    async def attempt(self, item: FinalDelivery, driver: Driver) -> bool | None:
         async with self._locks.setdefault(item.id, asyncio.Lock()):
             if item not in self.records:
                 return True
@@ -178,6 +179,8 @@ class FinalDeliveryQueue:
                 or time.time() < max(item.retry_at, item.cooldown_until)
             ):
                 return False
+            if self._ready is not None and not self._ready(item):
+                return None
             item.status = "in_flight"
             self.save()
             try:
@@ -214,6 +217,12 @@ class FinalDeliveryQueue:
                     item.id,
                     type(exc).__name__,
                 )
+            if item not in self.records:
+                return True
+            if delivered is None:
+                item.status = "pending"
+                self.save()
+                return None
             if delivered:
                 self.resolve(item)
                 return True
@@ -232,9 +241,12 @@ class FinalDeliveryQueue:
             )
             return False
 
-    def start(self, driver: Driver) -> None:
+    def start(
+        self, driver: Driver, *, ready: Callable[[FinalDelivery], bool] | None = None
+    ) -> None:
         self.load()
         self._driver = driver
+        self._ready = ready
         self.kick()
 
     def kick(self) -> None:
@@ -260,7 +272,9 @@ class FinalDeliveryQueue:
             if wait > 0:
                 await asyncio.sleep(wait)
             try:
-                await self.attempt(item, self._driver)
+                outcome = await self.attempt(item, self._driver)
+                if outcome is None:
+                    await asyncio.sleep(1.0)
             except asyncio.CancelledError:
                 raise
             except Exception:

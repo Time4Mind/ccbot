@@ -38,6 +38,7 @@ def _make_archived(idx: int) -> Session:
         id=f"{idx:08x}",
         name=f"sess-{idx}",
         state="archived",
+        created_at=time.time() - 3600,
         archived_at=time.time() - 3600,
         last_event_at=time.time() - 3600,
         workdir="/tmp/x",

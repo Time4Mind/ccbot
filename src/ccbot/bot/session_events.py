@@ -247,7 +247,12 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                         f"{user_id}:{sess.id}:{msg.session_id}:{msg.timestamp}:{msg.text}".encode()
                     ).hexdigest()
                     await finalize_task(
-                        bot, user_id, sess, msg.text or "", event_key=key
+                        bot,
+                        user_id,
+                        sess,
+                        msg.text or "",
+                        event_key=key,
+                        source_timestamp=msg.timestamp,
                     )
                 else:
                     await finalize_task(bot, user_id, sess, msg.text or "")

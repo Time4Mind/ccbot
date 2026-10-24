@@ -85,7 +85,7 @@ def test_switcher_orders_oldest_to_newest() -> None:
 
 def test_restored_session_flies_in_as_newest() -> None:
     """A session brought back via set_session_window (restore / re-bind) gets a
-    fresh created_at, so it slots to the far right of the switcher."""
+    fresh activation timestamp, so it slots to the far right without changing age."""
     saved = dict(session_manager.sessions)
     saved_active = dict(session_manager.active_sessions)
     try:
@@ -101,7 +101,8 @@ def test_restored_session_flies_in_as_newest() -> None:
         session_manager.set_session_window("z", "@99")
 
         assert session_manager.sessions["z"].state == "active"
-        assert session_manager.sessions["z"].created_at > 200.0
+        assert session_manager.sessions["z"].created_at == 50.0
+        assert session_manager.sessions["z"].activated_at > 200.0
         markup = build_switcher_keyboard(42)
         assert markup is not None
         assert _button_names(markup) == ["oldest", "middle", "restored"]

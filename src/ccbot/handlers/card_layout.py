@@ -239,6 +239,11 @@ def _render_card(
 
         pending = final_delivery_queue.pending(user_id, sess.id)
         if pending:
+            from .card_delivery_receipts import visible_final_matches
+
+            displayed = visible_final_matches(user_id, state, pending)
+            pending = [item for item in pending if item not in displayed]
+        if pending:
             header = header.removeprefix("✅ ")
             label = (
                 "⚠ Доставка ответа не подтверждена. Проверьте /delivery."

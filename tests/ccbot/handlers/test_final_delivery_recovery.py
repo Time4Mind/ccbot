@@ -292,3 +292,50 @@ async def test_restart_during_seed_keeps_final_obligation(
     h.connected[0] = True
     assert await q.attempt(q.pending(42)[0], lambda item: retry_delivery(h.bot, item))
     assert "final answer A" in h.sent[0][1]["rich_message"]["markdown"]
+
+
+@pytest.mark.asyncio
+async def test_retry_preserves_photo_placement_before_service_tail(
+    recovery_harness, isolated_final_deliveries, monkeypatch
+):
+    from ccbot.handlers import history
+    from ccbot.handlers.card_final_delivery import retry_delivery
+
+    h = recovery_harness
+    h.session.window_id = "@synthetic"
+    monkeypatch.setattr(history, "prewarm_pages_cache", AsyncMock())
+    monkeypatch.setattr(card_transport, "_inline_screens_enabled", lambda *_a: True)
+    monkeypatch.setattr(
+        card_transport, "_capture_pane_png", AsyncMock(return_value=(b"png", "digest"))
+    )
+    original = card_updates._legacy
+
+    def render(_session, state, **_kwargs):
+        body = "final answer A"
+        state.media_anchor_offset = len(body)
+        return body + "\n\ncontext service"
+
+    monkeypatch.setattr(
+        card_updates,
+        "_legacy",
+        lambda name: render if name == "_render_card" else original(name),
+    )
+    attempted = []
+
+    async def post(endpoint, data):
+        attempted.append(data["rich_message"]["markdown"])
+        if len(attempted) == 1:
+            error = NetworkError("offline")
+            error.__cause__ = httpx.ConnectError("offline")
+            raise error
+        return {"message_id": 99, "date": 1, "chat": {"id": 42, "type": "private"}}
+
+    h.bot._post = post
+    await card_updates.finalize_task(h.bot, 42, h.session, "final answer A")
+    item = isolated_final_deliveries.pending(42)[0]
+    item.retry_at = 0
+    assert await isolated_final_deliveries.attempt(
+        item, lambda row: retry_delivery(h.bot, row)
+    )
+    assert len(attempted) == 2
+    assert attempted[0] == attempted[1]

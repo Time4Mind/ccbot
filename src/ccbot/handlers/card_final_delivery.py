@@ -96,6 +96,7 @@ async def deliver_final(
         if text is None:
             return False
         item.payload["text"] = text
+        item.payload["state"]["media_anchor_offset"] = target.media_anchor_offset
         final_delivery_queue.save()
     keyboard = _legacy("build_footer_keyboard")(
         item.user_id, screen="main", is_busy=False

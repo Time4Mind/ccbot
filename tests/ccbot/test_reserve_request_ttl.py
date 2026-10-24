@@ -140,7 +140,8 @@ async def test_first_voice_survives_idle_sweep_and_delivers_to_its_pin(
     intake = asyncio.create_task(inbound.voice_intake_handler(update, context))
     try:
         await asyncio.wait_for(reached.wait(), 1)
-        # Admission protects the original pin while receipt/STT run separately.
+        # Admission fixes logical creation before receipt/download/STT finish.
+        assert reserve.created_at == reserve.activated_at == 200_000.0
         now[0] += 13 * 3600
         assert await archive._archive_context_status(reserve) is not False
         await archive.idle_archive_sweep(context.bot, 42)
@@ -156,6 +157,7 @@ async def test_first_voice_survives_idle_sweep_and_delivers_to_its_pin(
             await asyncio.sleep(0)
         assert delivered == [("@A", "one request")]
         assert reserve.last_event_at == now[0]
+        assert reserve.created_at == reserve.activated_at == 200_000.0
         assert reserve.default_reserve_user_id == 0
         assert any(
             s.window_id == "@replacement" for s in session_manager.sessions.values()

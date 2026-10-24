@@ -96,7 +96,8 @@ def _enqueue(
         # Promotion is deliberately synchronous and happens before the FIFO
         # owns the update. A session switch immediately after this point can
         # never redirect the request or make a second message claim it.
-        claim_default_session(context.bot, user.id, sess)
+        if kind in ("text", "voice", "photo", "document"):
+            claim_default_session(context.bot, user.id, sess)
     receipt = enqueue_inbound(
         user.id,
         wid,

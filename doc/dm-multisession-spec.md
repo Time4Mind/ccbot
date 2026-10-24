@@ -124,7 +124,7 @@ Switcher layout:
 ```
 
 - The active session is marked with a leading checkmark.
-- Buttons are ordered oldest → newest by `created_at` (ties broken by session id), so a session holds a stable slot and a newly created one appends to the right. A session restored from the archive counts as newest (its `created_at` is bumped on restore). Every surface that renders session buttons uses this same order.
+- Ordinary buttons are ordered oldest → newest by `active_order_at` (`activated_at`, falling back to `created_at`; ties by session id). Restores advance activation without resetting logical creation. An empty default reserve stays last. Its first accepted conversational request initializes creation and activation once, so it becomes the newest ordinary session before its replacement reserve. Later requests do not move it. Every session-button surface uses this order.
 - Tapping a non-active session triggers a callback. The bot edits the same message in place to show a context preview of the selected session and updates the active flag.
 - After switching, all subsequent free-text from the user routes to the new active session. Background work in the previously active session continues.
 
@@ -343,7 +343,7 @@ Transcript and quota data have separate sources:
 
 - `/archive` — one paginated 20-day list, newest first.
 - Each archived row has inline buttons:
-  - `Restore` — recreate tmux window, run `claude --resume <id> --dangerously-skip-permissions` in the original workdir, move back to active. `created_at` is bumped to now, so the session re-enters the switcher as the newest button (§4.1).
+  - `Restore` — recreate tmux window, run `claude --resume <id> --dangerously-skip-permissions` in the original workdir, move back to active. `activated_at` advances to now, so the session re-enters the switcher as the newest ordinary button without resetting its creation age (§4.1).
   - `Delete` — purge state record (transcript files retained on disk).
   - `Inspect` — show last context (same format as A8 preview, no live update).
 
@@ -422,7 +422,8 @@ Install footprint:
 
 ## 9. Recovery (F2 + F3)
 
-Archive lifecycle clocks are separate: `created_at` stays immutable,
+Archive lifecycle clocks are separate: `created_at` stays immutable once a user
+session begins (a prewarmed reserve begins at its first accepted request),
 `activated_at` controls create/restore ordering in the active switcher,
 `archived_at` records successful archival, and `lost_at` records window loss.
 The unified archive list sorts, filters and expires by the corresponding latest
@@ -489,7 +490,7 @@ remove delivery obligations.
 ### Manual restore (F3)
 
 - Inline `Restore` button on archived and lost sessions.
-- On restore: create tmux window, run `claude --resume <session-id> --dangerously-skip-permissions` in the original workdir, attach monitor, bump `created_at` so the session lands at the newest end of the switcher.
+- On restore: create tmux window, run `claude --resume <session-id> --dangerously-skip-permissions` in the original workdir, attach monitor, advance `activated_at` so the session lands at the newest ordinary position while retaining its logical creation date.
 
 ---
 
@@ -622,3 +623,15 @@ The fork ships when all of the following are true on a fresh Linux arm64 VPS ins
   pollution-free way to invoke `/context` per session or a richer
   parse of the JSONL (system / tools / memory aren't always in
   `cache_read`). Acceptable as-is for the at-a-glance signal.
+
+
+### Default reserve first use
+
+A warm default process is an unused reserve until the first accepted text,
+voice, photo or document request is synchronously pinned to it at intake.
+Promotion initializes `created_at`, `activated_at` and reliable creation
+provenance from that admission, before FIFO waiting, transcription or
+preprocessing. Marker removal and timestamp initialization are persisted
+together before a replacement reserve is scheduled. Subsequent claims are
+no-ops; navigation and control/unsupported input do not consume the reserve.
+Existing used sessions receive no guessed retrospective timestamp repair.

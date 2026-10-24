@@ -239,6 +239,10 @@ def claim_default_session(bot: Any, user_id: int, sess: Session) -> bool:
     if reserve_owner(sess) != user_id:
         return False
     session_manager.touch_session(sess.id)
+    # The empty process was only warm-up. User-visible age and ordering start
+    # at the same synchronous admission that consumes its reserve marker.
+    sess.created_at = sess.activated_at = sess.last_event_at
+    sess.created_at_known = True
     sess.clear_default_reserve()
     sess.name = _claimed_name(sess.workdir, sess.id)
     session_manager.save_state()

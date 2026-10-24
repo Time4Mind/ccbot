@@ -75,6 +75,16 @@ class RemotePromptQueue:
         node_name: str,
         deliver: Delivery,
     ) -> bool:
+        from .input_recovery import input_recovery
+
+        request = input_recovery.current()
+        if request is not None:
+            # The durable source FIFO must retain ownership until real submission.
+            while self.has_pending(session_id) or not self._node_available(node_id):
+                if input_recovery.source(request) is None:
+                    raise ValueError("Исходная сессия больше недоступна.")
+                await input_recovery.sleep(self._poll_interval)
+            return await deliver()
         flow = self._flows.get(session_id)
         if flow is None:
             flow = RemotePromptFlow(

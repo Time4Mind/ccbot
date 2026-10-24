@@ -185,6 +185,7 @@ Hidden (typed only):
 | `/usage` | Live account limits: Claude `/usage` modal or Codex app-server rate limits. |
 | `/health` | Uptime, queue stats, latency, counters. |
 | `/delivery` | Inspect pending final answers; reconcile an unacknowledged send after checking the chat. |
+| `/requests` | Inspect voice-input recovery and explicitly settle uncertain submission. |
 | `/login` | Re-authenticate the selected backend. Claude takes its OAuth code back through chat; Codex uses the official device URL/code and waits for app-server completion without receiving the code in chat. |
 | `/restore-file <msg_id>` | _(Planned — no handler implemented yet.)_ Re-fetch a previously-uploaded inbox file from Telegram. |
 
@@ -384,6 +385,35 @@ Transcript and quota data have separate sources:
 - Subprocess call on each voice message. RAM is freed between calls; only `whisper.cpp` binary stays loaded (~10MB).
 - Transcript is forwarded to the active session as if the user typed it. Reply-quote routing applies.
 - No OpenAI API key required.
+
+### Network recovery and submission identity
+
+Accepted voice requests and their same-session FIFO followers are atomically
+journaled in the private runtime `input-requests.json` before queue admission.
+The journal retains the Telegram file reference, original session/window,
+recognition/preprocessing results and submission checkpoint. Temporary download
+failures retry after 1, 2, 4, 8 and at most 15 seconds; Telegram `RetryAfter`
+deadlines may be longer and survive restart. Other sessions and navigation remain
+independent. A removed or replaced original session causes an explicit error.
+
+Startup restores each source FIFO in admission order. Completed request IDs
+remain as deduplication tombstones, including terminal failures whose error was
+confirmed delivered. Only final prepared text is submitted; recognition and
+preprocessing results already saved are reused. Remote-node waiting retains the
+durable FIFO rather than treating an in-memory queue admission as submission.
+
+Before sending input, persist the exact prepared text and transcript byte offset.
+Confirmed submission retires the request before Telegram repainting. A crash or
+uncertain acknowledgement during submission leaves a distinct unresolved state;
+only an exact new user transcript row or explicit `/requests ack <message-id>`
+resolves it as delivered. No automatic input replay occurs in that state.
+`/requests cancel <message-id>` releases the source FIFO without resending.
+
+Recovery repaints current status, rather than replaying intermediate cards. A
+definitive failure retains its terminal notice until Telegram confirms delivery.
+Typed connection failures are safe to retry; a new message with an uncertain
+acknowledgement is retained for reconciliation, avoiding duplicate notices. Its
+error text remains accessible in `/requests` and can be acknowledged there.
 
 ### Latency tuning (arm64)
 

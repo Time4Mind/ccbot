@@ -77,14 +77,21 @@ async def _send_card(
     update and desync which message carries the live switcher.
     """
     async with _user_send_lock(user_id):
-        return await _send_card_locked(
-            bot,
-            user_id,
-            sess,
-            state,
-            text=text,
-            reply_markup=reply_markup,
-        )
+        try:
+            return await _send_card_locked(
+                bot,
+                user_id,
+                sess,
+                state,
+                text=text,
+                reply_markup=reply_markup,
+            )
+        except (NetworkError, TimeoutError) as exc:
+            if not state.delivery_id:
+                from ..input_recovery import input_recovery
+
+                input_recovery.ui_error(user_id, sess.id, exc)
+            raise
 
 
 async def _send_card_locked(
@@ -160,6 +167,9 @@ async def _send_card_locked(
         except Exception as e:
             if state.delivery_id:
                 raise
+            from ..input_recovery import input_recovery
+
+            input_recovery.ui_error(user_id, sess.id, e)
             logger.debug("card send failed: %s", e)
             return False
         if sent is None:

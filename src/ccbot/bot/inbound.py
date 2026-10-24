@@ -87,6 +87,10 @@ def _enqueue(
     user = update.effective_user
     if user is None or update.message is None or not is_user_allowed(user.id):
         return False
+    from ..input_recovery import input_recovery
+
+    if input_recovery.duplicate(update):
+        return True
     wid = target_window_id or active_window(user.id)
     if wid is None:
         return False
@@ -98,6 +102,7 @@ def _enqueue(
         # never redirect the request or make a second message claim it.
         if kind in ("text", "voice", "photo", "document"):
             claim_default_session(context.bot, user.id, sess)
+    recovery = input_recovery.admit(update, kind, sess) if sess is not None else None
     receipt = enqueue_inbound(
         user.id,
         wid,
@@ -105,6 +110,7 @@ def _enqueue(
         context,
         kind=kind,
         processor=processor,
+        **({"recovery_id": recovery.id} if recovery is not None else {}),
     )
     if sess is not None:
         # Queue admission is the user-visible start of a new turn. Mark the
@@ -216,6 +222,10 @@ def _capture_pending_transfer(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> bool:
     """Keep requests off the source session while a target is starting."""
+    from ..input_recovery import input_recovery
+
+    if input_recovery.duplicate(update):
+        return True
     return capture_transfer_message(update, context)
 
 

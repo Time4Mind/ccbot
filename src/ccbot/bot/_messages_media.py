@@ -8,6 +8,8 @@ from __future__ import annotations
 import logging
 import html
 import asyncio
+
+from ..input_recovery import submit_input as submit
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -349,7 +351,9 @@ async def unsupported_content_handler(
         ):
             return False
         async with _card_repost_bracket(context.bot, user.id, sess) as repost:
-            success, message = await _send_with_delivery_proof(wid, text_to_send, sess)
+            success, message = await submit(
+                wid, text_to_send, sess, _send_with_delivery_proof
+            )
             if not success:
                 await safe_reply(msg, f"❌ {message}")
                 return False
@@ -401,7 +405,7 @@ async def _forward_inbox_file(
         rel_path = str(file_path)
     text_to_send = f"{caption}\n\n{rel_path}" if caption.strip() else rel_path
     await fire_typing(bot, user_id, "inbox_file_forward", window_id=wid, label=label)
-    return await _send_with_delivery_proof(wid, text_to_send, sess)
+    return await submit(wid, text_to_send, sess, _send_with_delivery_proof)
 
 
 async def photo_handler(

@@ -311,6 +311,9 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     from ..handlers.card_final_delivery import start_final_deliveries
 
     start_final_deliveries(application.bot)
+    from ..input_recovery import input_recovery
+
+    input_recovery.start(application)
     monitor = SessionMonitor()
 
     async def message_callback(msg: NewMessage) -> None:
@@ -469,6 +472,9 @@ async def post_shutdown(
     await shutdown_default_session_tasks()
     await shutdown_auth_flows()
     await shutdown_inbound_queues()
+    from ..input_recovery import input_recovery
+
+    await input_recovery.shutdown()
     from ..request_preprocessing import prompt_preprocessor
 
     await prompt_preprocessor.close()

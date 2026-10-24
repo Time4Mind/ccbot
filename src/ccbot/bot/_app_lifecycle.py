@@ -308,6 +308,9 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
         rate_limiter._base_limiter._level = rate_limiter._base_limiter.max_rate
         logger.info("Pre-filled global rate limiter bucket")
 
+    from ..handlers.card_final_delivery import start_final_deliveries
+
+    start_final_deliveries(application.bot)
     monitor = SessionMonitor()
 
     async def message_callback(msg: NewMessage) -> None:
@@ -451,6 +454,9 @@ async def post_shutdown(
         _node_notifications_task.cancel()
         await asyncio.gather(_node_notifications_task, return_exceptions=True)
         _node_notifications_task = None
+    from ..final_delivery import final_delivery_queue
+
+    await final_delivery_queue.shutdown()
     await shutdown_file_deliveries()
     from ..node_runtime import shutdown_remote_runtimes
 

@@ -230,7 +230,13 @@ plus an inline `≡ Menu` button on the most recent bot message:
 
 A few more commands work when typed but stay out of the `/`-menu:
 `/new`, `/kill`, `/stop`, `/archive`, `/usage`, `/clear`, `/cost`,
-`/health`, `/login`.
+`/health`, `/login`, `/delivery`.
+
+`/delivery` shows final answers waiting for Telegram delivery. Connection
+failures retry after 1, 2, 4, 8, then at most 15 seconds, including after a
+bot restart. Telegram flood waits may be longer. If Telegram may have accepted
+a new message but its acknowledgement was lost, automatic resending stops:
+check the chat, then use `/delivery` to confirm receipt or explicitly retry.
 
 **`/login` — re-authenticating Claude from the phone.** When the OAuth
 login behind `claude` expires, every session starts failing and there is

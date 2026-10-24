@@ -123,6 +123,10 @@ async def send_rich_media_card(
         )
     except RetryAfter:
         raise
+    except (NetworkError, TimeoutError) as exc:
+        if not isinstance(exc, BadRequest):
+            raise
+        return None
     except Exception as exc:
         logger.warning("rich-media card send failed chat=%s: %s", user_id, exc)
         return None

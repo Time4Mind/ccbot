@@ -240,7 +240,17 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             # so a switch-back later renders the full tool history. The
             # bg-status badge below is the chat-visible signal while bg.
             if is_terminal_text:
-                await finalize_task(bot, user_id, sess, msg.text or "")
+                if msg.timestamp:
+                    import hashlib
+
+                    key = hashlib.sha256(
+                        f"{user_id}:{sess.id}:{msg.session_id}:{msg.timestamp}:{msg.text}".encode()
+                    ).hexdigest()
+                    await finalize_task(
+                        bot, user_id, sess, msg.text or "", event_key=key
+                    )
+                else:
+                    await finalize_task(bot, user_id, sess, msg.text or "")
             else:
                 await update_session_card(bot, user_id, sess, msg)
 

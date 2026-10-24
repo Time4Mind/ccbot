@@ -234,6 +234,18 @@ def _render_card(
     name_part = sess.name or sess.id
     completion = "✅ " if state.completion_marker_pending else ""
     header = f"{completion}*{name_part}* · {state_label}{cont_marker}{ts_suffix}"
+    if user_id is not None and not state.delivery_id:
+        from ..final_delivery import final_delivery_queue
+
+        pending = final_delivery_queue.pending(user_id, sess.id)
+        if pending:
+            header = header.removeprefix("✅ ")
+            label = (
+                "⚠ Доставка ответа не подтверждена. Проверьте /delivery."
+                if any(item.status == "unknown" for item in pending)
+                else "⏳ Ответ сохранён, ожидает доставки. /delivery"
+            )
+            header += f"\n{label}"
     if sess.goal:
         header += f"\ngoal: {sess.goal}"
 

@@ -202,16 +202,24 @@ async def send_with_fallback(
         )
     except RetryAfter:
         raise
-    except Exception:
-        try:
-            return await bot.send_message(
-                chat_id=chat_id, text=strip_sentinels(text), **kwargs
-            )
-        except RetryAfter:
+    except (NetworkError, TimeoutError) as exc:
+        if not isinstance(exc, BadRequest):
             raise
-        except Exception as e:
-            logger.error(f"Failed to send message to {chat_id}: {e}")
-            return None
+    except Exception:
+        pass
+    try:
+        return await bot.send_message(
+            chat_id=chat_id, text=strip_sentinels(text), **kwargs
+        )
+    except RetryAfter:
+        raise
+    except (NetworkError, TimeoutError) as exc:
+        if not isinstance(exc, BadRequest):
+            raise
+        return None
+    except Exception as exc:
+        logger.error("Failed to send message to %s: %s", chat_id, exc)
+        return None
 
 
 async def send_photo(

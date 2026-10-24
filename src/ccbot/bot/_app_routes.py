@@ -26,6 +26,7 @@ from .callbacks import callback_handler
 from .callbacks.switcher import session_switch_intake_handler
 from ..handlers.callback_data import CB_SW_USE
 from .activity import record_user_message_activity
+from .commands.delivery import delivery_command, delivery_callback
 from .commands.auth import (
     login_command,
 )
@@ -148,6 +149,7 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     application.add_handler(CommandHandler("stop", stop_command))
     application.add_handler(CommandHandler("archive", archive_command))
     application.add_handler(CommandHandler("health", health_command))
+    application.add_handler(CommandHandler("delivery", delivery_command))
     application.add_handler(CommandHandler("help", help_command))
     # /login stays out of setMyCommands: it is an emergency path surfaced by the
     # "authorization expired" notice (text + 🔐 button), not day-to-day UI.
@@ -156,6 +158,9 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     # a tracked background task and cannot hold the serial update dispatcher.
     application.add_handler(
         CallbackQueryHandler(session_switch_intake_handler, pattern="^" + CB_SW_USE)
+    )
+    application.add_handler(
+        CallbackQueryHandler(delivery_callback, pattern="^delivery:")
     )
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Forward any other /command to Claude Code.

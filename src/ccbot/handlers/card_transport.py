@@ -158,6 +158,8 @@ async def _send_card_locked(
         except RetryAfter:
             raise
         except Exception as e:
+            if state.delivery_id:
+                raise
             logger.debug("card send failed: %s", e)
             return False
         if sent is None:
@@ -172,6 +174,34 @@ async def _send_card_locked(
         pane_hash=sent_pane_hash,
         photo_edit_ts=sent_photo_ts,
     )
+    if state.delivery_id:
+        from ..final_delivery import final_delivery_queue
+
+        final_delivery_queue.bind_ack(state.delivery_id, sent.message_id)
+        from .card_registry import _cards
+
+        live = _cards.get((user_id, sess.id))
+        active = session_manager.get_active_session(user_id)
+        superseded = (
+            active is None
+            or active.id != sess.id
+            or live is not None
+            and (
+                live.in_menu_view
+                or live.next_request_sequence != state.next_request_sequence
+            )
+        )
+        if superseded:
+            # Routing can advance during the network await. The result is
+            # delivered, but it must not take controls from the newer owner.
+            try:
+                await bot.edit_message_reply_markup(
+                    chat_id=user_id, message_id=sent.message_id, reply_markup=None
+                )
+            except Exception:
+                pass
+            _register_msg(user_id, sent.message_id, sess.id)
+            return True
     remember_rich_photo(state, sent_pane_hash, sent_file_id)
     persist_session_screenshot(sess, user_id, sent_pane_hash, sent_file_id)
     await _strip_stale_switchers(bot, user_id, sent.message_id, sess.id)

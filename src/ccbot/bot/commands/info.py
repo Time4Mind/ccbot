@@ -132,6 +132,17 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"active: {active} · idle: {idle} · archived: {archived} · lost: {lost}",
     ]
 
+    from ...final_delivery import final_delivery_queue
+
+    pending = final_delivery_queue.pending(user.id)
+    if pending:
+        unknown = sum(item.status == "unknown" for item in pending)
+        lines += [
+            "",
+            f"Ответов в очереди: {len(pending)} · без подтверждения: {unknown}",
+            "Проверка доставки: /delivery",
+        ]
+
     interesting = (
         "tg_messages_in",
         "tg_send_failures",

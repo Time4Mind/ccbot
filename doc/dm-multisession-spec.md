@@ -410,7 +410,10 @@ resolves it as delivered. No automatic input replay occurs in that state.
 `/requests cancel <message-id>` releases the source FIFO without resending.
 
 Recovery repaints current status, rather than replaying intermediate cards. A
-definitive failure retains its terminal notice until Telegram confirms delivery.
+recognized voice receipt is owned by the voice handler, including restart with
+cached recognition. Once its transcript echo consumes the receipt, background
+recovery must not recreate it while submission confirmation is still pending.
+A definitive failure retains its terminal notice until Telegram confirms delivery.
 Typed connection failures are safe to retry; a new message with an uncertain
 acknowledgement is retained for reconciliation, avoiding duplicate notices. Its
 error text remains accessible in `/requests` and can be acknowledged there.

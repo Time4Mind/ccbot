@@ -11,7 +11,6 @@ async def refresh_request_status(recovery: Any, user_id: int, session_id: str) -
     from ..session import session_manager
     from ..handlers.notifications import get_card_state, refresh_panel
     from ..handlers.card_surface import surface_card_after_message
-    from ..handlers.card_types import PendingPrompt
     from ..final_delivery import before_submission
     from ..telegram_rate_limit import background_telegram_request
 
@@ -29,17 +28,9 @@ async def refresh_request_status(recovery: Any, user_id: int, session_id: str) -
     ]
     work = [r for r in pending if r.state not in ("failed", "unknown")]
     state.voice_pending = any(r.kind == "voice" and not r.recognized for r in work)
-    for request in work:
-        if request.recognized and not any(
-            row.request_id == str(request.message_id) for row in state.pending_prompts
-        ):
-            state.pending_prompts.append(
-                PendingPrompt(
-                    str(request.message_id),
-                    request.prepared or request.recognized,
-                    user_icon="👤",
-                )
-            )
+    # The voice handler owns recognized receipts, including cached recognition
+    # on restart. A transcript echo may already have consumed that receipt while
+    # submission proof is still pending; recovery must not recreate it.
     latest = max(pending, key=lambda r: r.sequence) if pending else None
     if latest is not None and latest.ui_retry_at > recovery.clock():
         return False

@@ -33,6 +33,7 @@ class InboundEntry:
     processor: InboundProcessor
     completion: asyncio.Future[bool]
     received_at: float
+    recovery_id: str = ""
 
 
 @dataclass
@@ -89,6 +90,7 @@ def enqueue_inbound(
     *,
     kind: str,
     processor: InboundProcessor,
+    recovery_id: str = "",
 ) -> InboundReceipt:
     """Pin one update to ``window_id`` and return without yielding."""
     key = (user_id, window_id)
@@ -108,6 +110,7 @@ def enqueue_inbound(
         processor=processor,
         completion=loop.create_future(),
         received_at=time.monotonic(),
+        recovery_id=recovery_id,
     )
     lane.next_sequence += 1
     lane.entries.append(entry)
@@ -139,9 +142,20 @@ async def _drain_lane(key: tuple[int, str], lane: _Lane) -> None:
             lane.active = entry
             delivered = False
             try:
-                delivered = await entry.processor(
-                    entry.update, entry.context, entry.target_window_id
-                )
+                if entry.recovery_id:
+                    from .input_recovery import input_recovery
+
+                    delivered = await input_recovery.run(
+                        entry.recovery_id,
+                        entry.processor,
+                        entry.update,
+                        entry.context,
+                        entry.target_window_id,
+                    )
+                else:
+                    delivered = await entry.processor(
+                        entry.update, entry.context, entry.target_window_id
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

@@ -309,6 +309,11 @@ def _append_dropped_queue_notice(
 
 async def _download_voice_bytes(voice: Any, *, user_id: int, wid: str) -> bytes:
     """Fetch a Telegram voice payload, retrying transient network failures."""
+    from ..input_recovery import input_recovery
+
+    request = input_recovery.current()
+    if request is not None:
+        return await input_recovery.download(voice, request)
     for attempt in range(1, _VOICE_DOWNLOAD_ATTEMPTS + 1):
         stage = "get_file"
         try:
@@ -478,7 +483,11 @@ async def forward_command_handler(
         sess,
         after_message_id=update.message.message_id,
     ) as repost:
-        success, message = await _send_with_delivery_proof(wid, cc_slash, sess)
+        from ..input_recovery import submit_input
+
+        success, message = await submit_input(
+            wid, cc_slash, sess, _send_with_delivery_proof
+        )
         if success:
             # /clear: drop the session association so we re-detect once a
             # new session id is written by the next user message.

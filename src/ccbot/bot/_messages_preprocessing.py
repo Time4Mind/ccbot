@@ -71,6 +71,16 @@ async def prepare_request_for_dispatch(
 ) -> PreparedDispatch:
     """Rewrite an admitted request without ever re-resolving its target."""
     assert update.message is not None
+    from ..input_recovery import input_recovery
+
+    durable = input_recovery.current()
+    if durable is not None and durable.prepared:
+        return PreparedDispatch(
+            text=durable.prepared,
+            session=session_manager.find_session_by_window(wid),
+            preprocessed=durable.preprocessed,
+        )
+    persist_recovery = persist_recovery and durable is None
     settings = session_manager.get_user_settings(user_id)
     if not should_preprocess(
         str(settings.get("preprocessing_mode", "off")), input_kind
@@ -179,6 +189,10 @@ async def prepare_request_for_dispatch(
         record["state"] = "dispatching"
         session_manager.save_state()
 
+    if durable is not None:
+        durable.prepared = text
+        durable.preprocessed = was_preprocessed
+        input_recovery.changed(durable)
     return PreparedDispatch(
         text=text,
         record=record,

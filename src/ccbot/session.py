@@ -674,6 +674,10 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
         )
         return False
 
+    def is_window_starting(self, window_id: str) -> bool:
+        """Whether the pinned agent still holds input in a startup gate."""
+        return window_id in self._resuming_windows
+
     def cancel_window_startup(self, window_id: str) -> None:
         """Cancel a readiness gate after its tmux window was rolled back."""
         task = self._resume_settle_tasks.pop(window_id, None)

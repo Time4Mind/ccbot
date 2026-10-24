@@ -46,6 +46,7 @@ from ..handlers.card_types import TurnPhase
 from ..handlers.typing import fire_typing
 from ..naming import maybe_auto_name
 from ..i18n import t
+from ..input_recovery import submit_input as submit
 from ..remote_prompt_queue import remote_prompt_queue
 from ..session import session_manager
 from ..transfer_runtime import get_node_runtime
@@ -276,7 +277,7 @@ async def _dispatch_text_to_active(
     intent_sess_id = sess.id if (owns_card and sess is not None) else None
     try:
         _t0 = _time.time()
-        success, message = await _send_with_delivery_proof(wid, text, sess)
+        success, message = await submit(wid, text, sess, _send_with_delivery_proof)
         metrics.observe("tg_to_claude_latency_ms", (_time.time() - _t0) * 1000.0)
         metrics.inc("tg_messages_in")
         if not success:

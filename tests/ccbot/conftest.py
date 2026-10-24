@@ -211,5 +211,10 @@ async def isolated_final_deliveries(tmp_path, monkeypatch):
 
     queue = final_delivery.FinalDeliveryQueue(tmp_path / "final-deliveries.json")
     monkeypatch.setattr(final_delivery, "final_delivery_queue", queue)
+    from ccbot import input_recovery
+
+    recovery = input_recovery.InputRecovery(tmp_path / "input-requests.json")
+    monkeypatch.setattr(input_recovery, "input_recovery", recovery)
     yield queue
     await queue.shutdown()
+    await recovery.shutdown()

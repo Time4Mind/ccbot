@@ -55,6 +55,17 @@ logger = logging.getLogger(__name__)
 # --- voice ---
 
 
+async def _voice_reply(message: Any, text: str) -> None:
+    from ..input_recovery import input_recovery
+
+    request = input_recovery.current()
+    if request is not None:
+        request.notice = text
+        input_recovery.changed(request)
+    else:
+        await safe_reply(message, text)
+
+
 async def _clear_voice_pending_marker(bot: Bot, user_id: int, sess: Session) -> None:
     """Repaint the card without the temporary voice_pending user row.
 
@@ -62,6 +73,10 @@ async def _clear_voice_pending_marker(bot: Bot, user_id: int, sess: Session) -> 
     ``_dispatch_text_to_active`` already reposts unconditionally, which
     naturally drops the marker once ``voice_pending`` is cleared.
     """
+    from ..input_recovery import input_recovery
+
+    if input_recovery.current() is not None:
+        return
     try:
         await resume_card_view(bot, user_id, sess)
     except Exception as e:
@@ -137,11 +152,11 @@ async def _process_voice(
         return False
 
     if resolve_voice_backend(user.id) == "off":
-        await safe_reply(update.message, "⚠ Voice is disabled (voice backend = off).")
+        await _voice_reply(update.message, "⚠ Voice is disabled (voice backend = off).")
         return False
     wid = pinned_wid or active_window(user.id)
     if wid is None:
-        await safe_reply(
+        await _voice_reply(
             update.message,
             "❌ No active session. Send a text message first or use /new.",
         )
@@ -153,7 +168,7 @@ async def _process_voice(
         w = await tmux_manager.find_window_by_id(wid)
         if not w:
             display = session_manager.get_display_name(wid)
-            await safe_reply(
+            await _voice_reply(
                 update.message,
                 f"❌ Window '{display}' no longer exists.\n"
                 "Send a message to start a new session.",
@@ -196,69 +211,87 @@ async def _process_voice(
             except Exception as e:
                 logger.debug("voice-pending card surface failed: %s", e)
 
-    try:
-        ogg_data = await _download_voice_bytes(
-            update.message.voice, user_id=user.id, wid=wid
-        )
-    except NetworkError as e:
-        if sess is not None and card_state is not None:
-            card_state.voice_pending = False
-            await _clear_voice_pending_marker(context.bot, user.id, sess)
-        logger.error(
-            "Voice did not reach transcription after %d download attempts "
-            "user=%d window=%s: %s",
-            _VOICE_DOWNLOAD_ATTEMPTS,
-            user.id,
-            wid,
-            e,
-        )
+    from ..input_recovery import input_recovery
+
+    durable = input_recovery.current()
+    if durable is not None and durable.recognized:
+        text = durable.recognized
+    else:
         try:
-            await safe_reply(
-                update.message,
-                _append_dropped_queue_notice(
-                    user.id,
-                    t(
-                        user.id,
-                        "voice.download_failed",
-                        attempts=_VOICE_DOWNLOAD_ATTEMPTS,
-                    ),
-                    queue_barrier,
-                ),
+            ogg_data = await _download_voice_bytes(
+                update.message.voice, user_id=user.id, wid=wid
             )
-        except Exception as notify_error:
-            logger.warning(
-                "Voice download failure notification failed user=%d window=%s: %s",
+        except NetworkError as e:
+            if sess is not None and card_state is not None:
+                card_state.voice_pending = False
+                await _clear_voice_pending_marker(context.bot, user.id, sess)
+            from ..input_recovery import input_recovery
+
+            request = input_recovery.current()
+            if request is not None:
+                request.notice = "Не удалось загрузить голосовое: файл недоступен или отклонён Telegram."
+                input_recovery.changed(request)
+                return False
+            logger.error(
+                "Voice did not reach transcription after %d download attempts "
+                "user=%d window=%s: %s",
+                _VOICE_DOWNLOAD_ATTEMPTS,
                 user.id,
                 wid,
-                notify_error,
+                e,
             )
-        return False
+            try:
+                await _voice_reply(
+                    update.message,
+                    _append_dropped_queue_notice(
+                        user.id,
+                        t(
+                            user.id,
+                            "voice.download_failed",
+                            attempts=_VOICE_DOWNLOAD_ATTEMPTS,
+                        ),
+                        queue_barrier,
+                    ),
+                )
+            except Exception as notify_error:
+                logger.warning(
+                    "Voice download failure notification failed user=%d window=%s: %s",
+                    user.id,
+                    wid,
+                    notify_error,
+                )
+            return False
 
-    try:
-        text = await transcribe_voice(ogg_data, user_id=user.id)
-    except ValueError:
-        if sess is not None and card_state is not None:
-            card_state.voice_pending = False
-            await _clear_voice_pending_marker(context.bot, user.id, sess)
-        await safe_reply(
-            update.message,
-            _append_dropped_queue_notice(
-                user.id, t(user.id, "voice.transcription_failed"), queue_barrier
-            ),
-        )
-        return False
-    except Exception as e:
-        if sess is not None and card_state is not None:
-            card_state.voice_pending = False
-            await _clear_voice_pending_marker(context.bot, user.id, sess)
-        logger.error("Voice transcription failed: %s", e)
-        await safe_reply(
-            update.message,
-            _append_dropped_queue_notice(
-                user.id, t(user.id, "voice.transcription_failed"), queue_barrier
-            ),
-        )
-        return False
+        try:
+            text = await transcribe_voice(ogg_data, user_id=user.id)
+        except ValueError:
+            if sess is not None and card_state is not None:
+                card_state.voice_pending = False
+                await _clear_voice_pending_marker(context.bot, user.id, sess)
+            await _voice_reply(
+                update.message,
+                _append_dropped_queue_notice(
+                    user.id, t(user.id, "voice.transcription_failed"), queue_barrier
+                ),
+            )
+            return False
+        except Exception as e:
+            if sess is not None and card_state is not None:
+                card_state.voice_pending = False
+                await _clear_voice_pending_marker(context.bot, user.id, sess)
+            logger.error("Voice transcription failed: %s", e)
+            await _voice_reply(
+                update.message,
+                _append_dropped_queue_notice(
+                    user.id, t(user.id, "voice.transcription_failed"), queue_barrier
+                ),
+            )
+            return False
+
+    if durable is not None:
+        durable.recognized = text
+        durable.state = "prepared"
+        input_recovery.changed(durable)
 
     if card_state is not None:
         # Replace the recognition placeholder atomically with the recognized

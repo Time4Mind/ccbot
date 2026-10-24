@@ -513,6 +513,8 @@ async def test_real_voice_transcription_and_preprocessing_resume_without_repeati
     assert await inbound.voice_intake_handler(update(60), env.context)
     await prepared.wait()
     sender.assert_not_awaited()
+    assert len(env.cards["source"].pending_prompts) == 1
+    assert env.cards["source"].pending_prompts[0].text == "rewritten"
     await shutdown_inbound_queues()
     restarted = recovery_module.InputRecovery(env.recovery.path)
     restarted.load()
@@ -524,6 +526,7 @@ async def test_real_voice_transcription_and_preprocessing_resume_without_repeati
     assert transcription.await_count == 1 and rewrite.await_count == 1
     assert sender.call_args.args[0:2] == ("@source", "rewritten")
     assert sender.await_count == 1 and restarted.duplicate(update(60))
+    assert len(env.cards["source"].pending_prompts) == 1
 
 
 @pytest.mark.asyncio
@@ -607,3 +610,116 @@ async def test_restart_can_finish_already_rendered_known_terminal_notice(env):
     await restarted.deliver_notice(restarted.records[request.id])
     assert restarted.duplicate(update(80)) and not restarted.records
     restarted.bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("echo_before_confirmation", [True, False])
+async def test_voice_echo_never_returns_as_pending_tail_after_final(
+    env, monkeypatch, echo_before_confirmation
+):
+    """A recovery repaint between echo and TUI acknowledgement cannot undo it."""
+    from ccbot.handlers import card_updates, notifications
+    from ccbot.handlers.card_layout import _render_card
+    from ccbot.handlers.card_registry import begin_repost_intent, end_repost_intent
+    from ccbot.session_monitor import NewMessage
+
+    prompt = "Не в ту сессию забей."
+    answer = "Понял, Артём, не учитываю это сообщение."
+    state = env.cards["source"]
+    state.msg_id = 900
+    monkeypatch.setattr(messages, "is_user_allowed", lambda _: True)
+    monkeypatch.setattr(messages, "resolve_voice_backend", lambda _: "whisper")
+    monkeypatch.setattr(messages, "is_active_for_user", lambda *_: True)
+    monkeypatch.setattr(messages, "get_card_state", lambda *_: state)
+    monkeypatch.setattr(card_updates, "get_card_state", lambda *_: state)
+    monkeypatch.setattr(notifications, "get_card_state", lambda *_: state)
+    monkeypatch.setattr(notifications, "_ensure_seeded", AsyncMock())
+    monkeypatch.setattr(messages, "fire_typing", AsyncMock())
+    monkeypatch.setattr(messages, "cancel_bash_capture", lambda *_: None)
+    monkeypatch.setattr(messages, "get_interactive_window", lambda *_: None)
+    monkeypatch.setattr(messages, "_maybe_start_bash_capture", lambda *_: None)
+    monkeypatch.setattr(messages, "maybe_auto_name", AsyncMock())
+    monkeypatch.setattr(
+        messages, "_intercept_if_pending_ui", AsyncMock(return_value=False)
+    )
+    monkeypatch.setattr(
+        messages.tmux_manager, "find_window_by_id", AsyncMock(return_value=object())
+    )
+    monkeypatch.setattr(messages, "transcribe_voice", AsyncMock(return_value=prompt))
+    monkeypatch.setattr(
+        Voice,
+        "get_file",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                download_as_bytearray=AsyncMock(return_value=b"voice")
+            )
+        ),
+    )
+    monkeypatch.setattr(messages, "card_is_below", lambda *_: True)
+    paints = []
+
+    async def repaint(*args, **kwargs):
+        paints.append(_render_card(env.source, state, user_id=42))
+        return True
+
+    async def send_card(bot, uid, sess, target, *, text, **kwargs):
+        paints.append(text)
+        target.msg_id = 901
+        return True
+
+    monkeypatch.setattr(notifications, "refresh_panel", repaint)
+    monkeypatch.setattr(messages, "refresh_panel", repaint)
+    monkeypatch.setattr(notifications, "_send_card", send_card)
+    monkeypatch.setattr(card_updates, "_should_buffer", lambda *_: False)
+    waiting, acknowledged = asyncio.Event(), asyncio.Event()
+    sends = []
+
+    async def sender(wid, text, sess):
+        sends.append((wid, text))
+        waiting.set()
+        await acknowledged.wait()
+        return True, "confirmed"
+
+    monkeypatch.setattr(messages, "_send_with_delivery_proof", sender)
+    assert await inbound.voice_intake_handler(update(90), env.context)
+    await waiting.wait()
+    echo = NewMessage(
+        session_id="fixture",
+        text=prompt,
+        role="user",
+        is_complete=True,
+        content_type="text",
+        timestamp="2026-10-24T14:18:20.868Z",
+    )
+
+    async def echo_request():
+        begin_repost_intent(42, env.source.id)
+        try:
+            await card_updates.update_session_card(
+                env.context.bot, 42, env.source, echo
+            )
+        finally:
+            end_repost_intent(42, env.source.id)
+
+    if echo_before_confirmation:
+        await echo_request()
+        await refresh_request_status(env.recovery, 42, env.source.id)
+    acknowledged.set()
+    await until(lambda: not has_pending_inbound("@source"))
+    await refresh_request_status(env.recovery, 42, env.source.id)
+    if not echo_before_confirmation:
+        # A confirmed TUI queue admission may precede its user transcript row.
+        # That legitimate pending input must remain visible until its echo.
+        assert prompt in paints[-1]
+        await echo_request()
+    await card_updates.finalize_task(
+        env.context.bot,
+        42,
+        env.source,
+        answer,
+        source_timestamp="2026-10-24T14:18:23.329Z",
+    )
+    await refresh_request_status(env.recovery, 42, env.source.id)
+    assert answer in paints[-1]
+    assert prompt not in paints[-1]  # final-only page, with no synthetic user tail
+    assert sends == [("@source", prompt)]

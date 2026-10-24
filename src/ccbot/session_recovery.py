@@ -48,7 +48,7 @@ async def reconcile_with_tmux(mgr: "SessionManager") -> int:
             continue
         if sess.state in ("active", "idle") and sess.window_id:
             if sess.window_id not in live_ids:
-                sess.state = "lost"
+                mgr.mark_session_lost(sess.id)
                 lost += 1
     if lost:
         mgr.save_state()
@@ -250,7 +250,7 @@ async def reconcile_remote_sessions(
             rebound += 1
         sess.workdir = str(result.get("workdir", sess.workdir)) or sess.workdir
         if sess.state == "lost":
-            sess.state = "active"
+            mgr.set_session_window(sess.id, new_window_id)
         mgr.save_state()
     return rebound, lost, deferred
 

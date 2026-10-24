@@ -536,6 +536,30 @@ async def paint_card_on_carrier(
     *,
     refresh_pane: bool = True,
 ) -> bool:
+    """Serialize selected-page paint and its receipt with final delivery."""
+    async with _card_lock(user_id, sess.id):
+        painted = await _paint_card_on_carrier_locked(
+            bot, user_id, sess, carrier_msg_id, refresh_pane=refresh_pane
+        )
+        if painted is not None:
+            return painted
+        after_message = _cards[(user_id, sess.id)].receipt_after_message_id
+    # This intake surface owns the same session lock itself.
+    from .card_surface import surface_card_after_message
+
+    return await surface_card_after_message(
+        bot, user_id, sess, after_message, preserve_turn=True
+    )
+
+
+async def _paint_card_on_carrier_locked(
+    bot: Bot,
+    user_id: int,
+    sess: Session,
+    carrier_msg_id: int,
+    *,
+    refresh_pane: bool = True,
+) -> bool | None:
     """Claim ``carrier_msg_id`` as ``sess``'s live card and paint it.
 
     Used by Menu → Sessions: the carrier is the menu message the user just
@@ -557,11 +581,7 @@ async def paint_card_on_carrier(
         state.receipt_after_message_id
         and carrier_msg_id <= state.receipt_after_message_id
     ):
-        from .card_surface import surface_card_after_message
-
-        return await surface_card_after_message(
-            bot, user_id, sess, state.receipt_after_message_id, preserve_turn=True
-        )
+        return None
     if state.pending_edit is not None and not state.pending_edit.done():
         state.pending_edit.cancel()
     state.pending_edit = None

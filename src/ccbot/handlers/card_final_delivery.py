@@ -16,7 +16,7 @@ from ..final_delivery import FinalDelivery
 from ..session import Session, session_manager
 from .card_binding import restore_carrier, snapshot_carrier
 from .card_types import CardState, Event, TurnPhase
-from .card_registry import _card_lock
+from .card_registry import _card_lock, _carrier_edit_lock
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ async def deliver_final(
     *,
     sess: Session | None = None,
     live: CardState | None = None,
-) -> bool:
+) -> bool | None:
     """Attempt under the session lock; caller owns that lock on initial send."""
     from ..final_delivery import final_delivery_queue
     from . import bg_status
@@ -77,17 +77,23 @@ async def deliver_final(
         get_card_state,
     )
 
+    if item not in final_delivery_queue.records:
+        return True
     if item.message_id is not None:
         # The transport checkpoints this receipt before stripping keyboards.
         # A bookkeeping crash must not manufacture another final card.
         return True
     sess = sess or session_manager.get_session(item.session_id)
     if sess is None:
-        return False
+        return None
     live = live or get_card_state(item.user_id, sess)
     if _should_buffer(item.user_id, item.session_id, live):
-        return False
-    passive = live.turn_phase is not TurnPhase.IDLE
+        return None
+    from .card_delivery_receipts import visible_final_matches
+
+    passive = live.turn_phase is not TurnPhase.IDLE or bool(
+        live.events and item not in visible_final_matches(item.user_id, live, [item])
+    )
     target = restore_snapshot(item)
     text = item.payload["text"]
     if text is None:
@@ -101,27 +107,27 @@ async def deliver_final(
     keyboard = _legacy("build_footer_keyboard")(
         item.user_id, screen="main", is_busy=False
     )
-    if passive and target.msg_id is None:
-        # A later request owns the live controls. Deliver the frozen older
-        # result without rebinding or stripping that newer request's carrier.
-        from .message_sender import send_with_fallback
+    async with _carrier_edit_lock(item.user_id):
+        if item not in final_delivery_queue.records:
+            return True
+        if _should_buffer(item.user_id, item.session_id, live):
+            return None
+        if passive and target.msg_id is None:
+            # A later request owns the live controls. Deliver the frozen older
+            # result without rebinding or stripping that newer request's carrier.
+            from .message_sender import send_with_fallback
 
-        sent_message = await send_with_fallback(
-            bot, item.user_id, text, disable_notification=True
-        )
-        if sent_message is None:
-            return False
-        final_delivery_queue.bind_ack(item.id, sent_message.message_id)
-        return True
-    if target.msg_id is None:
+            sent_message = await send_with_fallback(
+                bot, item.user_id, text, disable_notification=True
+            )
+            if sent_message is None:
+                return False
+            final_delivery_queue.bind_ack(item.id, sent_message.message_id)
+            return True
         sent = await _legacy("_send_card")(
             bot, item.user_id, sess, target, text=text, reply_markup=keyboard
         )
         delivered = sent is not False and target.msg_id is not None
-    else:
-        delivered = await _legacy("_edit_card")(
-            bot, item.user_id, target, text=text, reply_markup=keyboard
-        )
     if not delivered:
         return False
     if target.msg_id is not None:
@@ -147,7 +153,7 @@ async def deliver_final(
     return True
 
 
-async def retry_delivery(bot: Bot, item: FinalDelivery) -> bool:
+async def retry_delivery(bot: Bot, item: FinalDelivery) -> bool | None:
     async with _card_lock(item.user_id, item.session_id):
         return await deliver_final(bot, item)
 
@@ -155,4 +161,14 @@ async def retry_delivery(bot: Bot, item: FinalDelivery) -> bool:
 def start_final_deliveries(bot: Bot) -> None:
     from ..final_delivery import final_delivery_queue
 
-    final_delivery_queue.start(lambda item: retry_delivery(bot, item))
+    def ready(item: FinalDelivery) -> bool:
+        from .card_registry import _cards, _should_buffer
+
+        sess = session_manager.get_session(item.session_id)
+        return sess is not None and not _should_buffer(
+            item.user_id,
+            item.session_id,
+            _cards.get((item.user_id, item.session_id), CardState()),
+        )
+
+    final_delivery_queue.start(lambda item: retry_delivery(bot, item), ready=ready)

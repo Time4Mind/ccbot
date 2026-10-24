@@ -112,9 +112,12 @@ class Session:
         state: 'active' | 'idle' | 'archived' | 'completed' | 'lost'.
         worker_session_id: Stable remote-worker routing id for RPC and events.
         claude_session_id: Native provider session id used for transcript/resume.
-        created_at: Unix timestamp.
+        created_at: Original creation timestamp when created_at_known is true.
+            Legacy observations are retained with created_at_known false.
+        activated_at: Last create/restore/recovery activation, for switcher order.
+        lost_at: Last transition into lost, independent of successful archival.
         last_event_at: Unix timestamp of most recent inbound or outbound activity.
-        archived_at: Unix timestamp of archival, 0 while active.
+        archived_at: Last successful archival timestamp; retained on restore.
         message_count: Cumulative claude turn count.
         was_lost: True if this session passed through the ``lost`` state
             before reaching its terminal state (archived/completed). Used
@@ -132,6 +135,11 @@ class Session:
     claude_session_id: str = ""
     provider_transcript_path: str = ""
     created_at: float = 0.0
+    # Legacy created_at could be overwritten by restore; preserve it without
+    # claiming it is the original date unless this provenance bit is present.
+    created_at_known: bool = True
+    activated_at: float = 0.0
+    lost_at: float = 0.0
     last_event_at: float = 0.0
     archived_at: float = 0.0
     message_count: int = 0
@@ -156,6 +164,25 @@ class Session:
     # from the provider's active context window and survives archive/restore.
     context_path: str = ""
     context_error: str = ""
+
+    @property
+    def archive_entry_at(self) -> float:
+        """Last terminal transition, with conservative legacy fallbacks."""
+        if self.state == "lost":
+            return self.lost_at or max(
+                self.archived_at, self.last_event_at, self.activated_at, self.created_at
+            )
+        return (
+            self.archived_at
+            or self.last_event_at
+            or self.activated_at
+            or self.created_at
+        )
+
+    @property
+    def active_order_at(self) -> float:
+        """Restores keep their new switcher position without changing age."""
+        return self.activated_at or self.created_at
 
     @staticmethod
     def new_id() -> str:
@@ -229,6 +256,9 @@ class Session:
             "claude_session_id": self.claude_session_id,
             "provider_transcript_path": self.provider_transcript_path,
             "created_at": self.created_at,
+            "created_at_known": self.created_at_known,
+            "activated_at": self.activated_at,
+            "lost_at": self.lost_at,
             "last_event_at": self.last_event_at,
             "archived_at": self.archived_at,
             "message_count": self.message_count,
@@ -272,6 +302,9 @@ class Session:
             claude_session_id=provider_session_id,
             provider_transcript_path=str(data.get("provider_transcript_path", "")),
             created_at=float(data.get("created_at", 0.0)),
+            created_at_known=data.get("created_at_known") is True,
+            activated_at=float(data.get("activated_at", data.get("created_at", 0.0))),
+            lost_at=float(data.get("lost_at", 0.0)),
             last_event_at=float(data.get("last_event_at", 0.0)),
             archived_at=float(data.get("archived_at", 0.0)),
             message_count=int(data.get("message_count", 0)),

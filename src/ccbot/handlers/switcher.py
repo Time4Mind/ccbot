@@ -88,7 +88,7 @@ def build_switcher_keyboard(
     # Ordinary sessions keep their chronological slots. The user's default
     # reserve stays last even when it was created before newer sessions.
     sessions = sorted(
-        sessions, key=lambda s: (reserve_owner(s) == user_id, s.created_at, s.id)
+        sessions, key=lambda s: (reserve_owner(s) == user_id, s.active_order_at, s.id)
     )
 
     active_sess = session_manager.get_active_session(user_id)

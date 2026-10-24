@@ -551,6 +551,8 @@ async def test_published_codex_restore_rolls_back_after_async_startup_failure(
         backend="codex",
         state=original_state,  # type: ignore[arg-type]
         created_at=11.0,
+        activated_at=15.0,
+        lost_at=30.0 if original_state == "lost" else 0.0,
         last_event_at=22.0,
         archived_at=33.0,
         was_lost=original_state == "lost",
@@ -592,6 +594,8 @@ async def test_published_codex_restore_rolls_back_after_async_startup_failure(
 
     assert restored.state == original_state
     assert restored.window_id == ""
+    assert restored.activated_at == 15.0
+    assert restored.lost_at == (30.0 if original_state == "lost" else 0.0)
     assert restored.created_at == 11.0
     assert restored.last_event_at == 22.0
     assert restored.archived_at == 33.0

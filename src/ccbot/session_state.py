@@ -202,6 +202,7 @@ class SessionStateMixin(NodeSessionStateMixin):
             goal=goal,
             state="active",
             created_at=now,
+            activated_at=now,
             last_event_at=now,
             backend=backend or self.agent_backend,
             default_reserve_user_id=default_reserve_user_id,
@@ -320,7 +321,10 @@ class SessionStateMixin(NodeSessionStateMixin):
         sess = self.sessions.get(session_id)
         if not sess:
             return
+        if sess.state != "lost":
+            sess.lost_at = time.time()
         sess.state = "lost"
+        sess.was_lost = True
         sess.window_id = ""
         sess.pending_preprocessing.clear()
         self._replace_terminal_active_session(sess)
@@ -339,8 +343,8 @@ class SessionStateMixin(NodeSessionStateMixin):
     ) -> list["Session"]:
         """Return archived/completed/lost sessions, newest first.
 
-        If `max_age_seconds` is given, only sessions whose archived_at is
-        within that window are returned.
+        If `max_age_seconds` is given, only sessions whose latest terminal
+        transition is within that window are returned.
         """
         now = time.time()
         out: list[Session] = []
@@ -348,12 +352,11 @@ class SessionStateMixin(NodeSessionStateMixin):
             if s.state not in states:
                 continue
             if max_age_seconds is not None:
-                # Use archived_at if set, else last_event_at as fallback.
-                anchor = s.archived_at or s.last_event_at or s.created_at
+                anchor = s.archive_entry_at
                 if anchor and (now - anchor) > max_age_seconds:
                     continue
             out.append(s)
-        out.sort(key=lambda s: s.archived_at or s.last_event_at or 0, reverse=True)
+        out.sort(key=lambda s: s.archive_entry_at, reverse=True)
         return out
 
     def find_idle_to_archive(self, idle_seconds: float) -> list["Session"]:
@@ -374,7 +377,7 @@ class SessionStateMixin(NodeSessionStateMixin):
         for s in self.sessions.values():
             if s.state not in ("archived", "completed", "lost"):
                 continue
-            anchor = s.archived_at or s.last_event_at or s.created_at
+            anchor = s.archive_entry_at
             if anchor and (now - anchor) >= purge_after_seconds:
                 out.append(s)
         return out
@@ -556,9 +559,9 @@ class SessionStateMixin(NodeSessionStateMixin):
     def set_session_window(self, session_id: str, window_id: str) -> None:
         """Re-attach a session to a (possibly new) tmux window after restore.
 
-        A restored (or re-bound lost) session re-enters as if freshly created:
-        ``created_at`` is bumped to now so the oldest -> newest switcher slots
-        it at the far right rather than back in its original position.
+        Activation order advances independently of immutable creation time.
+        Prior archival/loss timestamps remain historical until a new terminal
+        transition; a failed restore can restore the complete prior snapshot.
         """
         sess = self.sessions.get(session_id)
         if not sess:
@@ -566,7 +569,7 @@ class SessionStateMixin(NodeSessionStateMixin):
         now = time.time()
         sess.window_id = window_id
         sess.state = "active"
-        sess.created_at = now
+        sess.activated_at = now
         sess.last_event_at = now
         self.save_state()
 

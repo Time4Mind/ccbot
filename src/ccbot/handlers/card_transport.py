@@ -210,6 +210,9 @@ async def _send_card_locked(
     state.last_rendered = text
     _register_msg(user_id, sent.message_id, sess.id)
     session_manager.set_card_msg(user_id, sent.message_id)
+    from .card_delivery_receipts import observe_card_receipt
+
+    observe_card_receipt(user_id, state, text)
     return True
 
 
@@ -240,6 +243,32 @@ async def _edit_card(
 
 
 async def _edit_card_unlocked(
+    bot: Bot,
+    user_id: int,
+    state: CardState,
+    *,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    refresh_pane: bool = True,
+) -> bool:
+    """Record exact visible-final receipts before releasing the edit barrier."""
+    message_id = state.msg_id
+    edited = await _edit_card_content(
+        bot,
+        user_id,
+        state,
+        text=text,
+        reply_markup=reply_markup,
+        refresh_pane=refresh_pane,
+    )
+    if edited and state.msg_id == message_id:
+        from .card_delivery_receipts import observe_card_receipt
+
+        observe_card_receipt(user_id, state, text)
+    return edited
+
+
+async def _edit_card_content(
     bot: Bot,
     user_id: int,
     state: CardState,

@@ -422,6 +422,32 @@ Install footprint:
 
 ## 9. Recovery (F2 + F3)
 
+Archive lifecycle clocks are separate: `created_at` stays immutable,
+`activated_at` controls create/restore ordering in the active switcher,
+`archived_at` records successful archival, and `lost_at` records window loss.
+The unified archive list sorts, filters and expires by the corresponding latest
+terminal transition. Runtime, startup and remote reconciliation use the same
+lost transition; repeated observations of an already lost window do not extend
+its retention. Failed restores restore the complete prior session snapshot.
+Displayed age is measured from original creation. New records persist
+`created_at_known=true`; legacy records without reliable creation provenance
+retain their historical timestamp with `created_at_known=false` and display
+`?` for age, since older restores may have overwritten it. Migration does not
+invent a replacement date. Legacy loss ordering uses the latest known historical
+activity when no exact loss timestamp is available.
+
+Successful card edits and sends acknowledge only the queued final actually
+visible on the selected page. Matching includes the full answer and its source
+time or exact preceding transcript request; ambiguous matches remain pending.
+The receipt is persisted before navigation completes. Navigation and final sends
+share card barriers, so a queued worker rechecks the receipt before sending.
+Looking at a different page or failing an edit does not acknowledge a result.
+Navigation preserves its selected page and controls while any older unmatched
+result is delivered passively. Buffer-only sessions do not consume transport
+retry attempts or emit network-failure warnings. Source completion timestamps
+also make a minimal pre-seed journal recognizable after restart.
+
+
 Final-answer delivery is independent of model completion and transcript offsets.
 `final-deliveries.json` journals an immutable per-turn snapshot before any await.
 It is atomically saved with private file permissions and resumed at startup.

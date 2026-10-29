@@ -1225,6 +1225,28 @@ async def test_worker_cleans_up_window_when_startup_fails(tmp_path, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_worker_uses_stricter_startup_limits(tmp_path, monkeypatch):
+    from ccbot import node_worker
+
+    executor = TmuxWorkerExecutor(
+        workdir=tmp_path, ready_timeout=50, codex_update_timeout=400
+    )
+    drive = AsyncMock()
+    monkeypatch.setattr(node_worker, "drive_codex_startup", drive)
+    await executor._wait_ready(
+        "@9",
+        "codex",
+        command="codex",
+        startup_limits={
+            "startup_timeout": 70,
+            "update_timeout": 300,
+        },
+    )
+    assert drive.await_args.kwargs["timeout"] == 50
+    assert drive.await_args.kwargs["update_timeout"] == 300
+
+
+@pytest.mark.asyncio
 async def test_worker_cleans_up_window_when_startup_is_cancelled(tmp_path, monkeypatch):
     executor = TmuxWorkerExecutor(workdir=tmp_path)
     calls: list[tuple[str, ...]] = []

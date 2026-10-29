@@ -10,7 +10,14 @@ from ccbot.codex_startup import (
     classify_codex_screen,
     drive_codex_startup,
     is_codex_ready,
+    parse_codex_update_timeout,
 )
+
+
+@pytest.mark.parametrize("invalid", ["0", "-1", "nan", "inf", "not-a-number"])
+def test_update_timeout_requires_positive_finite_value(invalid):
+    with pytest.raises(ValueError, match="finite and positive"):
+        parse_codex_update_timeout(invalid)
 
 
 UPDATE_PROMPT = """Update available! 0.147.0 -> 0.151.0
@@ -36,6 +43,160 @@ READY_PROMPT = """OpenAI Codex
 
 gpt-5.6 medium · ~/project
 """
+
+
+@pytest.mark.asyncio
+async def test_slow_update_does_not_consume_startup_budget() -> None:
+    screens = iter([UPDATE_PROMPT, "Installing", "Installing", "shell", READY_PROMPT])
+    processes = iter(["codex", "npm", "npm", "zsh", "codex"])
+    commands = []
+
+    async def capture():
+        screen = next(screens)
+        if screen == "Installing":
+            await asyncio.sleep(0.04)
+        return screen
+
+    result = await drive_codex_startup(
+        command="codex resume exact",
+        capture=capture,
+        current_process=lambda: _next(processes),
+        send_key=lambda _key: _done(),
+        relaunch=lambda command: _append(commands, command),
+        timeout=0.06,
+        poll_interval=0,
+        ready_settle_time=0,
+    )
+    assert result.updated
+    assert commands == ["codex resume exact"]
+
+
+@pytest.mark.asyncio
+async def test_update_deadline_bounds_stuck_terminal_capture():
+    count = 0
+
+    async def capture():
+        nonlocal count
+        count += 1
+        if count == 1:
+            return UPDATE_PROMPT
+        await asyncio.Event().wait()
+        return "unreachable"
+
+    with pytest.raises(CodexStartupError, match="update timeout"):
+        await drive_codex_startup(
+            command="codex",
+            capture=capture,
+            current_process=lambda: _value("codex"),
+            send_key=lambda _key: _done(),
+            relaunch=lambda _cmd: _done(),
+            timeout=1,
+            update_timeout=0.03,
+            poll_interval=0,
+            ready_settle_time=0,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("frames", "timeout", "update_timeout", "error"),
+    [
+        ([(0, "waiting", "codex"), (3, "waiting", "codex")], 2, 20, "startup timeout"),
+        (
+            [
+                (0, UPDATE_PROMPT, "codex"),
+                (5, "Installing", "npm"),
+                (6, "Installing", "npm"),
+            ],
+            2,
+            10,
+            "update timeout",
+        ),
+        (
+            [(0, UPDATE_PROMPT, "codex"), (5, "shell", "zsh"), (3, "waiting", "codex")],
+            2,
+            10,
+            "post-update startup timeout",
+        ),
+        (
+            [(0, UPDATE_PROMPT, "codex"), (1, "npm ERR! installation failed", "npm")],
+            2,
+            10,
+            "update failed",
+        ),
+    ],
+)
+async def test_startup_phase_deadlines_and_failures_are_bounded(
+    frames, timeout, update_timeout, error
+):
+    ticks = [0.0]
+    process = ["codex"]
+    pending = iter(frames)
+    last = ["waiting"]
+
+    async def capture():
+        try:
+            advance, screen, process[0] = next(pending)
+            ticks[0] += advance
+            last[0] = screen
+        except StopIteration:
+            ticks[0] += 1
+        return last[0]
+
+    with pytest.raises(CodexStartupError, match=error):
+        await drive_codex_startup(
+            command="codex",
+            capture=capture,
+            current_process=lambda: _value(process[0]),
+            send_key=lambda _key: _done(),
+            relaunch=lambda _cmd: _done(),
+            timeout=timeout,
+            update_timeout=update_timeout,
+            poll_interval=0,
+            ready_settle_time=0,
+            clock=lambda: ticks[0],
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("direct", [False, True])
+async def test_update_grants_full_new_readiness_budget_with_controlled_clock(direct):
+    ticks = [0.0]
+    process = ["codex"]
+    frames = iter(
+        [(0, UPDATE_PROMPT, "codex"), (4, "Installing", "npm")]
+        + (
+            [(4, READY_PROMPT, "codex"), (1, READY_PROMPT, "codex")]
+            if direct
+            else [
+                (4, "shell", "zsh"),
+                (1, "Starting", "codex"),
+                (0.5, READY_PROMPT, "codex"),
+            ]
+        )
+    )
+    relaunched = []
+
+    async def capture():
+        advance, screen, process[0] = next(frames)
+        ticks[0] += advance
+        return screen
+
+    result = await drive_codex_startup(
+        command="codex --resume exact",
+        capture=capture,
+        current_process=lambda: _value(process[0]),
+        send_key=lambda _key: _done(),
+        relaunch=lambda command: _append(relaunched, command),
+        timeout=2,
+        update_timeout=10,
+        poll_interval=0,
+        ready_settle_time=1 if direct else 0,
+        clock=lambda: ticks[0],
+    )
+    assert result.updated
+    assert relaunched == ([] if direct else ["codex --resume exact"])
+
 
 BOOTSTRAP_ERROR = """>_ OpenAI Codex (v0.159.3)
   ~/workdir

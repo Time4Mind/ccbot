@@ -6,6 +6,7 @@ import asyncio
 import base64
 import hashlib
 import logging
+import math
 import secrets
 import ssl
 import time
@@ -40,6 +41,43 @@ _node_update_attempts: dict[str, float] = {}
 _NODE_UPDATE_RETRY_SECONDS = 300.0
 _REMOTE_SESSION_START_TIMEOUT_SECONDS = 135.0
 _EVENT_DRAIN_TIMEOUT_SECONDS = 10.0
+
+
+async def _codex_startup_limits(
+    runtime: Any, node_id: str
+) -> tuple[dict[str, float], float]:
+    """Read the worker's limits and reserve RPC time for both startup phases."""
+    from .config import config
+
+    response = await runtime._request(node_id, "startup_limits", {}, timeout=5.0)
+    if response.get("ok", True) is False:
+        error = str(response.get("error", ""))
+        if error not in (
+            "unsupported node operation: startup_limits",
+            "startup limits unsupported",
+        ):
+            raise RuntimeError(error or "worker startup limits failed")
+        logger.warning(
+            "worker startup limits unavailable node=%s; legacy behavior applies",
+            node_id,
+        )
+        startup, update = (
+            max(120.0, config.resume_settle_timeout),
+            config.codex_update_timeout,
+        )
+    else:
+        if not {"startup_timeout", "update_timeout"} <= response.keys():
+            raise ValueError("worker did not return startup limits")
+        startup, update = (
+            float(response["startup_timeout"]),
+            float(response["update_timeout"]),
+        )
+        if not all(math.isfinite(value) and value > 0 for value in (startup, update)):
+            raise ValueError("worker startup limits must be finite and positive")
+    return {
+        "startup_timeout": startup,
+        "update_timeout": update,
+    }, 2 * startup + update + 15.0
 
 
 class _NodeResponseTimeout(TimeoutError):
@@ -295,12 +333,18 @@ class RemoteNodeRuntime(RemoteInboxMixin, RemoteHistoryMixin):
         provider_transcript_path: str = "",
     ) -> dict[str, Any]:
         startup_id = secrets.token_urlsafe(12)
-        payload = {
+        payload: dict[str, Any] = {
             "path": path,
             "backend": backend,
             "name": name,
             "startup_id": startup_id,
         }
+        startup_rpc_timeout = _REMOTE_SESSION_START_TIMEOUT_SECONDS
+        if backend == "codex":
+            (
+                payload["startup_limits"],
+                startup_rpc_timeout,
+            ) = await _codex_startup_limits(self, target_node_id)
         if resume_session_id:
             payload["resume_session_id"] = resume_session_id
         if source_backend:
@@ -312,7 +356,7 @@ class RemoteNodeRuntime(RemoteInboxMixin, RemoteHistoryMixin):
                 target_node_id,
                 "restore_session" if resume_session_id else "create_session",
                 payload,
-                timeout=_REMOTE_SESSION_START_TIMEOUT_SECONDS,
+                timeout=startup_rpc_timeout,
             )
         except BaseException:
             try:
@@ -394,6 +438,12 @@ class RemoteNodeRuntime(RemoteInboxMixin, RemoteHistoryMixin):
         path = Path(transfer.context_path)
         content = await asyncio.to_thread(path.read_bytes)
         digest = hashlib.sha256(content).hexdigest()
+        startup_limits = None
+        finish_timeout = None
+        if transfer.target_backend == "codex":
+            startup_limits, finish_timeout = await _codex_startup_limits(
+                self, transfer.target_node_id
+            )
         begin = await self._request(
             transfer.target_node_id,
             "transfer_context_begin",
@@ -424,10 +474,14 @@ class RemoteNodeRuntime(RemoteInboxMixin, RemoteHistoryMixin):
                     },
                 )
             )
+        finish_payload: dict[str, Any] = {"transfer_id": worker_transfer_id}
+        if startup_limits is not None:
+            finish_payload["startup_limits"] = startup_limits
         finished = await self._request(
             transfer.target_node_id,
             "transfer_context_finish",
-            {"transfer_id": worker_transfer_id},
+            finish_payload,
+            timeout=finish_timeout,
         )
         self._require_ok(finished)
         target_session_id = str(finished.get("target_agent_session_id", ""))

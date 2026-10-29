@@ -8,7 +8,6 @@ Wraps libtmux to provide async-friendly operations on a single tmux session:
 
 All blocking libtmux calls are wrapped in asyncio.to_thread().
 
-Key class: TmuxManager (singleton instantiated as `tmux_manager`).
 """
 
 from __future__ import annotations
@@ -137,6 +136,7 @@ class TmuxManager:
             pane,
             command=command,
             timeout=config.resume_settle_timeout,
+            update_timeout=config.codex_update_timeout,
             to_thread=asyncio.to_thread,
             poll_interval=poll_interval,
             ready_settle_time=ready_settle_time,

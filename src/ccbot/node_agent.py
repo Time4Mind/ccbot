@@ -31,7 +31,11 @@ from .node_update import GitNodeUpdater, current_git_revision
 from .node_inbox import dispatch_inbox_operation, is_inbox_operation
 from .node_backend_readiness import health_backend_fields, require_ready_backend
 from .node_agent_config import print_connection_receipt, ssh_access_from_environment
-from .node_session_start import dispatch_create_session
+from .node_session_start import (
+    dispatch_create_session,
+    dispatch_context_session,
+    worker_startup_limits,
+)
 from .node_worker import TmuxWorkerExecutor
 
 logger = logging.getLogger(__name__)
@@ -41,6 +45,7 @@ _CONTROL_OPERATIONS = {
     "terminate_session",
     "cancel_session_start",
     "health",
+    "startup_limits",
 }
 _STARTUP_OPERATIONS = {"create_session", "transfer_context_finish"}
 _COMMAND_QUEUE_SIZE = 256
@@ -355,6 +360,8 @@ class NodeAgent:
 
     async def _dispatch(self, payload: dict[str, Any]) -> dict[str, Any]:
         operation = str(payload.get("operation", ""))
+        if operation == "startup_limits":
+            return worker_startup_limits(self._executor)
         if operation == "transfer_context_begin":
             return self._begin_context(payload)
         if operation == "transfer_context_chunk":
@@ -463,11 +470,7 @@ class NodeAgent:
             raise ValueError("context byte count mismatch")
         if hashlib.sha256(content).hexdigest() != pending.expected_sha256:
             raise ValueError("context sha256 mismatch")
-        result = await self._executor.start_context_session(
-            context_path=str(pending.path),
-            backend=pending.backend,
-            name=pending.name,
-        )
+        result = await dispatch_context_session(self._executor, pending, payload)
         result.setdefault("ok", True)
         result.setdefault("context_path", str(pending.path))
         return result

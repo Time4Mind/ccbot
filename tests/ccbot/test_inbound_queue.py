@@ -208,7 +208,7 @@ async def test_text_intake_focuses_latest_before_delayed_monitor_event() -> None
     state = CardState(current_page_idx=3)
     observed: list[object] = []
 
-    def surface(_bot, _uid, _sess, _message_id):
+    def surface(_bot, _uid, _sess, _message_id, **_kwargs):
         observed.append(state.current_page_idx)
 
     with (
@@ -506,7 +506,7 @@ async def test_reply_marks_finished_target_working_at_intake() -> None:
             patch("ccbot.bot.inbound.enqueue_inbound", return_value=receipt),
             patch(
                 "ccbot.bot.inbound.schedule_card_after_message",
-                side_effect=lambda *_args: observed.append(
+                side_effect=lambda *_args, **_kwargs: observed.append(
                     bg_status.status_emoji(42, target.id)
                 ),
             ),

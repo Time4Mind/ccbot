@@ -237,6 +237,65 @@ async def test_voice_receipt_does_not_wait_for_redundant_status_keyboard(
 
 
 @pytest.mark.asyncio
+async def test_new_text_shows_working_before_slow_history_seed(setup, monkeypatch):
+    from ccbot.inbound_queue import shutdown_inbound_queues
+
+    sess, state, manager, active = setup
+    active[0] = sess
+    bg_status.update_status(42, sess.id, "finished", force=True)
+    visible, release_seed = asyncio.Event(), asyncio.Event()
+    labels = []
+
+    async def slow_seed(*_args):
+        await release_seed.wait()
+
+    async def send_card(_bot, uid, target, card, *, text):
+        labels.append(bg_status.status_emoji(uid, target.id))
+        card.msg_id = 102
+        visible.set()
+        return True
+
+    monkeypatch.setattr(inbound, "_capture_pending_transfer", lambda *a: False)
+    monkeypatch.setattr(inbound, "is_user_allowed", lambda uid: True)
+    monkeypatch.setattr(inbound, "active_window", lambda uid: sess.window_id)
+    monkeypatch.setattr(inbound, "get_card_state", lambda *a: state)
+    monkeypatch.setattr(inbound, "claim_default_session", lambda *a: None)
+    monkeypatch.setattr(inbound, "_run_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        inbound, "refresh_session_keyboard", card_surface.refresh_session_keyboard
+    )
+    monkeypatch.setattr(card_surface, "get_card_state", lambda *a: state)
+    monkeypatch.setattr(card_surface, "refresh_panel", AsyncMock())
+    monkeypatch.setattr(
+        card_surface,
+        "_legacy",
+        lambda name: {
+            "is_active_for_user": lambda *a: True,
+            "build_footer_keyboard": lambda *a, **kw: None,
+            "_render_card": lambda *a, **kw: "receipt",
+            "_send_card": send_card,
+            "_ensure_seeded": slow_seed,
+        }[name],
+    )
+    state.agent_model, state.reasoning_effort = "gpt-6.1-sol", "high"
+    bot = AsyncMock()
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=42),
+        message=SimpleNamespace(text="next", message_id=101, reply_to_message=None),
+    )
+    try:
+        assert await inbound.text_intake_handler(
+            update, SimpleNamespace(bot=bot, user_data={})
+        )
+        await asyncio.wait_for(visible.wait(), 0.2)
+        assert labels == ["🔶"]
+    finally:
+        release_seed.set()
+        await shutdown_inbound_queues()
+        await card_surface.shutdown_card_surface_tasks()
+
+
+@pytest.mark.asyncio
 async def test_voice_intake_returns_and_pins_before_slow_telegram_receipt(
     setup, monkeypatch
 ):

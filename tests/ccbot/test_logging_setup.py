@@ -126,7 +126,9 @@ def test_startup_prunes_expired_log_records_and_rotations(tmp_path, monkeypatch)
             root.addHandler(handler)
         root.setLevel(old_level)
     assert "old" not in current.read_text()
-    assert "recent continuation" in current.read_text()
+    retained = "".join(p.read_text() for p in logs.glob("bot.log*"))
+    assert "recent continuation" in retained
+    assert "recent continuation" not in current.read_text()
     assert not rotated.exists()
     assert unrelated.exists()
 
@@ -141,3 +143,22 @@ def test_hourly_rotation_keeps_five_old_segments(tmp_path):
         assert len(handler.getFilesToDelete()) == 2
     finally:
         handler.close()
+
+
+def test_new_handler_rollover_is_aligned_to_next_hour(tmp_path, monkeypatch):
+    monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
+    root = logging.getLogger()
+    old_handlers, old_level = list(root.handlers), root.level
+    try:
+        configure_logging()
+        handler = root.handlers[0]
+        now = time.time()
+        expected = (int(now) // 3600 + 1) * 3600
+        assert handler.rolloverAt == expected
+    finally:
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+            handler.close()
+        for handler in old_handlers:
+            root.addHandler(handler)
+        root.setLevel(old_level)

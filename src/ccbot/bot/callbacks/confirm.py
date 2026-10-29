@@ -35,6 +35,14 @@ async def handle(
 
     if data.startswith(CB_CONF_KILL_YES):
         sid = data[len(CB_CONF_KILL_YES) :]
+        active = session_manager.get_active_session(user.id)
+        logger.info(
+            "close_confirmed user=%s target=%s active=%s source_message=%s",
+            user.id,
+            sid,
+            active.id if active else None,
+            getattr(getattr(query, "message", None), "message_id", None),
+        )
         sess = session_manager.get_session(sid)
         if sess is None or sess.state not in ("active", "idle", "lost"):
             await open_more_in_place(query, user.id)
@@ -46,6 +54,11 @@ async def handle(
         return True
 
     if data == CB_CONF_KILL_NO:
+        logger.info(
+            "close_cancelled user=%s source_message=%s",
+            user.id,
+            getattr(getattr(query, "message", None), "message_id", None),
+        )
         await open_more_in_place(query, user.id)
         await query.answer(t(user.id, "btn.cancelled"))
         return True

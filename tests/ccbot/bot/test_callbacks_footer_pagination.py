@@ -215,8 +215,13 @@ async def test_pagination_cancels_new_session_flow_before_showing_active_card(
 
 
 @pytest.mark.asyncio
-async def test_close_confirmation_uses_close_wording_in_russian(monkeypatch) -> None:
-    query = SimpleNamespace(data=CB_FT_KILL, answer=AsyncMock())
+async def test_close_confirmation_uses_close_wording_in_russian(
+    monkeypatch, caplog
+) -> None:
+    caplog.set_level("INFO")
+    query = SimpleNamespace(
+        data=CB_FT_KILL, answer=AsyncMock(), message=SimpleNamespace(message_id=99)
+    )
     context = SimpleNamespace(bot=SimpleNamespace())
     user = SimpleNamespace(id=42)
     session = SimpleNamespace(id="s1", name="Target", state="active")
@@ -237,3 +242,4 @@ async def test_close_confirmation_uses_close_wording_in_russian(monkeypatch) -> 
 
     keyboard = set_view.await_args.args[4]
     assert keyboard.inline_keyboard[0][0].text == "⚠ Да, закрыть"
+    assert "close_confirmation user=42 session=s1 source_message=99" in caplog.text

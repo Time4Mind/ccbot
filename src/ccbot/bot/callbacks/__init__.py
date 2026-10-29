@@ -113,6 +113,36 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             pass
         return
 
+    # Callback payloads can contain paths or opaque tokens: log only an
+    # allowlisted action family and the message/session routing metadata.
+    family = query.data.partition(":")[0]
+    if family not in {
+        "ft",
+        "pg",
+        "cn",
+        "mm",
+        "st",
+        "ar",
+        "aq",
+        "kb",
+        "nd",
+        "tr",
+        "db",
+        "rs",
+        "file",
+        "au",
+        "sw",
+    }:
+        family = "other"
+    active = session_manager.get_active_session(user.id)
+    logger.info(
+        "callback_received user=%s family=%s source_message=%s active_session=%s",
+        user.id,
+        family,
+        getattr(getattr(query, "message", None), "message_id", None),
+        active.id if active else None,
+    )
+
     # Every allowed button tap is an explicit user action, including noop
     # buttons that only dismiss Telegram's spinner.
     record_user_activity(user.id)
@@ -136,6 +166,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     for h in _HANDLERS:
         if await h(query, context, user):
+            logger.info(
+                "callback_handled user=%s family=%s handler=%s",
+                user.id,
+                family,
+                h.__module__.rsplit(".", 1)[-1],
+            )
             await _repaint_acknowledged_marker(
                 context.bot, user.id, acknowledged, manual_acknowledged
             )

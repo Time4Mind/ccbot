@@ -193,14 +193,31 @@ async def _strip_stale_switchers(
                 targets.append(st.msg_id)
     for msg_id in targets:
         if _switcher_carrier_is_protected(user_id, msg_id):
+            logger.info(
+                "keyboard_strip_skipped user=%s message_id=%s keep=%s reason=protected",
+                user_id,
+                msg_id,
+                keep_msg_id,
+            )
             continue
         try:
             await bot.edit_message_reply_markup(
                 chat_id=user_id, message_id=msg_id, reply_markup=None
             )
-        except Exception:
-            # Already stripped / deleted / not editable — nothing to do.
-            pass
+            logger.info(
+                "keyboard_strip user=%s message_id=%s keep=%s result=ok",
+                user_id,
+                msg_id,
+                keep_msg_id,
+            )
+        except Exception as exc:
+            logger.info(
+                "keyboard_strip user=%s message_id=%s keep=%s result=error error_type=%s",
+                user_id,
+                msg_id,
+                keep_msg_id,
+                type(exc).__name__,
+            )
 
 
 # Reverse lookup so reply-quote can route a one-shot user message to the

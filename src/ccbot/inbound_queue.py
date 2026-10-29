@@ -115,7 +115,13 @@ def enqueue_inbound(
     lane.next_sequence += 1
     lane.entries.append(entry)
     logger.info(
-        "inbound_enqueued",
+        "inbound_enqueued user=%s window=%s seq=%s kind=%s message_id=%s ahead=%s",
+        user_id,
+        window_id,
+        entry.sequence,
+        kind,
+        getattr(update.message, "message_id", None),
+        ahead,
         extra={
             "user_id": user_id,
             "window_id": window_id,
@@ -179,7 +185,13 @@ async def _drain_lane(key: tuple[int, str], lane: _Lane) -> None:
                     entry.completion.set_result(delivered)
                 lane.active = None
             logger.info(
-                "inbound_delivered",
+                "inbound_delivered user=%s window=%s seq=%s kind=%s message_id=%s delivered=%s",
+                lane.user_id,
+                lane.window_id,
+                entry.sequence,
+                entry.kind,
+                getattr(entry.update.message, "message_id", None),
+                delivered,
                 extra={
                     "user_id": lane.user_id,
                     "window_id": lane.window_id,

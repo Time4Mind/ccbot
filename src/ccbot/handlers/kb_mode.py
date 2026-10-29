@@ -118,6 +118,24 @@ def parse_picker_menu(prompt_content: str, ui_name: str = "") -> PickerMenu | No
     )
 
 
+def should_hide_reserve_ui(user_id: int, sess: object | None, pane_text: str) -> bool:
+    """Hide reserve prompts except an active model or effort picker."""
+    from ..session import session_manager
+    from ..session_models import reserve_owner
+    from ..terminal_parser import extract_interactive_content
+
+    if sess is None or not reserve_owner(sess):
+        return False
+    active = session_manager.get_active_session(user_id)
+    content = extract_interactive_content(pane_text)
+    return (
+        active is None
+        or active.id != getattr(sess, "id", None)
+        or content is None
+        or parse_picker_menu(content.content, content.name) is None
+    )
+
+
 def _utf8_complete_suffix(text: str, limit_bytes: int) -> str:
     raw = text.encode("utf-8", "replace")
     if len(raw) <= limit_bytes:

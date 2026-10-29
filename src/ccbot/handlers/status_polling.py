@@ -44,6 +44,7 @@ from .archive import idle_archive_sweep, purge_sweep
 from .cleanup import clear_session_state
 from .codex_wait import dismiss_codex_wait_prompt
 from .card_terminal import apply_card_identity
+from .kb_mode import should_hide_reserve_ui
 from .card_types import TurnPhase
 from .inbox import inbox_sweep
 from .interactive_ui import (
@@ -290,20 +291,9 @@ async def _surface_new_interactive_ui(
 
     ``is_interactive_ui(pane_text)`` is assumed True by the caller.
     """
-    # Startup/auth UI in a reserve stays hidden, but an explicitly opened
-    # model picker in the active reserve must be usable before the first turn.
-    if sess is not None and reserve_owner(sess):
-        from .kb_mode import parse_picker_menu
-
-        active = session_manager.get_active_session(user_id)
-        content = extract_interactive_content(pane_text)
-        if (
-            active is None
-            or active.id != sess.id
-            or content is None
-            or parse_picker_menu(content.content, content.name) is None
-        ):
-            return True
+    # Allow an active reserve's model picker while hiding startup/auth UI.
+    if should_hide_reserve_ui(user_id, sess, pane_text):
+        return True
 
     # User-configurable auto-approve takes precedence — bypass both
     # the TG surface AND the bg-status badge when the user has

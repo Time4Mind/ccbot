@@ -23,8 +23,10 @@ import re
 import sys
 import tempfile
 import time
-from datetime import datetime
+from contextlib import ExitStack
+from datetime import datetime, timedelta
 from pathlib import Path
+from typing import TextIO
 
 # Standard LogRecord attributes — anything else on the record is an
 # ``extra=`` payload contributed by the call site, and we surface those
@@ -62,48 +64,78 @@ _ROTATED_BOT_LOG = re.compile(r"^bot\.log\.\d{4}-\d{2}-\d{2}(?:_\d{2})?$")
 
 
 def _prune_expired_logs(logs_dir: Path) -> None:
-    """Prune bot-owned logs at startup without loading the whole log into RAM."""
-    cutoff = time.time() - _LOG_RETENTION_SECONDS
+    """Split legacy active logs into hours and prune without buffering them."""
+    now = time.time()
+    cutoff = now - _LOG_RETENTION_SECONDS
+    cutoff_text = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(cutoff))
+    current_hour = time.strftime("%Y-%m-%d %H", time.localtime(now))
     for path in logs_dir.iterdir():
         if _ROTATED_BOT_LOG.fullmatch(path.name) and path.stat().st_mtime < cutoff:
             path.unlink()
     current = logs_dir / "bot.log"
     if not current.is_file():
         return
-    fd, temporary = tempfile.mkstemp(prefix=".bot-log-prune-", dir=logs_dir)
-    os.fchmod(fd, current.stat().st_mode & 0o777)
-    removed = False
+    mode = current.stat().st_mode & 0o777
+    temporaries: dict[Path, str] = {}
+    outputs: dict[Path, TextIO] = {}
     keep = True
+    target = current
     try:
-        with (
-            current.open("r", encoding="utf-8", errors="replace") as source,
-            os.fdopen(fd, "w", encoding="utf-8") as out,
-        ):
+        with ExitStack() as stack:
+            source = stack.enter_context(
+                current.open("r", encoding="utf-8", errors="replace")
+            )
             for line in source:
                 stamp = line[:19]
-                if re.match(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$", stamp):
-                    try:
-                        keep = (
-                            datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S").timestamp()
-                            >= cutoff
-                        )
-                    except ValueError:
-                        keep = True
-                elif line.startswith('{"ts":'):
-                    try:
-                        row = json.loads(line)
-                        keep = datetime.fromisoformat(row["ts"]).timestamp() >= cutoff
-                    except (ValueError, KeyError, TypeError, json.JSONDecodeError):
-                        keep = True
+                if line.startswith('{"ts":'):
+                    match = re.match(
+                        r'^\{"ts":\s*"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)', line
+                    )
+                    stamp = match.group(1).replace("T", " ") if match else ""
+                if (
+                    len(stamp) == 19
+                    and stamp[4] == "-"
+                    and stamp[7] == "-"
+                    and stamp[10] == " "
+                    and stamp[13] == ":"
+                    and stamp[16] == ":"
+                ):
+                    keep = stamp >= cutoff_text
+                    target = (
+                        current
+                        if stamp[:13] >= current_hour
+                        else logs_dir / f"bot.log.{stamp[:10]}_{stamp[11:13]}"
+                    )
                 if keep:
-                    out.write(line)
-                else:
-                    removed = True
-        if removed:
-            os.replace(temporary, current)
+                    if target not in outputs:
+                        fd, name = tempfile.mkstemp(
+                            prefix=".bot-log-prune-", dir=logs_dir
+                        )
+                        os.fchmod(fd, mode)
+                        temporaries[target] = name
+                        outputs[target] = stack.enter_context(
+                            os.fdopen(fd, "w", encoding="utf-8")
+                        )
+                    outputs[target].write(line)
+            for stream in outputs.values():
+                stream.flush()
+                os.fsync(stream.fileno())
+        # A previous partial migration must not silently duplicate records.
+        if any(path != current and path.exists() for path in temporaries):
+            raise OSError("hourly log segment already exists")
+        if current not in temporaries:
+            fd, name = tempfile.mkstemp(prefix=".bot-log-prune-", dir=logs_dir)
+            os.fchmod(fd, mode)
+            os.close(fd)
+            temporaries[current] = name
+        for path, name in temporaries.items():
+            if path != current:
+                os.replace(name, path)
+        os.replace(temporaries[current], current)
     finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+        for name in temporaries.values():
+            if os.path.exists(name):
+                os.unlink(name)
 
 
 class JsonFormatter(logging.Formatter):
@@ -188,6 +220,10 @@ def configure_logging() -> None:
             backupCount=5,
             encoding="utf-8",
         )
+        current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+        file_handler.rolloverAt = int((current_hour + timedelta(hours=1)).timestamp())
+        for expired in file_handler.getFilesToDelete():
+            os.unlink(expired)
         file_handler.setFormatter(fmt)
         root.addHandler(file_handler)
         if prune_error:

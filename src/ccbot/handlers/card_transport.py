@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 import logging
 import time
 
@@ -12,6 +13,7 @@ from telegram.error import BadRequest, NetworkError, RetryAfter
 from ..config import config
 from ..file_actions import file_button_context_for_session
 from ..session import Session, session_manager
+from ..telegram_rate_limit import background_telegram_request
 from .card_binding import bind_carrier, carrier_kind, clear_carrier, snapshot_carrier
 from .card_model import (
     CardState,
@@ -34,6 +36,7 @@ from .card_registry import (
     _inline_screens_enabled,
     _legacy,
     lookup_session_for_message,
+    mark_switcher_active,
 )
 
 logger = logging.getLogger(__name__)
@@ -279,6 +282,8 @@ async def _edit_card_unlocked(
 ) -> bool:
     """Record exact visible-final receipts before releasing the edit barrier."""
     message_id = state.msg_id
+    if message_id is not None:
+        mark_switcher_active(user_id, message_id)
     edited = await _edit_card_content(
         bot,
         user_id,
@@ -288,6 +293,9 @@ async def _edit_card_unlocked(
         refresh_pane=refresh_pane,
     )
     if edited and state.msg_id == message_id:
+        if state.edit_retry_message_id == message_id:
+            state.edit_retry_after = 0.0
+            state.edit_retry_message_id = None
         from .card_delivery_receipts import observe_card_receipt
 
         observe_card_receipt(user_id, state, text)
@@ -523,6 +531,10 @@ async def _deferred_edit(
                     else min_interval
                 )
                 remaining = max(0.0, min_interval - elapsed)
+                if state.edit_retry_message_id == state.msg_id:
+                    remaining = max(
+                        remaining, state.edit_retry_after - time.monotonic()
+                    )
                 if remaining > 0.01:
                     continue
                 # Stale guard: card may have been reset while we slept.
@@ -533,12 +545,26 @@ async def _deferred_edit(
                     return
                 state.pending_edit_in_flight = True
                 try:
-                    delivered = await _legacy("_edit_card")(
-                        bot, user_id, state, text=text, refresh_pane=refresh_pane
+                    with background_telegram_request():
+                        delivered = await _legacy("_edit_card")(
+                            bot, user_id, state, text=text, refresh_pane=refresh_pane
+                        )
+                except RetryAfter as exc:
+                    wait = exc.retry_after
+                    seconds = (
+                        wait.total_seconds()
+                        if isinstance(wait, timedelta)
+                        else float(wait)
                     )
+                    remaining = max(1.0, seconds)
+                    state.edit_retry_message_id = state.msg_id
+                    state.edit_retry_after = time.monotonic() + remaining
+                    continue
                 except (NetworkError, TimeoutError) as exc:
                     logger.debug("rich card delivery pending: %s", type(exc).__name__)
                     delivered = False
+                finally:
+                    state.pending_edit_in_flight = False
                 if delivered:
                     state.last_rendered = text
                     state.last_edit_ts = time.monotonic()

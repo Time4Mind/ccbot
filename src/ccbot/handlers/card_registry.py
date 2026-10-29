@@ -5,17 +5,70 @@ from __future__ import annotations
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 import logging
 import time
 
 from telegram import Bot
+from telegram.error import BadRequest, RetryAfter
 
 from ..session import session_manager
+from ..telegram_rate_limit import background_telegram_request
 from .card_model import (
     CardState,
 )
 
 logger = logging.getLogger(__name__)
+
+# Bounded, process-local receipts; a keyboard-bearing edit invalidates them.
+_stripped_switchers: dict[tuple[int, int], None] = {}
+_switcher_retry_at: dict[tuple[int, int], float] = {}
+_switcher_retry_attempts: dict[tuple[int, int], int] = {}
+_switcher_user_retry_at: dict[int, float] = {}
+_switcher_retry_tasks: dict[int, asyncio.Task[None]] = {}
+_SWITCHER_RECEIPT_LIMIT = 2000
+_SWITCHER_TRANSIENT_RETRY_SECONDS = 30.0
+
+
+def _schedule_switcher_retry(bot: Bot, user_id: int, delay: float) -> None:
+    task = _switcher_retry_tasks.get(user_id)
+    if task is not None and not task.done():
+        return
+
+    async def retry() -> None:
+        try:
+            await asyncio.sleep(max(0.01, delay))
+            _switcher_retry_tasks.pop(user_id, None)
+            async with _carrier_edit_lock(user_id):
+                current = session_manager.get_active_session(user_id)
+                keep = session_manager.get_last_switcher_msg(user_id)
+                if current is not None and keep is not None:
+                    await _strip_stale_switchers(bot, user_id, keep, current.id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("switcher_cleanup_retry_failed user=%s", user_id)
+        finally:
+            if _switcher_retry_tasks.get(user_id) is asyncio.current_task():
+                _switcher_retry_tasks.pop(user_id, None)
+
+    _switcher_retry_tasks[user_id] = asyncio.create_task(retry())
+
+
+def mark_switcher_active(user_id: int, message_id: int) -> None:
+    key = (user_id, message_id)
+    _stripped_switchers.pop(key, None)
+    _switcher_retry_at.pop(key, None)
+    _switcher_retry_attempts.pop(key, None)
+
+
+def _remember_stripped(key: tuple[int, int]) -> None:
+    _stripped_switchers.pop(key, None)
+    _stripped_switchers[key] = None
+    if len(_stripped_switchers) > _SWITCHER_RECEIPT_LIMIT:
+        _stripped_switchers.pop(next(iter(_stripped_switchers)))
+    _switcher_retry_at.pop(key, None)
+    _switcher_retry_attempts.pop(key, None)
 
 
 __all__ = [
@@ -181,6 +234,12 @@ async def _strip_stale_switchers(
     AskUserQuestion / ExitPlanMode navigation grid the user still has to
     act on, not a stale switcher.
     """
+    mark_switcher_active(user_id, keep_msg_id)
+    user_wait = _switcher_user_retry_at.get(user_id, 0.0) - time.monotonic()
+    if user_wait > 0:
+        _schedule_switcher_retry(bot, user_id, user_wait)
+        return
+    _switcher_user_retry_at.pop(user_id, None)
     targets: list[int] = []
     prev = session_manager.get_last_switcher_msg(user_id)
     if prev and prev != keep_msg_id:
@@ -192,6 +251,13 @@ async def _strip_stale_switchers(
             if st.msg_id not in targets:
                 targets.append(st.msg_id)
     for msg_id in targets:
+        key = (user_id, msg_id)
+        if key in _stripped_switchers:
+            continue
+        retry_wait = _switcher_retry_at.get(key, 0) - time.monotonic()
+        if retry_wait > 0:
+            _schedule_switcher_retry(bot, user_id, retry_wait)
+            continue
         if _switcher_carrier_is_protected(user_id, msg_id):
             logger.info(
                 "keyboard_strip_skipped user=%s message_id=%s keep=%s reason=protected",
@@ -201,9 +267,11 @@ async def _strip_stale_switchers(
             )
             continue
         try:
-            await bot.edit_message_reply_markup(
-                chat_id=user_id, message_id=msg_id, reply_markup=None
-            )
+            with background_telegram_request():
+                await bot.edit_message_reply_markup(
+                    chat_id=user_id, message_id=msg_id, reply_markup=None
+                )
+            _remember_stripped(key)
             logger.info(
                 "keyboard_strip user=%s message_id=%s keep=%s result=ok",
                 user_id,
@@ -211,13 +279,50 @@ async def _strip_stale_switchers(
                 keep_msg_id,
             )
         except Exception as exc:
+            reason = "temporary"
+            if isinstance(exc, BadRequest):
+                # The same invalid edit will not become valid through a
+                # rapid retry. Invalidate this receipt if the card changes.
+                error = str(exc).lower()
+                reason = (
+                    "unchanged"
+                    if "message is not modified" in error
+                    else "missing"
+                    if "message to edit not found" in error
+                    else "invalid_request"
+                )
+                _remember_stripped(key)
+            else:
+                attempts = _switcher_retry_attempts.get(key, 0)
+                delay = min(
+                    900.0, _SWITCHER_TRANSIENT_RETRY_SECONDS * 2 ** min(attempts, 5)
+                )
+                _switcher_retry_attempts[key] = attempts + 1
+                if isinstance(exc, RetryAfter):
+                    reason = "rate_limited"
+                    wait = exc.retry_after
+                    delay = (
+                        wait.total_seconds()
+                        if isinstance(wait, timedelta)
+                        else float(wait)
+                    )
+                    _switcher_user_retry_at[user_id] = time.monotonic() + delay
+                _switcher_retry_at[key] = time.monotonic() + delay
+                if len(_switcher_retry_at) > _SWITCHER_RECEIPT_LIMIT:
+                    old = next(iter(_switcher_retry_at))
+                    _switcher_retry_at.pop(old)
+                    _switcher_retry_attempts.pop(old, None)
+                _schedule_switcher_retry(bot, user_id, delay)
             logger.info(
-                "keyboard_strip user=%s message_id=%s keep=%s result=error error_type=%s",
+                "keyboard_strip user=%s message_id=%s keep=%s result=error error_type=%s reason=%s",
                 user_id,
                 msg_id,
                 keep_msg_id,
                 type(exc).__name__,
+                reason,
             )
+            if isinstance(exc, RetryAfter):
+                break
 
 
 # Reverse lookup so reply-quote can route a one-shot user message to the

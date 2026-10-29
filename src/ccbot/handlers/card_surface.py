@@ -99,6 +99,9 @@ async def refresh_session_keyboard(bot: Bot, user_id: int) -> bool:
             )
             try:
                 with background_telegram_request():
+                    from .card_registry import mark_switcher_active
+
+                    mark_switcher_active(user_id, state.msg_id)
                     await bot.edit_message_reply_markup(
                         chat_id=user_id,
                         message_id=state.msg_id,

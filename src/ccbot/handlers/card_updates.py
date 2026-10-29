@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 import logging
 import time
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import RetryAfter
 
 from ..config import config
 from ..i18n import t
 from ..session import Session, session_manager
 from ..session_monitor import NewMessage
+from ..telegram_rate_limit import background_telegram_request
 from ..user_activity import effective_live_lag
 from .card_model import (
     CARD_MAX_EVENTS,
@@ -42,6 +45,45 @@ from .card_seed import get_card_state, matching_pending_span
 from .card_transport import _deferred_edit
 
 logger = logging.getLogger(__name__)
+
+
+async def _retry_card_spawn(
+    bot: Bot, user_id: int, sess: Session, state: CardState, delay: float
+) -> None:
+    """Retry one missing progress card without blocking transcript processing."""
+    try:
+        while True:
+            await asyncio.sleep(max(1.0, delay))
+            async with _card_lock(user_id, sess.id):
+                if state.msg_id is not None or _should_buffer(user_id, sess.id, state):
+                    return
+                text = _legacy("_render_card")(sess, state, user_id=user_id)
+                state.pending_edit_in_flight = True
+                try:
+                    with background_telegram_request():
+                        sent = await _legacy("_send_card")(
+                            bot, user_id, sess, state, text=text
+                        )
+                except RetryAfter as exc:
+                    wait = exc.retry_after
+                    delay = (
+                        wait.total_seconds()
+                        if isinstance(wait, timedelta)
+                        else float(wait)
+                    )
+                    continue
+                finally:
+                    state.pending_edit_in_flight = False
+                if sent is not False:
+                    state.last_edit_ts = time.monotonic()
+                return
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        logger.exception("card_spawn_retry_failed sess=%s", sess.id)
+    finally:
+        if state.pending_edit is asyncio.current_task():
+            state.pending_edit = None
 
 
 __all__ = [
@@ -262,7 +304,23 @@ async def _update_session_card_locked(
     text = _legacy("_render_card")(sess, state, user_id=user_id)
 
     if state.msg_id is None:
-        await _legacy("_send_card")(bot, user_id, sess, state, text=text)
+        if state.pending_edit is not None and not state.pending_edit.done():
+            return
+        try:
+            with background_telegram_request():
+                await _legacy("_send_card")(bot, user_id, sess, state, text=text)
+        except RetryAfter as exc:
+            wait = exc.retry_after
+            seconds = (
+                wait.total_seconds() if isinstance(wait, timedelta) else float(wait)
+            )
+            state.pending_edit = asyncio.create_task(
+                _retry_card_spawn(bot, user_id, sess, state, seconds)
+            )
+            logger.info(
+                "card_spawn_rate_limited sess=%s retry_after=%.1f", sess.id, seconds
+            )
+            return
         state.last_edit_ts = time.monotonic()
         logger.info(
             "card_update sent sess=%s msg_id=%s ctype=%s lines=%d",
@@ -289,8 +347,30 @@ async def _update_session_card_locked(
         user_lag = config.card_edit_lag
     lag = effective_live_lag(user_id, float(user_lag))
     elapsed = time.monotonic() - state.last_edit_ts if state.last_edit_ts else lag
-    if lag <= 0 or elapsed >= lag:
-        edited = await _legacy("_edit_card")(bot, user_id, state, text=text)
+    cooldown = (
+        max(0.0, state.edit_retry_after - time.monotonic())
+        if state.edit_retry_message_id == state.msg_id
+        else 0.0
+    )
+    if cooldown <= 0 and (lag <= 0 or elapsed >= lag):
+        try:
+            with background_telegram_request():
+                edited = await _legacy("_edit_card")(bot, user_id, state, text=text)
+        except RetryAfter as exc:
+            wait = exc.retry_after
+            seconds = (
+                wait.total_seconds() if isinstance(wait, timedelta) else float(wait)
+            )
+            state.edit_retry_message_id = state.msg_id
+            state.edit_retry_after = time.monotonic() + max(1.0, seconds)
+            if state.pending_edit is None or state.pending_edit.done():
+                state.pending_edit = asyncio.create_task(
+                    _deferred_edit(bot, user_id, sess, state, max(1.0, seconds))
+                )
+            logger.info(
+                "card_edit_rate_limited sess=%s retry_after=%.1f", sess.id, seconds
+            )
+            return
         if edited:
             state.last_rendered = text
             state.last_edit_ts = time.monotonic()
@@ -344,7 +424,7 @@ async def _update_session_card_locked(
 
     # Inside the coalescing window: ensure exactly one deferred edit is queued.
     if state.pending_edit is None or state.pending_edit.done():
-        delay = max(0.05, lag - elapsed)
+        delay = max(0.05, lag - elapsed, cooldown)
         state.pending_edit = asyncio.create_task(
             _deferred_edit(
                 bot,

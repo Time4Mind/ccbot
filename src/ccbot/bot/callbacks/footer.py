@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
@@ -58,8 +59,15 @@ _screenshot_tasks: dict[int, asyncio.Task[None]] = {}
 
 async def _apply_screenshot_toggle(bot: Any, user_id: int, enabled: bool) -> None:
     """Converge screenshot state outside Telegram's serialized callback path."""
+    started = time.monotonic()
+    sess = session_manager.get_active_session(user_id)
+    logger.info(
+        "screenshot_toggle_started user=%s session=%s enabled=%s",
+        user_id,
+        getattr(sess, "id", None),
+        enabled,
+    )
     try:
-        sess = session_manager.get_active_session(user_id)
         if enabled and sess is not None and sess.node_id != "local":
             await capture_session_pane(sess)
         refreshed = await refresh_panel(
@@ -69,7 +77,23 @@ async def _apply_screenshot_toggle(bot: Any, user_id: int, enabled: bool) -> Non
             state = get_card_state(user_id, sess)
             if not refreshed or not state.is_rich_media_msg:
                 raise RuntimeError("remote screenshot could not update the card")
+        logger.info(
+            "screenshot_toggle_finished user=%s session=%s enabled=%s refreshed=%s elapsed_ms=%d",
+            user_id,
+            getattr(sess, "id", None),
+            enabled,
+            refreshed,
+            round((time.monotonic() - started) * 1000),
+        )
     except Exception as exc:
+        logger.warning(
+            "screenshot_toggle_failed user=%s session=%s enabled=%s error_type=%s elapsed_ms=%d",
+            user_id,
+            getattr(sess, "id", None),
+            enabled,
+            type(exc).__name__,
+            round((time.monotonic() - started) * 1000),
+        )
         detail = str(exc).strip() or type(exc).__name__
         current = session_manager.get_user_settings(user_id)
         if enabled and current.get("card_inline_screenshots", False):
@@ -80,7 +104,16 @@ async def _apply_screenshot_toggle(bot: Any, user_id: int, enabled: bool) -> Non
                 await refresh_panel(bot, user_id, immediate=True, refresh_keyboard=True)
             except Exception:
                 logger.debug("Screenshot rollback repaint failed", exc_info=True)
-        await safe_send(bot, user_id, t(user_id, "toast.screenshot_failed", msg=detail))
+        try:
+            await safe_send(
+                bot, user_id, t(user_id, "toast.screenshot_failed", msg=detail)
+            )
+        except Exception as notify_exc:
+            logger.warning(
+                "screenshot_toggle_notice_failed user=%s error_type=%s",
+                user_id,
+                type(notify_exc).__name__,
+            )
 
 
 def _screenshot_done(user_id: int, task: asyncio.Task[None]) -> None:

@@ -1,6 +1,7 @@
 """Navigation confirms the exact displayed final without sending another card."""
 
 import asyncio
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -18,6 +19,7 @@ from ccbot.handlers.card_types import CardState, Event
 from ccbot.handlers.card_final_delivery import retry_delivery
 from ccbot.session import Session
 from ccbot.session import session_manager
+from telegram.error import RetryAfter
 
 
 @pytest.fixture
@@ -70,6 +72,74 @@ def navigation(monkeypatch):
     monkeypatch.setattr(card_transport, "_legacy", handlers.__getitem__)
     _register_msg(42, 9, sess.id)
     return SimpleNamespace(sess=sess, state=state, active=active, calls=calls, bot=bot)
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_final_send_automatically_updates_current_card(
+    navigation, isolated_final_deliveries
+):
+    h = navigation
+    h.active[0] = h.sess
+    h.state.in_menu_view = False
+    original = h.bot._post
+
+    async def post(endpoint, data):
+        if endpoint == "sendRichMessage":
+            h.calls.append((endpoint, data))
+            raise RetryAfter(14460)
+        return await original(endpoint, data)
+
+    h.bot._post = post
+    await card_updates.finalize_task(h.bot, 42, h.sess, "final answer")
+    assert [endpoint for endpoint, _ in h.calls] == [
+        "sendRichMessage",
+        "editMessageText",
+    ]
+    assert "final answer" in h.calls[-1][1]["rich_message"]["markdown"]
+    assert h.state.msg_id == 9
+    assert not isolated_final_deliveries.pending(42)
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_send_and_edit_preserve_pending_final(
+    navigation, isolated_final_deliveries
+):
+    h = navigation
+    h.active[0] = h.sess
+    h.state.in_menu_view = False
+
+    async def post(endpoint, data):
+        h.calls.append((endpoint, data))
+        raise RetryAfter(120 if endpoint == "sendRichMessage" else 30)
+
+    h.bot._post = post
+    await card_updates.finalize_task(h.bot, 42, h.sess, "final answer")
+    assert [endpoint for endpoint, _ in h.calls] == [
+        "sendRichMessage",
+        "editMessageText",
+    ]
+    assert h.state.msg_id == 9
+    assert len(isolated_final_deliveries.pending(42)) == 1
+    assert isolated_final_deliveries.pending(42)[0].cooldown_until >= time.time() + 115
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_send_does_not_repaint_after_session_switch(
+    navigation, isolated_final_deliveries
+):
+    h = navigation
+    h.active[0] = h.sess
+    h.state.in_menu_view = False
+
+    async def post(endpoint, data):
+        h.calls.append((endpoint, data))
+        h.active[0] = SimpleNamespace(id="other")
+        raise RetryAfter(120)
+
+    h.bot._post = post
+    await card_updates.finalize_task(h.bot, 42, h.sess, "final answer")
+    assert [endpoint for endpoint, _ in h.calls] == ["sendRichMessage"]
+    assert len(isolated_final_deliveries.pending(42)) == 1
 
 
 @pytest.mark.asyncio

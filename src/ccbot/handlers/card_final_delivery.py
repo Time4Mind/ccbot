@@ -7,16 +7,18 @@ session switch cannot change the answer waiting to be delivered.
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import timedelta
 import logging
 from typing import Any
 
 from telegram import Bot
+from telegram.error import RetryAfter
 
 from ..final_delivery import FinalDelivery
 from ..session import Session, session_manager
 from .card_binding import restore_carrier, snapshot_carrier
 from .card_types import CardState, Event, TurnPhase
-from .card_registry import _card_lock, _carrier_edit_lock
+from .card_registry import _card_lock, _carrier_edit_lock, lookup_session_for_message
 
 logger = logging.getLogger(__name__)
 
@@ -145,9 +147,70 @@ async def deliver_final(
                 live.msg_id,
             )
             return True
-        sent = await _legacy("_send_card")(
-            bot, item.user_id, sess, target, text=text, reply_markup=keyboard
-        )
+        try:
+            sent = await _legacy("_send_card")(
+                bot, item.user_id, sess, target, text=text, reply_markup=keyboard
+            )
+        except RetryAfter as send_limit:
+            # A rejected new-message operation does not imply that an edit of
+            # the existing carrier is also blocked. Repaint only the exact
+            # current turn; never overwrite a newer turn or another session.
+            active = session_manager.get_active_session(item.user_id)
+            if (
+                passive
+                or live.turn_phase is not TurnPhase.IDLE
+                or live.next_request_sequence != target.next_request_sequence
+                or item.message_id is not None
+                or live.msg_id is None
+                or live.msg_id != item.payload.get("old_message_id")
+                or lookup_session_for_message(item.user_id, live.msg_id)
+                != item.session_id
+                or active is None
+                or active.id != item.session_id
+                or item not in visible_final_matches(item.user_id, live, [item], text)
+            ):
+                raise
+            from .card_transport import _edit_card_unlocked
+
+            try:
+                edited = await _edit_card_unlocked(
+                    bot,
+                    item.user_id,
+                    live,
+                    text=text,
+                    reply_markup=keyboard,
+                    refresh_pane=False,
+                )
+            except RetryAfter as edit_limit:
+
+                def seconds(error: RetryAfter) -> float:
+                    wait = error.retry_after
+                    return (
+                        wait.total_seconds()
+                        if isinstance(wait, timedelta)
+                        else float(wait)
+                    )
+
+                raise (
+                    send_limit
+                    if seconds(send_limit) >= seconds(edit_limit)
+                    else edit_limit
+                )
+            if not edited:
+                raise
+            live.last_rendered = text
+            if item in final_delivery_queue.records:
+                final_delivery_queue.bind_ack(item.id, live.msg_id)
+            remaining = final_delivery_queue.pending(item.user_id, item.session_id)
+            if not remaining or remaining == [item]:
+                bg_status.record_finished_delivery(item.user_id, item.session_id)
+            logger.info(
+                "final_delivery_edited id=%s session=%s message_id=%s",
+                item.id,
+                item.session_id,
+                live.msg_id,
+            )
+            return True
         delivered = sent is not False and target.msg_id is not None
     if not delivered:
         return False

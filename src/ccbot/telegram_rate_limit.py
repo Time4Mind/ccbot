@@ -15,7 +15,7 @@ import tempfile
 import time
 from typing import Any
 
-from telegram.error import RetryAfter
+from telegram.error import BadRequest, RetryAfter
 from telegram.ext import AIORateLimiter
 
 logger = logging.getLogger(__name__)
@@ -149,6 +149,7 @@ class PersistentEndpointRateLimiter(AIORateLimiter):
             group = chat_id
 
         outcome = "error"
+        reason = "none"
         try:
             result = await self._run_request(
                 chat=chat,
@@ -181,13 +182,22 @@ class PersistentEndpointRateLimiter(AIORateLimiter):
             raise
         except Exception as exc:
             outcome = type(exc).__name__
+            if isinstance(exc, BadRequest):
+                error = str(exc).lower()
+                if "message is not modified" in error:
+                    reason = "not_modified"
+                elif "message to edit not found" in error:
+                    reason = "message_not_found"
+                else:
+                    reason = "other"
             raise
         finally:
             logger.info(
-                "telegram_request endpoint=%s chat=%s message=%s outcome=%s elapsed_ms=%d",
+                "telegram_request endpoint=%s chat=%s message=%s outcome=%s reason=%s elapsed_ms=%d",
                 endpoint,
                 data.get("chat_id"),
                 data.get("message_id"),
                 outcome,
+                reason,
                 round((time.monotonic() - started) * 1000),
             )

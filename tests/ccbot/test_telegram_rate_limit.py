@@ -4,7 +4,7 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
-from telegram.error import RetryAfter
+from telegram.error import BadRequest, RetryAfter
 
 from ccbot.telegram_rate_limit import (
     PersistentEndpointRateLimiter,
@@ -113,3 +113,18 @@ async def test_transport_logs_endpoint_outcome_and_latency_without_body(
     assert "elapsed_ms=" in caplog.text
     assert "private message" not in caplog.text
     assert "secret-token" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_transport_distinguishes_unchanged_message_from_other_bad_requests(
+    tmp_path, caplog
+):
+    limiter = PersistentEndpointRateLimiter(
+        token="token-a", cooldown_path=tmp_path / "limit.json"
+    )
+    caplog.set_level("INFO")
+    with pytest.raises(BadRequest):
+        await _request(
+            limiter, AsyncMock(side_effect=BadRequest("Message is not modified"))
+        )
+    assert "outcome=BadRequest reason=not_modified" in caplog.text

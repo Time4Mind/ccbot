@@ -5,6 +5,7 @@ from __future__ import annotations
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 import logging
 import time
 
@@ -302,7 +303,7 @@ async def _strip_stale_switchers(
                     wait = exc.retry_after
                     delay = (
                         wait.total_seconds()
-                        if hasattr(wait, "total_seconds")
+                        if isinstance(wait, timedelta)
                         else float(wait)
                     )
                     _switcher_user_retry_at[user_id] = time.monotonic() + delay

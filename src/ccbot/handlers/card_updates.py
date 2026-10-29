@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 import logging
 import time
 
@@ -67,7 +68,7 @@ async def _retry_card_spawn(
                     wait = exc.retry_after
                     delay = (
                         wait.total_seconds()
-                        if hasattr(wait, "total_seconds")
+                        if isinstance(wait, timedelta)
                         else float(wait)
                     )
                     continue
@@ -311,7 +312,7 @@ async def _update_session_card_locked(
         except RetryAfter as exc:
             wait = exc.retry_after
             seconds = (
-                wait.total_seconds() if hasattr(wait, "total_seconds") else float(wait)
+                wait.total_seconds() if isinstance(wait, timedelta) else float(wait)
             )
             state.pending_edit = asyncio.create_task(
                 _retry_card_spawn(bot, user_id, sess, state, seconds)
@@ -358,7 +359,7 @@ async def _update_session_card_locked(
         except RetryAfter as exc:
             wait = exc.retry_after
             seconds = (
-                wait.total_seconds() if hasattr(wait, "total_seconds") else float(wait)
+                wait.total_seconds() if isinstance(wait, timedelta) else float(wait)
             )
             state.edit_retry_message_id = state.msg_id
             state.edit_retry_after = time.monotonic() + max(1.0, seconds)

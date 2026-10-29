@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 import logging
 import time
 
@@ -552,7 +553,7 @@ async def _deferred_edit(
                     wait = exc.retry_after
                     seconds = (
                         wait.total_seconds()
-                        if hasattr(wait, "total_seconds")
+                        if isinstance(wait, timedelta)
                         else float(wait)
                     )
                     remaining = max(1.0, seconds)

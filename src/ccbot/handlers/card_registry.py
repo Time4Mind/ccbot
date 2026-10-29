@@ -348,6 +348,18 @@ def lookup_session_for_message(user_id: int, message_id: int) -> str | None:
     return _msg_to_session.get((user_id, message_id))
 
 
+def latest_registered_session_message(user_id: int, session_id: str) -> int | None:
+    """Find the newest known card, including a final sent without controls."""
+    return max(
+        (
+            mid
+            for (uid, mid), sid in _msg_to_session.items()
+            if uid == user_id and sid == session_id
+        ),
+        default=None,
+    )
+
+
 def _inline_screens_enabled(user_id: int | None) -> bool:
     """Read the ``card_inline_screenshots`` user-setting (default False)."""
     if user_id is None:

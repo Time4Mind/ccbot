@@ -366,6 +366,97 @@ async def test_failed_session_paint_does_not_acknowledge_completion(setup, monke
 
 
 @pytest.mark.asyncio
+async def test_switch_surfaces_selected_session_below_racing_final(setup, monkeypatch):
+    sess, state, manager, active = setup
+    manager.get_last_switcher_msg.return_value = 101
+    monkeypatch.setattr(
+        bg_status, "infer_status_from_jsonl", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(switcher, "paint_card_on_carrier", AsyncMock(return_value=True))
+    surface = AsyncMock(return_value=True)
+    monkeypatch.setattr(switcher, "surface_card_after_message", surface, raising=False)
+    query = SimpleNamespace(
+        data=CB_SW_USE + sess.id,
+        message=SimpleNamespace(message_id=100),
+        answer=AsyncMock(),
+    )
+    bot = AsyncMock()
+
+    await switcher.handle(
+        query, SimpleNamespace(bot=bot, user_data={}), SimpleNamespace(id=42)
+    )
+
+    surface.assert_awaited_once_with(
+        bot, 42, sess, 101, fast=True, preserve_turn=True, delete_old=False
+    )
+
+
+@pytest.mark.asyncio
+async def test_switch_surfaces_below_final_already_superseded(setup, monkeypatch):
+    sess, state, manager, active = setup
+    monkeypatch.setattr(
+        switcher, "latest_registered_session_message", lambda uid, sid: 101
+    )
+    monkeypatch.setattr(
+        bg_status, "infer_status_from_jsonl", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(switcher, "paint_card_on_carrier", AsyncMock(return_value=True))
+    surface = AsyncMock(return_value=True)
+    monkeypatch.setattr(switcher, "surface_card_after_message", surface)
+    query = SimpleNamespace(
+        data=CB_SW_USE + sess.id,
+        message=SimpleNamespace(message_id=100),
+        answer=AsyncMock(),
+    )
+    bot = AsyncMock()
+    await switcher.handle(
+        query, SimpleNamespace(bot=bot, user_data={}), SimpleNamespace(id=42)
+    )
+    surface.assert_awaited_once_with(
+        bot, 42, sess, 101, fast=True, preserve_turn=True, delete_old=False
+    )
+
+
+@pytest.mark.asyncio
+async def test_reposted_selection_preserves_turn_and_final_message(setup, monkeypatch):
+    sess, state, manager, active = setup
+    active[0] = sess
+    state.in_menu_view = False
+    sent = []
+    keyboard = object()
+
+    async def send(bot, uid, session, card, *, text, reply_markup):
+        sent.append((text, reply_markup))
+        card.msg_id = 102
+
+    monkeypatch.setattr(card_surface, "get_card_state", lambda *a: state)
+    monkeypatch.setattr(
+        card_surface,
+        "_legacy",
+        lambda name: {
+            "is_active_for_user": lambda *a: True,
+            "_render_card": lambda *a, **kw: "selected session",
+            "_send_card": send,
+            "build_footer_keyboard": lambda *a, **kw: keyboard,
+            "_ensure_seeded": AsyncMock(),
+        }[name],
+    )
+    state.agent_model, state.reasoning_effort = "gpt-6.1-sol", "high"
+    state.events.append(SimpleNamespace(type="tool_use"))
+    bot = AsyncMock()
+    assert await card_surface.surface_card_after_message(
+        bot, 42, sess, 101, fast=True, preserve_turn=True, delete_old=False
+    )
+    await card_surface.shutdown_card_surface_tasks()
+    assert state.msg_id == 102
+    assert sent == [("selected session", keyboard)]
+    assert not any(
+        call.kwargs.get("message_id") == 101
+        for call in bot.delete_message.await_args_list
+    )
+
+
+@pytest.mark.asyncio
 async def test_slow_voice_receipt_does_not_hold_session_route(setup, monkeypatch):
     sess, state, manager, active = setup
     active[0] = sess

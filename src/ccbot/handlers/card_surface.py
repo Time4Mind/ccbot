@@ -125,6 +125,7 @@ async def surface_card_after_message(
     *,
     fast: bool = False,
     preserve_turn: bool = False,
+    delete_old: bool = True,
 ) -> bool:
     """Make the active session card the only receipt for an inbound message.
 
@@ -175,7 +176,15 @@ async def surface_card_after_message(
             old_msg_id = clear_carrier(state)
             text = _legacy("_render_card")(sess, state, user_id=user_id)
             try:
-                await _legacy("_send_card")(bot, user_id, sess, state, text=text)
+                if preserve_turn:
+                    keyboard = _legacy("build_footer_keyboard")(
+                        user_id, screen="main", is_busy=_card_is_busy(state)
+                    )
+                    await _legacy("_send_card")(
+                        bot, user_id, sess, state, text=text, reply_markup=keyboard
+                    )
+                else:
+                    await _legacy("_send_card")(bot, user_id, sess, state, text=text)
             except BaseException:
                 # A timed-out send must not orphan the previous live carrier.
                 # If the send already bound a new message, keep that identity.
@@ -213,7 +222,7 @@ async def surface_card_after_message(
         )
 
         async def finish_card() -> bool:
-            if old_msg_id and new_msg_id != old_msg_id:
+            if delete_old and old_msg_id and new_msg_id != old_msg_id:
                 try:
                     await bot.delete_message(chat_id=user_id, message_id=old_msg_id)
                 except Exception as exc:
@@ -257,7 +266,7 @@ async def surface_card_after_message(
 
         task.add_done_callback(finished)
         return True
-    if old_msg_id and new_msg_id != old_msg_id:
+    if delete_old and old_msg_id and new_msg_id != old_msg_id:
         try:
             await bot.delete_message(chat_id=user_id, message_id=old_msg_id)
         except Exception as exc:

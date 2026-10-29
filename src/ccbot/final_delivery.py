@@ -165,7 +165,10 @@ class FinalDeliveryQueue:
         self._locks.pop(item.id, None)
         self.save()
         logger.info(
-            "final_delivery_confirmed id=%s session=%s", item.id, item.session_id
+            "final_delivery_confirmed id=%s session=%s message_id=%s",
+            item.id,
+            item.session_id,
+            item.message_id,
         )
 
     async def attempt(self, item: FinalDelivery, driver: Driver) -> bool | None:

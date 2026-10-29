@@ -123,6 +123,21 @@ async def handle(
         if sess is None or sess.state not in ("active", "idle", "lost"):
             await query.answer(t(user.id, "toast.nothing_to_kill"), show_alert=False)
             return True
+        from ...handlers.card_registry import lookup_session_for_message
+
+        source_message = getattr(getattr(query, "message", None), "message_id", None)
+        source_owner = (
+            lookup_session_for_message(user.id, source_message)
+            if source_message is not None
+            else None
+        )
+        logger.info(
+            "close_confirmation user=%s session=%s source_message=%s source_owner=%s",
+            user.id,
+            sess.id,
+            source_message,
+            source_owner,
+        )
         # Pause the card so live updates don't repaint over the
         # confirmation prompt. Resumed on Yes (archive resets card) or
         # No (CB_CONF_KILL_NO handler clears the pause + re-renders).

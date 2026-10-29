@@ -23,7 +23,9 @@ async def test_close_returns_to_sessions_not_menu(monkeypatch) -> None:
     monkeypatch.setattr(
         confirm,
         "session_manager",
-        SimpleNamespace(get_session=lambda _sid: sess),
+        SimpleNamespace(
+            get_session=lambda _sid: sess, get_active_session=lambda _uid: sess
+        ),
     )
     monkeypatch.setattr(confirm, "archive_session", archive)
     monkeypatch.setattr(confirm, "open_sessions_in_place", open_sessions, raising=False)

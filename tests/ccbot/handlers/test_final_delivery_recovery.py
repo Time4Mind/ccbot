@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from telegram.error import NetworkError
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from ccbot.handlers import card_transport, card_updates
 from ccbot.handlers.card_model import CardState, Event
@@ -101,6 +102,7 @@ def recovery_harness(monkeypatch):
         connected=connected,
         sent=sent,
         bot=bot,
+        handlers=handlers,
     )
 
 
@@ -153,27 +155,63 @@ async def test_switch_retains_answer_and_does_not_touch_other_session(
 
 @pytest.mark.asyncio
 async def test_new_request_does_not_replace_pending_snapshot_or_lose_live_controls(
+    recovery_harness, isolated_final_deliveries, caplog
+):
+    from ccbot.handlers.card_final_delivery import retry_delivery
+    from ccbot.handlers.card_model import TurnPhase
+
+    caplog.set_level("INFO")
+    h = recovery_harness
+    q = isolated_final_deliveries
+    await card_updates.finalize_task(h.bot, 42, h.session, "final answer A")
+    h.state.turn_phase = TurnPhase.RUNNING
+    h.state.events.append(Event("user_msg", "request B", 2.0))
+    h.state.current_page_idx = None
+    h.state.next_request_sequence += 1
+    h.connected[0] = True
+    h.handlers["build_footer_keyboard"] = lambda *_a, **_kw: InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Stop", callback_data="stop")]]
+    )
+    item = q.pending(42)[0]
+    item.retry_at = 0
+    assert await q.attempt(item, lambda row: retry_delivery(h.bot, row))
+    assert h.state.msg_id == 11
+    payload = h.sent[0][1]
+    assert "final answer A" in payload["rich_message"]["markdown"]
+    assert "request B" not in payload["rich_message"]["markdown"]
+    assert payload["reply_markup"]["inline_keyboard"][0][0]["text"] == "Stop"
+    assert h.state.turn_phase is TurnPhase.RUNNING
+    assert "final_delivery_confirmed" in caplog.text
+    assert "message_id=11" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_newer_request_during_old_answer_send_keeps_existing_controls(
     recovery_harness, isolated_final_deliveries
 ):
     from ccbot.handlers.card_final_delivery import retry_delivery
     from ccbot.handlers.card_model import TurnPhase
 
     h = recovery_harness
-    q = isolated_final_deliveries
     await card_updates.finalize_task(h.bot, 42, h.session, "final answer A")
     h.state.turn_phase = TurnPhase.RUNNING
-    h.state.events.append(Event("user_msg", "request B", 2.0))
+    h.state.current_page_idx = None
     h.state.next_request_sequence += 1
-    h.connected[0] = True
-    item = q.pending(42)[0]
+
+    async def newer_request_during_send(_endpoint, _data):
+        h.state.next_request_sequence += 1
+        return {"message_id": 11, "date": 1, "chat": {"id": 42, "type": "private"}}
+
+    h.bot._post = newer_request_during_send
+    item = isolated_final_deliveries.pending(42)[0]
     item.retry_at = 0
-    assert await q.attempt(item, lambda row: retry_delivery(h.bot, row))
+    assert await isolated_final_deliveries.attempt(
+        item, lambda row: retry_delivery(h.bot, row)
+    )
     assert h.state.msg_id == 9
-    payload = h.sent[0][1]
-    assert "final answer A" in payload["rich_message"]["markdown"]
-    assert "request B" not in payload["rich_message"]["markdown"]
-    assert payload.get("reply_markup") is None
-    h.bot.edit_message_reply_markup.assert_not_awaited()
+    h.bot.edit_message_reply_markup.assert_awaited_once_with(
+        chat_id=42, message_id=11, reply_markup=None
+    )
 
 
 @pytest.mark.asyncio

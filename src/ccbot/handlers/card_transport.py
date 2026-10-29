@@ -211,6 +211,13 @@ async def _send_card_locked(
             except Exception:
                 pass
             _register_msg(user_id, sent.message_id, sess.id)
+            logger.info(
+                "card_sent_superseded user=%s session=%s message_id=%s delivery=%s",
+                user_id,
+                sess.id,
+                sent.message_id,
+                state.delivery_id,
+            )
             return True
     remember_rich_photo(state, sent_pane_hash, sent_file_id)
     persist_session_screenshot(sess, user_id, sent_pane_hash, sent_file_id)
@@ -220,6 +227,15 @@ async def _send_card_locked(
     state.last_rendered = text
     _register_msg(user_id, sent.message_id, sess.id)
     session_manager.set_card_msg(user_id, sent.message_id)
+    logger.info(
+        "card_sent user=%s session=%s message_id=%s delivery=%s kind=%s keyboard=%s",
+        user_id,
+        sess.id,
+        sent.message_id,
+        state.delivery_id or None,
+        sent_kind.value,
+        keyboard is not None,
+    )
     from .card_delivery_receipts import observe_card_receipt
 
     observe_card_receipt(user_id, state, text)

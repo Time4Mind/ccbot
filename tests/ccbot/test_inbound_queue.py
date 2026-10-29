@@ -59,6 +59,30 @@ async def _clean_lanes():
 
 
 @pytest.mark.asyncio
+async def test_inbound_log_identifies_message_and_delivery_without_content(caplog):
+    caplog.set_level("INFO")
+    update = _update(41, text="private request text")
+    receipt = enqueue_inbound(
+        42,
+        "@A",
+        update,
+        _context(),
+        kind="text",
+        processor=AsyncMock(return_value=True),
+    )
+    assert await receipt.completion
+    assert (
+        "inbound_enqueued user=42 window=@A seq=1 kind=text message_id=41"
+        in caplog.text
+    )
+    assert (
+        "inbound_delivered user=42 window=@A seq=1 kind=text message_id=41 delivered=True"
+        in caplog.text
+    )
+    assert "private request text" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_voice_and_followup_pin_before_first_await() -> None:
     context = _context()
     voice = _update(1, voice=True)

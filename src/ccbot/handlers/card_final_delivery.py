@@ -94,7 +94,22 @@ async def deliver_final(
     passive = live.turn_phase is not TurnPhase.IDLE or bool(
         live.events and item not in visible_final_matches(item.user_id, live, [item])
     )
+    preserve_page = passive and (
+        live.turn_phase is TurnPhase.IDLE or live.current_page_idx is not None
+    )
     target = restore_snapshot(item)
+    # The older answer becomes the newest visible carrier while the live
+    # state continues tracking the newer request and its running phase.
+    if passive:
+        target.next_request_sequence = live.next_request_sequence
+    logger.info(
+        "final_delivery_route id=%s session=%s live_message=%s passive=%s sequence=%s",
+        item.id,
+        item.session_id,
+        live.msg_id,
+        passive,
+        target.next_request_sequence,
+    )
     text = item.payload["text"]
     if text is None:
         final = target.events[item.payload["final_index"]]
@@ -105,16 +120,15 @@ async def deliver_final(
         item.payload["state"]["media_anchor_offset"] = target.media_anchor_offset
         final_delivery_queue.save()
     keyboard = _legacy("build_footer_keyboard")(
-        item.user_id, screen="main", is_busy=False
+        item.user_id, screen="main", is_busy=live.turn_phase is not TurnPhase.IDLE
     )
     async with _carrier_edit_lock(item.user_id):
         if item not in final_delivery_queue.records:
             return True
         if _should_buffer(item.user_id, item.session_id, live):
             return None
-        if passive and target.msg_id is None:
-            # A later request owns the live controls. Deliver the frozen older
-            # result without rebinding or stripping that newer request's carrier.
+        if preserve_page and target.msg_id is None:
+            # A manually selected page remains in place during an old retry.
             from .message_sender import send_with_fallback
 
             sent_message = await send_with_fallback(
@@ -123,6 +137,13 @@ async def deliver_final(
             if sent_message is None:
                 return False
             final_delivery_queue.bind_ack(item.id, sent_message.message_id)
+            logger.info(
+                "final_delivery_passive id=%s session=%s message_id=%s live_message=%s",
+                item.id,
+                item.session_id,
+                sent_message.message_id,
+                live.msg_id,
+            )
             return True
         sent = await _legacy("_send_card")(
             bot, item.user_id, sess, target, text=text, reply_markup=keyboard
@@ -148,7 +169,10 @@ async def deliver_final(
     restore_carrier(live, snapshot_carrier(target))
     live.last_rendered = text
     # Only the last queued final may acknowledge the session's latest result.
-    if len(final_delivery_queue.pending(item.user_id, item.session_id)) == 1:
+    if (
+        not passive
+        and len(final_delivery_queue.pending(item.user_id, item.session_id)) == 1
+    ):
         bg_status.record_finished_delivery(item.user_id, item.session_id)
     return True
 

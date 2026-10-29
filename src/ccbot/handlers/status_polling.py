@@ -290,10 +290,20 @@ async def _surface_new_interactive_ui(
 
     ``is_interactive_ui(pane_text)`` is assumed True by the caller.
     """
-    # A prewarmed reserve has no user turn yet. Startup/auth UI must stay
-    # invisible; claiming the reserve turns it into an ordinary session.
+    # Startup/auth UI in a reserve stays hidden, but an explicitly opened
+    # model picker in the active reserve must be usable before the first turn.
     if sess is not None and reserve_owner(sess):
-        return True
+        from .kb_mode import parse_picker_menu
+
+        active = session_manager.get_active_session(user_id)
+        content = extract_interactive_content(pane_text)
+        if (
+            active is None
+            or active.id != sess.id
+            or content is None
+            or parse_picker_menu(content.content, content.name) is None
+        ):
+            return True
 
     # User-configurable auto-approve takes precedence — bypass both
     # the TG surface AND the bg-status badge when the user has

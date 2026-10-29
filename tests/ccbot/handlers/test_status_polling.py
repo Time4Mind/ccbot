@@ -22,6 +22,75 @@ from ccbot.tmux_manager import TmuxWindow
 
 
 @pytest.mark.asyncio
+async def test_active_default_reserve_surfaces_model_picker_on_first_poll(
+    monkeypatch, sample_pane_codex_model_picker
+) -> None:
+    from ccbot.handlers import notifications, status_polling
+    from ccbot.session_models import Session
+
+    sess = Session(
+        id="reserve",
+        name="default",
+        window_id="@1",
+        backend="codex",
+        default_reserve_user_id=42,
+    )
+    monkeypatch.setattr(
+        status_polling.session_manager, "find_session_by_window", lambda _w: sess
+    )
+    monkeypatch.setattr(
+        status_polling.session_manager, "get_active_session", lambda _u: sess
+    )
+    monkeypatch.setattr(status_polling, "get_interactive_window", lambda _u: None)
+    surface = AsyncMock()
+    monkeypatch.setattr(notifications, "enter_kb_mode", surface)
+    await update_status_message(
+        AsyncMock(),
+        42,
+        "@1",
+        window=SimpleNamespace(window_id="@1"),
+        pane_text=sample_pane_codex_model_picker,
+    )
+    assert surface.await_args is not None
+    assert surface.await_args.args[-1] == "Settings"
+
+
+@pytest.mark.asyncio
+async def test_background_default_reserve_keeps_model_picker_hidden(
+    monkeypatch, sample_pane_codex_model_picker
+) -> None:
+    from ccbot.handlers import notifications, status_polling
+    from ccbot.session_models import Session
+
+    sess = Session(
+        id="reserve",
+        name="default",
+        window_id="@1",
+        backend="codex",
+        default_reserve_user_id=42,
+    )
+    monkeypatch.setattr(
+        status_polling.session_manager, "find_session_by_window", lambda _w: sess
+    )
+    monkeypatch.setattr(
+        status_polling.session_manager,
+        "get_active_session",
+        lambda _u: SimpleNamespace(id="other"),
+    )
+    monkeypatch.setattr(status_polling, "get_interactive_window", lambda _u: None)
+    surface = AsyncMock()
+    monkeypatch.setattr(notifications, "enter_kb_mode", surface)
+    await update_status_message(
+        AsyncMock(),
+        42,
+        "@1",
+        window=SimpleNamespace(window_id="@1"),
+        pane_text=sample_pane_codex_model_picker,
+    )
+    surface.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("auto", ["on", "off"])
 async def test_codex_mcp_permission_obeys_autoapproval(monkeypatch, auto):
     from ccbot.handlers import status_polling, notifications
@@ -498,7 +567,13 @@ async def test_live_pane_work_keeps_stop_visible_between_transcript_events(
 
 
 @pytest.mark.asyncio
-async def test_codex_footer_change_refreshes_session_model_header(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("footer", "expected"),
+    [("gpt-5.6-sol medium", "gpt-5.6-sol"), ("GPT-6.1 Terra high", "GPT-6.1 Terra")],
+)
+async def test_codex_footer_change_refreshes_session_model_header(
+    monkeypatch, footer, expected
+) -> None:
     """The session's own footer is authoritative after /model or effort."""
     from ccbot.handlers import status_polling
 
@@ -508,7 +583,7 @@ async def test_codex_footer_change_refreshes_session_model_header(monkeypatch) -
         agent_model="gpt-5.5",
         reasoning_effort="low",
     )
-    pane = "› Ask anything\n\n  gpt-5.6-sol medium · ~/pet_projects/ccbot"
+    pane = f"› Ask anything\n\n  {footer} · ~/pet_projects/ccbot"
     bot = object()
     refresh = AsyncMock(return_value=True)
     monkeypatch.setattr(status_polling, "get_card_state", lambda *_a: state)
@@ -524,8 +599,8 @@ async def test_codex_footer_change_refreshes_session_model_header(monkeypatch) -
 
     await _drive_typing_indicator(bot, 42, "@1", pane, sess, False)
 
-    assert state.agent_model == "gpt-5.6-sol"
-    assert state.reasoning_effort == "medium"
+    assert state.agent_model == expected
+    assert state.reasoning_effort == footer.rsplit(" ", 1)[1]
     refresh.assert_awaited_once_with(
         bot,
         42,

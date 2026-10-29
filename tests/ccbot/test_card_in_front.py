@@ -455,6 +455,40 @@ class TestInboundCardSurface:
         refreshed.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_fast_text_with_existing_history_avoids_redundant_refresh(
+        self,
+    ) -> None:
+        from ccbot.handlers import card_surface
+        from ccbot.handlers.card_types import Event
+
+        bot = AsyncMock()
+        sess = MagicMock(id="ready", backend="codex")
+        state = CardState(
+            msg_id=400,
+            events=[Event("user_msg", "previous", 1.0)],
+            agent_model="gpt-6.1-sol",
+            reasoning_effort="high",
+        )
+        notifications._cards[(77, "ready")] = state
+
+        async def send_card(_bot, _uid, _sess, target, *, text):
+            target.msg_id = 600
+
+        with (
+            patch.object(notifications, "_ensure_seeded", new=AsyncMock()) as seed,
+            patch.object(notifications, "_render_card", return_value="ready"),
+            patch.object(notifications, "_send_card", side_effect=send_card),
+            patch.object(notifications, "is_active_for_user", return_value=True),
+            patch.object(card_surface, "refresh_panel", new=AsyncMock()) as refreshed,
+        ):
+            assert await notifications.surface_card_after_message(
+                bot, 77, sess, 500, fast=True
+            )
+            await asyncio.gather(*list(card_surface._card_surface_tasks))
+        seed.assert_not_awaited()
+        refreshed.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_first_receipt_shows_model_before_context_usage(self) -> None:
         from ccbot.handlers import card_terminal
         from ccbot.session_models import Session

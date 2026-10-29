@@ -123,8 +123,21 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             and msg.content_type == "text"
             and msg.stop_reason in ("end_turn", "stop_sequence", "max_tokens")
         )
+        newer_request_pending = False
+        if is_terminal_text:
+            from ..handlers.notifications import get_card_state
+
+            card = get_card_state(user_id, sess)
+            newer_request_pending = any(
+                sequence > card.active_turn_sequence
+                for _message_id, sequence in card.pending_request_sequences
+            )
         new_status: bg_status.Status = (
-            "error" if msg.api_error else "finished" if is_terminal_text else "working"
+            "error"
+            if msg.api_error
+            else "finished"
+            if is_terminal_text and not newer_request_pending
+            else "working"
         )
         status_changed = bg_status.update_status(
             user_id,

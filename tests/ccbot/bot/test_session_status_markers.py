@@ -94,6 +94,29 @@ async def test_active_session_turn_transitions_working_to_finished(monkeypatch) 
 
 
 @pytest.mark.asyncio
+async def test_late_previous_completion_keeps_new_request_working(monkeypatch) -> None:
+    from ccbot.handlers.card_types import CardState
+    from ccbot.handlers import notifications
+
+    sess = _session()
+    _patch_route(monkeypatch, sess)
+    state = CardState(active_turn_sequence=1, pending_request_sequences=[(42, 2)])
+    monkeypatch.setattr(notifications, "get_card_state", lambda *_a: state)
+    bg_status.update_status(42, sess.id, "working", force=True)
+    await session_events.handle_new_message(
+        NewMessage(
+            session_id="claude-1",
+            text="previous answer",
+            is_complete=True,
+            role="assistant",
+            stop_reason="end_turn",
+        ),
+        AsyncMock(),
+    )
+    assert bg_status.status_emoji(42, sess.id) == "🔶"
+
+
+@pytest.mark.asyncio
 async def test_successful_retry_clears_error_but_progress_does_not(monkeypatch) -> None:
     sess = _session()
     _patch_route(monkeypatch, sess)

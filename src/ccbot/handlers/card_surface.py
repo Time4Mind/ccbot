@@ -131,6 +131,7 @@ async def surface_card_after_message(
     one burst converge on one newest card instead of spawning one per task.
     """
     state = get_card_state(user_id, sess)
+    voice_receipt = state.voice_pending
     state.receipt_after_message_id = max(state.receipt_after_message_id, message_id)
     # Intake, rather than a later transcript event, is the boundary that
     # releases an explicit Stop latch. This makes a new request visibly
@@ -199,6 +200,14 @@ async def surface_card_after_message(
         new_msg_id,
     )
     if fast:
+        needs_followup = (
+            voice_receipt
+            or not state.events
+            or (
+                getattr(sess, "backend", None) == "codex"
+                and (not state.agent_model or not state.reasoning_effort)
+            )
+        )
 
         async def finish_card() -> bool:
             if old_msg_id and new_msg_id != old_msg_id:
@@ -212,6 +221,8 @@ async def surface_card_after_message(
                         old_msg_id,
                         exc,
                     )
+            if not needs_followup:
+                return True
             await _legacy("_ensure_seeded")(user_id, sess, state)
             if getattr(sess, "backend", None) == "codex" and (
                 not state.agent_model or not state.reasoning_effort

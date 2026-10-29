@@ -207,7 +207,7 @@ def _enqueue(
         if kind == "voice":
             state.voice_pending = True
         if not card_already_surfaced:
-            if kind == "voice":
+            if kind in ("voice", "text"):
                 schedule_card_after_message(
                     context.bot, user.id, sess, update.message.message_id, fast=True
                 )

@@ -44,6 +44,7 @@ from .archive import idle_archive_sweep, purge_sweep
 from .cleanup import clear_session_state
 from .codex_wait import dismiss_codex_wait_prompt
 from .card_terminal import apply_card_identity
+from .kb_mode import should_hide_reserve_ui
 from .card_types import TurnPhase
 from .inbox import inbox_sweep
 from .interactive_ui import (
@@ -290,9 +291,8 @@ async def _surface_new_interactive_ui(
 
     ``is_interactive_ui(pane_text)`` is assumed True by the caller.
     """
-    # A prewarmed reserve has no user turn yet. Startup/auth UI must stay
-    # invisible; claiming the reserve turns it into an ordinary session.
-    if sess is not None and reserve_owner(sess):
+    # Allow an active reserve's model picker while hiding startup/auth UI.
+    if should_hide_reserve_ui(user_id, sess, pane_text):
         return True
 
     # User-configurable auto-approve takes precedence — bypass both

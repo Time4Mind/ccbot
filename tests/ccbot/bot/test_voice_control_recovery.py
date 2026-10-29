@@ -457,6 +457,44 @@ async def test_reposted_selection_preserves_turn_and_final_message(setup, monkey
 
 
 @pytest.mark.asyncio
+async def test_reposted_working_session_keeps_stop_button(setup, monkeypatch):
+    from ccbot.handlers.card_types import TurnPhase
+
+    sess, state, manager, active = setup
+    active[0] = sess
+    state.turn_phase = TurnPhase.RUNNING
+    state.pane_busy = True
+    state.agent_model, state.reasoning_effort = "gpt-6.1-sol", "high"
+    state.events.append(SimpleNamespace(type="tool_use"))
+    busy_values = []
+
+    async def send(bot, uid, session, card, **kw):
+        card.msg_id = 102
+
+    def keyboard(*args, **kwargs):
+        busy_values.append(kwargs["is_busy"])
+        return object()
+
+    monkeypatch.setattr(card_surface, "get_card_state", lambda *a: state)
+    monkeypatch.setattr(
+        card_surface,
+        "_legacy",
+        lambda name: {
+            "is_active_for_user": lambda *a: True,
+            "_render_card": lambda *a, **kw: "working",
+            "_send_card": send,
+            "build_footer_keyboard": keyboard,
+            "_ensure_seeded": AsyncMock(),
+        }[name],
+    )
+    assert await card_surface.surface_card_after_message(
+        AsyncMock(), 42, sess, 101, fast=True, preserve_turn=True, delete_old=False
+    )
+    await card_surface.shutdown_card_surface_tasks()
+    assert busy_values == [True]
+
+
+@pytest.mark.asyncio
 async def test_slow_voice_receipt_does_not_hold_session_route(setup, monkeypatch):
     sess, state, manager, active = setup
     active[0] = sess

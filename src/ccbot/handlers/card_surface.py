@@ -172,13 +172,14 @@ async def surface_card_after_message(
             # the live conversation.  Otherwise the old menu card would stay
             # above the message and acceptance would remain invisible.
             state.in_menu_view = False
+            was_busy = _card_is_busy(state) if preserve_turn else False
             old_binding = snapshot_carrier(state)
             old_msg_id = clear_carrier(state)
             text = _legacy("_render_card")(sess, state, user_id=user_id)
             try:
                 if preserve_turn:
                     keyboard = _legacy("build_footer_keyboard")(
-                        user_id, screen="main", is_busy=_card_is_busy(state)
+                        user_id, screen="main", is_busy=was_busy
                     )
                     await _legacy("_send_card")(
                         bot, user_id, sess, state, text=text, reply_markup=keyboard

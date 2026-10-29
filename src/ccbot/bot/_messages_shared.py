@@ -230,7 +230,7 @@ async def _wait_for_voice_transcript(
 async def _send_with_delivery_proof(
     wid: str, text: str, sess: Session | None
 ) -> tuple[bool, str]:
-    """Submit one prompt at most once and verify that the TUI accepted it.
+    """Submit once and check that the text is not still in the input field.
 
     A busy Codex TUI accepts follow-up prompts into its own queue but does not
     append their user rows to the rollout until it starts processing them.
@@ -248,15 +248,19 @@ async def _send_with_delivery_proof(
         return True, message
     if sess is None or sess.backend != "codex":
         return True, message
-    if not await tmux_manager.ensure_codex_prompt_submitted(wid, text):
-        return False, "Codex kept the text in its input field"
+    probe = await tmux_manager.ensure_codex_prompt_submitted(wid, text)
+    logger.info(
+        "input_pane_probe window=%s outcome=%s",
+        wid,
+        "not_visible" if probe else "unconfirmed",
+    )
+    if not probe:
+        return False, "Codex input field status could not be confirmed"
     # TUI slash commands do not become ordinary user_message rows.
     if text.lstrip().startswith("/"):
         return True, message
-    # Reaching this point proves that text+Enter were sent and that the exact
-    # text no longer remains in the live input. Do not hold the inbound FIFO
-    # open waiting for a rollout row: a busy Codex writes that row only when it
-    # eventually consumes its queued prompt, which can take minutes.
+    # This is not proof of delivery: the durable input journal separately
+    # waits for the corresponding Codex transcript row without holding FIFO.
     return True, message
 
 

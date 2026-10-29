@@ -19,8 +19,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
+import tempfile
 import time
+from datetime import datetime
+from pathlib import Path
 
 # Standard LogRecord attributes — anything else on the record is an
 # ``extra=`` payload contributed by the call site, and we surface those
@@ -52,6 +56,54 @@ _STANDARD_LOGRECORD_ATTRS = frozenset(
         "message",
     }
 )
+
+_LOG_RETENTION_SECONDS = 6 * 3600
+_ROTATED_BOT_LOG = re.compile(r"^bot\.log\.\d{4}-\d{2}-\d{2}(?:_\d{2})?$")
+
+
+def _prune_expired_logs(logs_dir: Path) -> None:
+    """Prune bot-owned logs at startup without loading the whole log into RAM."""
+    cutoff = time.time() - _LOG_RETENTION_SECONDS
+    for path in logs_dir.iterdir():
+        if _ROTATED_BOT_LOG.fullmatch(path.name) and path.stat().st_mtime < cutoff:
+            path.unlink()
+    current = logs_dir / "bot.log"
+    if not current.is_file():
+        return
+    fd, temporary = tempfile.mkstemp(prefix=".bot-log-prune-", dir=logs_dir)
+    os.fchmod(fd, current.stat().st_mode & 0o777)
+    removed = False
+    keep = True
+    try:
+        with (
+            current.open("r", encoding="utf-8", errors="replace") as source,
+            os.fdopen(fd, "w", encoding="utf-8") as out,
+        ):
+            for line in source:
+                stamp = line[:19]
+                if re.match(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$", stamp):
+                    try:
+                        keep = (
+                            datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S").timestamp()
+                            >= cutoff
+                        )
+                    except ValueError:
+                        keep = True
+                elif line.startswith('{"ts":'):
+                    try:
+                        row = json.loads(line)
+                        keep = datetime.fromisoformat(row["ts"]).timestamp() >= cutoff
+                    except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+                        keep = True
+                if keep:
+                    out.write(line)
+                else:
+                    removed = True
+        if removed:
+            os.replace(temporary, current)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 class JsonFormatter(logging.Formatter):
@@ -113,7 +165,8 @@ def configure_logging() -> None:
     # paths may have already attached — keep one consistent stream.
     for h in list(root.handlers):
         root.removeHandler(h)
-    # File handler: untruncated lines, rotated daily, last 7 days kept.
+    # The current hour plus five closed hours retains at most six hourly
+    # segments. Rotation happens on writes and costs nothing while idle.
     # Use ``ccbot_dir`` so the path follows ``CCBOT_DIR`` env var (and
     # therefore matches wherever ``state.json`` lives).
     try:
@@ -123,14 +176,22 @@ def configure_logging() -> None:
 
         logs_dir = ccbot_dir() / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
+        prune_error = None
+        try:
+            _prune_expired_logs(logs_dir)
+        except OSError as exc:
+            prune_error = type(exc).__name__
         file_handler = TimedRotatingFileHandler(
             logs_dir / "bot.log",
-            when="midnight",
-            backupCount=7,
+            when="H",
+            interval=1,
+            backupCount=5,
             encoding="utf-8",
         )
         file_handler.setFormatter(fmt)
         root.addHandler(file_handler)
+        if prune_error:
+            root.warning("Log retention cleanup failed error_type=%s", prune_error)
     except Exception as e:
         # Keep one working destination when the file is unavailable.
         root.addHandler(stderr_handler)

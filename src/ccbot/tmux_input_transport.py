@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import secrets
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,26 @@ async def _send_carriage_return(window_id: str) -> bool:
 
 
 async def send_literal_chunked(window_id: str, text: str, *, backend: str = "") -> bool:
+    started = time.monotonic()
+    outcome = "error"
+    try:
+        sent = await _send_literal_chunked(window_id, text, backend=backend)
+        outcome = "sent" if sent else "failed"
+        return sent
+    finally:
+        logger.info(
+            "input_tmux_transport window=%s backend=%s outcome=%s elapsed_ms=%s text_len=%s",
+            window_id,
+            backend,
+            outcome,
+            round((time.monotonic() - started) * 1000),
+            len(text),
+        )
+
+
+async def _send_literal_chunked(
+    window_id: str, text: str, *, backend: str = ""
+) -> bool:
     codex = backend.strip().lower() == "codex"
     if codex and not await codex_process_is_running(window_id):
         logger.warning("Codex input blocked: agent is not running window=%s", window_id)

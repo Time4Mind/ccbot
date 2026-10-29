@@ -3,6 +3,9 @@
 import json
 import logging
 import sys
+import os
+import time
+from datetime import datetime, timedelta
 from io import StringIO
 from logging.handlers import TimedRotatingFileHandler
 
@@ -78,6 +81,8 @@ def test_file_logging_does_not_duplicate_records_to_stderr(
         handlers = list(root.handlers)
         assert len(handlers) == 1
         assert isinstance(handlers[0], TimedRotatingFileHandler)
+        assert handlers[0].interval == 3600
+        assert handlers[0].backupCount == 5
 
         root.warning("single destination probe")
         handlers[0].flush()
@@ -92,3 +97,47 @@ def test_file_logging_does_not_duplicate_records_to_stderr(
         for handler in old_handlers:
             root.addHandler(handler)
         root.setLevel(old_level)
+
+
+def test_startup_prunes_expired_log_records_and_rotations(tmp_path, monkeypatch):
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    old = datetime.now() - timedelta(hours=7)
+    fresh = datetime.now() - timedelta(hours=1)
+    current = logs / "bot.log"
+    current.write_text(
+        f"{old:%Y-%m-%d %H:%M:%S},000 - old\nold continuation\n{fresh:%Y-%m-%d %H:%M:%S},000 - recent\nrecent continuation\n"
+    )
+    rotated = logs / "bot.log.2026-01-01"
+    rotated.write_text("expired")
+    os.utime(rotated, (time.time() - 7 * 3600, time.time() - 7 * 3600))
+    unrelated = logs / "other.log"
+    unrelated.write_text("keep")
+    monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
+    root = logging.getLogger()
+    old_handlers, old_level = list(root.handlers), root.level
+    try:
+        configure_logging()
+    finally:
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+            handler.close()
+        for handler in old_handlers:
+            root.addHandler(handler)
+        root.setLevel(old_level)
+    assert "old" not in current.read_text()
+    assert "recent continuation" in current.read_text()
+    assert not rotated.exists()
+    assert unrelated.exists()
+
+
+def test_hourly_rotation_keeps_five_old_segments(tmp_path):
+    handler = TimedRotatingFileHandler(
+        tmp_path / "bot.log", when="H", interval=1, backupCount=5
+    )
+    try:
+        for hour in range(7):
+            (tmp_path / f"bot.log.2026-10-29_{hour:02}").write_text("x")
+        assert len(handler.getFilesToDelete()) == 2
+    finally:
+        handler.close()

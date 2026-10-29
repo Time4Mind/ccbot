@@ -184,14 +184,23 @@ async def _drain_lane(key: tuple[int, str], lane: _Lane) -> None:
                 if not entry.completion.done():
                     entry.completion.set_result(delivered)
                 lane.active = None
+            proof = "confirmed" if delivered else "failed"
+            if entry.recovery_id:
+                from .input_recovery import input_recovery
+
+                pending = input_recovery.records.get(entry.recovery_id)
+                if pending is not None:
+                    proof = pending.state
             logger.info(
-                "inbound_delivered user=%s window=%s seq=%s kind=%s message_id=%s delivered=%s",
+                "inbound_delivered user=%s window=%s seq=%s kind=%s message_id=%s delivered=%s proof=%s elapsed_ms=%s",
                 lane.user_id,
                 lane.window_id,
                 entry.sequence,
                 entry.kind,
                 getattr(entry.update.message, "message_id", None),
-                delivered,
+                delivered and proof == "confirmed",
+                proof,
+                round((time.monotonic() - entry.received_at) * 1000),
                 extra={
                     "user_id": lane.user_id,
                     "window_id": lane.window_id,

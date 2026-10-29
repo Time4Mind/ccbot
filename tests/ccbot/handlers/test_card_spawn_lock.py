@@ -30,6 +30,7 @@ from ccbot.handlers.notifications import (
 )
 from ccbot.session_models import Session
 from ccbot.session_monitor import NewMessage
+from telegram.error import RetryAfter
 
 
 @pytest.fixture(autouse=True)
@@ -81,6 +82,89 @@ def _make_user_msg(text: str) -> NewMessage:
         role="user",
         stop_reason=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_edit_keeps_processing_events_and_final(
+    monkeypatch, isolated_final_deliveries
+):
+    sess = _make_sess()
+    state = _cards.setdefault((42, sess.id), CardState(msg_id=99))
+    bot = AsyncMock()
+    edit = AsyncMock(side_effect=RetryAfter(120))
+    monkeypatch.setattr(notifications, "_edit_card", edit)
+    monkeypatch.setattr(
+        notifications, "_send_card", AsyncMock(side_effect=RetryAfter(120))
+    )
+    monkeypatch.setattr(notifications, "_ensure_seeded", AsyncMock())
+    monkeypatch.setattr(notifications, "is_active_for_user", lambda *_: True)
+    monkeypatch.setattr(
+        notifications.session_manager, "get_active_session", lambda _: sess
+    )
+    monkeypatch.setattr(
+        notifications.session_manager, "get_user_settings", lambda _: {"live_lag": 0}
+    )
+    monkeypatch.setattr("ccbot.handlers.history.prewarm_pages_cache", AsyncMock())
+
+    await notifications.update_session_card(bot, 42, sess, _make_msg("progress one"))
+    await notifications.update_session_card(bot, 42, sess, _make_msg("progress two"))
+    assert edit.await_count == 1
+    await notifications.finalize_task(bot, 42, sess, "final answer")
+    assert isolated_final_deliveries.pending(42, sess.id)
+    assert any(event.text == "final answer" for event in state.events)
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_initial_card_does_not_block_later_final(
+    monkeypatch, isolated_final_deliveries
+):
+    sess = _make_sess()
+    state = _cards.setdefault((42, sess.id), CardState())
+    send = AsyncMock(side_effect=RetryAfter(120))
+    monkeypatch.setattr(notifications, "_send_card", send)
+    monkeypatch.setattr(notifications, "_ensure_seeded", AsyncMock())
+    monkeypatch.setattr(notifications, "is_active_for_user", lambda *_: True)
+    monkeypatch.setattr(
+        notifications.session_manager, "get_active_session", lambda _: sess
+    )
+    monkeypatch.setattr(
+        notifications.session_manager, "get_user_settings", lambda _: {"live_lag": 0}
+    )
+    monkeypatch.setattr("ccbot.handlers.card_terminal.sync_card_identity", AsyncMock())
+    monkeypatch.setattr("ccbot.handlers.history.prewarm_pages_cache", AsyncMock())
+    await notifications.update_session_card(
+        AsyncMock(), 42, sess, _make_msg("progress one")
+    )
+    await notifications.update_session_card(
+        AsyncMock(), 42, sess, _make_msg("progress two")
+    )
+    assert send.await_count == 1
+    await notifications.finalize_task(AsyncMock(), 42, sess, "final answer")
+    assert isolated_final_deliveries.pending(42, sess.id)
+    assert any(event.text == "final answer" for event in state.events)
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_progress_repaints_automatically_after_wait(monkeypatch):
+    sess = _make_sess()
+    state = _cards.setdefault((42, sess.id), CardState(msg_id=99))
+    edit = AsyncMock(side_effect=[RetryAfter(0.01), True])
+    monkeypatch.setattr(notifications, "_edit_card", edit)
+    monkeypatch.setattr(notifications, "_ensure_seeded", AsyncMock())
+    monkeypatch.setattr(notifications, "is_active_for_user", lambda *_: True)
+    monkeypatch.setattr(
+        notifications.session_manager, "get_active_session", lambda _: sess
+    )
+    monkeypatch.setattr(
+        notifications.session_manager, "get_user_settings", lambda _: {"live_lag": 0}
+    )
+    await notifications.update_session_card(
+        AsyncMock(), 42, sess, _make_msg("progress")
+    )
+    await asyncio.sleep(1.1)
+    assert edit.await_count == 2
+    assert "progress" in edit.await_args.kwargs["text"]
+    assert state.pending_edit is None
 
 
 @pytest.mark.asyncio

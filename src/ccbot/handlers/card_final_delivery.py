@@ -16,6 +16,7 @@ from telegram.error import RetryAfter
 
 from ..final_delivery import FinalDelivery
 from ..session import Session, session_manager
+from ..telegram_rate_limit import background_telegram_request
 from .card_binding import restore_carrier, snapshot_carrier
 from .card_types import CardState, Event, TurnPhase
 from .card_registry import _card_lock, _carrier_edit_lock, lookup_session_for_message
@@ -133,9 +134,10 @@ async def deliver_final(
             # A manually selected page remains in place during an old retry.
             from .message_sender import send_with_fallback
 
-            sent_message = await send_with_fallback(
-                bot, item.user_id, text, disable_notification=True
-            )
+            with background_telegram_request():
+                sent_message = await send_with_fallback(
+                    bot, item.user_id, text, disable_notification=True
+                )
             if sent_message is None:
                 return False
             final_delivery_queue.bind_ack(item.id, sent_message.message_id)
@@ -148,9 +150,10 @@ async def deliver_final(
             )
             return True
         try:
-            sent = await _legacy("_send_card")(
-                bot, item.user_id, sess, target, text=text, reply_markup=keyboard
-            )
+            with background_telegram_request():
+                sent = await _legacy("_send_card")(
+                    bot, item.user_id, sess, target, text=text, reply_markup=keyboard
+                )
         except RetryAfter as send_limit:
             # A rejected new-message operation does not imply that an edit of
             # the existing carrier is also blocked. Repaint only the exact
@@ -173,14 +176,15 @@ async def deliver_final(
             from .card_transport import _edit_card_unlocked
 
             try:
-                edited = await _edit_card_unlocked(
-                    bot,
-                    item.user_id,
-                    live,
-                    text=text,
-                    reply_markup=keyboard,
-                    refresh_pane=False,
-                )
+                with background_telegram_request():
+                    edited = await _edit_card_unlocked(
+                        bot,
+                        item.user_id,
+                        live,
+                        text=text,
+                        reply_markup=keyboard,
+                        refresh_pane=False,
+                    )
             except RetryAfter as edit_limit:
 
                 def seconds(error: RetryAfter) -> float:

@@ -19,6 +19,7 @@ import asyncio
 import logging
 
 from telegram import Bot
+from telegram.error import RetryAfter
 
 from ..claude_auth import is_auth_failure_event
 from ..config import config
@@ -34,6 +35,7 @@ from ..handlers.notifications import (
 from ..handlers.typing import fire_typing
 from ..session import session_manager
 from ..session_monitor import NewMessage
+from ..telegram_rate_limit import background_telegram_request
 from ..terminal_parser import extract_interactive_content
 from ..tmux_manager import tmux_manager
 from ..usage import context_pct_for_session
@@ -310,7 +312,11 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
 
                     set_card_context_pct(user_id, sess.id, pct)
                     set_context_pct(user_id, sess.id, pct)
-                    await refresh_panel(bot, user_id)
+                    try:
+                        with background_telegram_request():
+                            await refresh_panel(bot, user_id)
+                    except RetryAfter:
+                        logger.info("context_refresh_rate_limited session=%s", sess.id)
         else:
             # Streaming chunk — best-effort card update.
             await update_session_card(bot, user_id, sess, msg)

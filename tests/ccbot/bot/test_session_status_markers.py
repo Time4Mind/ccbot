@@ -11,6 +11,7 @@ from ccbot.handlers.callback_data import CB_SW_USE
 from ccbot.session_models import Session
 from ccbot.session_monitor import NewMessage
 from ccbot.transcript_parser import TranscriptParser
+from telegram.error import RetryAfter
 
 
 @pytest.fixture(autouse=True)
@@ -91,6 +92,27 @@ async def test_active_session_turn_transitions_working_to_finished(monkeypatch) 
     # second presentation and acknowledges the result.
     assert bg_status.record_finished_view(42, sess.id) is True
     assert bg_status.status_emoji(42, sess.id) == ""
+
+
+@pytest.mark.asyncio
+async def test_limited_context_refresh_does_not_replay_completed_answer(monkeypatch):
+    sess = _session()
+    _patch_route(monkeypatch, sess)
+    monkeypatch.setattr(
+        session_events, "context_pct_for_session", AsyncMock(return_value=50)
+    )
+    monkeypatch.setattr(
+        session_events, "refresh_panel", AsyncMock(side_effect=RetryAfter(120))
+    )
+    message = NewMessage(
+        session_id="claude-1",
+        text="done",
+        is_complete=True,
+        role="assistant",
+        stop_reason="end_turn",
+    )
+    await session_events.handle_new_message(message, AsyncMock())
+    session_events.finalize_task.assert_awaited_once()
 
 
 @pytest.mark.asyncio

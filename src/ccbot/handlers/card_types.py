@@ -157,6 +157,8 @@ class CardState:
     fast_mode: bool = False
     last_rendered: str = ""  # last text we sent to TG; skips no-op edits
     last_edit_ts: float = 0.0  # monotonic seconds; gate for CARD_EDIT_LAG coalescing
+    edit_retry_after: float = 0.0  # monotonic deadline for a rate-limited carrier
+    edit_retry_message_id: int | None = None
     pending_edit: asyncio.Task[None] | None = None  # one deferred edit task at most
     pending_edit_in_flight: bool = False  # Telegram request phase of pending_edit
     is_continuation: bool = False  # True after a stale-pause or overflow split

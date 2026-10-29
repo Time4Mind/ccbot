@@ -1206,6 +1206,16 @@ async def test_codex_pending_prompt_stops_after_bounded_retries(
 
 
 @pytest.mark.asyncio
+async def test_missing_pane_is_not_submission_confirmation(monkeypatch):
+    manager = TmuxManager()
+    manager.capture_pane = AsyncMock(return_value=None)
+    manager.send_keys = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    assert not await manager.ensure_codex_prompt_submitted("@5", "request")
+    manager.send_keys.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_codex_rollout_discovery_uses_session_meta(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

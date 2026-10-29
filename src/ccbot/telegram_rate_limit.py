@@ -117,10 +117,18 @@ class PersistentEndpointRateLimiter(AIORateLimiter):
         data: dict[str, Any],
         rate_limit_args: int | None,  # noqa: ARG002
     ) -> Any:
+        started = time.monotonic()
         key = self._operation_key(endpoint, data)
         now = time.time()
         remaining = self._cooldowns.get(key, 0.0) - now
         if remaining > 0 and _is_background_request.get():
+            logger.info(
+                "telegram_request endpoint=%s chat=%s message=%s outcome=cooldown elapsed_ms=%d",
+                endpoint,
+                data.get("chat_id"),
+                data.get("message_id"),
+                round((time.monotonic() - started) * 1000),
+            )
             logger.debug(
                 "Telegram operation cooling down endpoint=%s chat=%s message=%s "
                 "retry_after=%.1f",
@@ -140,6 +148,7 @@ class PersistentEndpointRateLimiter(AIORateLimiter):
         if (isinstance(chat_id, int) and chat_id < 0) or isinstance(chat_id, str):
             group = chat_id
 
+        outcome = "error"
         try:
             result = await self._run_request(
                 chat=chat,
@@ -154,8 +163,10 @@ class PersistentEndpointRateLimiter(AIORateLimiter):
                 # proves Telegram released this concrete operation early.
                 self._cooldowns.pop(key, None)
                 self._save_cooldowns()
+            outcome = "ok"
             return result
         except RetryAfter as exc:
+            outcome = "rate_limited"
             seconds = self._retry_seconds(exc)
             self._cooldowns[key] = time.time() + seconds
             self._save_cooldowns()
@@ -168,3 +179,15 @@ class PersistentEndpointRateLimiter(AIORateLimiter):
                 seconds,
             )
             raise
+        except Exception as exc:
+            outcome = type(exc).__name__
+            raise
+        finally:
+            logger.info(
+                "telegram_request endpoint=%s chat=%s message=%s outcome=%s elapsed_ms=%d",
+                endpoint,
+                data.get("chat_id"),
+                data.get("message_id"),
+                outcome,
+                round((time.monotonic() - started) * 1000),
+            )

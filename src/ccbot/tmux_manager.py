@@ -626,7 +626,7 @@ class TmuxManager:
         for attempt in range(1, max_retries + 1):
             pane = await self.capture_pane(window_id)
             if not pane or not self._codex_prompt_contains(pane, text):
-                return True
+                return bool(pane)
             logger.warning(
                 "Codex prompt still pending in %s; retrying Enter (%d/%d)",
                 window_id,
@@ -637,7 +637,7 @@ class TmuxManager:
                 return False
             await asyncio.sleep(2.0)
         pane = await self.capture_pane(window_id)
-        return not pane or not self._codex_prompt_contains(pane, text)
+        return bool(pane) and not self._codex_prompt_contains(pane, text)
 
     async def rename_window(self, window_id: str, new_name: str) -> bool:
         """Rename a tmux window by its ID."""

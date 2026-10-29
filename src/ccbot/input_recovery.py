@@ -26,6 +26,8 @@ from .utils import atomic_write_json
 
 logger = logging.getLogger(__name__)
 _current: ContextVar[str] = ContextVar("ccbot_recoverable_input", default="")
+_CONFIRMATION_GRACE_SECONDS = 30.0
+_CONFIRMATION_CHECK_SECONDS = 5.0
 
 
 class SubmissionUnknown(Exception):
@@ -58,6 +60,9 @@ class InputRequest:
     ui_unknown: bool = False
     checkpoint: dict[str, Any] | None = None
     sequence: int = 0
+    confirmation_deadline: float = 0.0
+    strict_codex_proof: bool = False
+    submitted_at: float = 0.0
 
 
 class InputRecovery:
@@ -67,6 +72,7 @@ class InputRecovery:
         self.path = path
         self.records: dict[str, InputRequest] = {}
         self.completed: list[str] = []
+        self.confirmed_through: dict[str, int] = {}
         self.loaded = False
         self.bot: Any = None
         self.task: asyncio.Task[None] | None = None
@@ -74,6 +80,8 @@ class InputRecovery:
         self.dirty: set[tuple[int, str]] = set()
         self.clock: Callable[[], float] = time.time
         self.sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+        self._next_reconcile: dict[str, float] = {}
+        self._scan_positions: dict[str, int] = {}
 
     def load(self) -> None:
         if self.loaded:
@@ -86,6 +94,7 @@ class InputRecovery:
             row["id"]: InputRequest(**row) for row in raw.get("requests", [])
         }
         self.completed = raw.get("completed", [])
+        self.confirmed_through = raw.get("confirmed_through", {})
         for request in self.records.values():
             if request.state == "dispatching":
                 request.state = "unknown"
@@ -102,6 +111,7 @@ class InputRecovery:
                 "version": 1,
                 "requests": [asdict(r) for r in self.records.values()],
                 "completed": self.completed,
+                "confirmed_through": self.confirmed_through,
             },
         )
 
@@ -125,7 +135,11 @@ class InputRecovery:
             for r in self.records.values()
         )
         if not (
-            kind == "voice" and isinstance(file_id, str) and file_id or follows_voice
+            kind == "text"
+            or kind == "voice"
+            and isinstance(file_id, str)
+            and file_id
+            or follows_voice
         ):
             return None
         serialize = getattr(update, "to_dict", None)
@@ -149,13 +163,21 @@ class InputRecovery:
         )
         self.records[key] = request
         self.changed(request)
+        logger.info(
+            "input_admitted session=%s window=%s message_id=%s kind=%s",
+            request.session_id,
+            request.window_id,
+            request.message_id,
+            request.kind,
+        )
         return request
 
     def current(self) -> InputRequest | None:
         return self.records.get(_current.get())
 
     def changed(self, request: InputRequest) -> None:
-        self.dirty.add((request.user_id, request.session_id))
+        if request.kind == "voice" or request.state in ("unknown", "failed"):
+            self.dirty.add((request.user_id, request.session_id))
         self.save()
 
     def source(self, request: InputRequest) -> Any:
@@ -171,11 +193,21 @@ class InputRecovery:
         )
 
     def complete(self, request: InputRequest, *, confirmed: bool = True) -> None:
+        previous = request.state
         request.state = "delivered"
         request.confirmed = confirmed
         self.records.pop(request.id, None)
         self.completed.append(request.id)
+        self._scan_positions.pop(request.id, None)
+        self._next_reconcile.pop(request.id, None)
         self.changed(request)
+        logger.info(
+            "input_journal_completed session=%s message_id=%s previous=%s confirmed=%s",
+            request.session_id,
+            request.message_id,
+            previous,
+            confirmed,
+        )
         if request.id in self.events:
             self.events[request.id].set()
 
@@ -260,6 +292,13 @@ class InputRecovery:
                 "Исходная сессия больше недоступна; запрос не перенаправлен."
             )
         checkpoint = _voice_transcript_checkpoint(wid)
+        source = self.source(request)
+        request.strict_codex_proof = bool(
+            source is not None
+            and getattr(source, "backend", "") == "codex"
+            and getattr(source, "node_id", "local") == "local"
+            and not text.lstrip().startswith("/")
+        )
         request.checkpoint = (
             {
                 "path": str(checkpoint.path),
@@ -269,9 +308,31 @@ class InputRecovery:
             if checkpoint is not None
             else None
         )
+        if request.strict_codex_proof and request.checkpoint is None:
+            from .session import WindowState
+
+            provisional = session_manager.window_states.get(wid)
+            if (
+                isinstance(provisional, WindowState)
+                and not provisional.session_id
+                and not provisional.transcript_path
+            ):
+                request.checkpoint = {
+                    "path": "",
+                    "offset": 0,
+                    "backend": "codex",
+                    "unbound": True,
+                }
         request.prepared = text
         request.state = "dispatching"
         self.changed(request)
+        logger.info(
+            "input_dispatch_started session=%s window=%s message_id=%s checkpoint=%s",
+            request.session_id,
+            wid,
+            request.message_id,
+            request.checkpoint is not None,
+        )
 
     async def submit(
         self, wid: str, text: str, session: Any, sender: Any
@@ -286,16 +347,58 @@ class InputRecovery:
         if request is None:
             return
         if success and not message.startswith("Queued for "):
+            if request.strict_codex_proof:
+                request.state = "awaiting_confirmation"
+                request.strict_codex_proof = True
+                request.submitted_at = self.clock()
+                request.confirmation_deadline = (
+                    self.clock() + _CONFIRMATION_GRACE_SECONDS
+                )
+                self.changed(request)
+                logger.info(
+                    "input_awaiting_confirmation session=%s message_id=%s checkpoint=%s",
+                    request.session_id,
+                    request.message_id,
+                    request.checkpoint is not None,
+                )
+                return
             self.complete(request)
             return
         request.state = "unknown"
         request.notice = "Передача запроса агенту не подтверждена. Автоповтор остановлен; проверьте исходную сессию и /requests."
         self.changed(request)
+        logger.warning(
+            "input_dispatch_unknown session=%s message_id=%s",
+            request.session_id,
+            request.message_id,
+        )
         raise SubmissionUnknown()
 
     def reconcile(self, request: InputRequest) -> bool:
         if request.checkpoint is None or not request.prepared:
             return False
+        if request.checkpoint.get("unbound"):
+            from .session import WindowState, session_manager
+            from .codex_session_io import build_session_file_path
+
+            if self.source(request) is None:
+                return False
+            state = session_manager.window_states.get(request.window_id)
+            if (
+                not isinstance(state, WindowState)
+                or not state.session_id
+                or state.backend != "codex"
+            ):
+                return False
+            path = (
+                Path(state.transcript_path)
+                if state.transcript_path
+                else build_session_file_path(state.session_id, state.cwd)
+            )
+            if path is None or not path.is_file():
+                return False
+            request.checkpoint = {"path": str(path), "offset": 0, "backend": "codex"}
+            self.save()
         from .bot._messages_shared import (
             _VoiceTranscriptCheckpoint,
             _transcript_contains_voice_text,
@@ -306,10 +409,103 @@ class InputRecovery:
             request.checkpoint["offset"],
             request.checkpoint["backend"],
         )
+        if checkpoint.backend == "codex" and (
+            request.strict_codex_proof or request.state == "awaiting_confirmation"
+        ):
+            # One physical user row can acknowledge at most one request,
+            # even when two identical prompts were sent before either appeared.
+            path_key = str(checkpoint.path)
+            start = max(
+                checkpoint.offset,
+                self.confirmed_through.get(path_key, 0),
+                self._scan_positions.get(request.id, 0),
+            )
+            try:
+                if checkpoint.path.stat().st_size < start:
+                    return False
+                with checkpoint.path.open("rb") as stream:
+                    stream.seek(start)
+                    for line in stream:
+                        if not line.endswith(b"\n"):
+                            break
+                        self._scan_positions[request.id] = stream.tell()
+                        try:
+                            row = json.loads(line)
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            continue
+                        if (
+                            not isinstance(row, dict)
+                            or row.get("type") != "response_item"
+                        ):
+                            continue
+                        payload = row.get("payload")
+                        if (
+                            not isinstance(payload, dict)
+                            or payload.get("type") != "message"
+                            or payload.get("role") != "user"
+                        ):
+                            continue
+                        content = payload.get("content", [])
+                        if not isinstance(content, list):
+                            continue
+                        text = "\n".join(
+                            str(item.get("text") or "")
+                            for item in content
+                            if isinstance(item, dict)
+                            and item.get("type") in ("input_text", "text")
+                        )
+                        if text.strip() == request.prepared.strip():
+                            self.confirmed_through[path_key] = stream.tell()
+                            if len(self.confirmed_through) > 512:
+                                self.confirmed_through.pop(
+                                    next(iter(self.confirmed_through))
+                                )
+                            self.complete(request)
+                            return True
+            except OSError:
+                return False
+            return False
         if _transcript_contains_voice_text(checkpoint, request.prepared):
             self.complete(request)
             return True
         return False
+
+    def check_confirmation(self, request: InputRequest) -> None:
+        if request.state != "awaiting_confirmation":
+            return
+        now = self.clock()
+        if now >= self._next_reconcile.get(request.id, 0):
+            self._next_reconcile[request.id] = now + _CONFIRMATION_CHECK_SECONDS
+            if self.reconcile(request):
+                self._next_reconcile.pop(request.id, None)
+                logger.info(
+                    "input_confirmed_in_transcript session=%s message_id=%s latency_ms=%s",
+                    request.session_id,
+                    request.message_id,
+                    round((now - request.submitted_at) * 1000)
+                    if request.submitted_at
+                    else None,
+                )
+                return
+        if now >= request.confirmation_deadline:
+            request.state = "unknown"
+            request.notice = "Запрос принят ботом, но его получение агентом не подтверждено. Автоповтор остановлен; проверьте исходную сессию и /requests."
+            self._next_reconcile.pop(request.id, None)
+            self.changed(request)
+            logger.warning(
+                "input_confirmation_missing session=%s message_id=%s",
+                request.session_id,
+                request.message_id,
+            )
+
+    def reconcile_if_due(self, request: InputRequest) -> bool:
+        if not request.strict_codex_proof:
+            return self.reconcile(request)
+        now = self.clock()
+        if now < self._next_reconcile.get(request.id, 0.0):
+            return False
+        self._next_reconcile[request.id] = now + _CONFIRMATION_CHECK_SECONDS
+        return self.reconcile(request)
 
     async def run(
         self, request_id: str, processor: Any, update: Any, context: Any, wid: str
@@ -329,7 +525,7 @@ class InputRecovery:
                     )
                     return False
                 if request.state == "unknown":
-                    if self.reconcile(request):
+                    if self.reconcile_if_due(request):
                         return True
                     event = self.events.setdefault(request.id, asyncio.Event())
                     try:
@@ -353,6 +549,14 @@ class InputRecovery:
                 except Exception as exc:
                     if request.id not in self.records:
                         return request.confirmed
+                    if request.state == "awaiting_confirmation":
+                        logger.warning(
+                            "input_post_dispatch_failed session=%s message_id=%s error_type=%s",
+                            request.session_id,
+                            request.message_id,
+                            type(exc).__name__,
+                        )
+                        return True
                     if request.state == "dispatching":
                         try:
                             self.after_dispatch(False, "")
@@ -375,6 +579,8 @@ class InputRecovery:
                     return False
                 if request.id not in self.records:
                     return request.confirmed
+                if request.state == "awaiting_confirmation":
+                    return True
                 if result:
                     self.complete(request)
                     return True
@@ -396,7 +602,7 @@ class InputRecovery:
         from .inbound_queue import enqueue_inbound
 
         for request in sorted(self.records.values(), key=lambda r: r.sequence):
-            if request.state == "failed":
+            if request.state in ("failed", "awaiting_confirmation"):
                 continue
             update = Update.de_json(request.update, self.bot)
             context = CallbackContext.from_update(update, application)
@@ -474,8 +680,14 @@ class InputRecovery:
         while True:
             try:
                 for request in tuple(self.records.values()):
+                    if request.state == "awaiting_confirmation":
+                        self.check_confirmation(request)
+                        if request.id not in self.records:
+                            continue
                     if request.state in ("failed", "unknown"):
-                        if request.state == "unknown" and self.reconcile(request):
+                        if request.state == "unknown" and self.reconcile_if_due(
+                            request
+                        ):
                             continue
                         await self.deliver_notice(request)
                 for uid, sid in tuple(self.dirty):

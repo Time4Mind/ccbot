@@ -49,6 +49,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "transcribing": "распознаётся",
         "prepared": "подготовлен к передаче",
         "dispatching": "передаётся",
+        "awaiting_confirmation": "ожидает подтверждения от агента",
         "unknown": "передача не подтверждена",
         "failed": "обработка завершилась ошибкой",
     }

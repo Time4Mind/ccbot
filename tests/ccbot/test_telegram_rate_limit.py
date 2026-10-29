@@ -89,3 +89,27 @@ async def test_cooldown_survives_restart_but_is_scoped_to_token(tmp_path) -> Non
     with background_telegram_request():
         assert await _request(replacement_token, allowed) is True
     allowed.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_transport_logs_endpoint_outcome_and_latency_without_body(
+    tmp_path, caplog
+):
+    limiter = PersistentEndpointRateLimiter(
+        token="secret-token", cooldown_path=tmp_path / "limit.json"
+    )
+    caplog.set_level("INFO")
+    await limiter.process_request(
+        AsyncMock(return_value=True),
+        (),
+        {},
+        "sendMessage",
+        {"chat_id": 42, "text": "private message"},
+        None,
+    )
+    assert "telegram_request" in caplog.text
+    assert "endpoint=sendMessage" in caplog.text
+    assert "outcome=ok" in caplog.text
+    assert "elapsed_ms=" in caplog.text
+    assert "private message" not in caplog.text
+    assert "secret-token" not in caplog.text

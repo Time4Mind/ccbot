@@ -51,6 +51,225 @@ async def until(predicate):
             await asyncio.sleep(0)
 
 
+@pytest.mark.asyncio
+async def test_text_remains_recoverable_until_codex_records_exact_request(
+    env, monkeypatch, tmp_path
+):
+    from ccbot.bot import _messages_shared
+
+    env.source.backend = "codex"
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text("")
+    checkpoint = _messages_shared._VoiceTranscriptCheckpoint(transcript, 0, "codex")
+    monkeypatch.setattr(
+        _messages_shared, "_voice_transcript_checkpoint", lambda _: checkpoint
+    )
+    request = env.recovery.admit(update(101, "check logs"), "text", env.source)
+    assert request is not None
+    sender = AsyncMock(return_value=(True, "Sent"))
+
+    async def process(_update, _context, wid):
+        ok, _ = await env.recovery.submit(wid, "check logs", env.source, sender)
+        return ok
+
+    assert await env.recovery.run(
+        request.id, process, update(101, "check logs"), env.context, "@source"
+    )
+    assert env.recovery.records[request.id].state == "awaiting_confirmation"
+    assert not env.recovery.reconcile(request)
+    assert sender.await_count == 1
+    restarted = recovery_module.InputRecovery(env.recovery.path)
+    restarted.load()
+    assert request.id in restarted.records
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "check logs"}],
+                },
+            }
+        )
+        + "\n"
+    )
+    assert restarted.reconcile(restarted.records[request.id])
+    assert request.id not in restarted.records
+
+
+@pytest.mark.asyncio
+async def test_one_transcript_row_cannot_confirm_two_identical_requests(env, tmp_path):
+    path = tmp_path / "transcript.jsonl"
+    path.write_text("")
+    a = env.recovery.admit(update(201, "same"), "text", env.source)
+    b = env.recovery.admit(update(202, "same"), "text", env.source)
+    for item in (a, b):
+        item.prepared = "same"
+        item.state = "awaiting_confirmation"
+        item.checkpoint = {"path": str(path), "offset": 0, "backend": "codex"}
+    row = (
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "same"}],
+                },
+            }
+        )
+        + "\n"
+    )
+    path.write_text(row)
+    assert env.recovery.reconcile(a)
+    assert not env.recovery.reconcile(b)
+    with path.open("a") as f:
+        f.write(row)
+    assert env.recovery.reconcile(b)
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_text_is_reported_without_resending(
+    env, monkeypatch, tmp_path
+):
+    from ccbot.bot import _messages_shared
+
+    env.source.backend = "codex"
+    transcript = tmp_path / "missing.jsonl"
+    transcript.write_text("")
+    checkpoint = _messages_shared._VoiceTranscriptCheckpoint(transcript, 0, "codex")
+    monkeypatch.setattr(
+        _messages_shared, "_voice_transcript_checkpoint", lambda _: checkpoint
+    )
+    request = env.recovery.admit(update(203, "check logs"), "text", env.source)
+    sender = AsyncMock(return_value=(True, "Sent"))
+
+    async def process(_update, _context, wid):
+        ok, _ = await env.recovery.submit(wid, "check logs", env.source, sender)
+        return ok
+
+    assert await env.recovery.run(
+        request.id, process, update(203, "check logs"), env.context, "@source"
+    )
+    env.now[0] = request.confirmation_deadline + 1
+    env.recovery.check_confirmation(request)
+    assert request.state == "unknown"
+    assert "не подтверждено" in request.notice
+    assert request.id in env.recovery.records
+    assert sender.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_busy_codex_modal_does_not_turn_missing_text_into_delivery(
+    env, monkeypatch, tmp_path
+):
+    from ccbot.bot import _messages_shared
+
+    env.source.backend = "codex"
+    transcript = tmp_path / "codex.jsonl"
+    transcript.write_text("")
+    checkpoint = _messages_shared._VoiceTranscriptCheckpoint(transcript, 0, "codex")
+    monkeypatch.setattr(
+        _messages_shared, "_voice_transcript_checkpoint", lambda _: checkpoint
+    )
+    send = AsyncMock(return_value=(True, "Sent to source"))
+    monkeypatch.setattr(session_manager, "send_to_window", send)
+    monkeypatch.setattr(
+        messages.tmux_manager,
+        "capture_pane",
+        AsyncMock(return_value="Codex approval dialog\nAllow?"),
+    )
+    req = env.recovery.admit(update(204, "check logs"), "text", env.source)
+
+    async def process(_update, _context, wid):
+        ok, _ = await env.recovery.submit(
+            wid, "check logs", env.source, messages._send_with_delivery_proof
+        )
+        return ok
+
+    assert await env.recovery.run(
+        req.id, process, update(204, "check logs"), env.context, "@source"
+    )
+    assert req.state == "awaiting_confirmation"
+    assert not env.recovery.reconcile(req)
+    env.now[0] = req.confirmation_deadline + 1
+    env.recovery.check_confirmation(req)
+    assert req.state == "unknown" and req.notice
+    send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_fresh_codex_session_can_confirm_after_transcript_is_bound(
+    env, monkeypatch, tmp_path
+):
+    from ccbot.bot import _messages_shared
+
+    env.source.backend = "codex"
+    session_manager.window_states["@source"] = WindowState(
+        session_id="", backend="codex", cwd=str(tmp_path)
+    )
+    monkeypatch.setattr(
+        _messages_shared, "_voice_transcript_checkpoint", lambda _: None
+    )
+    req = env.recovery.admit(update(205, "first request"), "text", env.source)
+    sender = AsyncMock(return_value=(True, "Sent"))
+
+    async def process(_update, _context, wid):
+        ok, _ = await env.recovery.submit(wid, "first request", env.source, sender)
+        return ok
+
+    await env.recovery.run(
+        req.id, process, update(205, "first request"), env.context, "@source"
+    )
+    path = tmp_path / "new-session.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "first request"}],
+                },
+            }
+        )
+        + "\n"
+    )
+    session_manager.window_states["@source"] = WindowState(
+        session_id="new", backend="codex", cwd=str(tmp_path), transcript_path=str(path)
+    )
+    assert env.recovery.reconcile(req)
+
+
+@pytest.mark.asyncio
+async def test_post_submit_failure_does_not_discard_unconfirmed_request(
+    env, monkeypatch, tmp_path
+):
+    from ccbot.bot import _messages_shared
+
+    env.source.backend = "codex"
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text("")
+    checkpoint = _messages_shared._VoiceTranscriptCheckpoint(transcript, 0, "codex")
+    monkeypatch.setattr(
+        _messages_shared, "_voice_transcript_checkpoint", lambda _: checkpoint
+    )
+    req = env.recovery.admit(update(206, "check"), "text", env.source)
+
+    async def process(_update, _context, wid):
+        await env.recovery.submit(
+            wid, "check", env.source, AsyncMock(return_value=(True, "Sent"))
+        )
+        raise RuntimeError("UI refresh failed")
+
+    assert await env.recovery.run(
+        req.id, process, update(206, "check"), env.context, "@source"
+    )
+    assert req.state == "awaiting_confirmation"
+    assert req.id in env.recovery.records
+
+
 @pytest.fixture
 async def env(monkeypatch):
     source = Session(id="source", name="source", window_id="@source")

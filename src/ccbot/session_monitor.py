@@ -622,8 +622,19 @@ class SessionMonitor:
                 failed_index: int | None = None
                 for index, msg in enumerate(new_messages):
                     status = "complete" if msg.is_complete else "streaming"
-                    preview = msg.text[:80] + ("..." if len(msg.text) > 80 else "")
-                    logger.info("[%s] session=%s: %s", status, msg.session_id, preview)
+                    if msg.role == "user":
+                        logger.info(
+                            "transcript_event session=%s status=%s role=user type=%s text_len=%s",
+                            msg.session_id,
+                            status,
+                            msg.content_type,
+                            len(msg.text),
+                        )
+                    else:
+                        preview = msg.text[:80] + ("..." if len(msg.text) > 80 else "")
+                        logger.info(
+                            "[%s] session=%s: %s", status, msg.session_id, preview
+                        )
                     if self._message_callback:
                         try:
                             await self._message_callback(msg)

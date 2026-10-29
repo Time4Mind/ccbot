@@ -139,6 +139,11 @@ class Config:
         self.resume_settle_timeout = float(
             os.getenv("CCBOT_RESUME_SETTLE_TIMEOUT", "200")
         )
+        from .codex_startup import parse_codex_update_timeout
+
+        self.codex_update_timeout = parse_codex_update_timeout(
+            os.getenv("CCBOT_CODEX_UPDATE_TIMEOUT", "900")
+        )
 
         # Display user messages in history and real-time notifications
         # When True, user messages are shown with a 👤 prefix

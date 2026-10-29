@@ -29,6 +29,21 @@ def _line(kind: str, payload: dict) -> dict:
     return {"timestamp": "2026-01-01T00:00:00Z", "type": kind, "payload": payload}
 
 
+@pytest.mark.asyncio
+async def test_local_startup_forwards_configured_update_budget(monkeypatch):
+    from ccbot import tmux_manager
+
+    watcher = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        tmux_manager._tmux_window, "watch_codex_startup_screens", watcher
+    )
+    monkeypatch.setattr(config, "resume_settle_timeout", 20)
+    monkeypatch.setattr(config, "codex_update_timeout", 700)
+    assert await TmuxManager._watch_codex_startup_screens(object(), command="codex")
+    assert watcher.await_args.kwargs["timeout"] == 20
+    assert watcher.await_args.kwargs["update_timeout"] == 700
+
+
 def test_agent_backend_is_exposed_in_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

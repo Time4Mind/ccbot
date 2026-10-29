@@ -55,6 +55,7 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
         claude_flags: str = "",
         codex_flags: str = "",
         ready_timeout: float = 120.0,
+        codex_update_timeout: float | None = None,
         context_limit_bytes: int = 0,
         reconcile_interval: float = 10.0,
         codex_poll_interval: float = 0.25,
@@ -67,6 +68,11 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
         self._claude_flags = claude_flags
         self._codex_flags = codex_flags
         self._ready_timeout = ready_timeout
+        self._codex_update_timeout = (
+            config.codex_update_timeout
+            if codex_update_timeout is None
+            else codex_update_timeout
+        )
         self._context_limit_bytes = max(0, context_limit_bytes)
         self._reconcile_interval = max(0.0, reconcile_interval)
         self._codex_poll_interval = max(0.0, codex_poll_interval)
@@ -98,6 +104,12 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
         return {
             "active_sessions": len(self._sessions),
             "max_sessions": 0,
+        }
+
+    def startup_timeouts(self) -> dict[str, float]:
+        return {
+            "startup_timeout": self._ready_timeout,
+            "update_timeout": self._codex_update_timeout,
         }
 
     async def list_directories(self, *, path: str) -> dict[str, Any]:
@@ -145,6 +157,7 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
         resume_session_id: str = "",
         source_backend: str = "",
         provider_transcript_path: str = "",
+        startup_limits: dict[str, float] | None = None,
     ) -> dict[str, Any]:
         directory = self._resolve_directory(path)
         if backend not in ("claude", "codex"):
@@ -194,6 +207,7 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
             name=name,
             command=command,
             startup_id=startup_id,
+            startup_limits=startup_limits,
         )
         if resume_session_id and source_backend == backend:
             restored = self._sessions.get(str(result["target_agent_session_id"]))
@@ -238,13 +252,19 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
         }
 
     async def start_context_session(
-        self, *, context_path: str, backend: str, name: str
+        self,
+        *,
+        context_path: str,
+        backend: str,
+        name: str,
+        startup_limits: dict[str, float] | None = None,
     ) -> dict[str, Any]:
         result = await self._start_tmux_agent(
             workdir=self._workdir,
             backend=backend,
             name=name,
             command=self._agent_command(backend, context_path),
+            startup_limits=startup_limits,
         )
         result.update(
             {
@@ -268,6 +288,7 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
         command: str,
         startup_id: str = "",
         session_id: str = "",
+        startup_limits: dict[str, float] | None = None,
     ) -> dict[str, Any]:
         if backend not in ("claude", "codex"):
             raise ValueError(f"unsupported backend: {backend}")
@@ -316,7 +337,12 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
             )
             if code != 0:
                 raise RuntimeError(stderr.strip() or "tmux send-keys failed")
-            await self._wait_ready(window_id, backend, command=command)
+            if startup_limits is None:
+                await self._wait_ready(window_id, backend, command=command)
+            else:
+                await self._wait_ready(
+                    window_id, backend, command=command, startup_limits=startup_limits
+                )
             if startup_id and startup_id in self._cancelled_startups:
                 raise RuntimeError("worker session startup was cancelled")
         except BaseException:
@@ -579,7 +605,12 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
         return directory
 
     async def _wait_ready(
-        self, window_id: str, backend: str, *, command: str = ""
+        self,
+        window_id: str,
+        backend: str,
+        *,
+        command: str = "",
+        startup_limits: dict[str, float] | None = None,
     ) -> None:
         if backend == "codex":
             if not command:
@@ -624,13 +655,28 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
                 if code != 0:
                     raise CodexStartupError(stderr.strip() or "Codex relaunch failed")
 
+            ready_timeout = self._ready_timeout
+            update_timeout = self._codex_update_timeout
+            if startup_limits is not None:
+                import math
+
+                ready_cap = float(startup_limits["startup_timeout"])
+                update_cap = float(startup_limits["update_timeout"])
+                if not all(
+                    math.isfinite(value) and value > 0
+                    for value in (ready_cap, update_cap)
+                ):
+                    raise ValueError("startup limits must be finite and positive")
+                ready_timeout = min(ready_timeout, ready_cap)
+                update_timeout = min(update_timeout, update_cap)
             await drive_codex_startup(
                 command=command,
                 capture=capture,
                 current_process=current_process,
                 send_key=send_key,
                 relaunch=relaunch,
-                timeout=self._ready_timeout,
+                timeout=ready_timeout,
+                update_timeout=update_timeout,
                 poll_interval=self._codex_poll_interval,
                 ready_settle_time=self._codex_ready_settle_time,
             )

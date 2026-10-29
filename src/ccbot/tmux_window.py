@@ -107,6 +107,7 @@ async def watch_codex_startup_screens(
     *,
     command: str,
     timeout: float,
+    update_timeout: float = 900.0,
     to_thread: Any,
     poll_interval: float = _CODEX_STARTUP_POLL_SECONDS,
     ready_settle_time: float = CODEX_READY_SETTLE_SECONDS,
@@ -151,6 +152,7 @@ async def watch_codex_startup_screens(
         send_key=send_key,
         relaunch=relaunch,
         timeout=timeout,
+        update_timeout=update_timeout,
         poll_interval=poll_interval,
         ready_settle_time=ready_settle_time,
     )

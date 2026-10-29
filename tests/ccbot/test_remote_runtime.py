@@ -25,6 +25,8 @@ class FakeRpc:
         payload = {"target_node_id": target_node_id, **payload}
         self.calls.append((operation, dict(payload)))
         self.options.append(dict(kwargs))
+        if operation == "startup_limits":
+            return {"ok": False, "error": "unsupported node operation: startup_limits"}
         if operation == "transfer_context_begin":
             return {"transfer_id": "worker-transfer"}
         if operation == "transfer_context_finish":
@@ -35,6 +37,25 @@ class FakeRpc:
                 "context_error": "",
             }
         return {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_remote_timeout_uses_worker_configured_limits():
+    class Rpc(FakeRpc):
+        async def request(self, target_node_id, operation, payload, **kwargs):
+            if operation == "startup_limits":
+                self.calls.append((operation, dict(payload)))
+                self.options.append(dict(kwargs))
+                return {"ok": True, "startup_timeout": 350, "update_timeout": 1200}
+            return await super().request(target_node_id, operation, payload, **kwargs)
+
+    rpc = Rpc()
+    await RemoteNodeRuntime(rpc).create_session("node", "/tmp", "codex", "test")
+    assert rpc.calls[-1][1]["startup_limits"] == {
+        "startup_timeout": 350,
+        "update_timeout": 1200,
+    }
+    assert rpc.options[-1]["timeout"] == 1915
 
 
 @pytest.mark.asyncio
@@ -63,6 +84,7 @@ async def test_remote_runtime_streams_context_and_returns_prompt_delivery(tmp_pa
     assert result.target_window_id == "@42"
     operations = [operation for operation, _payload in rpc.calls]
     assert operations == [
+        "startup_limits",
         "transfer_context_begin",
         "transfer_context_chunk",
         "transfer_context_chunk",
@@ -71,6 +93,12 @@ async def test_remote_runtime_streams_context_and_returns_prompt_delivery(tmp_pa
         "transfer_context_finish",
     ]
     assert all(payload["target_node_id"] == "worker-a" for _, payload in rpc.calls)
+    limits = rpc.calls[-1][1]["startup_limits"]
+    assert (
+        rpc.options[-1]["timeout"]
+        == 2 * limits["startup_timeout"] + limits["update_timeout"] + 15
+    )
+    assert rpc.options[-1]["retries"] == 0
 
     update = SimpleNamespace(message=SimpleNamespace(text="next prompt"))
     assert await result.delivery(update, SimpleNamespace())
@@ -136,13 +164,20 @@ async def test_remote_runtime_sends_restore_contract_to_worker():
         provider_transcript_path="/srv/codex/rollout-42.jsonl",
     )
 
-    operation, payload = rpc.calls[0]
+    operation, payload = rpc.calls[1]
     assert operation == "restore_session"
     assert payload["target_node_id"] == "worker-a"
     assert payload["resume_session_id"] == "rollout-42"
     assert payload["source_backend"] == "codex"
     assert payload["provider_transcript_path"] == "/srv/codex/rollout-42.jsonl"
-    assert rpc.options[0] == {"retries": 0, "timeout": 135.0}
+    from ccbot.config import config
+
+    limits = payload["startup_limits"]
+    assert limits["update_timeout"] == config.codex_update_timeout
+    assert rpc.options[1] == {
+        "retries": 0,
+        "timeout": 2 * limits["startup_timeout"] + limits["update_timeout"] + 15,
+    }
 
 
 @pytest.mark.asyncio
@@ -278,6 +313,11 @@ async def test_cancelling_remote_creation_requests_worker_cleanup() -> None:
             **_kwargs: object,
         ) -> dict[str, object]:
             calls.append((operation, dict(payload)))
+            if operation == "startup_limits":
+                return {
+                    "ok": False,
+                    "error": "unsupported node operation: startup_limits",
+                }
             if operation == "create_session":
                 started.set()
                 await asyncio.Event().wait()
@@ -293,7 +333,8 @@ async def test_cancelling_remote_creation_requests_worker_cleanup() -> None:
         await task
 
     assert [operation for operation, _payload in calls] == [
+        "startup_limits",
         "create_session",
         "cancel_session_start",
     ]
-    assert calls[1][1]["startup_id"] == calls[0][1]["startup_id"]
+    assert calls[2][1]["startup_id"] == calls[1][1]["startup_id"]

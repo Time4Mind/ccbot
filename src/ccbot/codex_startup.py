@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
+from typing import TypeVar
 
 from .terminal_parser import (
     is_interactive_ui,
@@ -51,9 +53,31 @@ _SHELL_PROCESSES = {
     "zsh",
 }
 CODEX_READY_SETTLE_SECONDS = 3.0
+CODEX_UPDATE_TIMEOUT_SECONDS = 900.0
+T = TypeVar("T")
+
+
+def parse_codex_update_timeout(value: str) -> float:
+    """Require a finite, positive update budget in seconds."""
+    try:
+        seconds = float(value)
+    except ValueError as exc:
+        raise ValueError(
+            "CCBOT_CODEX_UPDATE_TIMEOUT must be finite and positive"
+        ) from exc
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError("CCBOT_CODEX_UPDATE_TIMEOUT must be finite and positive")
+    return seconds
+
+
 _UPDATE_TITLE = re.compile(r"^\s*update available\b", re.IGNORECASE)
 _NUMBERED_OPTION = re.compile(r"^\s*(?:[›❯]\s*)?\d+\.\s*(.+?)\s*$")
 _SELECTED_LINE = re.compile(r"^\s*[›❯]\s*(.*)$")
+_UPDATER_FAILURE = re.compile(
+    r"^\s*(?:npm (?:ERR!|error\b)|(?:error:\s*)?(?:codex )?"
+    r"(?:update failed|failed to (?:update|install)(?: codex)?\b|installation failed))",
+    re.IGNORECASE,
+)
 
 
 def _update_now_is_selected(text: str) -> bool:
@@ -223,8 +247,10 @@ async def drive_codex_startup(
     send_key: Callable[[str], Awaitable[None]],
     relaunch: Callable[[str], Awaitable[None]],
     timeout: float,
+    update_timeout: float = CODEX_UPDATE_TIMEOUT_SECONDS,
     poll_interval: float = 0.25,
     ready_settle_time: float = CODEX_READY_SETTLE_SECONDS,
+    clock: Callable[[], float] | None = None,
 ) -> CodexStartupResult:
     """Drive known startup prompts until the real input state is visible.
 
@@ -235,30 +261,68 @@ async def drive_codex_startup(
     relaunched. A second update prompt is a bounded error.
     """
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + max(0.0, timeout)
+    if not math.isfinite(update_timeout) or update_timeout <= 0:
+        raise ValueError("Codex update timeout must be finite and positive")
+    now = clock or loop.time
+    deadline = now() + max(0.0, timeout)
     updated = False
     waiting_for_updater_exit = False
     relaunched_after_update = False
     ready_since: float | None = None
     settle_time = max(0.0, ready_settle_time)
+    update_baseline: set[str] = set()
 
-    while loop.time() <= deadline:
-        text, process = await asyncio.gather(capture(), current_process())
+    def timeout_error() -> CodexStartupError:
+        if waiting_for_updater_exit:
+            return CodexStartupError(
+                "Codex update did not finish before update timeout"
+            )
+        if updated:
+            return CodexStartupError(
+                "Codex did not become ready before post-update startup timeout"
+            )
+        return CodexStartupError("Codex did not become ready before startup timeout")
+
+    async def within_deadline(operation: Callable[[], Awaitable[T]]) -> T:
+        remaining = deadline - now()
+        if remaining <= 0:
+            raise timeout_error()
+        timer = asyncio.timeout(remaining)
+        try:
+            async with timer:
+                return await operation()
+        except TimeoutError as exc:
+            if not timer.expired():
+                raise
+            raise timeout_error() from exc
+
+    while now() <= deadline:
+        result = await within_deadline(
+            lambda: asyncio.gather(capture(), current_process())
+        )
+        text, process = result
+        if now() > deadline:
+            break
         failure = codex_bootstrap_error(text)
         if failure is not None:
             raise CodexStartupError(failure)
 
         if waiting_for_updater_exit:
+            for line in text.rstrip().splitlines()[-20:]:
+                if line not in update_baseline and _UPDATER_FAILURE.match(line):
+                    raise CodexStartupError("Codex update failed (installer error)")
             if _is_shell(process):
-                await relaunch(command)
                 waiting_for_updater_exit = False
                 relaunched_after_update = True
+                deadline = now() + max(0.0, timeout)
                 ready_since = None
+                await within_deadline(lambda: relaunch(command))
             elif classify_codex_screen(text) is CodexScreen.READY:
-                now = loop.time()
-                if ready_since is None:
-                    ready_since = now
-                if now - ready_since >= settle_time:
+                waiting_for_updater_exit = False
+                relaunched_after_update = True
+                deadline = now() + max(0.0, timeout)
+                ready_since = now()
+                if settle_time == 0:
                     return CodexStartupResult(updated=True)
             else:
                 ready_since = None
@@ -274,32 +338,34 @@ async def drive_codex_startup(
 
         screen = classify_codex_screen(text)
         if screen is CodexScreen.READY:
-            now = loop.time()
+            timestamp = now()
             if ready_since is None:
-                ready_since = now
-            if now - ready_since >= settle_time:
+                ready_since = timestamp
+            if timestamp - ready_since >= settle_time:
                 return CodexStartupResult(updated=updated)
         else:
             ready_since = None
         if screen is CodexScreen.TRUST:
-            await send_key("ENTER")
+            await within_deadline(lambda: send_key("ENTER"))
         elif screen is CodexScreen.HOOKS_REVIEW:
-            await send_key("DOWN")
-            await send_key("ENTER")
+            await within_deadline(lambda: send_key("DOWN"))
+            await within_deadline(lambda: send_key("ENTER"))
         elif screen is CodexScreen.HOOKS_INLINE:
-            await send_key("t")
+            await within_deadline(lambda: send_key("t"))
         elif screen is CodexScreen.MODEL_MIGRATION:
-            await send_key("DOWN")
-            await send_key("ENTER")
+            await within_deadline(lambda: send_key("DOWN"))
+            await within_deadline(lambda: send_key("ENTER"))
         elif screen is CodexScreen.RESUME_DIRECTORY:
-            await send_key("DOWN")
-            await send_key("ENTER")
+            await within_deadline(lambda: send_key("DOWN"))
+            await within_deadline(lambda: send_key("ENTER"))
         elif screen is CodexScreen.UPDATE:
             if relaunched_after_update or updated:
                 raise CodexStartupError("Codex repeated update prompt after relaunch")
-            await send_key("ENTER")
             updated = True
             waiting_for_updater_exit = True
+            update_baseline = set(text.rstrip().splitlines())
+            deadline = now() + max(0.0, update_timeout)
+            await within_deadline(lambda: send_key("ENTER"))
         elif screen is CodexScreen.AUTHENTICATION:
             raise CodexStartupError("Codex requires authentication")
         elif screen is CodexScreen.UNHANDLED_MODAL:
@@ -307,9 +373,7 @@ async def drive_codex_startup(
 
         await asyncio.sleep(max(0.0, poll_interval))
 
-    if waiting_for_updater_exit:
-        raise CodexStartupError("Codex update did not finish before startup timeout")
-    raise CodexStartupError("Codex did not become ready before startup timeout")
+    raise timeout_error()
 
 
 __all__ = [

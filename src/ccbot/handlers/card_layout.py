@@ -232,7 +232,13 @@ def _render_card(
     if state.last_event_ts > 0:
         ts_suffix = " · " + _format_hhmmss(state.last_event_ts)
     name_part = sess.name or sess.id
-    completion = "✅ " if state.completion_marker_pending else ""
+    if user_id is None:
+        emoji = "✅" if state.completion_marker_pending else ""
+    else:
+        from .bg_status import status_emoji
+
+        emoji = status_emoji(user_id, sess.id)
+    completion = f"{emoji} " if emoji else ""
     header = f"{completion}*{name_part}* · {state_label}{cont_marker}{ts_suffix}"
     if user_id is not None and not state.delivery_id:
         from ..final_delivery import final_delivery_queue

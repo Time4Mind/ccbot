@@ -113,12 +113,11 @@ async def deliver_final(
         passive,
         target.next_request_sequence,
     )
-    text = item.payload["text"]
+    final = target.events[item.payload["final_index"]]
+    text = _render_with_final_proof(sess, target, item.user_id, final)
     if text is None:
-        final = target.events[item.payload["final_index"]]
-        text = _render_with_final_proof(sess, target, item.user_id, final)
-        if text is None:
-            return False
+        return False
+    if item.payload["text"] != text:
         item.payload["text"] = text
         item.payload["state"]["media_anchor_offset"] = target.media_anchor_offset
         final_delivery_queue.save()

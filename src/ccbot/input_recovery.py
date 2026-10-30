@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from datetime import timedelta
 import json
 import logging
@@ -63,6 +64,7 @@ class InputRequest:
     confirmation_deadline: float = 0.0
     strict_codex_proof: bool = False
     submitted_at: float = 0.0
+    dispatch_started_at: float = 0.0
 
 
 class InputRecovery:
@@ -73,6 +75,8 @@ class InputRecovery:
         self.records: dict[str, InputRequest] = {}
         self.completed: list[str] = []
         self.confirmed_through: dict[str, int] = {}
+        self.resolved_notices: list[dict[str, int]] = []
+        self._notice_resolution_retry_at = 0.0
         self.loaded = False
         self.bot: Any = None
         self.task: asyncio.Task[None] | None = None
@@ -95,6 +99,7 @@ class InputRecovery:
         }
         self.completed = raw.get("completed", [])
         self.confirmed_through = raw.get("confirmed_through", {})
+        self.resolved_notices = raw.get("resolved_notices", [])
         for request in self.records.values():
             if request.state == "dispatching":
                 request.state = "unknown"
@@ -112,6 +117,7 @@ class InputRecovery:
                 "requests": [asdict(r) for r in self.records.values()],
                 "completed": self.completed,
                 "confirmed_through": self.confirmed_through,
+                "resolved_notices": self.resolved_notices,
             },
         )
 
@@ -194,6 +200,16 @@ class InputRecovery:
 
     def complete(self, request: InputRequest, *, confirmed: bool = True) -> None:
         previous = request.state
+        if previous == "unknown":
+            self.dirty.add((request.user_id, request.session_id))
+        if confirmed and previous == "unknown" and request.notice_id is not None:
+            self.resolved_notices.append(
+                {
+                    "user_id": request.user_id,
+                    "notice_id": request.notice_id,
+                    "message_id": request.message_id,
+                }
+            )
         request.state = "delivered"
         request.confirmed = confirmed
         self.records.pop(request.id, None)
@@ -308,6 +324,13 @@ class InputRecovery:
             if checkpoint is not None
             else None
         )
+        if checkpoint is not None and request.checkpoint is not None:
+            try:
+                stat = checkpoint.path.stat()
+                request.checkpoint["device"] = stat.st_dev
+                request.checkpoint["inode"] = stat.st_ino
+            except OSError:
+                pass
         if request.strict_codex_proof and request.checkpoint is None:
             from .session import WindowState
 
@@ -324,6 +347,7 @@ class InputRecovery:
                     "unbound": True,
                 }
         request.prepared = text
+        request.dispatch_started_at = self.clock()
         request.state = "dispatching"
         self.changed(request)
         logger.info(
@@ -375,7 +399,65 @@ class InputRecovery:
         raise SubmissionUnknown()
 
     def reconcile(self, request: InputRequest) -> bool:
-        if request.checkpoint is None or not request.prepared:
+        if not request.prepared:
+            return False
+        if request.strict_codex_proof and not (request.checkpoint or {}).get("unbound"):
+            from .session import WindowState, session_manager
+            from .codex_session_io import build_session_file_path
+
+            source = self.source(request)
+            state = session_manager.window_states.get(request.window_id)
+            if (
+                source is not None
+                and isinstance(state, WindowState)
+                and state.backend == "codex"
+                and state.session_id
+                and state.session_id == source.claude_session_id
+            ):
+                path = (
+                    Path(state.transcript_path)
+                    if state.transcript_path
+                    else build_session_file_path(state.session_id, state.cwd)
+                )
+                replaced = False
+                if path is not None and path.is_file() and request.checkpoint:
+                    try:
+                        current = path.stat()
+                        saved_inode = request.checkpoint.get("inode")
+                        replaced = (
+                            saved_inode is not None
+                            and (
+                                current.st_ino != saved_inode
+                                or current.st_dev != request.checkpoint.get("device")
+                            )
+                        ) or current.st_size < int(request.checkpoint.get("offset", 0))
+                    except OSError:
+                        pass
+                if (
+                    path is not None
+                    and path.is_file()
+                    and (
+                        request.checkpoint is None
+                        or request.checkpoint.get("path") != str(path)
+                        or replaced
+                    )
+                ):
+                    boundary = request.dispatch_started_at
+                    # An admission timestamp is too early when requests queue;
+                    # using it could match a different, identical user row.
+                    if boundary > 0:
+                        request.checkpoint = {
+                            "path": str(path),
+                            "offset": 0,
+                            "backend": "codex",
+                            "not_before": boundary,
+                            "device": path.stat().st_dev,
+                            "inode": path.stat().st_ino,
+                            "replaced": replaced,
+                        }
+                        self._scan_positions.pop(request.id, None)
+                        self.save()
+        if request.checkpoint is None:
             return False
         if request.checkpoint.get("unbound"):
             from .session import WindowState, session_manager
@@ -414,9 +496,22 @@ class InputRecovery:
         ):
             # One physical user row can acknowledge at most one request,
             # even when two identical prompts were sent before either appeared.
-            path_key = str(checkpoint.path)
+            base_path_key = str(checkpoint.path)
+            device = request.checkpoint.get("device")
+            inode = request.checkpoint.get("inode")
+            path_key = (
+                f"{base_path_key}#{device}:{inode}"
+                if device is not None and inode is not None
+                else base_path_key
+            )
+            legacy_offset = (
+                0
+                if request.checkpoint.get("replaced")
+                else self.confirmed_through.get(base_path_key, 0)
+            )
             start = max(
                 checkpoint.offset,
+                legacy_offset,
                 self.confirmed_through.get(path_key, 0),
                 self._scan_positions.get(request.id, 0),
             )
@@ -445,6 +540,16 @@ class InputRecovery:
                             or payload.get("role") != "user"
                         ):
                             continue
+                        not_before = float(request.checkpoint.get("not_before", 0))
+                        if not_before:
+                            try:
+                                stamp = datetime.fromisoformat(
+                                    str(row.get("timestamp", "")).replace("Z", "+00:00")
+                                ).timestamp()
+                            except (TypeError, ValueError, OSError):
+                                continue
+                            if stamp < not_before:
+                                continue
                         content = payload.get("content", [])
                         if not isinstance(content, list):
                             continue
@@ -456,6 +561,7 @@ class InputRecovery:
                         )
                         if text.strip() == request.prepared.strip():
                             self.confirmed_through[path_key] = stream.tell()
+                            self.confirmed_through[base_path_key] = stream.tell()
                             if len(self.confirmed_through) > 512:
                                 self.confirmed_through.pop(
                                     next(iter(self.confirmed_through))
@@ -488,6 +594,14 @@ class InputRecovery:
                 )
                 return
         if now >= request.confirmation_deadline:
+            from .handlers import bg_status
+
+            if bg_status.get_status(request.user_id, request.session_id) == "working":
+                # Codex can queue a follow-up until the current turn or
+                # compaction ends. Absence of a row while busy proves nothing.
+                request.confirmation_deadline = now + _CONFIRMATION_GRACE_SECONDS
+                self.save()
+                return
             request.state = "unknown"
             request.notice = "Запрос принят ботом, но его получение агентом не подтверждено. Автоповтор остановлен; проверьте исходную сессию и /requests."
             self._next_reconcile.pop(request.id, None)
@@ -679,6 +793,44 @@ class InputRecovery:
 
         while True:
             try:
+                if (
+                    self.resolved_notices
+                    and self.bot is not None
+                    and self.clock() >= self._notice_resolution_retry_at
+                ):
+                    item = self.resolved_notices[0]
+                    resolved = False
+                    try:
+                        from .telegram_rate_limit import background_telegram_request
+
+                        with background_telegram_request():
+                            await self.bot.edit_message_text(
+                                chat_id=item["user_id"],
+                                message_id=item["notice_id"],
+                                text=f"Запрос №{item['message_id']}: получение агентом подтверждено.",
+                            )
+                        resolved = True
+                    except BadRequest as exc:
+                        resolved = (
+                            "message is not modified" in str(exc).lower()
+                            or "message to edit not found" in str(exc).lower()
+                        )
+                        if not resolved:
+                            self._notice_resolution_retry_at = self.clock() + 300.0
+                            logger.warning(
+                                "input_notice_resolution_retry error=%s",
+                                type(exc).__name__,
+                            )
+                    except Exception as exc:
+                        self._notice_resolution_retry_at = self.clock() + max(
+                            60.0, self.retry_delay(0, exc)
+                        )
+                        logger.warning(
+                            "input_notice_resolution_retry error=%s", type(exc).__name__
+                        )
+                    if resolved:
+                        self.resolved_notices.pop(0)
+                        self.save()
                 for request in tuple(self.records.values()):
                     if request.state == "awaiting_confirmation":
                         self.check_confirmation(request)

@@ -299,7 +299,7 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                 saved_backend = state.get("agent_backend", config.agent_backend)
                 self.agent_backend = (
                     saved_backend
-                    if saved_backend in ("claude", "codex")
+                    if saved_backend in ("claude", "codex", "zcode")
                     else config.agent_backend
                 )
                 # Keep legacy call sites and helper modules in sync with the
@@ -500,7 +500,9 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                         "TUI readiness is still unproven",
                         window_id,
                     )
-            if backend == "codex" and not await tmux_manager.wait_startup(window_id):
+            if backend in ("codex", "zcode") and not await tmux_manager.wait_startup(
+                window_id
+            ):
                 logger.warning("startup checks failed for window %s", window_id)
                 return
             logger.info(
@@ -571,6 +573,10 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
     @staticmethod
     def _pane_has_ready_input(pane: str, backend: str) -> bool:
         """Whether the visible pane ends in the agent's real input box."""
+        if backend == "zcode":
+            from .zcode_runtime import is_ready
+
+            return is_ready(pane)
         if backend == "codex":
             return is_codex_ready(pane)
         if not pane or is_interactive_ui(pane) or parse_status_line(pane) is not None:

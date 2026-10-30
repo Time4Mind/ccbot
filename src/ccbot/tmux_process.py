@@ -27,6 +27,8 @@ def kill_orphan_processes(
     normalized_backend = backend.strip().lower()
     if normalized_backend == "claude":
         pattern = f"claude.*--resume[ =]{agent_session_id}"
+    elif normalized_backend == "zcode":
+        pattern = f"zcode.*--resume[ =]{agent_session_id}"
     elif normalized_backend == "codex":
         pattern = f"codex.*resume[ ]+{agent_session_id}"
     else:

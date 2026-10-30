@@ -100,7 +100,7 @@ async def handle(
 
         await _asyncio.sleep(0.4)
         success, message = await session_manager.send_to_window(
-            sess.window_id, "/clear"
+            sess.window_id, "/new" if sess.backend == "zcode" else "/clear"
         )
         if not success:
             await open_more_in_place(query, user.id)

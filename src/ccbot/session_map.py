@@ -143,7 +143,7 @@ class SessionMapMixin:
                 continue
             state = self.get_window_state(window_id)
             state.backend = (
-                new_backend if new_backend in ("claude", "codex") else "claude"
+                new_backend if new_backend in ("claude", "codex", "zcode") else "claude"
             )
             if state.transcript_path != new_transcript_path:
                 state.transcript_path = new_transcript_path
@@ -215,7 +215,7 @@ class SessionMapMixin:
         coordinates the file update with the external hook process.
         """
         if not transcript_path.is_file():
-            raise RuntimeError(f"Codex rollout does not exist: {transcript_path}")
+            raise RuntimeError(f"Agent transcript does not exist: {transcript_path}")
         from .session_map_store import upsert_session_map_entry
 
         key = f"{config.tmux_session_name}:{window_id}"
@@ -223,7 +223,7 @@ class SessionMapMixin:
             "session_id": sess.claude_session_id,
             "cwd": sess.workdir,
             "window_name": window_name,
-            "backend": "codex",
+            "backend": sess.backend,
             "transcript_path": str(transcript_path),
         }
         async with self._session_map_lock:
@@ -237,7 +237,7 @@ class SessionMapMixin:
             state.session_id = sess.claude_session_id
             state.cwd = sess.workdir
             state.window_name = window_name
-            state.backend = "codex"
+            state.backend = sess.backend
             state.transcript_path = str(transcript_path)
             self.set_session_window(sess.id, window_id)
             self.set_active_session(user_id, sess.id)
@@ -295,6 +295,10 @@ class SessionMapMixin:
         from . import codex_session_io, session_claude_io
 
         io = codex_session_io if self.agent_backend == "codex" else session_claude_io
+        if self.agent_backend == "zcode":
+            from . import zcode_session_io
+
+            io = zcode_session_io
         return await io.list_sessions_for_directory(cwd)
 
     async def resolve_session_for_window(self, window_id: str) -> ClaudeSession | None:
@@ -314,6 +318,12 @@ class SessionMapMixin:
                 state.session_id,
                 state.cwd,
                 state.transcript_path or None,
+            )
+        elif state.backend == "zcode":
+            from . import zcode_session_io
+
+            session = await zcode_session_io.get_session_direct(
+                state.session_id, state.cwd, state.transcript_path or None
             )
         else:
             session = await session_claude_io.get_session_direct(

@@ -119,11 +119,13 @@ Most-frequently-tweaked optionals:
 | --------------------------- | ------------ | ------ |
 | `CCBOT_DIR`                 | `~/.ccbot`   | Config and state directory |
 | `TMUX_SESSION_NAME`         | `ccbot`      | tmux session that holds all session windows |
-| `CCBOT_AGENT_BACKEND`       | `claude`     | initial global backend for a new state file |
+| `CCBOT_AGENT_BACKEND`       | `claude`     | initial global backend (`claude`, `codex`, `zcode`) for a new state file |
 | `CLAUDE_COMMAND`            | `claude`     | binary used to start a session |
 | `CLAUDE_FLAGS`              | `--dangerously-skip-permissions` | flags appended to `claude` |
 | `CODEX_COMMAND`             | `codex`      | Codex CLI binary (an absolute Termux path is accepted) |
 | `CODEX_FLAGS`               | bypass + hook trust + hooks + `--no-alt-screen` | flags appended to `codex` |
+| `ZCODE_COMMAND`             | `zcode`      | installed official ZCode CLI |
+| `ZCODE_FLAGS`               | `--mode yolo --locale en-US` | native TUI flags |
 | `CODEX_NAMING_MODEL`        | `gpt-5.6-luna` | lightweight Codex model for automatic session names |
 | `ARCHIVE_PURGE_AFTER`       | `20d`        | archived sessions purged from state after this |
 | `QUOTA_ALERT_POLL_INTERVAL` | `10m`        | how often the live `/usage` modal is sampled |
@@ -187,6 +189,30 @@ For the Codex backend, install the equivalent hooks in
 ```bash
 ccbot hook --install --backend codex
 ```
+
+For ZCode, install the official Agent CLI and configure its provider, then run:
+
+```bash
+ccbot hook --install --backend zcode
+```
+
+Enable ZCode in Settings → Agent; existing sessions and the default backend
+stay selected. ZCode uses its native TUI and `--resume sess_<uuid>`. CCBot reads
+its SQLite session store with read-only connections and maintains its own
+normalized journal under `$CCBOT_DIR/zcode-transcripts/`. It does not modify
+native session rows. `ZCODE_SESSION_DB_PATH` overrides the default native store.
+The provider configuration remains in `~/.zcode/v2/provider_config.json` (or
+`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`); never put a key in a launch command.
+
+ZCode model, effort and mode commands leave the native selector open for the
+Telegram arrow controls. Cancel also clears the selector's command draft.
+`/compact`, `/stop`, history, archives and cross-agent handoff use the existing
+surfaces. Image support follows the selected model. Usage reports recorded
+session tokens; absent account quotas/reset times remain unknown.
+
+See [the backend contract](doc/zcode-backend-spec.md). The opt-in real-provider
+acceptance is `CCBOT_RUN_ZCODE_LIVE=1 uv run pytest tests/ccbot/test_zcode_live.py`;
+it uses isolated fixtures and restores temporary user-hook configuration.
 
 Switching is blocked while the current backend still has live sessions;
 archive or kill them first. Archived sessions retain their original backend.

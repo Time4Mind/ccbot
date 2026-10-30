@@ -592,7 +592,9 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
         )
         return True, f"Restored {sess.name or sess.id} ({created_wname}){note}"
 
-    native_codex_restore = bool(resume_session_id and target_backend == "codex")
+    native_codex_restore = bool(
+        resume_session_id and target_backend in ("codex", "zcode")
+    )
     restore_published = asyncio.Event()
 
     async def _rollback_failed_startup(
@@ -659,23 +661,20 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
         user_id=user_id,
     )
 
-    # Codex ``resume <id>`` keeps the same authoritative rollout id. We
-    # already know everything needed to bind the window, while its SessionStart
-    # hook may not run until the CLI has finished booting. Waiting 15 seconds
-    # here made a normal archive restore look frozen for exactly that long.
-    # Bind Codex immediately; the hook will later add transcript_path and
-    # self-heal the persisted map. Claude's original id is also known, so it
-    # can be published immediately and reconciled after the hook in background.
+    # Codex and ZCode retain their native identity on resume. Publish the
+    # binding before exposing the window; hooks reconcile it after startup.
     codex_restore_published = False
-    if resume_session_id and target_backend == "codex":
-        from ..codex_session_io import build_session_file_path
+    if resume_session_id and target_backend in ("codex", "zcode"):
+        from ..agent_backends import session_transcript_path
 
-        transcript_path = build_session_file_path(resume_session_id, workdir)
+        transcript_path = session_transcript_path(
+            resume_session_id, workdir, target_backend
+        )
         if transcript_path is None or not transcript_path.is_file():
             restore_published.set()
             session_manager.cancel_window_startup(created_wid)
             await tmux_manager.kill_window(created_wid)
-            return False, "Codex rollout not found; restore was cancelled"
+            return False, f"{target_backend}: transcript missing; restore cancelled"
         try:
             await session_manager.publish_codex_restore_binding(
                 sess=sess,
@@ -689,7 +688,7 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
             session_manager.cancel_window_startup(created_wid)
             await tmux_manager.kill_window(created_wid)
             logger.warning("Codex restore binding failed for %s: %s", created_wid, e)
-            return False, "Could not publish Codex restore binding"
+            return False, f"Could not publish {target_backend} restore binding"
         codex_restore_published = True
         restore_published.set()
     elif cross_backend:

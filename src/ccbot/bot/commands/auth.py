@@ -63,7 +63,12 @@ def _cancel_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 async def start_login(bot: Bot, user_id: int, *, backend: str | None = None) -> bool:
     """Spawn the login exchange and post the URL. True when the URL went out."""
-    selected_backend = backend or session_manager.agent_backend
+    active = session_manager.get_active_session(user_id)
+    selected_backend = backend or (
+        active.backend if active else session_manager.agent_backend
+    )
+    if selected_backend == "zcode":
+        return await _check_zcode_auth(bot, user_id)
     if selected_backend == "codex":
         await safe_send(bot, user_id, t(user_id, "auth.login.starting"))
         flow = await codex_auth.start_flow(user_id, command=config.codex_command)
@@ -125,6 +130,13 @@ async def ensure_codex_authenticated(
     bot: Bot, user_id: int, *, backend: str | None = None
 ) -> bool:
     """Return True when Codex can run, otherwise ensure a login is underway."""
+    if (backend or session_manager.agent_backend) == "zcode":
+        from ...zcode_runtime import auth_state
+
+        if auth_state().configured:
+            return True
+        await _check_zcode_auth(bot, user_id)
+        return False
     if (backend or session_manager.agent_backend) != "codex":
         return True
     # Managed ChatGPT credentials are refreshable. A plain account/read can
@@ -335,3 +347,38 @@ async def notify_auth_expired(bot: Bot, user_id: int) -> None:
         [[InlineKeyboardButton(t(user_id, "btn.login"), callback_data=CB_AUTH_LOGIN)]]
     )
     await safe_send(bot, user_id, t(user_id, "auth.expired"), reply_markup=keyboard)
+
+
+async def _check_zcode_auth(bot: Bot, user_id: int) -> bool:
+    """Check the selected provider without exposing or replacing its key."""
+    from ...zcode_runtime import auth_state
+    from ...zcode_generation import generate
+
+    state = auth_state()
+    if not state.configured:
+        await safe_send(bot, user_id, t(user_id, "auth.zcode.configure"))
+        return False
+    await safe_send(bot, user_id, t(user_id, "auth.zcode.checking"))
+    response = await generate(
+        config.zcode_command,
+        "Reply exactly ZCODE_CONNECTION_OK. Do not use tools.",
+        timeout=45,
+    )
+    success = response is not None and response.strip() == "ZCODE_CONNECTION_OK"
+    await safe_send(
+        bot, user_id, t(user_id, "auth.zcode.ready" if success else "auth.zcode.failed")
+    )
+    return success
+
+
+_zcode_auth_notified: set[int] = set()
+
+
+async def notify_zcode_auth_failure(bot: Bot, user_id: int) -> None:
+    if user_id not in _zcode_auth_notified:
+        await safe_send(bot, user_id, t(user_id, "auth.zcode.rejected"))
+        _zcode_auth_notified.add(user_id)
+
+
+def clear_zcode_auth_failure(user_id: int) -> None:
+    _zcode_auth_notified.discard(user_id)

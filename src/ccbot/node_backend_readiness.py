@@ -26,7 +26,18 @@ async def probe_ready_backends(
         )
         if not resolved:
             continue
-        status_args = ["auth", "status"] if backend == "claude" else ["login", "status"]
+        if backend == "zcode":
+            from .zcode_runtime import auth_state
+
+            if not auth_state().configured:
+                continue
+        status_args = (
+            ["auth", "status"]
+            if backend == "claude"
+            else ["--version"]
+            if backend == "zcode"
+            else ["login", "status"]
+        )
         process: asyncio.subprocess.Process | None = None
         try:
             process = await asyncio.create_subprocess_exec(
@@ -78,11 +89,13 @@ def parse_backend_health(
     ready = [
         str(value)
         for value in payload.get("backends", [])
-        if value in ("claude", "codex")
+        if value in ("claude", "codex", "zcode")
     ]
     configured_source = payload.get("configured_backends", fallback or ready)
     configured = [
-        str(value) for value in configured_source if str(value) in ("claude", "codex")
+        str(value)
+        for value in configured_source
+        if str(value) in ("claude", "codex", "zcode")
     ]
     raw_status = payload.get("backend_status", {})
     status = (

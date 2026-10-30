@@ -85,7 +85,7 @@ async def create_and_activate_session(
     )
     backend = (
         selected_backend
-        if selected_backend in ("claude", "codex")
+        if selected_backend in ("claude", "codex", "zcode")
         else session_manager.agent_backend
     )
     effective_backends = getattr(session_manager, "get_effective_backends", None)

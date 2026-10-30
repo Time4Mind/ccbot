@@ -70,7 +70,8 @@ def parse_codex_update_timeout(value: str) -> float:
     return seconds
 
 
-_UPDATE_TITLE = re.compile(r"^\s*update available\b", re.IGNORECASE)
+_UPDATE_TITLE = re.compile(r"^\s*[^\w\n]*update available\b", re.IGNORECASE)
+_CODEX_TITLE = re.compile(r"^\s*(?:>_\s*)?openai codex\b", re.IGNORECASE)
 _NUMBERED_OPTION = re.compile(r"^\s*(?:[›❯]\s*)?\d+\.\s*(.+?)\s*$")
 _SELECTED_LINE = re.compile(r"^\s*[›❯]\s*(.*)$")
 _UPDATER_FAILURE = re.compile(
@@ -191,7 +192,7 @@ def is_codex_ready(text: str) -> bool:
         (
             index
             for index in range(latest_prompt, -1, -1)
-            if lines[index].strip().lower().startswith("openai codex")
+            if _CODEX_TITLE.match(lines[index])
         ),
         max(0, latest_prompt - 8),
     )

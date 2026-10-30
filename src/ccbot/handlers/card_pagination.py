@@ -459,7 +459,11 @@ def _duplicate_of_seeded(events: list[Event], candidate: Event) -> bool:
     appended again as the live event, rendering the user's message
     twice.
 
-    Matched on ``(type, started_at, text)``. ``started_at`` is the JSONL
+    Tools match by their native call identity: folding a result changes the
+    displayed text and completion timestamp of the seeded call. Distinct
+    parallel calls can have identical text and timestamps.
+
+    Other events match on ``(type, started_at, text)``. ``started_at`` is the JSONL
     timestamp parsed deterministically by ``_parse_timestamp``, so the
     seeded copy and the live copy of one entry share a bit-identical
     value while two distinct turns never collide (distinct timestamps).
@@ -467,6 +471,15 @@ def _duplicate_of_seeded(events: list[Event], candidate: Event) -> bool:
     with a later timestamp, so it is not deduped.
     """
     for ev in events:
+        if (
+            candidate.type in ("tool_use", "tool_result")
+            and ev.type in ("tool_use", "tool_result")
+            and candidate.tool_use_id
+            and ev.tool_use_id
+        ):
+            if ev.tool_use_id == candidate.tool_use_id:
+                return True
+            continue
         if (
             ev.type == candidate.type
             and ev.started_at == candidate.started_at

@@ -99,6 +99,16 @@ async def parse_session_usage(file_path: Path) -> list[Turn]:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if obj.get("type") == "zcode_usage":
+                    usage = obj["usage"]
+                    turns.append(
+                        Turn(
+                            timestamp=float(usage.get("started_at") or 0) / 1000,
+                            input_tokens=int(usage.get("input_tokens") or 0),
+                            output_tokens=int(usage.get("output_tokens") or 0),
+                        )
+                    )
+                    continue
                 if obj.get("type") != "assistant":
                     continue
                 msg = obj.get("message", {})
@@ -128,8 +138,11 @@ async def context_pct_for_session(sess: Session) -> int | None:
     """
     if not sess.claude_session_id:
         return None
-    if sess.backend == "codex":
+    if sess.backend in ("codex", "zcode"):
         from . import codex_session_io
+
+        if sess.backend == "zcode":
+            from . import zcode_session_io as codex_session_io
 
         file_path: Path | None = None
         if sess.window_id:
@@ -354,6 +367,20 @@ def format_usage_breakdown_compact(
         lines = ["| " + " | ".join(headers) + " |", "|---|---|---|---|---|"]
         lines.extend("| " + " | ".join(row) + " |" for row in rows)
         return f"*{title}*\n\n" + "\n".join(lines)
+
+    from .zcode_usage import ZCodeUsageInfo
+
+    if isinstance(info, ZCodeUsageInfo):
+        result = table([("ZCode", "-", "-", "-", "-")])
+        if info.total_tokens is not None:
+            result += "\n\n" + t(
+                user_id,
+                "usage.zcode.tokens",
+                total=info.total_tokens,
+                incoming=info.input_tokens,
+                outgoing=info.output_tokens,
+            )
+        return result + "\n\n" + t(user_id, "usage.zcode.unknown_quota")
 
     if isinstance(info, CodexUsageInfo):
         five = f"{info.five_hour.used_percent}%" if info.five_hour else "-"

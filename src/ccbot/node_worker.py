@@ -52,6 +52,8 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
         tmux_session: str = "ccbot-worker",
         claude_command: str = "claude",
         codex_command: str = "codex",
+        zcode_command: str = "zcode",
+        zcode_flags: str = "--mode yolo --locale en-US",
         claude_flags: str = "",
         codex_flags: str = "",
         ready_timeout: float = 120.0,
@@ -64,6 +66,8 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
         self._workdir = Path(workdir).expanduser().resolve()
         self._tmux_session = tmux_session
         self._claude_command = claude_command
+        self._zcode_command = zcode_command
+        self._zcode_flags = zcode_flags
         self._codex_command = codex_command
         self._claude_flags = claude_flags
         self._codex_flags = codex_flags
@@ -83,6 +87,7 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
         self._startup_sessions: dict[str, str] = {}
         self._cancelled_startups: set[str] = set()
         self._backend_probe_at = float("-inf")
+        self._backend_probe_configured: tuple[str, ...] | None = None
         self._ready_backend_cache: tuple[str, ...] = ()
         self._event_cursor_for: Callable[[str], int | None] | None = None
         self._ensure_event_cursor: Callable[[str, int], None] | None = None
@@ -91,12 +96,20 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
         self, configured: tuple[str, ...], *, max_age: float = 60.0
     ) -> tuple[str, ...]:
         now = time.monotonic()
-        if now - self._backend_probe_at < max_age:
+        if (
+            configured == self._backend_probe_configured
+            and now - self._backend_probe_at < max_age
+        ):
             return self._ready_backend_cache
         self._backend_probe_at = now
+        self._backend_probe_configured = configured
         self._ready_backend_cache = await probe_ready_backends(
             configured,
-            commands=dict(claude=self._claude_command, codex=self._codex_command),
+            commands=dict(
+                claude=self._claude_command,
+                codex=self._codex_command,
+                zcode=self._zcode_command,
+            ),
         )
         return self._ready_backend_cache
 
@@ -160,9 +173,10 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
         startup_limits: dict[str, float] | None = None,
     ) -> dict[str, Any]:
         directory = self._resolve_directory(path)
-        if backend not in ("claude", "codex"):
+        if backend not in ("claude", "codex", "zcode"):
             raise ValueError(f"unsupported backend: {backend}")
         command = self._agent_command(backend)
+        deferred_prompt = ""
         if resume_session_id:
             source_backend = source_backend or backend
             transcript_path = await asyncio.to_thread(
@@ -197,15 +211,17 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
                 context_path = await asyncio.to_thread(
                     build_import_context, archived, backend
                 )
+                deferred_prompt = import_prompt(context_path, source_backend)
                 command = self._agent_command(
                     backend,
-                    initial_prompt=import_prompt(context_path, source_backend),
+                    initial_prompt=deferred_prompt,
                 )
         result = await self._start_tmux_agent(
             workdir=directory,
             backend=backend,
             name=name,
             command=command,
+            **({"initial_prompt": deferred_prompt} if backend == "zcode" else {}),
             startup_id=startup_id,
             startup_limits=startup_limits,
         )
@@ -232,6 +248,8 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
                 }
         if backend == "codex":
             from .codex_session_io import list_sessions_for_directory
+        elif backend == "zcode":
+            from .zcode_session_io import list_sessions_for_directory
         elif backend == "claude":
             from .session_claude_io import list_sessions_for_directory
         else:
@@ -264,6 +282,13 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
             backend=backend,
             name=name,
             command=self._agent_command(backend, context_path),
+            **(
+                {
+                    "initial_prompt": f"Read the complete transferred session context from {context_path}. Continue the conversation from that context."
+                }
+                if backend == "zcode"
+                else {}
+            ),
             startup_limits=startup_limits,
         )
         result.update(
@@ -285,12 +310,13 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
         workdir: Path,
         backend: str,
         name: str,
+        initial_prompt: str = "",
         command: str,
         startup_id: str = "",
         session_id: str = "",
         startup_limits: dict[str, float] | None = None,
     ) -> dict[str, Any]:
-        if backend not in ("claude", "codex"):
+        if backend not in ("claude", "codex", "zcode"):
             raise ValueError(f"unsupported backend: {backend}")
         if not self._workdir.is_dir():
             raise ValueError(f"worker workdir does not exist: {self._workdir}")
@@ -345,6 +371,11 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
                 )
             if startup_id and startup_id in self._cancelled_startups:
                 raise RuntimeError("worker session startup was cancelled")
+            if backend == "zcode" and initial_prompt:
+                if not await tmux_input_transport.send_literal_chunked(
+                    window_id, initial_prompt, backend="zcode"
+                ):
+                    raise RuntimeError("Could not submit imported ZCode context")
         except BaseException:
             self._sessions.pop(session_id, None)
             try:
@@ -396,6 +427,11 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
         session = await self._find_session(session_id)
         if session is None or not key:
             return {"ok": False, "error": "worker session not found"}
+        if session.backend == "zcode" and key in ("Escape", "Esc"):
+            from .zcode_runtime import navigation_key
+
+            pane = await self.capture_session(session_id=session_id)
+            key = navigation_key(key, pane.get("pane", ""))
         code, _stdout, stderr = await self._run_tmux(
             "send-keys", "-t", session.window_id, key
         )
@@ -469,7 +505,11 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
                 continue
             window_id, session_id, backend = parts[:3]
             workdir = parts[3] if len(parts) == 4 else str(self._workdir)
-            if not window_id or not session_id or backend not in ("claude", "codex"):
+            if (
+                not window_id
+                or not session_id
+                or backend not in ("claude", "codex", "zcode")
+            ):
                 continue
             existing = self._sessions.get(session_id)
             recovered[session_id] = existing or _TmuxWorkerSession(
@@ -512,6 +552,9 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
         if backend == "codex":
             command = self._codex_command
             flags = self._codex_flags
+        elif backend == "zcode":
+            command = self._zcode_command
+            flags = self._zcode_flags
         else:
             command = self._claude_command
             flags = self._claude_flags
@@ -521,8 +564,15 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
             "CODEX_HOME": os.environ.get("CODEX_HOME") or str(Path(home) / ".codex"),
             "CCBOT_CODEX_SESSIONS_PATH": str(config.codex_sessions_path),
             "CCBOT_DIR": str(ccbot_dir()),
+            "CCBOT_AGENT_BACKEND": backend,
         }
-        for key in ("CLAUDE_CONFIG_DIR", "CCBOT_CLAUDE_PROJECTS_PATH"):
+        for key in (
+            "CLAUDE_CONFIG_DIR",
+            "CCBOT_CLAUDE_PROJECTS_PATH",
+            "ZCODE_DATA_BASE_DIR",
+            "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
+            "ZCODE_SESSION_DB_PATH",
+        ):
             if value := os.environ.get(key):
                 provider_env[key] = value
         parts = [
@@ -538,13 +588,13 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
                 if backend == "codex"
                 else ["--resume", shlex.quote(resume_session_id)]
             )
-        if context_path:
+        if context_path and backend != "zcode":
             prompt = (
                 "Read the complete transferred session context from "
                 f"{context_path}. Continue the conversation from that context."
             )
             parts.append(shlex.quote(prompt))
-        if initial_prompt:
+        if initial_prompt and backend != "zcode":
             parts.append(shlex.quote(initial_prompt))
         return " ".join(parts)
 
@@ -562,6 +612,10 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
                     from .codex_session_io import session_id_for_path
 
                     exact_session_id = session_id_for_path(exact)
+                elif backend == "zcode":
+                    from .zcode_session_io import session_id_for_path
+
+                    exact_session_id = session_id_for_path(exact)
                 elif backend == "claude":
                     exact_session_id = exact.stem
                 else:
@@ -573,6 +627,8 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
                 return exact
         if backend == "codex":
             from .codex_session_io import build_session_file_path
+        elif backend == "zcode":
+            from .zcode_session_io import build_session_file_path
         elif backend == "claude":
             from .session_claude_io import build_session_file_path
         else:
@@ -690,7 +746,12 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
             pane = stdout if code == 0 else ""
             if pane:
                 tail = pane.splitlines()[-8:]
-                if any(line.lstrip().startswith((">", "❯")) for line in tail):
+                if backend == "zcode":
+                    from .zcode_runtime import is_ready
+
+                    if is_ready(pane):
+                        return
+                elif any(line.lstrip().startswith((">", "❯")) for line in tail):
                     return
             await asyncio.sleep(1.0)
         raise TimeoutError("worker agent did not become ready")

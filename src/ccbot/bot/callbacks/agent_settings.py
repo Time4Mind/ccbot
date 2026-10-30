@@ -17,6 +17,8 @@ from ...handlers.message_sender import safe_edit, safe_send
 from ...i18n import t
 from ...session import session_manager
 
+from ...config import config
+
 logger = logging.getLogger(__name__)
 
 _install_inflight: set[tuple[int, str]] = set()
@@ -27,6 +29,21 @@ async def _ensure_auth(bot: Any, user_id: int, backend: str) -> None:
 
     if backend == "codex":
         await ensure_codex_authenticated(bot, user_id, backend="codex")
+    elif backend == "zcode":
+        if await ensure_codex_authenticated(bot, user_id, backend="zcode"):
+            from ...node_worker import TmuxWorkerExecutor
+            from ...node_backend_readiness import (
+                health_backend_fields,
+                update_backend_health,
+            )
+
+            probe = TmuxWorkerExecutor(workdir=".", zcode_command=config.zcode_command)
+            configured = session_manager.get_enabled_backends(user_id)
+            ready = await probe.ready_backends(configured, max_age=0)
+            node = session_manager.get_node("local")
+            if node is not None:
+                update_backend_health(node, health_backend_fields(configured, ready))
+                session_manager.save_state()
     elif not credentials_state().present:
         await start_login(bot, user_id, backend="claude")
 
@@ -68,7 +85,7 @@ async def handle_agent_value(
     """Apply an Agent-screen value; True means response already completed."""
     if value.startswith("toggle:"):
         backend = value.removeprefix("toggle:")
-        if backend not in ("claude", "codex"):
+        if backend not in ("claude", "codex", "zcode"):
             await query.answer("Unknown backend", show_alert=True)
             return True
         enabled = backend not in session_manager.get_enabled_backends(user.id)

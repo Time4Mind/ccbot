@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 ZH: dict[str, str] = {
+    "usage.zcode.tokens": "已记录的 ZCode 会话：{total} tokens（输入 {incoming}，输出 {outgoing}）。",
+    "usage.zcode.unknown_quota": "此 API 连接未提供账户配额和重置时间。",
+    "auth.zcode.configure": "创建会话前，请在 ZCode 终端中配置模型访问。",
+    "auth.zcode.checking": "正在检查 ZCode 连接…",
+    "auth.zcode.ready": "✅ ZCode 连接已验证。",
+    "auth.zcode.failed": "❌ ZCode 连接检查失败。请检查模型访问和服务可用性。",
+    "auth.zcode.rejected": "🔐 ZCode 拒绝了已配置的凭据。请在 ZCode 终端检查模型访问，然后使用 /login 验证连接。",
     "voice.not_delivered": (
         "🎙 语音未送达会话 —— 会话中有待处理的提示（授权/提问），"
         "转写文本无法送入。请先回应该提示，然后重新发送语音消息。"

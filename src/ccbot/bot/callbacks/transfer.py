@@ -48,7 +48,9 @@ def _available_backends(user_id: int, node: Any) -> tuple[str, ...]:
         return session_manager.get_effective_backends(user_id, node.id)
     return tuple(
         dict.fromkeys(
-            backend for backend in node.backends if backend in ("claude", "codex")
+            backend
+            for backend in node.backends
+            if backend in ("claude", "codex", "zcode")
         )
     )
 

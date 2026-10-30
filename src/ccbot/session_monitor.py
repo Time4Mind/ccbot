@@ -128,9 +128,24 @@ class SessionMonitor:
             async with aiofiles.open(config.session_map_file, "r") as f:
                 raw_map = json.loads(await f.read())
             for info in raw_map.values():
-                if not isinstance(info, dict) or info.get("backend") != "codex":
+                if not isinstance(info, dict) or info.get("backend") not in (
+                    "codex",
+                    "zcode",
+                ):
                     continue
-                path = Path(str(info.get("transcript_path") or ""))
+                if info.get("backend") == "zcode":
+                    from .zcode_session_io import build_session_file_path
+
+                    projected = await asyncio.to_thread(
+                        build_session_file_path,
+                        str(info.get("session_id") or ""),
+                        str(info.get("cwd") or ""),
+                    )
+                    if projected is None:
+                        continue
+                    path = projected
+                else:
+                    path = Path(str(info.get("transcript_path") or ""))
                 cwd = str(info.get("cwd") or "")
                 try:
                     cwd = str(Path(cwd).resolve())
@@ -143,8 +158,11 @@ class SessionMonitor:
                     sessions.append(SessionInfo(session_id=sid, file_path=path))
         except (OSError, json.JSONDecodeError):
             pass
-        if config.agent_backend == "codex" and not sessions:
-            from .codex_session_io import scan_active_sessions
+        if config.agent_backend in ("codex", "zcode") and not sessions:
+            if config.agent_backend == "zcode":
+                from .zcode_session_io import scan_active_sessions
+            else:
+                from .codex_session_io import scan_active_sessions
 
             sessions.extend(
                 SessionInfo(session_id=sid, file_path=path)
@@ -348,6 +366,19 @@ class SessionMonitor:
             if session_info.session_id not in active_session_ids:
                 continue
             try:
+                if session_info.session_id.startswith("sess_"):
+                    from .zcode_session_io import build_session_file_path
+
+                    # Direct targets bypass scan_projects. Refresh the owned
+                    # journal each poll so native SQLite changes reach Telegram.
+                    projected = await asyncio.to_thread(
+                        build_session_file_path, session_info.session_id
+                    )
+                    if projected is None:
+                        continue
+                    session_info = SessionInfo(
+                        session_id=session_info.session_id, file_path=projected
+                    )
                 tracked = self.state.get_session(session_info.session_id)
 
                 if tracked is None:

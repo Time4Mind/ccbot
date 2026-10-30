@@ -459,7 +459,7 @@ class SessionStateMixin(NodeSessionStateMixin):
         values: list[str] = []
         if isinstance(raw, list):
             for value in raw:
-                if value in ("claude", "codex") and value not in values:
+                if value in ("claude", "codex", "zcode") and value not in values:
                     values.append(value)
         if not values:
             values.append(self.agent_backend)
@@ -473,7 +473,7 @@ class SessionStateMixin(NodeSessionStateMixin):
 
     def set_backend_enabled(self, user_id: int, backend: str, enabled: bool) -> None:
         """Enable/disable a backend without mutating already-created sessions."""
-        if backend not in ("claude", "codex"):
+        if backend not in ("claude", "codex", "zcode"):
             raise ValueError(f"Unknown agent backend: {backend}")
         values = list(self.get_enabled_backends(user_id))
         if enabled:
@@ -507,7 +507,7 @@ class SessionStateMixin(NodeSessionStateMixin):
         deliberately single-backend at runtime. Archive/kill live sessions
         first; historical records retain their backend for safe inspection.
         """
-        if backend not in ("claude", "codex"):
+        if backend not in ("claude", "codex", "zcode"):
             raise ValueError(f"Unknown agent backend: {backend}")
         if backend == self.agent_backend:
             return

@@ -69,7 +69,7 @@ def _archived_card_path(
     fp = session_file_path(sess)
     if fp is not None and fp.exists():
         return fp
-    if sess.backend == "codex":
+    if sess.backend in ("codex", "zcode"):
         return None
     matches = list(config.claude_projects_path.glob(f"*/{sid}.jsonl"))
     return matches[0] if matches else None
@@ -224,7 +224,7 @@ async def render_archived_history_pages_impl(
         return None
     fp = session_file_path(sess)
     if fp is None or not fp.exists():
-        if sess.backend == "codex":
+        if sess.backend in ("codex", "zcode"):
             return None
         # Glob fallback — the cwd column on the Session may have shifted
         # since archival (rare, but cheap to handle).

@@ -19,7 +19,11 @@ _PACKAGES = {
 
 
 def _command(backend: str) -> str:
-    configured = config.claude_command if backend == "claude" else config.codex_command
+    configured = {
+        "claude": config.claude_command,
+        "codex": config.codex_command,
+        "zcode": config.zcode_command,
+    }[backend]
     parts = shlex.split(configured)
     return parts[0] if parts else backend
 
@@ -34,6 +38,13 @@ def is_available(backend: str) -> bool:
 
 async def install(backend: str, progress: Progress) -> bool:
     """Install a missing official CLI package with npm."""
+    if backend == "zcode":
+        if is_available(backend):
+            return True
+        await progress(
+            "❌ Install the official ZCode CLI first: https://github.com/zai-org/ZCode/tree/main/apps/zcode-cli"
+        )
+        return False
     if backend not in _PACKAGES:
         raise ValueError(f"Unknown backend: {backend}")
     if is_available(backend):

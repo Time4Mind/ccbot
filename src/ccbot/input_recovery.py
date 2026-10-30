@@ -401,91 +401,17 @@ class InputRecovery:
     def reconcile(self, request: InputRequest) -> bool:
         if not request.prepared:
             return False
-        if request.strict_codex_proof and not (request.checkpoint or {}).get("unbound"):
-            from .session import WindowState, session_manager
-            from .codex_session_io import build_session_file_path
+        from .input_checkpoint import restore_checkpoint
 
-            source = self.source(request)
-            state = session_manager.window_states.get(request.window_id)
-            if (
-                source is not None
-                and isinstance(state, WindowState)
-                and state.backend == "codex"
-                and state.session_id
-                and state.session_id == source.claude_session_id
-            ):
-                path = (
-                    Path(state.transcript_path)
-                    if state.transcript_path
-                    else build_session_file_path(state.session_id, state.cwd)
-                )
-                replaced = False
-                if path is not None and path.is_file() and request.checkpoint:
-                    try:
-                        current = path.stat()
-                        saved_inode = request.checkpoint.get("inode")
-                        replaced = (
-                            saved_inode is not None
-                            and (
-                                current.st_ino != saved_inode
-                                or current.st_dev != request.checkpoint.get("device")
-                            )
-                        ) or current.st_size < int(request.checkpoint.get("offset", 0))
-                    except OSError:
-                        pass
-                if (
-                    path is not None
-                    and path.is_file()
-                    and (
-                        request.checkpoint is None
-                        or request.checkpoint.get("path") != str(path)
-                        or replaced
-                    )
-                ):
-                    boundary = request.dispatch_started_at
-                    # An admission timestamp is too early when requests queue;
-                    # using it could match a different, identical user row.
-                    if boundary > 0:
-                        request.checkpoint = {
-                            "path": str(path),
-                            "offset": 0,
-                            "backend": "codex",
-                            "not_before": boundary,
-                            "device": path.stat().st_dev,
-                            "inode": path.stat().st_ino,
-                            "replaced": replaced,
-                        }
-                        self._scan_positions.pop(request.id, None)
-                        self.save()
-        if request.checkpoint is None:
+        if not restore_checkpoint(self, request, self._scan_positions):
             return False
-        if request.checkpoint.get("unbound"):
-            from .session import WindowState, session_manager
-            from .codex_session_io import build_session_file_path
-
-            if self.source(request) is None:
-                return False
-            state = session_manager.window_states.get(request.window_id)
-            if (
-                not isinstance(state, WindowState)
-                or not state.session_id
-                or state.backend != "codex"
-            ):
-                return False
-            path = (
-                Path(state.transcript_path)
-                if state.transcript_path
-                else build_session_file_path(state.session_id, state.cwd)
-            )
-            if path is None or not path.is_file():
-                return False
-            request.checkpoint = {"path": str(path), "offset": 0, "backend": "codex"}
-            self.save()
         from .bot._messages_shared import (
             _VoiceTranscriptCheckpoint,
             _transcript_contains_voice_text,
         )
 
+        if request.checkpoint is None:
+            return False
         checkpoint = _VoiceTranscriptCheckpoint(
             Path(request.checkpoint["path"]),
             request.checkpoint["offset"],

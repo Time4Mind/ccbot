@@ -122,6 +122,10 @@ def _transcript_contains_voice_text(
     checkpoint: _VoiceTranscriptCheckpoint, text: str
 ) -> bool:
     """Check only rows appended after ``checkpoint`` for the exact user text."""
+    if checkpoint.backend == "zcode":
+        from ..zcode_session_io import build_session_file_path, session_id_for_path
+
+        build_session_file_path(session_id_for_path(checkpoint.path))
     try:
         size = checkpoint.path.stat().st_size
         start = checkpoint.offset if size >= checkpoint.offset else 0
@@ -468,6 +472,8 @@ async def forward_command_handler(
         await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
         return False
 
+    if sess is not None and sess.backend == "zcode" and command_name == "clear":
+        cc_slash = "/new"
     display = session_manager.get_display_name(wid)
     logger.info(
         "Forwarding command %s to window %s (user=%d)", cc_slash, display, user.id

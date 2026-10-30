@@ -40,6 +40,14 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not update.message:
         return
     active = session_manager.get_active_session(user.id)
+    if active is not None and active.backend == "zcode":
+        from ...zcode_usage import fetch_usage
+        from ...usage import format_usage_breakdown_compact
+
+        await safe_reply(
+            update.message, format_usage_breakdown_compact(user.id, await fetch_usage())
+        )
+        return
     if active is not None and active.backend == "codex":
         await safe_reply(
             update.message,

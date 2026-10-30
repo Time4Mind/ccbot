@@ -37,11 +37,29 @@ Release notes: https://github.com/openai/codex/releases/latest
 enter continue · esc skip
 """
 
+DECORATED_UPDATE_PROMPT = UPDATE_PROMPT.replace(
+    "Update available!", "✨ Update available!"
+)
+
 READY_PROMPT = """OpenAI Codex
 
 › Ask anything
 
 gpt-5.6 medium · ~/project
+"""
+
+DECORATED_READY_PROMPT = """  >_ OpenAI Codex (v0.158.0)
+     ~
+  permissions: YOLO mode
+
+  Take your time. The cursor can wait.
+
+  Tip: Coming back to a conversation? Use /recap to summarize it.
+
+
+› Ask Codex to do anything
+
+  GPT-5.6-Luna medium · ~                 ⚠ 2 warnings · f2 to view
 """
 
 
@@ -274,6 +292,15 @@ def test_tmux_blank_rows_do_not_hide_active_update_menu() -> None:
     assert (
         classify_codex_screen(CURRENT_UPDATE_PROMPT + "\n" * 20) is CodexScreen.UPDATE
     )
+
+
+def test_decorated_update_title_is_recognized() -> None:
+    assert classify_codex_screen(DECORATED_UPDATE_PROMPT) is CodexScreen.UPDATE
+
+
+def test_decorated_codex_0158_ready_screen_is_recognized() -> None:
+    assert is_codex_ready(DECORATED_READY_PROMPT)
+    assert classify_codex_screen(DECORATED_READY_PROMPT) is CodexScreen.READY
 
 
 @pytest.mark.asyncio

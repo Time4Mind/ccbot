@@ -210,6 +210,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
             workdir=Path.home(),
             claude_command=config.claude_command,
             codex_command=config.codex_command,
+            zcode_command=config.zcode_command,
         )
         while True:
             configured = tuple(

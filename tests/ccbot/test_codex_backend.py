@@ -67,6 +67,7 @@ def test_agent_backend_is_exposed_in_settings(
     assert [button.callback_data for button in choices] == [
         "st:agent:toggle:claude",
         "st:agent:toggle:codex",
+        "st:agent:toggle:zcode",
     ]
     assert choices[1].text.startswith("✅ ")
 

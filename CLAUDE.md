@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-ccbot (this fork) — Telegram bot that bridges a private 1-1 DM to multiple parallel Claude Code or Codex CLI sessions via tmux windows. One user, N sessions, one inline switcher in the most recent bot message.
+ccbot (this fork) — Telegram bot that bridges a private 1-1 DM to multiple parallel Claude Code, Codex CLI or ZCode CLI sessions via tmux windows. One user, N sessions, one inline switcher in the most recent bot message.
 
 Authoritative product spec: `doc/dm-multisession-spec.md`. Implementation plan: `doc/dm-multisession-plan.md`.
 
@@ -42,7 +42,7 @@ ccbot hook --install                  # Auto-install Claude Code SessionStart ho
 
 - Config directory: `~/.ccbot/` by default, override with `CCBOT_DIR` env var.
 - Bot-wide agent backend is persisted in `state.json` and selected in Telegram
-  Settings. `CCBOT_AGENT_BACKEND=claude|codex` is only the initial default.
+  Settings. `CCBOT_AGENT_BACKEND=claude|codex|zcode` is only the initial default.
 - `.env` loading priority: local `.env` > config dir `.env`.
 - State files: `state.json` (sessions / window_states / user settings), `session_map.json` (hook-generated), `monitor_state.json` (byte offsets), `ccbot.lock` (singleton flock).
 

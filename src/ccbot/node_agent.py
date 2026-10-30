@@ -153,7 +153,7 @@ class NodeAgent:
         context_dir: str | Path,
         node_id: str = "",
         display_name: str = "",
-        backends: tuple[str, ...] = ("claude", "codex"),
+        backends: tuple[str, ...] = ("claude", "codex", "zcode"),
         configured_backends: tuple[str, ...] | None = None,
         backend_probe: Callable[[], Awaitable[tuple[str, ...]]] | None = None,
         receipt_ledger: RequestReceiptLedger | None = None,
@@ -496,7 +496,7 @@ class NodeAgent:
         executor: WorkerSessionExecutor,
         context_dir: str | Path,
         display_name: str = "",
-        backends: tuple[str, ...] = ("claude", "codex"),
+        backends: tuple[str, ...] = ("claude", "codex", "zcode"),
         ssl: Any = None,
         pairing_nonce: str = "",
         pairing_expires: float = 0.0,
@@ -589,13 +589,12 @@ async def _run_agent_forever(
         secret = stored_secret
     if not node_id or not secret:
         raise RuntimeError("CCBOT_NODE_ID and CCBOT_NODE_SECRET are required")
+    from .node_agent_config import worker_command_options
+
     executor = TmuxWorkerExecutor(
         workdir=os.environ.get("CCBOT_WORKER_WORKDIR", str(Path.home())),
         tmux_session=os.environ.get("CCBOT_WORKER_TMUX_SESSION", "ccbot-worker"),
-        claude_command=os.environ.get("CCBOT_CLAUDE_COMMAND", "claude"),
-        codex_command=os.environ.get("CCBOT_CODEX_COMMAND", "codex"),
-        claude_flags=os.environ.get("CCBOT_CLAUDE_FLAGS", ""),
-        codex_flags=os.environ.get("CCBOT_CODEX_FLAGS", ""),
+        **worker_command_options(),
         ready_timeout=float(os.environ.get("CCBOT_WORKER_READY_TIMEOUT", "120")),
         context_limit_bytes=int(
             os.environ.get("CCBOT_WORKER_CONTEXT_LIMIT_BYTES", "0")
@@ -607,10 +606,10 @@ async def _run_agent_forever(
     configured_backends = tuple(
         value.strip()
         for value in os.environ.get("CCBOT_NODE_BACKENDS", "").split(",")
-        if value.strip() in ("claude", "codex")
+        if value.strip() in ("claude", "codex", "zcode")
     )
     if not configured_backends:
-        configured_backends = ("claude", "codex")
+        configured_backends = ("claude", "codex", "zcode")
     backends = await executor.ready_backends(configured_backends, max_age=0.0)
     display_name = (
         name_override.strip()

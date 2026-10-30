@@ -16,6 +16,20 @@ from .card_types import CardState
 logger = logging.getLogger(__name__)
 
 
+def sync_pane_identity(state: CardState, backend: str, pane: str) -> bool:
+    if backend == "zcode":
+        from ..zcode_runtime import composer_identity
+
+        identity = composer_identity(pane)
+        return apply_card_identity(state, identity) if identity else False
+    identity = parse_codex_model_effort(pane) if backend == "codex" else None
+    return (
+        apply_card_identity(state, identity, parse_codex_fast_mode(pane))
+        if identity
+        else False
+    )
+
+
 def apply_card_identity(
     state: CardState, identity: tuple[str, str], fast_mode: bool | None = None
 ) -> bool:
@@ -32,7 +46,7 @@ def apply_card_identity(
 
 async def sync_card_identity(sess: Session, state: CardState) -> bool:
     """Refresh Codex model/effort from the session's owning node."""
-    if sess.backend != "codex" or not sess.window_id:
+    if sess.backend not in ("codex", "zcode") or not sess.window_id:
         return False
     identity = None
     fast_mode = None
@@ -41,9 +55,19 @@ async def sync_card_identity(sess: Session, state: CardState) -> bool:
     except PaneCaptureError as exc:
         logger.debug("Card identity capture failed session=%s: %s", sess.id, exc)
     else:
-        identity = parse_codex_model_effort(pane)
-        fast_mode = parse_codex_fast_mode(pane)
-    if identity is None and sess.node_id == "local" and sess.claude_session_id:
+        if sess.backend == "zcode":
+            from ..zcode_runtime import composer_identity
+
+            identity = composer_identity(pane)
+        else:
+            identity = parse_codex_model_effort(pane)
+            fast_mode = parse_codex_fast_mode(pane)
+    if (
+        identity is None
+        and sess.backend == "codex"
+        and sess.node_id == "local"
+        and sess.claude_session_id
+    ):
         window_state = session_manager.window_states.get(sess.window_id)
         path = (
             Path(window_state.transcript_path)

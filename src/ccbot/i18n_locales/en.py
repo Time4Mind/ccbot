@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 EN: dict[str, str] = {
+    "usage.zcode.tokens": "Recorded ZCode sessions: {total} tokens (input {incoming}, output {outgoing}).",
+    "usage.zcode.unknown_quota": "Account quotas and reset times are not reported for this API connection.",
+    "auth.zcode.configure": "Configure model access in the ZCode terminal before starting a session.",
+    "auth.zcode.checking": "Checking ZCode connection…",
+    "auth.zcode.ready": "✅ ZCode connection verified.",
+    "auth.zcode.failed": "❌ ZCode could not complete the connection check. Check model access and provider availability.",
+    "auth.zcode.rejected": "🔐 ZCode rejected the configured credentials. Check model access in the ZCode terminal, then use /login to verify the connection.",
     # Voice delivery
     "voice.not_delivered": (
         "🎙 Voice didn't reach the session — it has an open prompt "

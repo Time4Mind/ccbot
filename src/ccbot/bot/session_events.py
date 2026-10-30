@@ -39,7 +39,11 @@ from ..telegram_rate_limit import background_telegram_request
 from ..terminal_parser import extract_interactive_content
 from ..tmux_manager import tmux_manager
 from ..usage import context_pct_for_session
-from .commands.auth import notify_auth_expired
+from .commands.auth import (
+    notify_auth_expired,
+    notify_zcode_auth_failure,
+    clear_zcode_auth_failure,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +77,17 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
     if is_auth_failure_event(msg.api_error, msg.text or ""):
         for user_id in sorted(config.allowed_users):
             try:
-                await notify_auth_expired(bot, user_id)
+                if any(sess.backend == "zcode" for _owner, sess in targets):
+                    if any(owner == user_id for owner, _sess in targets):
+                        await notify_zcode_auth_failure(bot, user_id)
+                else:
+                    await notify_auth_expired(bot, user_id)
             except Exception as exc:  # noqa: BLE001 — never break event dispatch
                 logger.debug("auth-expired notice failed for %s: %s", user_id, exc)
+    if msg.is_complete and not msg.api_error:
+        for owner, owned in targets:
+            if owned.backend == "zcode":
+                clear_zcode_auth_failure(owner)
     if not targets:
         logger.info("No session record for claude session %s", msg.session_id)
         return

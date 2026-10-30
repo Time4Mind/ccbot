@@ -206,7 +206,11 @@ async def generate_name(seed_text: str, backend: str = "claude") -> str | None:
     if not seed:
         return None
     prompt = _PROMPT_TEMPLATE.format(seed=seed)
-    if backend == "codex":
+    if backend == "zcode":
+        from .zcode_generation import generate
+
+        raw = await generate(config.zcode_command, prompt)
+    elif backend == "codex":
         command = shlex.split(config.codex_command or "codex")
         if not command or not config.codex_naming_model:
             return None
@@ -259,7 +263,11 @@ async def generate_description(
     if not seed:
         return None
     prompt = _DESCRIPTION_PROMPT_TEMPLATE.format(seed=seed[:500])
-    if backend == "codex":
+    if backend == "zcode":
+        from .zcode_generation import generate
+
+        raw = await generate(config.zcode_command, prompt)
+    elif backend == "codex":
         command = shlex.split(config.codex_command or "codex")
         if not command or not config.codex_naming_model:
             return None
@@ -310,7 +318,7 @@ async def maybe_auto_name(
     sess = session_manager.get_session(session_id)
     if sess is None:
         return
-    if sess.backend not in ("claude", "codex"):
+    if sess.backend not in ("claude", "codex", "zcode"):
         return
 
     if user_id is not None:

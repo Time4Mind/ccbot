@@ -381,6 +381,11 @@ def extract_interactive_content(pane_text: str) -> InteractiveUIContent | None:
     if not pane_text:
         return None
 
+    from .zcode_runtime import interactive_panel
+
+    if panel := interactive_panel(pane_text):
+        return InteractiveUIContent(panel[1], panel[0])
+
     from .codex_wait_prompt import parse_codex_wait_prompt
 
     if prompt := parse_codex_wait_prompt(pane_text):
@@ -461,6 +466,10 @@ def parse_status_line(pane_text: str) -> str | None:
     if not pane_text:
         return None
 
+    from .zcode_runtime import status_line
+
+    if native_status := status_line(pane_text):
+        return native_status
     lines = pane_text.split("\n")
 
     # Codex TUI has no horizontal separator around its prompt. Its live line

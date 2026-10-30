@@ -92,8 +92,10 @@ class Config:
         # Agent backend. ``claude`` remains the default for backwards
         # compatibility; ``codex`` uses OpenAI Codex CLI and its rollout store.
         self.agent_backend = os.getenv("CCBOT_AGENT_BACKEND", "claude").strip().lower()
-        if self.agent_backend not in ("claude", "codex"):
-            raise ValueError("CCBOT_AGENT_BACKEND must be 'claude' or 'codex'")
+        if self.agent_backend not in ("claude", "codex", "zcode"):
+            raise ValueError("CCBOT_AGENT_BACKEND must be 'claude', 'codex' or 'zcode'")
+        self.zcode_command = os.getenv("ZCODE_COMMAND", "zcode")
+        self.zcode_flags = os.getenv("ZCODE_FLAGS", "--mode yolo --locale en-US")
         self.codex_command = os.getenv("CODEX_COMMAND", "codex")
         # Cheap, fast model used for one-shot session auto-naming. Keep this
         # separate from the interactive session model.

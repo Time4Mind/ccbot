@@ -186,7 +186,7 @@ async def create_window(
     # Validate directory first
     path = Path(work_dir).expanduser().resolve()
     selected_backend = backend or config_obj.agent_backend
-    if selected_backend not in ("claude", "codex"):
+    if selected_backend not in ("claude", "codex", "zcode"):
         return False, f"Unsupported agent backend: {selected_backend}", "", ""
     if not path.exists():
         return False, f"Directory does not exist: {work_dir}", "", ""
@@ -238,13 +238,19 @@ async def create_window(
                             cmd = f"{cmd} {config_obj.codex_flags}"
                         if resume_session_id:
                             cmd = f"{cmd} resume {shlex.quote(resume_session_id)}"
+                    elif selected_backend == "zcode":
+                        cmd = config_obj.zcode_command
+                        if config_obj.zcode_flags:
+                            cmd = f"{cmd} {config_obj.zcode_flags}"
+                        if resume_session_id:
+                            cmd = f"{cmd} --resume {shlex.quote(resume_session_id)}"
                     else:
                         cmd = config_obj.claude_command
                         if config_obj.claude_flags:
                             cmd = f"{cmd} {config_obj.claude_flags}"
                         if resume_session_id:
                             cmd = f"{cmd} --resume {shlex.quote(resume_session_id)}"
-                    if initial_prompt:
+                    if initial_prompt and selected_backend != "zcode":
                         cmd = f"{cmd} {shlex.quote(initial_prompt)}"
                     # Identify the runtime so Claude (via the
                     # output-format guidance in CLAUDE.md) can
@@ -304,10 +310,26 @@ async def create_window(
             return False, message, "", ""
 
     result = await asyncio.to_thread(_create_and_start)
-    if result[0] and selected_backend == "codex" and created_pane is not None:
+    if (
+        result[0]
+        and selected_backend in ("codex", "zcode")
+        and created_pane is not None
+    ):
 
         async def _drive_and_rollback_on_failure() -> bool:
             try:
+                if selected_backend == "zcode":
+                    from .zcode_runtime import wait_ready
+
+                    async def capture() -> str:
+                        return await manager.capture_pane(result[3]) or ""
+
+                    await wait_ready(capture)
+                    if initial_prompt and not await manager.send_keys(
+                        result[3], initial_prompt, backend="zcode"
+                    ):
+                        raise RuntimeError("Could not submit imported ZCode context")
+                    return True
                 return await manager._watch_codex_startup_screens(
                     created_pane, command=created_command
                 )

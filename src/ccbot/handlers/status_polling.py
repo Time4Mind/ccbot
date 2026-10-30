@@ -34,8 +34,6 @@ from ..terminal_parser import (
     InteractiveUIContent,
     extract_interactive_content,
     is_interactive_ui,
-    parse_codex_model_effort,
-    parse_codex_fast_mode,
     parse_status_line,
 )
 from ..tmux_manager import tmux_manager
@@ -43,7 +41,6 @@ from . import bg_status
 from .archive import idle_archive_sweep, purge_sweep
 from .cleanup import clear_session_state
 from .codex_wait import dismiss_codex_wait_prompt
-from .card_terminal import apply_card_identity
 from .kb_mode import should_hide_reserve_ui
 from .card_types import TurnPhase
 from .inbox import inbox_sweep
@@ -432,12 +429,12 @@ async def _drive_typing_indicator(
     background_work = background_match is not None
     state = get_card_state(user_id, sess) if sess is not None else None
     identity_changed = False
-    if state is not None and getattr(sess, "backend", "") == "codex":
-        identity = parse_codex_model_effort(pane_text)
-        if identity is not None:
-            identity_changed = apply_card_identity(
-                state, identity, parse_codex_fast_mode(pane_text)
-            )
+    if state is not None:
+        from .card_terminal import sync_pane_identity
+
+        identity_changed = sync_pane_identity(
+            state, getattr(sess, "backend", ""), pane_text
+        )
     if state is not None and state.user_stopped:
         # Escape can leave the last TUI spinner visible for several polls.
         # Explicit user intent wins until a new inbound request clears it.

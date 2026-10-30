@@ -121,6 +121,10 @@ def _install_hook(backend: str = "claude") -> int:
 
     Returns 0 on success, 1 on error.
     """
+    if backend == "zcode":
+        from .zcode_hooks import install_hooks
+
+        return install_hooks(_find_ccbot_path())
     settings_file = _CODEX_HOOKS_FILE if backend == "codex" else _CLAUDE_SETTINGS_FILE
     settings_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -198,25 +202,30 @@ def hook_main() -> None:
     )
     parser.add_argument(
         "--backend",
-        choices=("claude", "codex"),
+        choices=("claude", "codex", "zcode"),
         default=os.environ.get("CCBOT_AGENT_BACKEND", "claude"),
         help="Agent whose hook configuration should be updated",
     )
     # Parse only known args to avoid conflicts with stdin JSON
     args, _ = parser.parse_known_args(sys.argv[2:])
+    if args.backend == "zcode":
+        logging.getLogger().setLevel(logging.WARNING)
 
     if args.install:
         logger.info("Hook install requested")
         sys.exit(_install_hook(args.backend))
 
     try:
-        _process_hook_event()
+        if args.backend == "zcode":
+            _process_hook_event(backend="zcode")
+        else:
+            _process_hook_event()
     except Exception as e:
         logger.warning("Hook event processing failed: %s", e)
     # Always exit 0: a non-zero exit on UserPromptSubmit blocks the user.
 
 
-def _process_hook_event() -> None:
+def _process_hook_event(backend: str | None = None) -> None:
     """Read one hook event from stdin and update session_map.json."""
     logger.debug("Processing hook event from stdin")
     try:
@@ -234,8 +243,23 @@ def _process_hook_event() -> None:
         logger.debug("Empty session_id or event, ignoring")
         return
 
-    # Validate session_id format
-    if not _UUID_RE.match(session_id):
+    detected_backend = backend or os.environ.get("CCBOT_AGENT_BACKEND", "")
+    if not detected_backend:
+        detected_backend = (
+            "zcode"
+            if session_id.startswith("sess_")
+            else "codex"
+            if "/.codex/" in transcript_path.replace("\\", "/")
+            else "claude"
+        )
+    valid_id = _UUID_RE.fullmatch(session_id)
+    if detected_backend == "zcode":
+        from .zcode_store import SESSION_ID
+
+        valid_id = SESSION_ID.fullmatch(session_id)
+    # Native ZCode IDs retain their sess_ namespace; do not weaken UUID
+    # validation for the other backends.
+    if not valid_id:
         logger.warning("Invalid session_id format: %s", session_id)
         return
 
@@ -319,13 +343,6 @@ def _process_hook_event() -> None:
                             "Failed to read existing session_map, starting fresh"
                         )
 
-                detected_backend = os.environ.get("CCBOT_AGENT_BACKEND", "")
-                if not detected_backend:
-                    detected_backend = (
-                        "codex"
-                        if "/.codex/" in transcript_path.replace("\\", "/")
-                        else "claude"
-                    )
                 if detected_backend == "codex" and not _codex_transcript_matches(
                     transcript_path, session_id
                 ):
@@ -335,6 +352,10 @@ def _process_hook_event() -> None:
                         transcript_path,
                     )
                     return
+                if detected_backend == "zcode":
+                    from .zcode_session_io import ensure_projection
+
+                    transcript_path = str(ensure_projection(session_id, cwd))
                 new_entry = {
                     "session_id": session_id,
                     "cwd": cwd,

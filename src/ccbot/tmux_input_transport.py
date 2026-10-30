@@ -136,6 +136,26 @@ async def _send_carriage_return(window_id: str) -> bool:
     return True
 
 
+async def zcode_process_is_running(window_id: str) -> bool:
+    """Never send a ZCode prompt into a shell after the agent exits."""
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "tmux",
+            "display-message",
+            "-p",
+            "-t",
+            window_id,
+            "#{pane_current_command}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        output, _ = await process.communicate()
+        name = os.path.basename(output.decode(errors="replace").strip()).lower()
+        return process.returncode == 0 and name in {"zcode", "zcode-cli", "node"}
+    except OSError:
+        return False
+
+
 async def send_literal_chunked(window_id: str, text: str, *, backend: str = "") -> bool:
     started = time.monotonic()
     outcome = "error"
@@ -157,21 +177,26 @@ async def send_literal_chunked(window_id: str, text: str, *, backend: str = "") 
 async def _send_literal_chunked(
     window_id: str, text: str, *, backend: str = ""
 ) -> bool:
-    codex = backend.strip().lower() == "codex"
-    if codex and not await codex_process_is_running(window_id):
+    codex = backend.strip().lower() in ("codex", "zcode")
+    process_running = (
+        zcode_process_is_running
+        if backend.strip().lower() == "zcode"
+        else codex_process_is_running
+    )
+    if codex and not await process_running(window_id):
         logger.warning("Codex input blocked: agent is not running window=%s", window_id)
         return False
     chunks = terminal_input_chunks(text, backend=backend)
     operation = f"ccbot-{secrets.token_hex(8)}"
     pasted = 0
     for index, chunk in enumerate(chunks):
-        if index and codex and not await codex_process_is_running(window_id):
+        if index and codex and not await process_running(window_id):
             return False
         name = operation if index == 0 else f"{operation}-{index}"
         ok, ambiguous = await _paste_chunk(window_id, name, chunk)
         if not ok:
             if pasted or ambiguous:
-                if codex and not await codex_process_is_running(window_id):
+                if codex and not await process_running(window_id):
                     return False
                 if backend.strip().lower() == "codex" and not chunk.endswith(b" "):
                     await _paste_chunk(window_id, f"{operation}-barrier", b" ")
@@ -179,6 +204,14 @@ async def _send_literal_chunked(
             return False
         pasted += 1
         await asyncio.sleep(_CHUNK_PACE)
-    if codex and not await codex_process_is_running(window_id):
+    if codex and not await process_running(window_id):
         return False
+    if backend.strip().lower() == "zcode" and text.strip() in {
+        "/model",
+        "/effort",
+        "/mode",
+    }:
+        # Native ZCode chooses the highlighted autocomplete item on Enter.
+        # Keep the selector open for the existing Telegram arrow keyboard.
+        return True
     return await _send_carriage_return(window_id)

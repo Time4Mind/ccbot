@@ -80,6 +80,14 @@ class WorkerEventPollingMixin:
                         }
                     )
                     session.binding_announced = True
+                if session.backend == "zcode" and session.provider_session_id:
+                    from .zcode_session_io import build_session_file_path
+
+                    await asyncio.to_thread(
+                        build_session_file_path,
+                        session.provider_session_id,
+                        str(session.workdir),
+                    )
                 path = session.transcript_path
                 if path is None:
                     continue

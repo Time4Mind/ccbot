@@ -29,10 +29,20 @@ def _transcript_path(sess: Session) -> Path | None:
 
                 if session_id_for_path(exact) == sess.claude_session_id:
                     return exact
+            elif sess.backend == "zcode":
+                from .zcode_session_io import session_id_for_path
+
+                if session_id_for_path(exact) == sess.claude_session_id:
+                    return exact
             elif exact.stem == sess.claude_session_id:
                 return exact
     if sess.backend == "codex":
         from .codex_session_io import build_session_file_path
+
+        return build_session_file_path(sess.claude_session_id, sess.workdir)
+
+    if sess.backend == "zcode":
+        from .zcode_session_io import build_session_file_path
 
         return build_session_file_path(sess.claude_session_id, sess.workdir)
 

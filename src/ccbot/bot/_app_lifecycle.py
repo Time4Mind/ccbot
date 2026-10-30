@@ -44,6 +44,37 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+async def _connect_relay_with_backoff(connect: Any) -> None:
+    """Aggregate repeated failures while reporting changed errors and recovery."""
+    attempts = 0
+    last_error = None
+    last_report = 0.0
+    while True:
+        try:
+            await connect()
+            if attempts:
+                logger.info("Multi-node relay recovered after %d attempts", attempts)
+            else:
+                logger.info("Multi-node relay connected")
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            attempts += 1
+            error = (type(exc).__name__, str(exc))
+            now = time.monotonic()
+            if error != last_error or now - last_report >= 300:
+                logger.warning(
+                    "Multi-node relay connection failed (attempts=%d): %s: %s",
+                    attempts,
+                    error[0],
+                    error[1],
+                )
+                last_error, last_report = error, now
+            await asyncio.sleep(min(120.0, 5.0 * 2 ** min(attempts - 1, 5)))
+
+
 session_monitor: SessionMonitor | None = None
 # Set in ``post_init`` so ``_error_handler`` can reach the Application even
 # when ``update`` is not an Update (Conflict updates carry no chat).
@@ -155,22 +186,16 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
             return
         from ..node_runtime import connect_configured_remote_runtimes
 
-        while True:
-            try:
-                await connect_configured_remote_runtimes(
-                    relay_url=config.node_relay_url,
-                    leader_id=config.node_leader_id,
-                    secret=config.node_secret,
-                    node_ids=[node.id for node in session_manager.list_nodes()],
-                    tls=config.node_relay_tls,
-                )
-                logger.info("Multi-node relay connected")
-                return
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning("Multi-node relay connection failed: %s", exc)
-                await asyncio.sleep(5.0)
+        async def connect() -> None:
+            await connect_configured_remote_runtimes(
+                relay_url=config.node_relay_url,
+                leader_id=config.node_leader_id,
+                secret=config.node_secret,
+                node_ids=[node.id for node in session_manager.list_nodes()],
+                tls=config.node_relay_tls,
+            )
+
+        await _connect_relay_with_backoff(connect)
 
     _node_runtime_task = asyncio.create_task(
         _connect_node_runtime(), name="node-runtime-connect"

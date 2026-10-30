@@ -516,23 +516,23 @@ class SessionMonitor:
         return current_map, list(targets.values())
 
     async def _cleanup_all_stale_sessions(self) -> None:
-        """Clean up all tracked sessions not in current session_map (used on startup)."""
-        current_map = await self._load_current_session_map()
-        active_session_ids = set(current_map.values())
+        """Retain offsets across restart while a binding may be transient."""
+        limit = 2048
+        tracked = self.state.tracked_sessions
+        if len(tracked) <= limit:
+            return
+        active = set((await self._load_current_session_map()).values())
 
-        stale_sessions = []
-        for session_id in self.state.tracked_sessions.keys():
-            if session_id not in active_session_ids:
-                stale_sessions.append(session_id)
+        def modified(session_id: str) -> float:
+            try:
+                return Path(tracked[session_id].file_path).stat().st_mtime
+            except OSError:
+                return 0.0
 
-        if stale_sessions:
-            logger.info(
-                f"[Startup cleanup] Removing {len(stale_sessions)} stale sessions"
-            )
-            for session_id in stale_sessions:
-                self.state.remove_session(session_id)
-                self._file_mtimes.pop(session_id, None)
-            self.state.save_if_dirty()
+        inactive = sorted((sid for sid in tracked if sid not in active), key=modified)
+        for session_id in inactive[: max(0, len(tracked) - limit)]:
+            self.state.remove_session(session_id)
+        self.state.save_if_dirty()
 
     async def _detect_and_cleanup_changes(
         self, current_map: dict[str, str] | None = None
@@ -556,7 +556,8 @@ class SessionMonitor:
                     old_session_id,
                     new_session_id,
                 )
-                sessions_to_remove.add(old_session_id)
+                # The former transcript can become authoritative again. Its
+                # persisted offset is needed to catch up without replay.
 
         # Check for deleted windows (window in old map but not in current)
         old_windows = set(self._last_session_map.keys())

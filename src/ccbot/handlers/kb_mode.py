@@ -106,8 +106,15 @@ def parse_picker_menu(prompt_content: str, ui_name: str = "") -> PickerMenu | No
         return None
 
     cursor_index = next((i for i, (_, cursor, _) in enumerate(parsed) if cursor), 0)
+    # A declared current model may be outside a filtered/virtualized window.
+    # In that case the cursor is navigation state, not a selected value.
+    fallback_selected = (
+        None
+        if re.search(r"^Current model:", prompt_content, re.MULTILINE)
+        else cursor_index
+    )
     selected_index = next(
-        (i for i, (_, _, explicit) in enumerate(parsed) if explicit), cursor_index
+        (i for i, (_, _, explicit) in enumerate(parsed) if explicit), fallback_selected
     )
     return PickerMenu(
         options=tuple(

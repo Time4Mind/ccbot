@@ -65,6 +65,17 @@ def test_hidden_current_metadata_falls_back_to_composer_model():
     assert picker and [o.selected for o in picker.options] == [False, True]
 
 
+def test_current_model_outside_visible_window_does_not_mark_cursor_as_selected():
+    panel = PANEL.replace("  current", "         ")
+    pane = (panel + "\n" + COMPOSER).replace(
+        "glm-4.7-flash zai-free", "other-model zai-free"
+    )
+    result = extract_interactive_content(pane)
+    assert result
+    picker = parse_picker_menu(result.content, result.name)
+    assert picker and [o.selected for o in picker.options] == [False, False]
+
+
 def test_same_model_name_on_different_providers_is_unambiguous():
     panel = PANEL.replace("glm-4.7-flash", "glm-4.5-flash")
     panel = panel.replace("Z.ai Free", "Provider A", 1)

@@ -75,7 +75,7 @@ def _model_picker_content(rows: list[str], current_model: str) -> str | None:
     names = Counter(name for name, *_ in options)
     explicit_current = any(selected for *_, selected in options)
     matches = sum(name == current_model for name, *_ in options)
-    lines = ["Select model", ""]
+    lines = ["Select model", f"Current model: {current_model}", ""]
     for index, (name, description, cursor, selected) in enumerate(options, 1):
         selected = selected or (
             not explicit_current and matches == 1 and name == current_model

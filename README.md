@@ -204,8 +204,9 @@ native session rows. `ZCODE_SESSION_DB_PATH` overrides the default native store.
 The provider configuration remains in `~/.zcode/v2/provider_config.json` (or
 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`); never put a key in a launch command.
 
-ZCode model, effort and mode commands leave the native selector open for the
-Telegram arrow controls. Cancel also clears the selector's command draft.
+The ZCode model selector uses direct Telegram buttons, with a checkmark on the
+current model, like Codex. Effort and mode selectors use the Telegram arrow
+controls. Cancel also clears the selector's command draft.
 `/compact`, `/stop`, history, archives and cross-agent handoff use the existing
 surfaces. Image support follows the selected model. Usage reports recorded
 session tokens; absent account quotas/reset times remain unknown.

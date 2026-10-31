@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import asyncio
+from collections import Counter
 from collections.abc import Awaitable, Callable
 import json
 import os
@@ -49,10 +50,48 @@ def is_ready(pane: str) -> bool:
     )
 
 
+def _model_picker_content(rows: list[str], current_model: str) -> str | None:
+    """Translate native model columns into the shared direct-choice contract."""
+    options: list[tuple[str, str, bool, bool]] = []
+    for row in rows:
+        row = row.strip()
+        if not (row.startswith("│") and row.endswith("│")):
+            return None
+        body = row[1:-1].strip()
+        if not body or body == "No matching models.":
+            return None
+        cursor = body.startswith("> ")
+        if cursor:
+            body = body[2:]
+        columns = re.split(r"\s{2,}", body)
+        name = columns[0].strip()
+        details = [part.strip() for col in columns[1:] for part in col.split(" | ")]
+        selected = "current" in details
+        description = " · ".join(part for part in details if part != "current")
+        options.append((name, description, cursor, selected))
+    if not options:
+        return None
+
+    names = Counter(name for name, *_ in options)
+    explicit_current = any(selected for *_, selected in options)
+    matches = sum(name == current_model for name, *_ in options)
+    lines = ["Select model", f"Current model: {current_model}", ""]
+    for index, (name, description, cursor, selected) in enumerate(options, 1):
+        selected = selected or (
+            not explicit_current and matches == 1 and name == current_model
+        )
+        label = f"{name} · {description}" if names[name] > 1 else name
+        state = " (current)" if selected else ""
+        detail = f"    {description}" if description and names[name] == 1 else ""
+        lines.append(f"{'›' if cursor else ' '} {index}. {label}{state}{detail}")
+    return "\n".join([*lines, "", "Enter to confirm · Esc to cancel"])
+
+
 def interactive_panel(pane: str) -> tuple[str, str] | None:
     """Require a complete native panel beside the actual ZCode composer."""
     lines = pane.splitlines()
-    if composer_identity(pane) is None:
+    identity = composer_identity(pane)
+    if identity is None:
         return None
     top = re.compile(
         r"^\s*[╭┌]─+\s*(Models|Effort|Modes|Question \d+/\d+:.*|Review answers)\s*─"
@@ -69,7 +108,13 @@ def interactive_panel(pane: str) -> tuple[str, str] | None:
                     if title.startswith(("Question ", "Review answers"))
                     else "Settings"
                 )
-                return name, "\n".join(lines[index : end + 1])
+                content = "\n".join(lines[index : end + 1])
+                if title == "Models":
+                    content = (
+                        _model_picker_content(lines[index + 1 : end], identity[0])
+                        or content
+                    )
+                return name, content
     return None
 
 

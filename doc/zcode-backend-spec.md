@@ -36,6 +36,8 @@ partially written journal tail is repaired only in this CCBot-owned journal.
    agent creates its own native session and source history stays intact.
 5. File/voice delivery reuses the inbox path; media support follows the model.
 6. Model/mode/effort pickers, compact and terminal capture use ZCode's actual UI.
+   Models share Codex's direct Telegram option buttons and current-value marker;
+   cancellation clears the native command draft.
 7. Readiness/auth status respects API-key configuration; provider failures are
    reported from structured errors rather than matching assistant prose.
 8. Token/context/cost values come from native usage. Missing account quota or

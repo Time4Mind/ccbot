@@ -592,9 +592,17 @@ async def _paint_card_on_carrier_locked(
     _register_msg(user_id, carrier_msg_id, sess.id)
     session_manager.set_card_msg(user_id, carrier_msg_id)
     text = _legacy("_render_card")(sess, state, user_id=user_id)
-    keyboard = _legacy("build_footer_keyboard")(
-        user_id, screen="main", is_busy=_card_is_busy(state)
-    )
+    if state.in_kb_mode and state.kb_prompt and sess.window_id:
+        keyboard = _legacy("build_kb_mode_keyboard")(
+            user_id,
+            sess.window_id,
+            ui_name=state.kb_ui_name,
+            prompt_content=state.kb_prompt,
+        )
+    else:
+        keyboard = _legacy("build_footer_keyboard")(
+            user_id, screen="main", is_busy=_card_is_busy(state)
+        )
     edit_kwargs = {
         "text": text,
         "reply_markup": keyboard,

@@ -324,6 +324,52 @@ async def test_repost_card_preserves_native_picker_keyboard(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("prompt", "labels"),
+    [
+        (
+            "Select Model and Effort\n› 1. GPT-6.1-Sol (current)\n  2. GPT-6-Astra\n",
+            ["✓ GPT-6.1-Sol", "GPT-6-Astra"],
+        ),
+        (
+            "Select model\nCurrent model: glm-4.7-flash\n\n"
+            "› 1. glm-4.5-flash\n  2. glm-4.7-flash (current)\n",
+            ["glm-4.5-flash", "✓ glm-4.7-flash"],
+        ),
+    ],
+)
+async def test_menu_return_preserves_model_picker(monkeypatch, prompt, labels):
+    """Menu → Sessions must restore both providers' live model buttons."""
+    from ccbot.handlers import card_carrier, card_terminal
+
+    sess = _make_sess()
+    state = _cards.setdefault((42, sess.id), CardState())
+    state.msg_id = 999
+    state.in_menu_view = True
+    state.in_kb_mode = True
+    state.kb_ui_name = "Settings"
+    state.kb_prompt = prompt
+    edit = AsyncMock(return_value=True)
+    monkeypatch.setattr(notifications, "_ensure_seeded", AsyncMock())
+    monkeypatch.setattr(notifications, "_render_card", lambda *a, **kw: "picker")
+    monkeypatch.setattr(notifications, "_edit_card", edit)
+    monkeypatch.setattr(notifications, "is_active_for_user", lambda *a: True)
+    monkeypatch.setattr(card_terminal, "sync_card_identity", AsyncMock())
+    monkeypatch.setattr(card_carrier, "_strip_stale_switchers", AsyncMock())
+    monkeypatch.setattr(card_carrier.session_manager, "set_card_msg", MagicMock())
+    monkeypatch.setattr(
+        card_carrier.session_manager, "set_last_switcher_msg", MagicMock()
+    )
+
+    assert await notifications.paint_card_on_carrier(AsyncMock(), 42, sess, 1000)
+
+    rows = _button_rows(edit.call_args.kwargs["reply_markup"])
+    assert rows == [[label] for label in labels] + [["× Cancel"]]
+    assert state.in_menu_view is False
+    assert state.msg_id == 1000
+
+
+@pytest.mark.asyncio
 async def test_transcript_event_does_not_close_live_picker(monkeypatch) -> None:
     """Transcript growth is not proof that the terminal selector disappeared."""
     from ccbot.bot import session_events

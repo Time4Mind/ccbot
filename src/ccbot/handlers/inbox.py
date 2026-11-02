@@ -16,7 +16,10 @@ Public API:
 from __future__ import annotations
 
 import logging
+import hashlib
+import os
 import re
+import tempfile
 import time
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -53,6 +56,8 @@ async def save_inbox_file(
     workdir: str,
     filename: str,
     fetch: Callable[[Path], Awaitable[None]],
+    *,
+    identity: str = "",
 ) -> Path:
     """Save an inbound file to the session's inbox.
 
@@ -60,9 +65,22 @@ async def save_inbox_file(
     Returns the path that was written.
     """
     inbox = ccbot_inbox_dir(workdir)
-    ts = int(time.time())
-    target = inbox / f"{ts}-{_safe_filename(filename)}"
-    await fetch(target)
+    prefix = (
+        hashlib.sha256(identity.encode()).hexdigest()[:24]
+        if identity
+        else str(time.time_ns())
+    )
+    target = inbox / f"{prefix}-{_safe_filename(filename)}"
+    if identity and target.is_file():
+        return target
+    fd, name = tempfile.mkstemp(prefix=".download-", suffix=".part", dir=inbox)
+    os.close(fd)
+    partial = Path(name)
+    try:
+        await fetch(partial)
+        partial.replace(target)
+    finally:
+        partial.unlink(missing_ok=True)
     return target
 
 

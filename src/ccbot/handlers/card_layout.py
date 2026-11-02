@@ -356,6 +356,8 @@ def _render_card(
             now=time.time(),
         )
         body = _EVENT_JOINER.join(part for part in (body, prompt_row) if part)
+    if state.inbound_status and is_latest_page:
+        body = _EVENT_JOINER.join(part for part in (body, state.inbound_status) if part)
     parts = [header, "─────"]
     if body:
         parts.append(body)

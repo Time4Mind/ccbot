@@ -190,7 +190,7 @@ async def test_remote_document_upload_failure_sends_no_prompt(
 
     assert await messages.document_handler(update, context) is False
     sent.assert_not_awaited()
-    assert "not delivered" in reply.await_args.args[1]
+    assert "Не удалось загрузить файл" in reply.await_args.args[1]
 
 
 @pytest.mark.asyncio

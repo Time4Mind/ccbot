@@ -2,14 +2,15 @@
 
 import asyncio
 import json
+from pathlib import Path
 from collections import defaultdict
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from telegram import Update, Voice
-from telegram.error import BadRequest, NetworkError, RetryAfter
+from telegram import Document, PhotoSize, Update, Voice
+from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
 from telegram.ext import Application
 
 from ccbot import input_recovery as recovery_module
@@ -942,3 +943,278 @@ async def test_voice_echo_never_returns_as_pending_tail_after_final(
     assert answer in paints[-1]
     assert prompt not in paints[-1]  # final-only page, with no synthetic user tail
     assert sends == [("@source", prompt)]
+
+
+def file_update(number, kind="document"):
+    raw = update(number, "read attached").to_dict()
+    raw["message"].pop("text")
+    raw["message"]["caption"] = "read attached"
+    file = {"file_id": f"file-{number}", "file_unique_id": f"unique-{number}"}
+    if kind == "document":
+        raw["message"][kind] = {**file, "file_name": "report.txt"}
+    else:
+        raw["message"][kind] = [{**file, "width": 20, "height": 20}]
+    return Update.de_json(raw, None)
+
+
+@pytest.fixture
+def media_env(env, monkeypatch, tmp_path):
+    from contextlib import asynccontextmanager
+
+    env.source.workdir = str(tmp_path)
+    monkeypatch.setattr(messages, "is_user_allowed", lambda _: True)
+    monkeypatch.setattr(messages, "fire_typing", AsyncMock())
+    monkeypatch.setattr(messages, "safe_reply", AsyncMock())
+    monkeypatch.setattr(
+        messages, "_intercept_if_pending_ui", AsyncMock(return_value=False)
+    )
+    monkeypatch.setattr(
+        messages.tmux_manager, "find_window_by_id", AsyncMock(return_value=object())
+    )
+
+    @asynccontextmanager
+    async def bracket(*_args):
+        yield SimpleNamespace(commit=lambda: None)
+
+    monkeypatch.setattr(messages, "_card_repost_bracket", bracket)
+    env.delivered = []
+
+    async def send(wid, text, sess):
+        from pathlib import Path
+
+        relative = text.splitlines()[-1]
+        assert (Path(sess.workdir) / relative).read_bytes() == b"complete file"
+        env.delivered.append((wid, "file"))
+        return True, "accepted"
+
+    monkeypatch.setattr(messages, "_send_with_delivery_proof", send)
+
+    async def follower(_update, _context, wid):
+        env.delivered.append((wid, "voice"))
+        return True
+
+    monkeypatch.setattr(inbound, "_run_voice", follower)
+
+    async def download(target):
+        target.write_bytes(b"complete file")
+
+    env.downloaded = SimpleNamespace(download_to_drive=AsyncMock(side_effect=download))
+    return env
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["document", "photo"])
+async def test_first_file_retries_before_following_voice_in_original_session(
+    media_env, monkeypatch, kind
+):
+    env = media_env
+    cls = Document if kind == "document" else PhotoSize
+    monkeypatch.setattr(
+        cls, "get_file", AsyncMock(side_effect=[TimedOut(), env.downloaded])
+    )
+    intake = getattr(inbound, kind + "_intake_handler")
+    assert await intake(file_update(401, kind), env.context)
+    assert await inbound.voice_intake_handler(update(402), env.context)
+    session_manager.active_sessions[42] = "other"
+    await until(lambda: not has_pending_inbound("@source"))
+    assert env.delivered == [("@source", "file"), ("@source", "voice")]
+    assert env.recovery.duplicate(file_update(401, kind))
+    assert len(list((Path(env.source.workdir) / ".ccbot-inbox").iterdir())) == 1
+
+
+@pytest.mark.asyncio
+async def test_file_download_timeout_recovers_with_one_complete_file(
+    media_env, monkeypatch
+):
+    env = media_env
+    monkeypatch.setattr(Document, "get_file", AsyncMock(return_value=env.downloaded))
+    interrupted = False
+
+    async def download(target):
+        nonlocal interrupted
+        target.write_bytes(b"partial")
+        if not interrupted:
+            interrupted = True
+            raise TimedOut()
+        target.write_bytes(b"complete file")
+
+    env.downloaded.download_to_drive.side_effect = download
+    assert await inbound.document_intake_handler(file_update(403), env.context)
+    await until(lambda: not has_pending_inbound("@source"))
+    assert env.delivered == [("@source", "file")]
+    files = list((Path(env.source.workdir) / ".ccbot-inbox").iterdir())
+    assert len(files) == 1 and files[0].read_bytes() == b"complete file"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("crash_point", ["after_publish", "before_dispatch"])
+async def test_document_restart_reuses_complete_file_without_resending(
+    media_env, monkeypatch, crash_point
+):
+    env = media_env
+    monkeypatch.setattr(Document, "get_file", AsyncMock(return_value=env.downloaded))
+    paused = asyncio.Event()
+    changed = env.recovery.changed
+
+    if crash_point == "after_publish":
+
+        def crash(request):
+            if request.media_path:
+                paused.set()
+                raise asyncio.CancelledError()
+            changed(request)
+
+        monkeypatch.setattr(env.recovery, "changed", crash)
+    else:
+
+        async def pause(*args, **kwargs):
+            paused.set()
+            await asyncio.Future()
+
+        monkeypatch.setattr(messages, "_intercept_if_pending_ui", pause)
+    assert await inbound.document_intake_handler(file_update(404), env.context)
+    await paused.wait()
+    await shutdown_inbound_queues()
+    assert env.delivered == []
+    files = list((Path(env.source.workdir) / ".ccbot-inbox").iterdir())
+    assert len(files) == 1 and files[0].read_bytes() == b"complete file"
+    restarted = recovery_module.InputRecovery(env.recovery.path)
+    restarted.load()
+    monkeypatch.setattr(recovery_module, "input_recovery", restarted)
+    session_manager.active_sessions[42] = "other"
+    monkeypatch.setattr(
+        messages, "_intercept_if_pending_ui", AsyncMock(return_value=False)
+    )
+    env.downloaded.download_to_drive.side_effect = AssertionError(
+        "must reuse published bytes"
+    )
+    assert await restarted.run(
+        "42:404", inbound._run_document, file_update(404), env.context, "@source"
+    )
+    assert env.delivered == [("@source", "file")]
+    assert restarted.duplicate(file_update(404))
+    assert list((Path(env.source.workdir) / ".ccbot-inbox").iterdir()) == files
+
+
+@pytest.mark.asyncio
+async def test_document_permanent_error_is_visible_once_and_not_replayed(
+    media_env, monkeypatch
+):
+    env = media_env
+    monkeypatch.setattr(
+        Document, "get_file", AsyncMock(side_effect=BadRequest("file unavailable"))
+    )
+    assert await inbound.document_intake_handler(file_update(405), env.context)
+    await until(lambda: not has_pending_inbound("@source"))
+    request = env.recovery.records["42:405"]
+    env.recovery.bot = AsyncMock()
+    env.recovery.bot.send_message.return_value = SimpleNamespace(message_id=4050)
+    await env.recovery.deliver_notice(request)
+    text = env.recovery.bot.send_message.call_args.kwargs["text"]
+    assert "файл" in text.lower() and "Голосовое" not in text
+    messages.safe_reply.assert_not_awaited()
+    assert env.delivered == [] and env.recovery.duplicate(file_update(405))
+
+
+@pytest.mark.asyncio
+async def test_file_retry_visible_with_correlated_stage_timings(
+    media_env, monkeypatch, caplog
+):
+    from ccbot.handlers import notifications
+    from ccbot.handlers.card_layout import _render_card
+
+    env = media_env
+    caplog.set_level("INFO")
+    error = TimedOut()
+    error.__cause__ = httpx.ReadTimeout("private-token-url-must-not-be-logged")
+    monkeypatch.setattr(
+        Document, "get_file", AsyncMock(side_effect=[error, env.downloaded])
+    )
+    waiting, release = asyncio.Event(), asyncio.Event()
+    advance = env.recovery.sleep
+
+    async def pause(delay):
+        waiting.set()
+        await release.wait()
+        await advance(delay)
+
+    env.recovery.sleep = pause
+    env.recovery.bot = env.context.bot
+    state = env.cards["source"]
+    state.msg_id = 9999
+    monkeypatch.setattr(notifications, "get_card_state", lambda *_: state)
+    monkeypatch.setattr(notifications, "refresh_panel", AsyncMock(return_value=True))
+    assert await inbound.document_intake_handler(file_update(406), env.context)
+    await waiting.wait()
+    assert await refresh_request_status(env.recovery, 42, "source")
+    visible = _render_card(env.source, state).lower()
+    assert "файл" in visible and "повтор" in visible
+    release.set()
+    await until(lambda: not has_pending_inbound("@source"))
+    assert env.delivered == [("@source", "file")]
+    assert "input_stage message_id=406" in caplog.text
+    assert "stage=get_file" in caplog.text and "stage=download" in caplog.text
+    assert "cause_type=ReadTimeout" in caplog.text
+    assert "private-token-url-must-not-be-logged" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_cancelled_download_publishes_no_partial_file(media_env, monkeypatch):
+    env = media_env
+    monkeypatch.setattr(Document, "get_file", AsyncMock(return_value=env.downloaded))
+    downloading = asyncio.Event()
+
+    async def partial(target):
+        target.write_bytes(b"partial")
+        downloading.set()
+        await asyncio.Future()
+
+    env.downloaded.download_to_drive.side_effect = partial
+    assert await inbound.document_intake_handler(file_update(407), env.context)
+    await downloading.wait()
+    inbox = Path(env.source.workdir) / ".ccbot-inbox"
+    assert not list(inbox.glob("*.txt"))
+    await shutdown_inbound_queues()
+    assert list(inbox.iterdir()) == [] and env.delivered == []
+
+
+@pytest.mark.asyncio
+async def test_document_unacknowledged_submit_never_replays_after_restart(
+    media_env, monkeypatch, tmp_path
+):
+    from ccbot.bot import _messages_shared
+
+    env = media_env
+    env.source.backend = "codex"
+    transcript = tmp_path / "codex.jsonl"
+    transcript.write_text("")
+    checkpoint = _messages_shared._VoiceTranscriptCheckpoint(transcript, 0, "codex")
+    monkeypatch.setattr(messages, "_voice_transcript_checkpoint", lambda _: checkpoint)
+    monkeypatch.setattr(Document, "get_file", AsyncMock(return_value=env.downloaded))
+    sent = []
+
+    async def unknown(wid, text, sess):
+        sent.append(text)
+        return False, "lost acknowledgement"
+
+    monkeypatch.setattr(messages, "_send_with_delivery_proof", unknown)
+    assert await inbound.document_intake_handler(file_update(408), env.context)
+    await until(lambda: env.recovery.records["42:408"].state == "unknown")
+    await shutdown_inbound_queues()
+    restarted = recovery_module.InputRecovery(env.recovery.path)
+    restarted.load()
+    monkeypatch.setattr(recovery_module, "input_recovery", restarted)
+    row = {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": sent[0]}],
+        },
+    }
+    transcript.write_text(json.dumps(row) + "\n")
+    async with asyncio.timeout(2):
+        assert await restarted.run(
+            "42:408", inbound._run_document, file_update(408), env.context, "@source"
+        )
+    assert len(sent) == 1 and restarted.duplicate(file_update(408))

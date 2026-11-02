@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from contextvars import ContextVar
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 import json
@@ -65,6 +65,9 @@ class InputRequest:
     strict_codex_proof: bool = False
     submitted_at: float = 0.0
     dispatch_started_at: float = 0.0
+    media_path: str = ""
+    stage: str = ""
+    received_at: float = 0.0
 
 
 class InputRecovery:
@@ -95,7 +98,10 @@ class InputRecovery:
         except FileNotFoundError:
             raw = {}
         self.records = {
-            row["id"]: InputRequest(**row) for row in raw.get("requests", [])
+            row["id"]: InputRequest(
+                **row, **raw.get("request_metadata", {}).get(row["id"], {})
+            )
+            for row in raw.get("requests", [])
         }
         self.completed = raw.get("completed", [])
         self.confirmed_through = raw.get("confirmed_through", {})
@@ -110,11 +116,13 @@ class InputRecovery:
             self.save()
 
     def save(self) -> None:
+        from .input_media import encode_requests
+
         atomic_write_json(
             self.path,
             {
                 "version": 1,
-                "requests": [asdict(r) for r in self.records.values()],
+                **encode_requests(self.records),
                 "completed": self.completed,
                 "confirmed_through": self.confirmed_through,
                 "resolved_notices": self.resolved_notices,
@@ -141,7 +149,7 @@ class InputRecovery:
             for r in self.records.values()
         )
         if not (
-            kind == "text"
+            kind in ("text", "photo", "document")
             or kind == "voice"
             and isinstance(file_id, str)
             and file_id
@@ -166,6 +174,7 @@ class InputRecovery:
             kind,
             raw,
             sequence=max((r.sequence for r in self.records.values()), default=0) + 1,
+            received_at=self.clock(),
         )
         self.records[key] = request
         self.changed(request)
@@ -182,7 +191,10 @@ class InputRecovery:
         return self.records.get(_current.get())
 
     def changed(self, request: InputRequest) -> None:
-        if request.kind == "voice" or request.state in ("unknown", "failed"):
+        if request.kind in ("voice", "photo", "document") or request.state in (
+            "unknown",
+            "failed",
+        ):
             self.dirty.add((request.user_id, request.session_id))
         self.save()
 
@@ -218,11 +230,14 @@ class InputRecovery:
         self._next_reconcile.pop(request.id, None)
         self.changed(request)
         logger.info(
-            "input_journal_completed session=%s message_id=%s previous=%s confirmed=%s",
+            "input_journal_completed session=%s message_id=%s previous=%s confirmed=%s elapsed_ms=%s",
             request.session_id,
             request.message_id,
             previous,
             confirmed,
+            round((self.clock() - request.received_at) * 1000)
+            if request.received_at
+            else None,
         )
         if request.id in self.events:
             self.events[request.id].set()
@@ -266,31 +281,9 @@ class InputRecovery:
         return RETRY_DELAYS[min(attempts, len(RETRY_DELAYS) - 1)]
 
     async def download(self, voice: Any, request: InputRequest) -> bytes:
-        while True:
-            if self.source(request) is None:
-                raise ValueError(
-                    "Исходная сессия больше недоступна. Голосовое не перенаправлено."
-                )
-            if request.retry_at > self.clock():
-                await self.sleep(request.retry_at - self.clock())
-            request.state = "downloading"
-            self.changed(request)
-            try:
-                file = await voice.get_file()
-                audio = bytes(await file.download_as_bytearray())
-            except (NetworkError, TimeoutError, RetryAfter) as exc:
-                if isinstance(exc, BadRequest):
-                    raise
-                request.retry_at = self.clock() + self.retry_delay(
-                    request.attempts, exc
-                )
-                request.attempts += 1
-                self.changed(request)
-                continue
-            request.state = "transcribing"
-            request.retry_at = 0
-            self.changed(request)
-            return audio
+        from .input_media import download_voice
+
+        return await download_voice(self, voice, request)
 
     async def before_dispatch(self, wid: str, text: str) -> None:
         request = self.current()
@@ -361,8 +354,11 @@ class InputRecovery:
     async def submit(
         self, wid: str, text: str, session: Any, sender: Any
     ) -> tuple[bool, str]:
-        await self.before_dispatch(wid, text)
-        success, message = await sender(wid, text, session)
+        from .input_timing import input_stage
+
+        with input_stage("dispatch"):
+            await self.before_dispatch(wid, text)
+            success, message = await sender(wid, text, session)
         self.after_dispatch(success, message)
         return success, message
 
@@ -605,10 +601,9 @@ class InputRecovery:
                     if isinstance(
                         exc, (NetworkError, TimeoutError, RetryAfter)
                     ) and not isinstance(exc, BadRequest):
-                        delay = self.retry_delay(request.attempts, exc)
-                        request.attempts += 1
-                        request.retry_at = self.clock() + delay
-                        self.changed(request)
+                        from .input_media import schedule_retry
+
+                        delay = schedule_retry(self, request, exc)
                         await self.sleep(delay)
                         continue
                     self.fail(
@@ -684,7 +679,7 @@ class InputRecovery:
                     self.save()
                     message = await self.bot.send_message(
                         chat_id=request.user_id,
-                        text=f"Голосовое / запрос №{request.message_id}: {request.notice}",
+                        text=f"Запрос №{request.message_id}: {request.notice}",
                         disable_notification=True,
                     )
                     request.notice_id = message.message_id

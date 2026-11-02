@@ -45,7 +45,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     labels = {
         "accepted": "принят, ожидает обработки",
-        "downloading": "ожидает загрузки аудио",
+        "downloading": "загружается файл",
         "transcribing": "распознаётся",
         "prepared": "подготовлен к передаче",
         "dispatching": "передаётся",

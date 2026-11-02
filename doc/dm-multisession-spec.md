@@ -363,10 +363,14 @@ Transcript and quota data have separate sources:
 
 ### Inbound photos / documents
 
-- Stored in `<workdir>/.ccbot-inbox/<utc-timestamp>-<filename>`.
-- The active session receives a synthetic message in tmux: `"received file: .ccbot-inbox/<...>"`.
+- Stored atomically under `<workdir>/.ccbot-inbox/`. Recoverable uploads use a
+  stable request-derived filename; incomplete downloads stay in a private
+  temporary file and are never forwarded to the agent.
+- The pinned session receives the relative inbox path, preceded by the caption
+  when present. A session switch during download does not change that target.
 - Reply-quote routing applies: replying to a non-active session's message with a file attaches it to that session instead.
-- TTL: files are deleted from the inbox 24h after upload. The bot retains the original Telegram `file_id` for 30d so `/restore-file <message-id>` can re-fetch from Telegram CDN.
+- TTL: files are deleted from the inbox 24h after upload. `/restore-file` remains
+  planned; completed uploads do not have a guaranteed 30-day replay history.
 
 ### Outbound
 
@@ -388,13 +392,27 @@ Transcript and quota data have separate sources:
 
 ### Network recovery and submission identity
 
-Accepted voice requests and their same-session FIFO followers are atomically
+Accepted text, voice, photo and document requests are atomically
 journaled in the private runtime `input-requests.json` before queue admission.
 The journal retains the Telegram file reference, original session/window,
 recognition/preprocessing results and submission checkpoint. Temporary download
 failures retry after 1, 2, 4, 8 and at most 15 seconds; Telegram `RetryAfter`
 deadlines may be longer and survive restart. Other sessions and navigation remain
 independent. A removed or replaced original session causes an explicit error.
+
+A first standalone file has the same recovery protection as voice. Metadata and
+download failures retry within its original FIFO, so a following voice cannot
+pass a transiently failed attachment. A delayed file shows its retry state on
+the selected session card; permanent failures have durable error feedback.
+Published file paths survive restart and are reused without fetching or sending
+the input again. The journal remains readable by the pre-deploy rollback version.
+
+Content-free `input_stage` logs correlate queue, `get_file`, download, STT,
+preprocessing and dispatch time with message/request identity. `input_retry`
+records retry delay and exception types, including the underlying network cause;
+neither payload text nor token-bearing URLs are logged by this instrumentation.
+Journal completion also records the total time since admission. These timings
+do not imply that Telegram network timeouts have been eliminated.
 
 Startup restores each source FIFO in admission order. Completed request IDs
 remain as deduplication tombstones, including terminal failures whose error was

@@ -29,6 +29,7 @@ from ..session_models import Session
 from ..session import session_manager
 from ..tmux_manager import tmux_manager
 from ..transcribe import resolve_voice_backend, transcribe_voice
+from ..input_timing import input_stage
 from ._common import active_window, is_user_allowed
 
 from typing import Any, TYPE_CHECKING, cast
@@ -263,7 +264,8 @@ async def _process_voice(
             return False
 
         try:
-            text = await transcribe_voice(ogg_data, user_id=user.id)
+            with input_stage("stt"):
+                text = await transcribe_voice(ogg_data, user_id=user.id)
         except ValueError:
             if sess is not None and card_state is not None:
                 card_state.voice_pending = False

@@ -10,6 +10,7 @@ import html
 import asyncio
 
 from ..input_recovery import submit_input as submit
+from ..input_media import media_identity, receive_file, report_media_error
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -142,6 +143,10 @@ async def _save_session_inbox_file(
 ) -> str:
     """Store locally or atomically upload to the owning worker."""
     if sess is None or getattr(sess, "node_id", "local") == "local":
+        if identity := media_identity(filename):
+            return str(
+                await save_inbox_file(workdir, filename, fetch, identity=identity)
+            )
         return str(await save_inbox_file(workdir, filename, fetch))
     node_id = str(sess.node_id)
     routing_id = str(
@@ -449,23 +454,21 @@ async def photo_handler(
     workdir = sess.workdir if sess and sess.workdir else str(ccbot_dir() / "images")
 
     photo = update.message.photo[-1]
-    try:
-        tg_file = await photo.get_file()
-    except BadRequest as e:
-        if _is_file_too_big(e):
-            await safe_reply(update.message, _FILE_TOO_BIG_MSG)
-            return False
-        raise
     filename = f"{photo.file_unique_id}.jpg"
-
-    async def _fetch(target: Path) -> None:
-        await tg_file.download_to_drive(target)
-
     try:
-        file_path = await _save_session_inbox_file(sess, workdir, filename, _fetch)
+        file_path = await receive_file(
+            sess, workdir, filename, photo, _save_session_inbox_file
+        )
     except Exception as exc:
-        logger.warning("Photo delivery failed window=%s: %s", wid, exc)
-        await safe_reply(update.message, f"❌ File was not delivered: {exc}")
+        notice = (
+            _FILE_TOO_BIG_MSG
+            if isinstance(exc, BadRequest) and _is_file_too_big(exc)
+            else "Не удалось загрузить файл. Проверьте вложение и отправьте его ещё раз."
+        )
+        await report_media_error(update.message, exc, safe_reply, notice)
+        logger.warning(
+            "Photo delivery failed window=%s error_type=%s", wid, type(exc).__name__
+        )
         return False
 
     caption = update.message.caption or ""
@@ -544,21 +547,19 @@ async def document_handler(
     workdir = sess.workdir if sess and sess.workdir else str(ccbot_dir() / "images")
     filename = doc.file_name or f"{doc.file_unique_id}.bin"
     try:
-        tg_file = await doc.get_file()
-    except BadRequest as e:
-        if _is_file_too_big(e):
-            await safe_reply(update.message, _FILE_TOO_BIG_MSG)
-            return False
-        raise
-
-    async def _fetch(target: Path) -> None:
-        await tg_file.download_to_drive(target)
-
-    try:
-        file_path = await _save_session_inbox_file(sess, workdir, filename, _fetch)
+        file_path = await receive_file(
+            sess, workdir, filename, doc, _save_session_inbox_file
+        )
     except Exception as exc:
-        logger.warning("Document delivery failed window=%s: %s", wid, exc)
-        await safe_reply(update.message, f"❌ File was not delivered: {exc}")
+        notice = (
+            _FILE_TOO_BIG_MSG
+            if isinstance(exc, BadRequest) and _is_file_too_big(exc)
+            else "Не удалось загрузить файл. Проверьте вложение и отправьте его ещё раз."
+        )
+        await report_media_error(update.message, exc, safe_reply, notice)
+        logger.warning(
+            "Document delivery failed window=%s error_type=%s", wid, type(exc).__name__
+        )
         return False
 
     caption = update.message.caption or ""

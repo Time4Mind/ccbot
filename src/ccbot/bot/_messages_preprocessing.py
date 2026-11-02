@@ -16,6 +16,7 @@ from ..handlers.notifications import (
     refresh_panel,
 )
 from ..request_preprocessing import prompt_preprocessor, should_preprocess
+from ..input_timing import input_stage
 from ..session import session_manager
 
 logger = logging.getLogger(__name__)
@@ -146,10 +147,11 @@ async def prepare_request_for_dispatch(
 
     was_preprocessed = False
     try:
-        prepared = await prompt_preprocessor.process(
-            text,
-            instruction=str(settings.get("preprocessing_instruction", "")),
-        )
+        with input_stage("preprocessing"):
+            prepared = await prompt_preprocessor.process(
+                text,
+                instruction=str(settings.get("preprocessing_instruction", "")),
+            )
     except Exception as exc:
         logger.warning(
             "request preprocessing failed user=%d window=%s kind=%s: %s",

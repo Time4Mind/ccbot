@@ -147,6 +147,14 @@ async def _drain_lane(key: tuple[int, str], lane: _Lane) -> None:
             entry = lane.entries.popleft()
             lane.active = entry
             delivered = False
+            logger.info(
+                "input_stage message_id=%s request_id=%s window=%s kind=%s stage=queue event=end elapsed_ms=%s",
+                getattr(entry.update.message, "message_id", None),
+                entry.recovery_id or "none",
+                entry.target_window_id,
+                entry.kind,
+                round((time.monotonic() - entry.received_at) * 1000),
+            )
             try:
                 if entry.recovery_id:
                     from .input_recovery import input_recovery

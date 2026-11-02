@@ -126,6 +126,7 @@ class CardState:
     delivery_id: str = ""
     events: list[Event] = field(default_factory=list)
     pending_prompts: list[PendingPrompt] = field(default_factory=list)
+    inbound_status: str = ""
     # Completed logical pages are immutable while the current turn streams.
     # ``paginate_events_for_card`` caches their budget-split Event references
     # here and recomputes only the latest logical page on each update. This is

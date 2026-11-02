@@ -27,6 +27,19 @@ async def refresh_request_status(recovery: Any, user_id: int, session_id: str) -
         if r.user_id == user_id and r.session_id == session_id
     ]
     work = [r for r in pending if r.state not in ("failed", "unknown")]
+    files = [
+        r
+        for r in work
+        if r.kind in ("document", "photo") and r.state in ("accepted", "downloading")
+    ]
+    state.inbound_status = ""
+    if files:
+        item = min(files, key=lambda r: r.sequence)
+        state.inbound_status = (
+            f"📎 Загрузка файла задерживается, повторная попытка №{item.attempts + 1}."
+            if item.attempts
+            else "📎 Файл ожидает загрузки."
+        )
     state.voice_pending = any(r.kind == "voice" and not r.recognized for r in work)
     # The voice handler owns recognized receipts, including cached recognition
     # on restart. A transcript echo may already have consumed that receipt while

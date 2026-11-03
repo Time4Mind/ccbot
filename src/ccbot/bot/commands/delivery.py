@@ -18,7 +18,7 @@ async def delivery_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     from ...final_delivery import final_delivery_queue
 
-    pending = final_delivery_queue.pending(user.id)
+    pending = final_delivery_queue.pending(user.id, include_history=True)
     if not pending:
         await safe_reply(update.message, "Нет ответов, ожидающих доставки.")
         return
@@ -29,6 +29,8 @@ async def delivery_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if unknown
             else "Ответ готов и сохранён. Доставка ожидает восстановления связи или открытия сессии."
         )
+        if item.history_only and not unknown:
+            text = "Ответ сохранён в истории сессии. Откройте нужную страницу; новой отправки при просмотре не будет."
         text += f"\nСессия: {item.session_id}"
         keyboard = (
             InlineKeyboardMarkup(
@@ -63,13 +65,19 @@ async def delivery_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if len(parts) != 3:
         return
     item = next(
-        (r for r in final_delivery_queue.pending(user.id) if r.id == parts[2]), None
+        (
+            r
+            for r in final_delivery_queue.pending(user.id, include_history=True)
+            if r.id == parts[2]
+        ),
+        None,
     )
     if item is None or item.status != "unknown":
         return
     if parts[1] == "ack":
         final_delivery_queue.resolve(item)
     elif parts[1] == "retry":
+        item.payload.pop("delivery_mode", None)
         item.status = "pending"
         item.retry_at = time.time()
         final_delivery_queue.save()

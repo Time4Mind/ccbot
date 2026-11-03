@@ -111,7 +111,7 @@ def acknowledge_visible_final(
     """Caller has confirmed this exact card payload through Telegram."""
     from ..final_delivery import final_delivery_queue
 
-    pending = final_delivery_queue.pending(user_id, session_id)
+    pending = final_delivery_queue.pending(user_id, session_id, include_history=True)
     if not pending or state.delivery_id or state.in_menu_view or state.in_kb_mode:
         return
     for item in visible_final_matches(user_id, state, pending, rendered):

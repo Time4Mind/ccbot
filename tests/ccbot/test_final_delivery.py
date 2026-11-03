@@ -1,6 +1,7 @@
 """Durable delivery retry, crash recovery, ordering and acknowledgement contracts."""
 
 import asyncio
+import time
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -34,6 +35,9 @@ def clock(monkeypatch):
         "asyncio",
         SimpleNamespace(
             Lock=asyncio.Lock,
+            Event=asyncio.Event,
+            wait=asyncio.wait,
+            FIRST_COMPLETED=asyncio.FIRST_COMPLETED,
             Task=asyncio.Task,
             CancelledError=asyncio.CancelledError,
             create_task=asyncio.create_task,
@@ -224,3 +228,27 @@ async def test_replayed_event_is_deduplicated_while_pending_and_after_receipt(
         restarted.enqueue(42, "session", {"text": "same"}, event_key="turn-two")
         is not None
     )
+
+
+@pytest.mark.asyncio
+async def test_navigation_wakes_an_old_retry_without_blocking_new_final(tmp_path):
+    queue = delivery.FinalDeliveryQueue(tmp_path / "deliveries.json")
+    old = queue.enqueue(42, "s", {"text": "old"})
+    old.retry_at = time.time() + 3600
+    delivered = []
+
+    async def driver(item):
+        delivered.append(item.payload["text"])
+        return True
+
+    queue.start(driver)
+    try:
+        await asyncio.sleep(0)
+        queue.defer_to_history(42, "s")
+        queue.enqueue(42, "s", {"text": "new"})
+        queue.kick()
+        await asyncio.sleep(0.03)
+        assert delivered == ["new"]
+        assert queue.pending(42, include_history=True) == [old]
+    finally:
+        await queue.shutdown()

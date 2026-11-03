@@ -633,6 +633,8 @@ async def finalize_task(
                 prepared = final_payload(state, final_events[0], old_card_msg_id)
                 if event_key:
                     prepared["event_key"] = event_key
+                if item.history_only:
+                    prepared["delivery_mode"] = "history"
                 item.payload = prepared
                 if not buffered:
                     await final_delivery_queue.attempt(

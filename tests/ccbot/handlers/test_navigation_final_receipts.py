@@ -20,6 +20,7 @@ from ccbot.handlers.card_final_delivery import retry_delivery
 from ccbot.session import Session
 from ccbot.session import session_manager
 from telegram.error import RetryAfter
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 
 @pytest.fixture
@@ -62,7 +63,9 @@ def navigation(monkeypatch):
     handlers = {
         "_ensure_seeded": AsyncMock(),
         "_render_card": _render_card,
-        "build_footer_keyboard": lambda *_a, **_kw: None,
+        "build_footer_keyboard": lambda *_a, **_kw: InlineKeyboardMarkup(
+            [[InlineKeyboardButton("Menu", callback_data="ft:menu")]]
+        ),
         "_send_card": card_transport._send_card,
         "_edit_card": card_transport._edit_card,
         "is_active_for_user": lambda *_a: active[0].id == sess.id,
@@ -172,13 +175,13 @@ async def test_other_page_and_failed_edit_do_not_confirm_final(
     h.active[0] = h.sess
     h.state.current_page_idx = 0
     assert await card_carrier.paint_card_on_carrier(h.bot, 42, h.sess, 9)
-    assert len(q.pending(42)) == 1
+    assert len(q.pending(42, include_history=True)) == 1
     h.state.current_page_idx = 1
     original = h.bot._post
     h.bot._post = AsyncMock(side_effect=NetworkError("edit failed"))
     with pytest.raises(NetworkError):
         await card_carrier.paint_card_on_carrier(h.bot, 42, h.sess, 9)
-    assert len(q.pending(42)) == 1
+    assert len(q.pending(42, include_history=True)) == 1
     h.bot._post = original
     assert await card_carrier.paint_card_on_carrier(h.bot, 42, h.sess, 9)
     assert not q.pending(42)
@@ -197,17 +200,14 @@ async def test_multiple_same_text_finals_only_acknowledge_selected_turn(
     h.active[0] = h.sess
     chosen = h.state.current_page_idx
     assert await card_carrier.paint_card_on_carrier(h.bot, 42, h.sess, 9)
-    assert q.pending(42) == [first]
+    assert q.pending(42, include_history=True) == [first]
     first.retry_at = 0
     await q.attempt(first, lambda row: retry_delivery(h.bot, row))
-    assert not q.pending(42)
+    assert q.pending(42, include_history=True) == [first]
     assert h.state.msg_id == 9
     assert h.state.current_page_idx == chosen
-    assert [endpoint for endpoint, _ in h.calls] == [
-        "editMessageText",
-        "sendRichMessage",
-    ]
-    assert h.calls[-1][1].get("reply_markup") is None
+    assert [endpoint for endpoint, _ in h.calls] == ["editMessageText"]
+    assert h.calls[-1][1].get("reply_markup") is not None
 
 
 @pytest.mark.asyncio
@@ -337,13 +337,11 @@ async def test_new_request_preserves_page_and_controls_during_older_retry(
     h.state.current_page_idx = 2
     h.state.turn_phase = TurnPhase.RUNNING
     assert await card_carrier.paint_card_on_carrier(h.bot, 42, h.sess, 9)
-    assert q.pending(42) == [item]
+    assert q.pending(42, include_history=True) == [item]
     await q.attempt(item, lambda row: retry_delivery(h.bot, row))
     assert h.state.msg_id == 9 and h.state.current_page_idx == 2
-    assert (
-        h.calls[-1][0] == "sendRichMessage"
-        and h.calls[-1][1].get("reply_markup") is None
-    )
+    assert [endpoint for endpoint, _ in h.calls] == ["editMessageText"]
+    assert h.calls[-1][1].get("reply_markup") is not None
 
 
 @pytest.mark.asyncio
@@ -432,4 +430,179 @@ async def test_same_final_text_and_timestamp_still_require_correct_request(
     await card_updates.finalize_task(h.bot, 42, h.sess, "same answer")
     h.active[0] = h.sess
     assert await card_carrier.paint_card_on_carrier(h.bot, 42, h.sess, 9)
-    assert q.pending(42) == [first]
+    assert q.pending(42, include_history=True) == [first]
+
+
+@pytest.mark.asyncio
+async def test_open_completed_session_keeps_older_answers_in_history_without_sends(
+    navigation, isolated_final_deliveries
+):
+    h = navigation
+    q = isolated_final_deliveries
+    await card_updates.finalize_task(h.bot, 42, h.sess, "older final answer")
+    older = q.pending(42)[0]
+    h.state.events.append(Event("user_msg", "new request", 3.0, is_page_break=True))
+    await card_updates.finalize_task(h.bot, 42, h.sess, "latest final answer")
+    h.active[0] = h.sess
+    assert await card_carrier.paint_card_on_carrier(h.bot, 42, h.sess, 9)
+    await q.attempt(older, lambda row: retry_delivery(h.bot, row))
+    assert [endpoint for endpoint, _ in h.calls] == ["editMessageText"]
+    assert h.state.msg_id == 9
+    assert older in q.records, "An answer not displayed must not be acknowledged"
+    h.state.current_page_idx = 1
+    assert await card_carrier.paint_card_on_carrier(h.bot, 42, h.sess, 9)
+    assert not q.records, "Opening the older answer should acknowledge that view"
+
+
+@pytest.mark.asyncio
+async def test_switch_intake_prevents_queue_send_before_slow_card_paint(
+    navigation, isolated_final_deliveries, monkeypatch
+):
+    from ccbot.bot.callbacks import switcher
+    from ccbot.bot import callbacks, _new_session_flow
+    from ccbot.handlers.callback_data import CB_SW_USE
+
+    h = navigation
+    q = isolated_final_deliveries
+    await card_updates.finalize_task(h.bot, 42, h.sess, "saved final answer")
+    item = q.pending(42)[0]
+    jobs = []
+    h.state.in_menu_view = False
+
+    def select(_user, _target):
+        h.active[0] = h.sess
+        jobs.append(
+            asyncio.create_task(
+                q.attempt(item, lambda entry: retry_delivery(h.bot, entry))
+            )
+        )
+
+    def defer_paint(coro, **_kwargs):
+        coro.close()
+
+    monkeypatch.setattr(switcher, "is_user_allowed", lambda _: True)
+    monkeypatch.setattr(callbacks, "_acknowledge_completion_marker", lambda _: None)
+    monkeypatch.setattr(_new_session_flow, "cancel_for_active_card", lambda *_: None)
+    monkeypatch.setattr(session_manager, "select_session", select)
+    update = SimpleNamespace(
+        callback_query=SimpleNamespace(
+            data=CB_SW_USE + h.sess.id, message=SimpleNamespace(message_id=9)
+        ),
+        effective_user=SimpleNamespace(id=42),
+    )
+    context = SimpleNamespace(
+        bot=h.bot, user_data={}, application=SimpleNamespace(create_task=defer_paint)
+    )
+    await switcher.session_switch_intake_handler(update, context)
+    await asyncio.gather(*jobs)
+    assert not h.calls, (
+        "Accepting a manual selection must not release a final send before paint"
+    )
+    assert item in q.records
+
+
+@pytest.mark.asyncio
+async def test_navigation_backlog_survives_restart_and_does_not_block_new_answer(
+    navigation, isolated_final_deliveries, monkeypatch
+):
+    from ccbot import final_delivery
+    from ccbot.handlers.card_types import TurnPhase
+
+    h = navigation
+    q = isolated_final_deliveries
+    await card_updates.finalize_task(h.bot, 42, h.sess, "older answer")
+    older = q.pending(42)[0]
+    h.state.events.append(Event("user_msg", "second request", 3.0, is_page_break=True))
+    await card_updates.finalize_task(h.bot, 42, h.sess, "latest answer")
+    h.active[0] = h.sess
+    assert await card_carrier.paint_card_on_carrier(h.bot, 42, h.sess, 9)
+    restored = final_delivery.FinalDeliveryQueue(q.path)
+    monkeypatch.setattr(final_delivery, "final_delivery_queue", restored)
+    restored.start(lambda item: retry_delivery(h.bot, item))
+    try:
+        await asyncio.sleep(0.02)
+        assert [endpoint for endpoint, _ in h.calls] == ["editMessageText"]
+        assert [item.id for item in restored.pending(42, include_history=True)] == [
+            older.id
+        ]
+        h.state.events.append(
+            Event("user_msg", "third request", 5.0, is_page_break=True)
+        )
+        h.state.current_page_idx = None
+        h.state.turn_phase = TurnPhase.RUNNING
+        await card_updates.finalize_task(h.bot, 42, h.sess, "brand new answer")
+        assert [endpoint for endpoint, _ in h.calls] == [
+            "editMessageText",
+            "sendRichMessage",
+        ]
+        assert h.calls[-1][1].get("reply_markup") is not None
+        assert "brand new answer" in h.calls[-1][1]["rich_message"]["markdown"]
+        assert [item.id for item in restored.pending(42, include_history=True)] == [
+            older.id
+        ]
+    finally:
+        await restored.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_unknown_send_stays_unknown_in_history_until_exact_page_is_shown(
+    navigation, isolated_final_deliveries, monkeypatch
+):
+    from ccbot import final_delivery
+
+    h = navigation
+    q = isolated_final_deliveries
+    await card_updates.finalize_task(h.bot, 42, h.sess, "saved answer")
+    item = q.pending(42)[0]
+    item.status = "unknown"
+    q.save()
+    h.active[0] = h.sess
+    h.state.current_page_idx = 0
+    assert await card_carrier.paint_card_on_carrier(h.bot, 42, h.sess, 9)
+    restored = final_delivery.FinalDeliveryQueue(q.path)
+    restored.load()
+    monkeypatch.setattr(final_delivery, "final_delivery_queue", restored)
+    saved = restored.pending(42, include_history=True)[0]
+    assert saved.status == "unknown"
+    assert (
+        await restored.attempt(saved, lambda item: retry_delivery(h.bot, item)) is None
+    )
+    assert [ep for ep, _ in h.calls] == ["editMessageText"]
+    h.state.current_page_idx = 1
+    assert await card_carrier.paint_card_on_carrier(h.bot, 42, h.sess, 9)
+    assert not restored.records
+    assert [ep for ep, _ in h.calls] == ["editMessageText", "editMessageText"]
+
+
+@pytest.mark.asyncio
+async def test_navigation_during_final_preparation_cannot_restore_automatic_send(
+    navigation, isolated_final_deliveries, monkeypatch
+):
+    h = navigation
+    q = isolated_final_deliveries
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original = card_updates._legacy
+
+    async def seed(*_args):
+        entered.set()
+        await release.wait()
+
+    monkeypatch.setattr(
+        card_updates,
+        "_legacy",
+        lambda key: seed if key == "_ensure_seeded" else original(key),
+    )
+    task = asyncio.create_task(
+        card_updates.finalize_task(h.bot, 42, h.sess, "saved final")
+    )
+    await entered.wait()
+    q.defer_to_history(42, h.sess.id)
+    release.set()
+    await task
+    h.active[0] = h.sess
+    h.state.in_menu_view = False
+    item = q.pending(42, include_history=True)[0]
+    assert await q.attempt(item, lambda row: retry_delivery(h.bot, row)) is None
+    assert not h.calls
+    assert item in q.records

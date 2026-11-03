@@ -23,6 +23,7 @@ from ..config import config
 from ..handlers.quota_alerts import quota_alerts_loop
 from ..handlers.notifications import card_timer_loop, shutdown_card_surface_tasks
 from ..handlers.status_polling import status_poll_loop
+from ..handlers.card_registry import start_switcher_cleanup, shutdown_switcher_cleanup
 from ..metrics import metrics_flush_loop
 from ..session import session_manager
 from ..session_monitor import NewMessage, SessionMonitor
@@ -340,6 +341,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
     from ..input_recovery import input_recovery
 
     input_recovery.start(application)
+    start_switcher_cleanup(application.bot)
     monitor = SessionMonitor()
 
     async def message_callback(msg: NewMessage) -> None:
@@ -564,6 +566,8 @@ async def post_shutdown(
     if session_monitor:
         await session_monitor.stop()
         logger.info("Session monitor stopped")
+
+    await shutdown_switcher_cleanup()
 
     # Telegram polling and the session monitor are both stopped now, so this
     # process no longer owns the live-bot role. Release the process gate before

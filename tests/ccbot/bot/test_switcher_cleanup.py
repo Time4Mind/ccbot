@@ -146,3 +146,102 @@ async def test_temporary_cleanup_error_is_retried_without_user_action(monkeypatc
     await card_registry._strip_stale_switchers(bot, 42, 99, "new")
     await asyncio.sleep(0.05)
     assert bot.edit_message_reply_markup.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_handoff_release_removes_old_controls_without_another_user_action(
+    monkeypatch,
+):
+    pointer = [88]
+    keyboards = {88, 99}
+    monkeypatch.setattr(card_registry, "_cards", {(42, "new"): CardState(msg_id=99)})
+    monkeypatch.setattr(
+        card_registry.session_manager, "get_last_switcher_msg", lambda _: pointer[0]
+    )
+    monkeypatch.setattr(
+        card_registry.session_manager,
+        "get_active_session",
+        lambda _: SimpleNamespace(id="new"),
+    )
+
+    async def edit(**kwargs):
+        keyboards.discard(kwargs["message_id"])
+
+    bot = SimpleNamespace(edit_message_reply_markup=edit)
+    card_registry.protect_switcher_carrier(42, 88)
+    await card_registry._strip_stale_switchers(bot, 42, 99, "new")
+    assert keyboards == {88, 99}
+    pointer[0] = 99
+    card_registry.release_switcher_carrier(42, 88)
+    await asyncio.sleep(0.03)
+    assert keyboards == {99}
+
+
+@pytest.mark.asyncio
+async def test_network_cleanup_survives_pointer_move_and_restart(tmp_path, monkeypatch):
+    from ccbot import keyboard_cleanup
+
+    pointer = [88]
+    keyboards = {88, 99}
+    monkeypatch.setattr(card_registry, "_cards", {})
+    monkeypatch.setattr(
+        card_registry.session_manager, "get_last_switcher_msg", lambda _: pointer[0]
+    )
+    monkeypatch.setattr(
+        card_registry.session_manager,
+        "get_active_session",
+        lambda _: SimpleNamespace(id="new"),
+    )
+    failed_bot = SimpleNamespace(
+        edit_message_reply_markup=AsyncMock(side_effect=NetworkError("offline"))
+    )
+    monkeypatch.setattr(card_registry, "_SWITCHER_TRANSIENT_RETRY_SECONDS", 0.02)
+    await card_registry._strip_stale_switchers(failed_bot, 42, 99, "new")
+    pointer[0] = 99
+    await card_registry.shutdown_switcher_cleanup()
+    path = keyboard_cleanup.cleanup_queue.path
+    monkeypatch.setattr(
+        keyboard_cleanup, "cleanup_queue", keyboard_cleanup.KeyboardCleanup(path)
+    )
+
+    async def edit(**kwargs):
+        keyboards.discard(kwargs["message_id"])
+
+    card_registry.start_switcher_cleanup(
+        SimpleNamespace(edit_message_reply_markup=edit)
+    )
+    await asyncio.sleep(0.08)
+    assert keyboards == {99}
+    assert not keyboard_cleanup.cleanup_queue.pending
+
+
+@pytest.mark.asyncio
+async def test_retryafter_remains_user_wide_after_restart(monkeypatch):
+    from ccbot import keyboard_cleanup
+
+    pointer = [88]
+    monkeypatch.setattr(card_registry, "_cards", {(42, "old"): CardState(msg_id=89)})
+    monkeypatch.setattr(
+        card_registry.session_manager, "get_last_switcher_msg", lambda _: pointer[0]
+    )
+    monkeypatch.setattr(
+        card_registry.session_manager,
+        "get_active_session",
+        lambda _: SimpleNamespace(id="new"),
+    )
+    bot = SimpleNamespace(
+        edit_message_reply_markup=AsyncMock(side_effect=RetryAfter(120))
+    )
+    await card_registry._strip_stale_switchers(bot, 42, 99, "new")
+    pointer[0] = 99
+    await card_registry.shutdown_switcher_cleanup()
+    path = keyboard_cleanup.cleanup_queue.path
+    monkeypatch.setattr(
+        keyboard_cleanup, "cleanup_queue", keyboard_cleanup.KeyboardCleanup(path)
+    )
+    monkeypatch.setattr(card_registry, "_switcher_user_retry_at", {})
+    monkeypatch.setattr(card_registry, "_switcher_retry_at", {})
+    restored_bot = SimpleNamespace(edit_message_reply_markup=AsyncMock())
+    card_registry.start_switcher_cleanup(restored_bot)
+    await asyncio.sleep(0.03)
+    restored_bot.edit_message_reply_markup.assert_not_awaited()

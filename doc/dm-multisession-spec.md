@@ -127,6 +127,11 @@ Switcher layout:
 - Ordinary buttons are ordered oldest → newest by `active_order_at` (`activated_at`, falling back to `created_at`; ties by session id). Restores advance activation without resetting logical creation. An empty default reserve stays last. Its first accepted conversational request initializes creation and activation once, so it becomes the newest ordinary session before its replacement reserve. Later requests do not move it. Every session-button surface uses this order.
 - Tapping a non-active session triggers a callback. The bot edits the same message in place to show a context preview of the selected session and updates the active flag.
 - After switching, all subsequent free-text from the user routes to the new active session. Background work in the previously active session continues.
+- Switching repaints the tapped live card in place. A newer frozen answer is
+  retained as history and does not cause another live card to be posted.
+  Obsolete switcher keyboards have durable cleanup obligations: protection
+  during a handoff delays cleanup until release; transient errors and
+  Telegram retry deadlines survive pointer changes and bot restarts.
 
 Context preview format (calibratable):
 
@@ -424,7 +429,10 @@ Before sending input, persist the exact prepared text and transcript byte offset
 Confirmed submission retires the request before Telegram repainting. A crash or
 uncertain acknowledgement during submission leaves a distinct unresolved state;
 only an exact new user transcript row or explicit `/requests ack <message-id>`
-resolves it as delivered. No automatic input replay occurs in that state.
+resolves it as delivered. Each physical Codex user row can confirm at most
+one request. Individual row receipts survive restart, so confirming a later
+request cannot hide an earlier pending request. A late or replaced transcript
+is searched only from the original dispatch-time boundary. No automatic input replay occurs in that state.
 `/requests cancel <message-id>` releases the source FIFO without resending.
 
 Recovery repaints current status, rather than replaying intermediate cards. A
@@ -435,6 +443,11 @@ A definitive failure retains its terminal notice until Telegram confirms deliver
 Typed connection failures are safe to retry; a new message with an uncertain
 acknowledgement is retained for reconciliation, avoiding duplicate notices. Its
 error text remains accessible in `/requests` and can be acknowledged there.
+Warnings and late-confirmation corrections identify the original session by
+name and the Telegram request number. Warnings include a short request preview,
+reply to the original request when available, and point to `/requests`. The
+session name is retained if the source session later disappears; selecting a
+different active session does not change the warning's attribution.
 
 ### Latency tuning (arm64)
 

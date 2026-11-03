@@ -15,14 +15,15 @@ logger = logging.getLogger(__name__)
 
 def encode_requests(records: dict[str, Any]) -> dict[str, Any]:
     """Keep the v1 request rows readable by the pre-deploy rollback commit."""
-    rows, metadata = [], {}
+    rows, metadata, names = [], {}, {}
     for request in records.values():
         row = asdict(request)
+        names[request.id] = row.pop("session_name")
         metadata[request.id] = {
             key: row.pop(key) for key in ("media_path", "stage", "received_at")
         }
         rows.append(row)
-    return {"requests": rows, "request_metadata": metadata}
+    return {"requests": rows, "request_metadata": metadata, "session_names": names}
 
 
 def schedule_retry(recovery: Any, request: Any, exc: Exception) -> float:

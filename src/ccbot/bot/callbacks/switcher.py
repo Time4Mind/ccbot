@@ -17,7 +17,6 @@ from ...handlers.callback_data import CB_SW_NEW, CB_SW_NOOP, CB_SW_USE
 from ...handlers.card_types import CarrierKind
 from ...handlers.card_pagination import _card_is_busy
 from ...handlers.card_registry import (
-    latest_registered_session_message,
     protect_switcher_carrier,
     release_switcher_carrier,
 )
@@ -34,7 +33,6 @@ from ...handlers.notifications import (
     refresh_cached_screenshot,
 )
 from ...handlers.card_carrier import SCREENSHOT_CACHE_FRESH_SECONDS
-from ...handlers.card_surface import surface_card_after_message
 from ...session import session_manager
 from ...terminal_parser import extract_interactive_content, is_interactive_ui
 from .interactive_ui import capture_window
@@ -176,7 +174,6 @@ async def handle(
         old_active_id = old_active.id if old_active is not None else None
         orphan_msg_id: int | None = None
         protected_carrier_id: int | None = None
-        newer_carrier_id: int | None = None
         try:
             if query.message is not None:
                 protected_carrier_id = query.message.message_id
@@ -187,17 +184,6 @@ async def handle(
                     target_id,
                     query.message.message_id,
                 )
-                latest = session_manager.get_last_switcher_msg(user.id)
-                if old_active_id:
-                    recent_old = latest_registered_session_message(
-                        user.id, old_active_id
-                    )
-                    if recent_old is not None and (
-                        not isinstance(latest, int) or recent_old > latest
-                    ):
-                        latest = recent_old
-                if isinstance(latest, int) and latest > query.message.message_id:
-                    newer_carrier_id = latest
             else:
                 session_manager.select_session(user.id, target_id)
             current = session_manager.get_active_session(user.id)
@@ -384,27 +370,8 @@ async def handle(
                 if painted and still_selected and count_finished_view:
                     if bg_status.record_finished_view(user.id, target_id):
                         await refresh_session_keyboard(context.bot, user.id)
-                if painted and still_selected and newer_carrier_id is not None:
-                    # A final answer was posted while this tap waited for the
-                    # carrier lock. Keep that answer intact and put the selected
-                    # session's controls below it, where the user can see them.
-                    surfaced = await surface_card_after_message(
-                        context.bot,
-                        user.id,
-                        sess,
-                        newer_carrier_id,
-                        fast=True,
-                        preserve_turn=True,
-                        delete_old=False,
-                    )
-                    logger.info(
-                        "switch_surface_after_racing_card user=%s session=%s source=%s newer=%s result=%s",
-                        user.id,
-                        target_id,
-                        protected_carrier_id,
-                        newer_carrier_id,
-                        surfaced,
-                    )
+                # A selection repaints the tapped carrier in place. A newer
+                # frozen answer is history, not a reason to post another card.
                 if not painted and not delivery_unknown and still_selected:
                     try:
                         preview = await render_session_preview(sess)

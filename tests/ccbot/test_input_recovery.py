@@ -227,6 +227,7 @@ async def test_fresh_codex_session_can_confirm_after_transcript_is_bound(
     path.write_text(
         json.dumps(
             {
+                "timestamp": "1970-01-01T00:16:41Z",
                 "type": "response_item",
                 "payload": {
                     "type": "message",

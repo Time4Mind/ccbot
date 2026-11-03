@@ -55,7 +55,9 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     }
     lines = []
     for item in pending[:20]:
-        line = f"№{item.message_id}, сессия {item.session_id}: {labels.get(item.state, item.state)}"
+        from ...input_notices import session_name
+
+        line = f"№{item.message_id}, сессия «{session_name(item)}»: {labels.get(item.state, item.state)}"
         if item.notice:
             line += "\n" + item.notice
         if item.state == "unknown":

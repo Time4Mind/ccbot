@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime
 from datetime import timedelta
 import json
 import logging
@@ -18,7 +17,7 @@ from pathlib import Path
 import time
 from typing import Any, Awaitable, Callable
 
-from telegram import Update
+from telegram import ReplyParameters, Update
 from telegram.error import BadRequest, NetworkError, RetryAfter
 
 from .config import config
@@ -68,6 +67,7 @@ class InputRequest:
     media_path: str = ""
     stage: str = ""
     received_at: float = 0.0
+    session_name: str = ""
 
 
 class InputRecovery:
@@ -78,7 +78,8 @@ class InputRecovery:
         self.records: dict[str, InputRequest] = {}
         self.completed: list[str] = []
         self.confirmed_through: dict[str, int] = {}
-        self.resolved_notices: list[dict[str, int]] = []
+        self.confirmed_rows: dict[str, list[int]] = {}
+        self.resolved_notices: list[dict[str, Any]] = []
         self._notice_resolution_retry_at = 0.0
         self.loaded = False
         self.bot: Any = None
@@ -99,17 +100,29 @@ class InputRecovery:
             raw = {}
         self.records = {
             row["id"]: InputRequest(
-                **row, **raw.get("request_metadata", {}).get(row["id"], {})
+                **row,
+                **raw.get("request_metadata", {}).get(row["id"], {}),
+                session_name=raw.get("session_names", {}).get(row["id"], ""),
             )
             for row in raw.get("requests", [])
         }
         self.completed = raw.get("completed", [])
         self.confirmed_through = raw.get("confirmed_through", {})
+        self.confirmed_rows = raw.get("confirmed_rows", {})
         self.resolved_notices = raw.get("resolved_notices", [])
         for request in self.records.values():
             if request.state == "dispatching":
                 request.state = "unknown"
                 request.notice = "Передача запроса агенту не подтверждена. Автоповтор остановлен; проверьте исходную сессию и /requests."
+            if (
+                request.state == "unknown"
+                and request.notice_id is not None
+                and not request.session_name
+            ):
+                request.notice = (
+                    request.notice
+                    or "Получение запроса агентом не подтверждено. Автоповтор остановлен; проверьте /requests."
+                )
             self.dirty.add((request.user_id, request.session_id))
         self.loaded = True
         if self.records:
@@ -125,6 +138,7 @@ class InputRecovery:
                 **encode_requests(self.records),
                 "completed": self.completed,
                 "confirmed_through": self.confirmed_through,
+                "confirmed_rows": self.confirmed_rows,
                 "resolved_notices": self.resolved_notices,
             },
         )
@@ -175,6 +189,7 @@ class InputRecovery:
             raw,
             sequence=max((r.sequence for r in self.records.values()), default=0) + 1,
             received_at=self.clock(),
+            session_name=getattr(session, "name", ""),
         )
         self.records[key] = request
         self.changed(request)
@@ -215,11 +230,16 @@ class InputRecovery:
         if previous == "unknown":
             self.dirty.add((request.user_id, request.session_id))
         if confirmed and previous == "unknown" and request.notice_id is not None:
+            from .input_notices import session_name
+
+            name = session_name(request)
             self.resolved_notices.append(
                 {
                     "user_id": request.user_id,
                     "notice_id": request.notice_id,
                     "message_id": request.message_id,
+                    "session_id": request.session_id,
+                    "session_name": name,
                 }
             )
         request.state = "delivered"
@@ -416,83 +436,9 @@ class InputRecovery:
         if checkpoint.backend == "codex" and (
             request.strict_codex_proof or request.state == "awaiting_confirmation"
         ):
-            # One physical user row can acknowledge at most one request,
-            # even when two identical prompts were sent before either appeared.
-            base_path_key = str(checkpoint.path)
-            device = request.checkpoint.get("device")
-            inode = request.checkpoint.get("inode")
-            path_key = (
-                f"{base_path_key}#{device}:{inode}"
-                if device is not None and inode is not None
-                else base_path_key
-            )
-            legacy_offset = (
-                0
-                if request.checkpoint.get("replaced")
-                else self.confirmed_through.get(base_path_key, 0)
-            )
-            start = max(
-                checkpoint.offset,
-                legacy_offset,
-                self.confirmed_through.get(path_key, 0),
-                self._scan_positions.get(request.id, 0),
-            )
-            try:
-                if checkpoint.path.stat().st_size < start:
-                    return False
-                with checkpoint.path.open("rb") as stream:
-                    stream.seek(start)
-                    for line in stream:
-                        if not line.endswith(b"\n"):
-                            break
-                        self._scan_positions[request.id] = stream.tell()
-                        try:
-                            row = json.loads(line)
-                        except (json.JSONDecodeError, UnicodeDecodeError):
-                            continue
-                        if (
-                            not isinstance(row, dict)
-                            or row.get("type") != "response_item"
-                        ):
-                            continue
-                        payload = row.get("payload")
-                        if (
-                            not isinstance(payload, dict)
-                            or payload.get("type") != "message"
-                            or payload.get("role") != "user"
-                        ):
-                            continue
-                        not_before = float(request.checkpoint.get("not_before", 0))
-                        if not_before:
-                            try:
-                                stamp = datetime.fromisoformat(
-                                    str(row.get("timestamp", "")).replace("Z", "+00:00")
-                                ).timestamp()
-                            except (TypeError, ValueError, OSError):
-                                continue
-                            if stamp < not_before:
-                                continue
-                        content = payload.get("content", [])
-                        if not isinstance(content, list):
-                            continue
-                        text = "\n".join(
-                            str(item.get("text") or "")
-                            for item in content
-                            if isinstance(item, dict)
-                            and item.get("type") in ("input_text", "text")
-                        )
-                        if text.strip() == request.prepared.strip():
-                            self.confirmed_through[path_key] = stream.tell()
-                            self.confirmed_through[base_path_key] = stream.tell()
-                            if len(self.confirmed_through) > 512:
-                                self.confirmed_through.pop(
-                                    next(iter(self.confirmed_through))
-                                )
-                            self.complete(request)
-                            return True
-            except OSError:
-                return False
-            return False
+            from .input_proof import reconcile_codex
+
+            return reconcile_codex(self, request, self._scan_positions)
         if _transcript_contains_voice_text(checkpoint, request.prepared):
             self.complete(request)
             return True
@@ -555,6 +501,14 @@ class InputRecovery:
                 if request.state == "failed":
                     return False
                 if self.source(request) is None:
+                    # Archiving the source does not undo a recorded receipt.
+                    # Reconcile only the saved transcript; never dispatch into
+                    # another session or bind an unknown source here.
+                    if request.state in (
+                        "unknown",
+                        "awaiting_confirmation",
+                    ) and self.reconcile(request):
+                        return True
                     self.fail(
                         request,
                         "Исходная сессия больше недоступна. Запрос не перенаправлен в другую сессию.",
@@ -665,21 +619,28 @@ class InputRecovery:
         ):
             return
         from .telegram_rate_limit import background_telegram_request
+        from .input_notices import notice_text
 
+        rendered = notice_text(request)
+        self.save()
         try:
             with background_telegram_request():
                 if request.notice_id is not None:
                     await self.bot.edit_message_text(
                         chat_id=request.user_id,
                         message_id=request.notice_id,
-                        text=request.notice,
+                        text=rendered,
                     )
                 else:
                     request.notice_unknown = True
                     self.save()
                     message = await self.bot.send_message(
                         chat_id=request.user_id,
-                        text=f"Запрос №{request.message_id}: {request.notice}",
+                        text=rendered,
+                        reply_parameters=ReplyParameters(
+                            message_id=request.message_id,
+                            allow_sending_without_reply=True,
+                        ),
                         disable_notification=True,
                     )
                     request.notice_id = message.message_id
@@ -724,11 +685,13 @@ class InputRecovery:
                     try:
                         from .telegram_rate_limit import background_telegram_request
 
+                        from .input_notices import resolved_text
+
                         with background_telegram_request():
                             await self.bot.edit_message_text(
                                 chat_id=item["user_id"],
                                 message_id=item["notice_id"],
-                                text=f"Запрос №{item['message_id']}: получение агентом подтверждено.",
+                                text=resolved_text(item),
                             )
                         resolved = True
                     except BadRequest as exc:

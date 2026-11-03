@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from __future__ import annotations
-
 import asyncio
 from datetime import timedelta
 import logging
@@ -26,14 +24,20 @@ _switcher_retry_at: dict[tuple[int, int], float] = {}
 _switcher_retry_attempts: dict[tuple[int, int], int] = {}
 _switcher_user_retry_at: dict[int, float] = {}
 _switcher_retry_tasks: dict[int, asyncio.Task[None]] = {}
+_switcher_retry_due: dict[int, float] = {}
+_switcher_cleanup_bots: dict[int, Bot] = {}
 _SWITCHER_RECEIPT_LIMIT = 2000
 _SWITCHER_TRANSIENT_RETRY_SECONDS = 30.0
 
 
 def _schedule_switcher_retry(bot: Bot, user_id: int, delay: float) -> None:
     task = _switcher_retry_tasks.get(user_id)
+    due = time.monotonic() + max(0.01, delay)
     if task is not None and not task.done():
-        return
+        if _switcher_retry_due.get(user_id, due) <= due:
+            return
+        task.cancel()
+    _switcher_retry_due[user_id] = due
 
     async def retry() -> None:
         try:
@@ -42,8 +46,12 @@ def _schedule_switcher_retry(bot: Bot, user_id: int, delay: float) -> None:
             async with _carrier_edit_lock(user_id):
                 current = session_manager.get_active_session(user_id)
                 keep = session_manager.get_last_switcher_msg(user_id)
-                if current is not None and keep is not None:
-                    await _strip_stale_switchers(bot, user_id, keep, current.id)
+                if isinstance(keep, int):
+                    await _strip_stale_switchers(
+                        bot, user_id, keep, current.id if current else None
+                    )
+                else:
+                    _schedule_switcher_retry(bot, user_id, 30.0)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -57,12 +65,18 @@ def _schedule_switcher_retry(bot: Bot, user_id: int, delay: float) -> None:
 
 def mark_switcher_active(user_id: int, message_id: int) -> None:
     key = (user_id, message_id)
+    from ..keyboard_cleanup import cleanup_queue
+
+    cleanup_queue.forget(user_id, message_id)
     _stripped_switchers.pop(key, None)
     _switcher_retry_at.pop(key, None)
     _switcher_retry_attempts.pop(key, None)
 
 
 def _remember_stripped(key: tuple[int, int]) -> None:
+    from ..keyboard_cleanup import cleanup_queue
+
+    cleanup_queue.forget(*key)
     _stripped_switchers.pop(key, None)
     _stripped_switchers[key] = None
     if len(_stripped_switchers) > _SWITCHER_RECEIPT_LIMIT:
@@ -193,6 +207,11 @@ def release_switcher_carrier(user_id: int, message_id: int) -> None:
         return
     _protected_carrier_users.pop(key, None)
     _protected_switcher_carriers.pop(key, None)
+    from ..keyboard_cleanup import cleanup_queue
+
+    bot = _switcher_cleanup_bots.get(user_id)
+    if bot is not None and key in cleanup_queue.pending:
+        _schedule_switcher_retry(bot, user_id, 0.0)
 
 
 def _switcher_carrier_is_protected(user_id: int, message_id: int) -> bool:
@@ -235,11 +254,6 @@ async def _strip_stale_switchers(
     act on, not a stale switcher.
     """
     mark_switcher_active(user_id, keep_msg_id)
-    user_wait = _switcher_user_retry_at.get(user_id, 0.0) - time.monotonic()
-    if user_wait > 0:
-        _schedule_switcher_retry(bot, user_id, user_wait)
-        return
-    _switcher_user_retry_at.pop(user_id, None)
     targets: list[int] = []
     prev = session_manager.get_last_switcher_msg(user_id)
     if prev and prev != keep_msg_id:
@@ -250,15 +264,51 @@ async def _strip_stale_switchers(
         if st.msg_id is not None and st.msg_id != keep_msg_id:
             if st.msg_id not in targets:
                 targets.append(st.msg_id)
+    from ..keyboard_cleanup import cleanup_queue
+
+    _switcher_cleanup_bots[user_id] = bot
+    cleanup_queue.load()
+    for msg_id in targets:
+        if (user_id, msg_id) not in _stripped_switchers:
+            cleanup_queue.remember(user_id, msg_id)
+    targets = list(
+        dict.fromkeys(
+            targets
+            + [
+                mid
+                for uid, mid in cleanup_queue.pending
+                if uid == user_id and mid != keep_msg_id
+            ]
+        )
+    )
+    user_wait = max(
+        _switcher_user_retry_at.get(user_id, 0.0) - time.monotonic(),
+        cleanup_queue.blocked_until.get(user_id, 0.0) - time.time(),
+    )
+    if user_wait > 0:
+        _schedule_switcher_retry(bot, user_id, user_wait)
+        return
+    _switcher_user_retry_at.pop(user_id, None)
     for msg_id in targets:
         key = (user_id, msg_id)
         if key in _stripped_switchers:
             continue
-        retry_wait = _switcher_retry_at.get(key, 0) - time.monotonic()
+        item = cleanup_queue.pending.get(key)
+        retry_wait = max(
+            _switcher_retry_at.get(key, 0) - time.monotonic(),
+            item.retry_at - time.time() if item else 0.0,
+        )
         if retry_wait > 0:
             _schedule_switcher_retry(bot, user_id, retry_wait)
             continue
+        if any(
+            uid == user_id and st.msg_id == msg_id and st.in_kb_mode
+            for (uid, _), st in _cards.items()
+        ):
+            _schedule_switcher_retry(bot, user_id, 30.0)
+            continue
         if _switcher_carrier_is_protected(user_id, msg_id):
+            _schedule_switcher_retry(bot, user_id, _PROTECTED_CARRIER_TTL_SECONDS)
             logger.info(
                 "keyboard_strip_skipped user=%s message_id=%s keep=%s reason=protected",
                 user_id,
@@ -293,7 +343,9 @@ async def _strip_stale_switchers(
                 )
                 _remember_stripped(key)
             else:
-                attempts = _switcher_retry_attempts.get(key, 0)
+                attempts = max(
+                    _switcher_retry_attempts.get(key, 0), item.attempts if item else 0
+                )
                 delay = min(
                     900.0, _SWITCHER_TRANSIENT_RETRY_SECONDS * 2 ** min(attempts, 5)
                 )
@@ -306,7 +358,9 @@ async def _strip_stale_switchers(
                         if isinstance(wait, timedelta)
                         else float(wait)
                     )
+                    cleanup_queue.block(user_id, delay)
                     _switcher_user_retry_at[user_id] = time.monotonic() + delay
+                cleanup_queue.retry(user_id, msg_id, delay)
                 _switcher_retry_at[key] = time.monotonic() + delay
                 if len(_switcher_retry_at) > _SWITCHER_RECEIPT_LIMIT:
                     old = next(iter(_switcher_retry_at))
@@ -454,3 +508,22 @@ def _legacy(name: str):
     if facade is None or not hasattr(facade, name):
         raise RuntimeError(f"notifications facade is missing {name}")
     return getattr(facade, name)
+
+
+async def shutdown_switcher_cleanup() -> None:
+    tasks = list(_switcher_retry_tasks.values())
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    _switcher_retry_tasks.clear()
+    _switcher_retry_due.clear()
+    _switcher_cleanup_bots.clear()
+
+
+def start_switcher_cleanup(bot: Bot) -> None:
+    from ..keyboard_cleanup import cleanup_queue
+
+    cleanup_queue.load()
+    for user_id in {uid for uid, _ in cleanup_queue.pending}:
+        _switcher_cleanup_bots[user_id] = bot
+        _schedule_switcher_retry(bot, user_id, 0.0)

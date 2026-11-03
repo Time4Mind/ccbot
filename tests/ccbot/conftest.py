@@ -218,3 +218,30 @@ async def isolated_final_deliveries(tmp_path, monkeypatch):
     yield queue
     await queue.shutdown()
     await recovery.shutdown()
+
+
+@pytest.fixture(autouse=True)
+async def isolated_keyboard_cleanup(tmp_path, monkeypatch):
+    from ccbot import keyboard_cleanup
+    from ccbot.handlers import card_registry
+
+    await card_registry.shutdown_switcher_cleanup()
+    monkeypatch.setattr(
+        keyboard_cleanup,
+        "cleanup_queue",
+        keyboard_cleanup.KeyboardCleanup(tmp_path / "keyboard-cleanup.json"),
+    )
+    for name in (
+        "_stripped_switchers",
+        "_switcher_retry_at",
+        "_switcher_retry_attempts",
+        "_switcher_user_retry_at",
+        "_switcher_retry_tasks",
+        "_switcher_retry_due",
+        "_switcher_cleanup_bots",
+        "_protected_switcher_carriers",
+        "_protected_carrier_users",
+    ):
+        monkeypatch.setattr(card_registry, name, {})
+    yield
+    await card_registry.shutdown_switcher_cleanup()

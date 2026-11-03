@@ -366,7 +366,9 @@ async def test_failed_session_paint_does_not_acknowledge_completion(setup, monke
 
 
 @pytest.mark.asyncio
-async def test_switch_surfaces_selected_session_below_racing_final(setup, monkeypatch):
+async def test_switch_repaints_selected_session_without_reposting_after_final(
+    setup, monkeypatch
+):
     sess, state, manager, active = setup
     manager.get_last_switcher_msg.return_value = 101
     monkeypatch.setattr(
@@ -386,23 +388,26 @@ async def test_switch_surfaces_selected_session_below_racing_final(setup, monkey
         query, SimpleNamespace(bot=bot, user_data={}), SimpleNamespace(id=42)
     )
 
-    surface.assert_awaited_once_with(
-        bot, 42, sess, 101, fast=True, preserve_turn=True, delete_old=False
-    )
+    surface.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_switch_surfaces_below_final_already_superseded(setup, monkeypatch):
+async def test_switch_preserves_newer_frozen_final_without_reposting(
+    setup, monkeypatch
+):
     sess, state, manager, active = setup
     monkeypatch.setattr(
-        switcher, "latest_registered_session_message", lambda uid, sid: 101
+        switcher,
+        "latest_registered_session_message",
+        lambda uid, sid: 101,
+        raising=False,
     )
     monkeypatch.setattr(
         bg_status, "infer_status_from_jsonl", AsyncMock(return_value=None)
     )
     monkeypatch.setattr(switcher, "paint_card_on_carrier", AsyncMock(return_value=True))
     surface = AsyncMock(return_value=True)
-    monkeypatch.setattr(switcher, "surface_card_after_message", surface)
+    monkeypatch.setattr(switcher, "surface_card_after_message", surface, raising=False)
     query = SimpleNamespace(
         data=CB_SW_USE + sess.id,
         message=SimpleNamespace(message_id=100),
@@ -412,9 +417,7 @@ async def test_switch_surfaces_below_final_already_superseded(setup, monkeypatch
     await switcher.handle(
         query, SimpleNamespace(bot=bot, user_data={}), SimpleNamespace(id=42)
     )
-    surface.assert_awaited_once_with(
-        bot, 42, sess, 101, fast=True, preserve_turn=True, delete_old=False
-    )
+    surface.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -605,3 +608,32 @@ async def test_superseded_handoff_pauses_actual_previous_carrier_owner(setup):
     card_registry._cards[(42, "superseded")] = previous_carrier
     await card_carrier.activate_card_on_carrier(42, "old", sess.id, 100)
     assert previous_carrier.in_menu_view
+
+
+@pytest.mark.asyncio
+async def test_switch_keeps_one_card_when_newer_frozen_answer_exists(
+    setup, monkeypatch
+):
+    sess, state, manager, active = setup
+    manager.get_last_switcher_msg.return_value = 101
+    monkeypatch.setattr(
+        bg_status, "infer_status_from_jsonl", AsyncMock(return_value=None)
+    )
+    paint = AsyncMock(return_value=True)
+    monkeypatch.setattr(switcher, "paint_card_on_carrier", paint)
+    surface = AsyncMock(return_value=True)
+    monkeypatch.setattr(switcher, "surface_card_after_message", surface, raising=False)
+    bot = AsyncMock()
+    query = SimpleNamespace(
+        data=CB_SW_USE + sess.id,
+        message=SimpleNamespace(message_id=100),
+        answer=AsyncMock(),
+    )
+    await switcher.handle(
+        query, SimpleNamespace(bot=bot, user_data={}), SimpleNamespace(id=42)
+    )
+    assert active[0] is sess
+    assert paint.await_args.args[3] == 100
+    surface.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+    bot.delete_message.assert_not_awaited()

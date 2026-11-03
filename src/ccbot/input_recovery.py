@@ -501,6 +501,14 @@ class InputRecovery:
                 if request.state == "failed":
                     return False
                 if self.source(request) is None:
+                    # Archiving the source does not undo a recorded receipt.
+                    # Reconcile only the saved transcript; never dispatch into
+                    # another session or bind an unknown source here.
+                    if request.state in (
+                        "unknown",
+                        "awaiting_confirmation",
+                    ) and self.reconcile(request):
+                        return True
                     self.fail(
                         request,
                         "Исходная сессия больше недоступна. Запрос не перенаправлен в другую сессию.",

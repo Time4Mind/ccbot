@@ -116,3 +116,23 @@ def test_legacy_watermark_does_not_hide_an_unconfirmed_distinct_row(
     second = request(path, 2, "second")
     recovery.records[second.id] = second
     assert not recovery.reconcile(second)
+
+
+async def test_archived_source_reconciles_received_input_without_resending(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    path = tmp_path / "native.jsonl"
+    path.write_text(row("already received"))
+    sess = source(monkeypatch, path)
+    sess.state = "archived"
+    sess.window_id = ""
+    recovery = InputRecovery(tmp_path / "journal")
+    item = request(path, 1, "already received")
+    recovery.records[item.id] = item
+    processor = AsyncMock()
+    result = await recovery.run(item.id, processor, object(), SimpleNamespace(), "@1")
+    assert result and item.confirmed
+    processor.assert_not_awaited()

@@ -53,6 +53,10 @@ class FinalDelivery:
     message_id: int | None = None
     created_at: float = field(default_factory=time.time)
 
+    @property
+    def history_only(self) -> bool:
+        return self.payload.get("delivery_mode") == "history"
+
 
 Driver = Callable[[FinalDelivery], Awaitable[bool | None]]
 
@@ -65,6 +69,7 @@ class FinalDeliveryQueue:
         self.records: list[FinalDelivery] = []
         self.completed_keys: list[str] = []
         self.tasks: dict[tuple[int, str], asyncio.Task[None]] = {}
+        self._wakeups: dict[tuple[int, str], asyncio.Event] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._loaded = False
         self._driver: Driver | None = None
@@ -101,7 +106,11 @@ class FinalDeliveryQueue:
         )
 
     def pending(
-        self, user_id: int, session_id: str | None = None
+        self,
+        user_id: int,
+        session_id: str | None = None,
+        *,
+        include_history: bool = False,
     ) -> list[FinalDelivery]:
         self.load()
         return [
@@ -109,7 +118,37 @@ class FinalDeliveryQueue:
             for r in self.records
             if r.user_id == user_id
             and (session_id is None or r.session_id == session_id)
+            and (include_history or not r.history_only)
         ]
+
+    def defer_to_history(self, user_id: int, session_id: str) -> None:
+        """Navigation presents saved answers in place, without new sends.
+
+        Keep unseen snapshots and unknown send outcomes intact until an exact
+        visible receipt or explicit user acknowledgement resolves them.
+        """
+        self.load()
+        changed = 0
+        for item in self.records:
+            if (
+                item.user_id == user_id
+                and item.session_id == session_id
+                and item.message_id is None
+                and not item.history_only
+            ):
+                item.payload["delivery_mode"] = "history"
+                changed += 1
+        if changed:
+            self.save()
+            logger.info(
+                "final_delivery_history user=%s session=%s retained=%s",
+                user_id,
+                session_id,
+                changed,
+            )
+            wakeup = self._wakeups.get((user_id, session_id))
+            if wakeup is not None:
+                wakeup.set()
 
     def contains_event(self, event_key: str) -> bool:
         self.load()
@@ -175,6 +214,8 @@ class FinalDeliveryQueue:
         async with self._locks.setdefault(item.id, asyncio.Lock()):
             if item not in self.records:
                 return True
+            if item.history_only:
+                return None
             head = self.pending(item.user_id, item.session_id)[0]
             if (
                 head is not item
@@ -256,11 +297,26 @@ class FinalDeliveryQueue:
         if self._driver is None:
             return
         for item in self.records:
+            if item.history_only:
+                continue
             key = (item.user_id, item.session_id)
             if key not in self.tasks or self.tasks[key].done():
                 self.tasks[key] = asyncio.create_task(
                     self._run(key), name=f"final-delivery:{key[0]}:{key[1]}"
                 )
+
+    async def _wait(self, key: tuple[int, str], delay: float) -> None:
+        """A manual view can retire the sleeping head without cancelling a send."""
+        wakeup = self._wakeups.setdefault(key, asyncio.Event())
+        sleeper = asyncio.create_task(asyncio.sleep(delay))
+        changed = asyncio.create_task(wakeup.wait())
+        try:
+            await asyncio.wait({sleeper, changed}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            sleeper.cancel()
+            changed.cancel()
+            await asyncio.gather(sleeper, changed, return_exceptions=True)
+            wakeup.clear()
 
     async def _run(self, key: tuple[int, str]) -> None:
         assert self._driver is not None
@@ -273,11 +329,12 @@ class FinalDeliveryQueue:
                 continue
             wait = max(item.retry_at, item.cooldown_until) - time.time()
             if wait > 0:
-                await asyncio.sleep(wait)
+                await self._wait(key, wait)
+                continue
             try:
                 outcome = await self.attempt(item, self._driver)
                 if outcome is None:
-                    await asyncio.sleep(1.0)
+                    await self._wait(key, 1.0)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -291,6 +348,7 @@ class FinalDeliveryQueue:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self.tasks.clear()
+        self._wakeups.clear()
 
 
 final_delivery_queue = FinalDeliveryQueue(config.config_dir / "final-deliveries.json")

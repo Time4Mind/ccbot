@@ -132,6 +132,12 @@ Switcher layout:
   Obsolete switcher keyboards have durable cleanup obligations: protection
   during a handoff delays cleanup until release; transient errors and
   Telegram retry deadlines survive pointer changes and bot restarts.
+- Manually opening a session presents already-completed answers in the current
+  card. Waiting older finals remain available through paginated history and
+  are not posted as additional messages, including after restart. Only the
+  exact answer actually shown is acknowledged; unseen answers stay retained.
+  A new answer to a later request still follows normal automatic delivery.
+
 
 Context preview format (calibratable):
 

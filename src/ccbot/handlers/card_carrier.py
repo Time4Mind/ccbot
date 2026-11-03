@@ -538,6 +538,9 @@ async def paint_card_on_carrier(
 ) -> bool:
     """Serialize selected-page paint and its receipt with final delivery."""
     async with _card_lock(user_id, sess.id):
+        from ..final_delivery import final_delivery_queue
+
+        final_delivery_queue.defer_to_history(user_id, sess.id)
         painted = await _paint_card_on_carrier_locked(
             bot, user_id, sess, carrier_msg_id, refresh_pane=refresh_pane
         )

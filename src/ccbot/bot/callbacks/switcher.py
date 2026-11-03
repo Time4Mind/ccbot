@@ -93,6 +93,9 @@ async def session_switch_intake_handler(
     _acknowledge_completion_marker(user.id)
     cancel_for_active_card(user.id, getattr(context, "user_data", None))
     record_user_activity(user.id)
+    from ...final_delivery import final_delivery_queue
+
+    final_delivery_queue.defer_to_history(user.id, target_id)
     session_manager.select_session(user.id, target_id)
     context.application.create_task(
         handle(query, context, user, previous_session=previous, route_selected=True),
@@ -171,6 +174,9 @@ async def handle(
         # drains an old editMessageText already in flight, then pauses FROM,
         # claims TO, and flips ``active_sessions`` atomically so a late update
         # from FROM cannot overwrite the target after it is painted.
+        from ...final_delivery import final_delivery_queue
+
+        final_delivery_queue.defer_to_history(user.id, target_id)
         old_active_id = old_active.id if old_active is not None else None
         orphan_msg_id: int | None = None
         protected_carrier_id: int | None = None

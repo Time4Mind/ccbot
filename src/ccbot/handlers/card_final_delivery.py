@@ -86,6 +86,8 @@ async def deliver_final(
         # The transport checkpoints this receipt before stripping keyboards.
         # A bookkeeping crash must not manufacture another final card.
         return True
+    if item.history_only:
+        return None
     sess = sess or session_manager.get_session(item.session_id)
     if sess is None:
         return None
@@ -127,7 +129,7 @@ async def deliver_final(
     async with _carrier_edit_lock(item.user_id):
         if item not in final_delivery_queue.records:
             return True
-        if _should_buffer(item.user_id, item.session_id, live):
+        if item.history_only or _should_buffer(item.user_id, item.session_id, live):
             return None
         if preserve_page and target.msg_id is None:
             # A manually selected page remains in place during an old retry.

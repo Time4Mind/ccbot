@@ -432,6 +432,12 @@ preprocessing results already saved are reused. Remote-node waiting retains the
 durable FIFO rather than treating an in-memory queue admission as submission.
 
 Before sending input, persist the exact prepared text and transcript byte offset.
+For photos and image documents, Codex may replace the submitted inbox path with
+a native image wrapper. Confirmation requires one complete wrapper, an actual
+image block, the request's exact attachment path and matching caption. An
+unrelated image, malformed wrapper, historical row or previously claimed row
+cannot acknowledge the request. Plain text and non-image documents retain exact
+text matching. The original image is never resent to repair a missing receipt.
 Confirmed submission retires the request before Telegram repainting. A crash or
 uncertain acknowledgement during submission leaves a distinct unresolved state;
 only an exact new user transcript row or explicit `/requests ack <message-id>`

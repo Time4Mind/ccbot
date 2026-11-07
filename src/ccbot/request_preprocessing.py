@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 PreprocessingMode = Literal["off", "voice", "all"]
 InputKind = Literal["text", "voice", "command"]
-PREPROCESSING_MODEL = "gpt-5.6-luna"
+PREPROCESSING_MODEL = "gpt-6-luna"
 
 DEFAULT_PREPROCESSING_INSTRUCTION = """Консервативно отредактируй одно голосовое или текстовое сообщение. Верни только готовый запрос, не расширяя исходный текст.
 Удали ругань, междометия, пустые связки и явные повторы. Исправь пунктуацию, грамматику и только очевидные ошибки распознавания. При явной самокоррекции оставь финальную версию. Если область замены неясна, сохрани обе версии.

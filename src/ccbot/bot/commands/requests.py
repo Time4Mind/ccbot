@@ -17,6 +17,20 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     input_recovery.load()
     args = context.args or []
+    if len(args) == 2 and args[0] == "retry":
+        from ...input_media import retry_deferred_media
+
+        item = input_recovery.records.get(f"{user.id}:{args[1]}")
+        retried = item is not None and retry_deferred_media(
+            input_recovery, item, context.application
+        )
+        await safe_reply(
+            update.message,
+            "Голосовое поставлено на повтор в исходную сессию."
+            if retried
+            else "Нет сохранённого голосового для повтора в доступную исходную сессию.",
+        )
+        return
     if len(args) == 2 and args[0] in ("ack", "cancel"):
         item = input_recovery.records.get(f"{user.id}:{args[1]}")
         if (

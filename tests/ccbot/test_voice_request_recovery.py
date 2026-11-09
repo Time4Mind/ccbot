@@ -1,6 +1,7 @@
 """Accepted Telegram voice requests recover beyond short network outages."""
 
 import asyncio
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -54,6 +55,16 @@ async def test_real_intake_retries_voice_after_old_three_attempt_limit(monkeypat
         AsyncMock(side_effect=[NetworkError("offline") for _ in range(3)] + [audio]),
     )
     from ccbot.input_recovery import input_recovery
+    from ccbot import input_media
+
+    @asynccontextmanager
+    async def fresh(_voice):
+        async def get_file(_file_id):
+            return await _voice.get_file()
+
+        yield SimpleNamespace(get_file=get_file)
+
+    monkeypatch.setattr(input_media, "fresh_media_bot", fresh)
 
     now = [1000.0]
     input_recovery.clock = lambda: now[0]

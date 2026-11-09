@@ -390,7 +390,7 @@ async def test_restart_restores_real_update_file_and_original_fifo(env, monkeypa
 @pytest.mark.asyncio
 async def test_retry_intervals_and_retryafter_survive_restart(env, monkeypatch):
     audio = SimpleNamespace(download_as_bytearray=AsyncMock(return_value=b"audio"))
-    fetched = AsyncMock(side_effect=[disconnected() for _ in range(7)] + [audio])
+    fetched = AsyncMock(side_effect=[disconnected() for _ in range(2)] + [audio])
     monkeypatch.setattr(Voice, "get_file", fetched)
     received = []
 
@@ -404,7 +404,7 @@ async def test_retry_intervals_and_retryafter_survive_restart(env, monkeypatch):
     assert await inbound.voice_intake_handler(update(20), env.context)
     await until(lambda: bool(received))
     assert received == [b"audio"]
-    assert env.delays == [1, 2, 4, 8, 15, 15, 15]
+    assert env.delays == [1, 2]
 
     paused = asyncio.Event()
 
@@ -716,7 +716,7 @@ async def test_real_voice_transcription_and_preprocessing_resume_without_repeati
     monkeypatch.setattr(
         Voice,
         "get_file",
-        AsyncMock(side_effect=[disconnected() for _ in range(4)] + [audio]),
+        AsyncMock(side_effect=[disconnected() for _ in range(2)] + [audio]),
     )
     sender = AsyncMock(return_value=(True, "accepted"))
     monkeypatch.setattr(messages, "_send_with_delivery_proof", sender)
@@ -779,7 +779,7 @@ async def test_all_telegram_feedback_offline_then_current_receipt_only_after_suc
 
     async def wait(delay):
         await advance(delay)
-        if len(calls) == 4:
+        if len(calls) == 2:
             waiting.set()
             await online.wait()
 
@@ -797,7 +797,7 @@ async def test_all_telegram_feedback_offline_then_current_receipt_only_after_suc
     assert await inbound.voice_intake_handler(update(70), env.context)
     await waiting.wait()
     assert not await refresh_request_status(env.recovery, 42, "source")
-    assert len(calls) == 4 and not delivered
+    assert len(calls) == 2 and not delivered
     online.set()
     await until(lambda: not has_pending_inbound("@source"))
     assert delivered == [("@source", b"audio")]
@@ -1219,3 +1219,180 @@ async def test_document_unacknowledged_submit_never_replays_after_restart(
             "42:408", inbound._run_document, file_update(408), env.context, "@source"
         )
     assert len(sent) == 1 and restarted.duplicate(file_update(408))
+
+
+@pytest.mark.asyncio
+async def test_media_outage_releases_fifo_with_gap_and_retains_retryable_voice(
+    env, monkeypatch
+):
+    from contextlib import asynccontextmanager
+    from ccbot import input_media
+
+    seen = []
+    attempts = []
+
+    async def broken(*_args, **_kwargs):
+        attempts.append("shared")
+        if len(attempts) > 8:
+            raise ValueError("test bounds legacy infinite retries")
+        raise TimedOut()
+
+    async def fresh_get(*_args, **_kwargs):
+        attempts.append("fresh")
+        raise TimedOut()
+
+    @asynccontextmanager
+    async def fresh(_voice):
+        yield SimpleNamespace(get_file=fresh_get)
+
+    monkeypatch.setattr(Voice, "get_file", broken)
+    monkeypatch.setattr(input_media, "fresh_media_bot", fresh, raising=False)
+
+    async def process(upd, ctx, wid):
+        if upd.message.voice:
+            await messages._download_voice_bytes(upd.message.voice, user_id=42, wid=wid)
+            return True
+
+        async def send(_wid, text, _session):
+            seen.append(text)
+            return True, "Sent"
+
+        return (await env.recovery.submit(wid, upd.message.text, env.source, send))[0]
+
+    monkeypatch.setattr(inbound, "_run_voice", process)
+    monkeypatch.setattr(inbound, "_run_text", process)
+    await inbound.voice_intake_handler(update(1301), env.context)
+    await inbound.text_intake_handler(update(1302, "среднее за час"), env.context)
+    await until(lambda: not has_pending_inbound("@source"))
+    assert attempts == ["shared"] * 3 + ["fresh"] * 2
+    assert len(seen) == 1 and "среднее за час" in seen[0]
+    assert "1301" in seen[0] and "не получено" in seen[0]
+    failed = env.recovery.records["42:1301"]
+    assert failed.state == "failed" and "/requests retry 1301" in failed.notice
+    env.recovery.bot = SimpleNamespace(
+        send_message=AsyncMock(return_value=SimpleNamespace(message_id=77))
+    )
+    await env.recovery.deliver_notice(failed)
+    assert failed.id in env.recovery.records
+    restarted = recovery_module.InputRecovery(env.recovery.path)
+    restarted.load()
+    assert (
+        restarted.records[failed.id].update["message"]["voice"]["file_id"]
+        == "file-1301"
+    )
+    assert restarted.records[failed.id].media_deferred
+
+
+@pytest.mark.asyncio
+async def test_media_recovers_on_separate_client_after_three_failures(env, monkeypatch):
+    from contextlib import asynccontextmanager
+    from ccbot import input_media
+
+    audio = SimpleNamespace(
+        download_as_bytearray=AsyncMock(return_value=b"fresh audio")
+    )
+    shared = AsyncMock(side_effect=[TimedOut()] * 3)
+    monkeypatch.setattr(Voice, "get_file", shared)
+    fresh_closed = []
+
+    @asynccontextmanager
+    async def fresh(_voice):
+        try:
+            yield SimpleNamespace(get_file=AsyncMock(return_value=audio))
+        finally:
+            fresh_closed.append(True)
+
+    monkeypatch.setattr(input_media, "fresh_media_bot", fresh, raising=False)
+    received = []
+
+    async def process(upd, ctx, wid):
+        received.append(
+            await messages._download_voice_bytes(upd.message.voice, user_id=42, wid=wid)
+        )
+        return True
+
+    monkeypatch.setattr(inbound, "_run_voice", process)
+    await inbound.voice_intake_handler(update(1303), env.context)
+    await until(lambda: not has_pending_inbound("@source"))
+    assert received == [b"fresh audio"]
+    assert fresh_closed == [True]
+    assert "42:1303" in env.recovery.completed
+
+
+@pytest.mark.asyncio
+async def test_explicit_media_retry_after_restart_keeps_original_source(
+    env, monkeypatch
+):
+    from ccbot.bot.commands import requests as command
+
+    req = env.recovery.admit(update(1304), "voice", env.source)
+    req.media_deferred = True
+    req.media_failures = 5
+    env.recovery.fail(req, "media failed")
+    restarted = recovery_module.InputRecovery(env.recovery.path)
+    restarted.load()
+    monkeypatch.setattr(recovery_module, "input_recovery", restarted)
+    session_manager.active_sessions[42] = "other"
+    received = []
+
+    async def receive(upd, ctx, wid):
+        received.append((wid, upd.message.voice.file_id))
+        return True
+
+    monkeypatch.setattr(inbound, "_run_voice", receive)
+    monkeypatch.setattr(command, "is_user_allowed", lambda _: True)
+    monkeypatch.setattr(command, "safe_reply", AsyncMock())
+    application = Application.builder().token("1:testing").build()
+    context = SimpleNamespace(args=["retry", "1304"], application=application)
+    await command.requests_command(update(1305, "/requests retry 1304"), context)
+    await until(lambda: not has_pending_inbound("@source"))
+    assert received == [("@source", "file-1304")]
+    assert "42:1304" in restarted.completed
+    # A second command cannot replay an already completed request.
+    await command.requests_command(update(1306, "/requests retry 1304"), context)
+    assert received == [("@source", "file-1304")]
+
+
+@pytest.mark.asyncio
+async def test_media_failure_budget_survives_restart_and_shared_api_success(
+    env, monkeypatch
+):
+    from contextlib import asynccontextmanager
+    from ccbot import input_media
+    from ccbot.telegram_polling_health import PollingHealth
+
+    req = env.recovery.admit(update(1307), "voice", env.source)
+    req.state = "downloading"
+    req.media_failures = 3
+    env.recovery.changed(req)
+    restarted = recovery_module.InputRecovery(env.recovery.path)
+    restarted.load()
+    restarted.sleep = env.recovery.sleep
+    restarted.clock = env.recovery.clock
+    monkeypatch.setattr(recovery_module, "input_recovery", restarted)
+    health = PollingHealth(
+        stale_seconds=180,
+        startup_grace_seconds=180,
+        state_path=env.recovery.path.parent / "media-health.json",
+    )
+
+    @asynccontextmanager
+    async def fresh(_voice):
+        async def unavailable(*args):
+            health.record_outbound_success()
+            raise TimedOut()
+
+        yield SimpleNamespace(get_file=unavailable)
+
+    monkeypatch.setattr(input_media, "fresh_media_bot", fresh)
+
+    async def process(upd, ctx, wid):
+        await messages._download_voice_bytes(upd.message.voice, user_id=42, wid=wid)
+        return True
+
+    assert not await restarted.run(
+        req.id, process, update(1307), env.context, "@source"
+    )
+    saved = restarted.records[req.id]
+    assert saved.state == "failed" and saved.media_failures == 5
+    assert saved.media_deferred

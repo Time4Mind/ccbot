@@ -68,6 +68,8 @@ class InputRequest:
     stage: str = ""
     received_at: float = 0.0
     session_name: str = ""
+    media_failures: int = 0
+    media_deferred: bool = False
 
 
 class InputRecovery:
@@ -111,6 +113,15 @@ class InputRecovery:
         self.confirmed_rows = raw.get("confirmed_rows", {})
         self.resolved_notices = raw.get("resolved_notices", [])
         for request in self.records.values():
+            media = raw.get("media_recovery", {}).get(request.id, {})
+            # Upgrade a running legacy retry loop without another unbounded run.
+            request.media_failures = media.get(
+                "media_failures",
+                min(3, request.attempts)
+                if request.kind == "voice" and request.state == "downloading"
+                else 0,
+            )
+            request.media_deferred = media.get("media_deferred", False)
             if request.state == "dispatching":
                 request.state = "unknown"
                 request.notice = "Передача запроса агенту не подтверждена. Автоповтор остановлен; проверьте исходную сессию и /requests."
@@ -375,7 +386,9 @@ class InputRecovery:
         self, wid: str, text: str, session: Any, sender: Any
     ) -> tuple[bool, str]:
         from .input_timing import input_stage
+        from .input_media import with_media_gap
 
+        text = with_media_gap(self, text)
         with input_stage("dispatch"):
             await self.before_dispatch(wid, text)
             success, message = await sender(wid, text, session)
@@ -616,6 +629,8 @@ class InputRecovery:
             or not request.notice
             or request.notice_unknown
             or request.notice_retry_at > self.clock()
+            or request.media_deferred
+            and request.notice_id is not None
         ):
             return
         from .telegram_rate_limit import background_telegram_request
@@ -664,8 +679,10 @@ class InputRecovery:
                 request.notice_attempts += 1
                 self.changed(request)
                 return
-        if request.state == "failed":
+        if request.state == "failed" and not request.media_deferred:
             self.complete(request, confirmed=False)
+        elif request.media_deferred:
+            self.save()
         else:
             request.notice = ""
             self.save()

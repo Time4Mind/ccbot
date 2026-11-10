@@ -16,11 +16,9 @@ async def refresh_request_status(recovery: Any, user_id: int, session_id: str) -
 
     session = session_manager.get_session(session_id)
     active = session_manager.get_active_session(user_id)
-    if session is None or active is None or active.id != session_id:
+    if session is None:
         return True
     state = get_card_state(user_id, session)
-    if state.in_menu_view or state.in_kb_mode:
-        return False
     pending = [
         r
         for r in recovery.records.values()
@@ -40,7 +38,20 @@ async def refresh_request_status(recovery: Any, user_id: int, session_id: str) -
             if item.attempts
             else "📎 Файл ожидает загрузки."
         )
+    deferred = [r for r in pending if r.media_deferred and r.state == "failed"]
+    if deferred:
+        item = max(deferred, key=lambda r: r.sequence)
+        state.inbound_status = (
+            f"⚠️ Голосовое №{item.message_id} не загружено. "
+            f"Повторить: /requests retry {item.message_id}"
+        )
     state.voice_pending = any(r.kind == "voice" and not r.recognized for r in work)
+    # Preserve the error on its own card even when the source is not selected.
+    # A lost send-notice response must not make recovery instructions disappear.
+    if active is None or active.id != session_id:
+        return True
+    if state.in_menu_view or state.in_kb_mode:
+        return False
     # The voice handler owns recognized receipts, including cached recognition
     # on restart. A transcript echo may already have consumed that receipt while
     # submission proof is still pending; recovery must not recreate it.

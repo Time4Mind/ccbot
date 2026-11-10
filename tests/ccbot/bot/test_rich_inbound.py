@@ -71,7 +71,7 @@ async def test_rich_message_is_delivered_to_active_session(monkeypatch) -> None:
             pass
 
     @asynccontextmanager
-    async def bracket(*_args):
+    async def bracket(*_args, **_kwargs):
         yield Repost()
 
     monkeypatch.setattr(messages, "is_user_allowed", lambda _uid: True)
@@ -182,7 +182,7 @@ async def test_forwarded_rich_message_delivers_embedded_photo(
             pass
 
     @asynccontextmanager
-    async def bracket(*_args):
+    async def bracket(*_args, **_kwargs):
         yield Repost()
 
     monkeypatch.setattr(messages, "is_user_allowed", lambda _uid: True)
@@ -245,6 +245,7 @@ async def test_direct_media_caption_is_preprocessed_before_delivery(
         get_file=AsyncMock(return_value=downloaded),
     )
     msg = SimpleNamespace(
+        message_id=101,
         caption="ну проверь файл",
         photo=[media] if media_kind == "photo" else None,
         document=media if media_kind == "document" else None,
@@ -269,7 +270,7 @@ async def test_direct_media_caption_is_preprocessed_before_delivery(
             pass
 
     @asynccontextmanager
-    async def bracket(*_args):
+    async def bracket(*_args, **_kwargs):
         yield Repost()
 
     monkeypatch.setattr(messages, "is_user_allowed", lambda _uid: True)
@@ -354,7 +355,7 @@ async def test_image_only_rich_message_does_not_run_text_preprocessing(
             pass
 
     @asynccontextmanager
-    async def bracket(*_args):
+    async def bracket(*_args, **_kwargs):
         yield Repost()
 
     monkeypatch.setattr(messages, "is_user_allowed", lambda _uid: True)

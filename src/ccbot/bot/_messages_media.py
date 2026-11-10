@@ -1,7 +1,4 @@
-"""Forwarded-content, photo and document handler implementation.
-
-Public imports remain in :mod:`ccbot.bot.messages`.
-"""
+"""Media handlers, exposed through the public :mod:`ccbot.bot.messages` facade."""
 
 from __future__ import annotations
 
@@ -355,7 +352,9 @@ async def unsupported_content_handler(
             wait_until_clear=pinned_wid is not None,
         ):
             return False
-        async with _card_repost_bracket(context.bot, user.id, sess) as repost:
+        async with _card_repost_bracket(
+            context.bot, user.id, sess, after_message_id=msg.message_id
+        ) as repost:
             success, message = await submit(
                 wid, text_to_send, sess, _send_with_delivery_proof
             )
@@ -493,7 +492,9 @@ async def photo_handler(
         wait_until_clear=pinned_wid is not None,
     ):
         return False
-    async with _card_repost_bracket(context.bot, user.id, sess) as repost:
+    async with _card_repost_bracket(
+        context.bot, user.id, sess, after_message_id=update.message.message_id
+    ) as repost:
         success, message = await _forward_inbox_file(
             user.id, wid, user.id, Path(file_path), caption, "image", context.bot
         )
@@ -584,7 +585,9 @@ async def document_handler(
         wait_until_clear=pinned_wid is not None,
     ):
         return False
-    async with _card_repost_bracket(context.bot, user.id, sess) as repost:
+    async with _card_repost_bracket(
+        context.bot, user.id, sess, after_message_id=update.message.message_id
+    ) as repost:
         success, message = await _forward_inbox_file(
             user.id, wid, user.id, Path(file_path), caption, "document", context.bot
         )

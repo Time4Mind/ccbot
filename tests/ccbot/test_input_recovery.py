@@ -974,7 +974,7 @@ def media_env(env, monkeypatch, tmp_path):
     )
 
     @asynccontextmanager
-    async def bracket(*_args):
+    async def bracket(*_args, **_kwargs):
         yield SimpleNamespace(commit=lambda: None)
 
     monkeypatch.setattr(messages, "_card_repost_bracket", bracket)
@@ -1396,3 +1396,145 @@ async def test_media_failure_budget_survives_restart_and_shared_api_success(
     saved = restarted.records[req.id]
     assert saved.state == "failed" and saved.media_failures == 5
     assert saved.media_deferred
+
+
+@pytest.fixture
+def media_card_env(media_env, monkeypatch):
+    """Exercise the real repost path instead of the download fixture's no-op."""
+    from ccbot.handlers import card_registry, card_stall
+
+    h = media_env
+    state = h.cards["source"]
+    state.msg_id = 2302  # Receipt already surfaced below incoming message 2301.
+    sends = []
+
+    async def send(_bot, _uid, _session, card, **_kwargs):
+        sends.append("new card")
+        card.msg_id = 2303
+        return True
+
+    legacy = {
+        "_ensure_seeded": AsyncMock(),
+        "_render_card": lambda *_a, **_kw: "card",
+        "_send_card": send,
+    }
+    monkeypatch.setattr(card_registry, "_cards", {(42, "source"): state})
+    monkeypatch.setattr(card_registry, "_card_locks", {})
+    monkeypatch.setattr(card_stall, "_cards", card_registry._cards)
+    monkeypatch.setattr(card_stall, "get_card_state", lambda *_: state)
+    monkeypatch.setattr(card_stall, "_legacy", legacy.__getitem__)
+    monkeypatch.setattr(messages, "get_card_state", lambda *_: state)
+    monkeypatch.setattr(
+        messages,
+        "is_active_for_user",
+        lambda *_: session_manager.active_sessions[42] == "source",
+    )
+    monkeypatch.setattr(messages, "resume_card_view", AsyncMock())
+    monkeypatch.setattr(messages, "refresh_panel", AsyncMock())
+    monkeypatch.setattr(messages, "begin_repost_intent", lambda *_: None)
+    monkeypatch.setattr(messages, "end_repost_intent", lambda *_: None)
+    monkeypatch.setattr(messages, "repost_card", card_stall.repost_card)
+    monkeypatch.setattr(
+        messages,
+        "_card_repost_bracket",
+        messages._ORIGINAL_FUNCTIONS["_card_repost_bracket"],
+    )
+    h.state = state
+    h.card_sends = sends
+    return h
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["document", "photo", "rich"])
+@pytest.mark.parametrize("receipt", ["ready", "arrives_during_dispatch", "missing"])
+async def test_media_uses_one_receipt_after_dispatch(
+    media_card_env, monkeypatch, kind, receipt
+):
+    h = media_card_env
+    if receipt != "ready":
+        h.state.msg_id = None
+    monkeypatch.setattr(Document, "get_file", AsyncMock(return_value=h.downloaded))
+    monkeypatch.setattr(PhotoSize, "get_file", AsyncMock(return_value=h.downloaded))
+    delivered = []
+
+    async def send(wid, text, _session):
+        delivered.append((wid, text))
+        if receipt == "arrives_during_dispatch":
+            h.state.msg_id = 2302
+        return True, "Sent"
+
+    monkeypatch.setattr(messages, "_send_with_delivery_proof", send)
+    if kind == "rich":
+        raw = update(2301, "placeholder").to_dict()
+        raw["message"].pop("text")
+        raw["message"]["rich_message"] = {"markdown": "first line\n\nsecond line"}
+        upd = Update.de_json(raw, None)
+        intake = inbound.unsupported_intake_handler
+    else:
+        upd = file_update(2301, kind)
+        intake = getattr(inbound, kind + "_intake_handler")
+    assert await intake(upd, h.context)
+    await until(lambda: not has_pending_inbound("@source"))
+    assert len(delivered) == 1 and delivered[0][0] == "@source"
+    if kind == "rich":
+        assert delivered[0][1] == "first line\n\nsecond line"
+    assert h.card_sends == (["new card"] if receipt == "missing" else [])
+    assert h.state.msg_id == (2303 if receipt == "missing" else 2302)
+    h.context.bot.delete_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_media_dispatch_cannot_repost_over_a_newly_selected_session(
+    media_card_env, monkeypatch
+):
+    h = media_card_env
+    monkeypatch.setattr(Document, "get_file", AsyncMock(return_value=h.downloaded))
+    delivered = []
+
+    async def send(wid, _text, _session):
+        delivered.append(wid)
+        session_manager.active_sessions[42] = "other"
+        return True, "Sent"
+
+    monkeypatch.setattr(messages, "_send_with_delivery_proof", send)
+    assert await inbound.document_intake_handler(file_update(2301), h.context)
+    await until(lambda: not has_pending_inbound("@source"))
+    assert delivered == ["@source"]
+    assert h.card_sends == [] and h.state.msg_id == 2302
+
+
+@pytest.mark.asyncio
+async def test_failed_voice_keeps_recoverable_error_on_its_card_when_notice_is_uncertain(
+    env, monkeypatch
+):
+    from ccbot.handlers import notifications
+
+    state = env.cards["source"]
+    state.msg_id = 4000
+    monkeypatch.setattr(notifications, "get_card_state", lambda *_: state)
+    paint = AsyncMock(return_value=True)
+    monkeypatch.setattr(notifications, "refresh_panel", paint)
+    request = env.recovery.admit(update(2401), "voice", env.source)
+    request.media_deferred = True
+    request.notice_unknown = True  # Telegram may have lost the failure-notice response.
+    env.recovery.fail(request, "download failed")
+    session_manager.active_sessions[42] = "other"
+    assert await refresh_request_status(env.recovery, 42, "source")
+    paint.assert_not_awaited()
+    assert "2401" in state.inbound_status
+    assert "/requests retry 2401" in state.inbound_status
+    assert not state.voice_pending
+    session_manager.active_sessions[42] = "source"
+    assert await refresh_request_status(env.recovery, 42, "source")
+    paint.assert_awaited_once()
+    from ccbot.handlers.card_model import _render_card
+
+    assert "/requests retry 2401" in _render_card(env.source, state, user_id=42)
+    request.state = "accepted"
+    request.media_deferred = False
+    assert await refresh_request_status(env.recovery, 42, "source")
+    assert state.inbound_status == "" and state.voice_pending
+    # Acknowledging/discarding the saved request removes the old failure banner.
+    env.recovery.complete(request, confirmed=False)
+    assert await refresh_request_status(env.recovery, 42, "source")
+    assert state.inbound_status == ""

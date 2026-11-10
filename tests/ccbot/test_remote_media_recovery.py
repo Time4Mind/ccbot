@@ -60,6 +60,7 @@ async def test_remote_photo_upload_precedes_prompt_without_local_tmux(
         file_unique_id="photo-id", get_file=AsyncMock(return_value=downloaded)
     )
     msg = SimpleNamespace(
+        message_id=101,
         caption="look",
         photo=[photo],
         document=None,
@@ -92,7 +93,7 @@ async def test_remote_photo_upload_precedes_prompt_without_local_tmux(
             pass
 
     @asynccontextmanager
-    async def bracket(*_args):
+    async def bracket(*_args, **_kwargs):
         yield Repost()
 
     async def send(_wid, text, _sess):
@@ -258,7 +259,7 @@ async def test_forwarded_rich_photo_uploads_to_worker(monkeypatch) -> None:
             pass
 
     @asynccontextmanager
-    async def bracket(*_args):
+    async def bracket(*_args, **_kwargs):
         yield Repost()
 
     monkeypatch.setattr(messages, "is_user_allowed", lambda _uid: True)

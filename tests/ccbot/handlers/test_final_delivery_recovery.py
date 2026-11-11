@@ -12,6 +12,21 @@ from ccbot.handlers import card_transport, card_updates
 from ccbot.handlers.card_model import CardState, Event
 
 
+def source_session_link():
+    from ccbot.i18n import t
+
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    t(42, "btn.open_session", name="Source session"),
+                    callback_data="sw:recover",
+                )
+            ]
+        ]
+    )
+
+
 @pytest.mark.asyncio
 async def test_final_outage_preserves_carrier_and_durable_obligation(monkeypatch):
     state = CardState(msg_id=9, events=[Event("user_msg", "request", 1.0)])
@@ -58,7 +73,7 @@ def recovery_harness(monkeypatch):
     from ccbot.session import session_manager
 
     state = CardState(msg_id=9, events=[Event("user_msg", "request A", 1.0)])
-    session = SimpleNamespace(id="recover", window_id="")
+    session = SimpleNamespace(id="recover", name="Source session", window_id="")
     active = [session]
     connected = [False]
     sent = []
@@ -210,7 +225,7 @@ async def test_newer_request_during_old_answer_send_keeps_existing_controls(
     )
     assert h.state.msg_id == 9
     h.bot.edit_message_reply_markup.assert_awaited_once_with(
-        chat_id=42, message_id=11, reply_markup=None
+        chat_id=42, message_id=11, reply_markup=source_session_link()
     )
 
 
@@ -238,12 +253,22 @@ async def test_restart_reconstructs_final_without_new_transcript_event(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("rich_media", [False, True])
 async def test_switch_during_successful_send_cannot_steal_new_carrier(
-    recovery_harness, isolated_final_deliveries
+    recovery_harness, isolated_final_deliveries, monkeypatch, rich_media
 ):
     h = recovery_harness
+    if rich_media:
+        h.session.window_id = "@1"
+        monkeypatch.setattr(card_transport, "_inline_screens_enabled", lambda *_a: True)
+        monkeypatch.setattr(
+            card_transport,
+            "_capture_pane_png",
+            AsyncMock(return_value=(b"png", "pane")),
+        )
 
     async def switch_during_send(endpoint, data):
+        assert endpoint == "sendRichMessage"
         h.active[0] = SimpleNamespace(id="other")
         h.state.in_menu_view = True
         h.state.msg_id = None
@@ -254,7 +279,7 @@ async def test_switch_during_successful_send_cannot_steal_new_carrier(
     assert h.state.msg_id is None
     card_transport._strip_stale_switchers.assert_not_awaited()
     h.bot.edit_message_reply_markup.assert_awaited_once_with(
-        chat_id=42, message_id=99, reply_markup=None
+        chat_id=42, message_id=99, reply_markup=source_session_link()
     )
     assert not isolated_final_deliveries.pending(42)
 
@@ -377,3 +402,92 @@ async def test_retry_preserves_photo_placement_before_service_tail(
     )
     assert len(attempted) == 2
     assert attempted[0] == attempted[1]
+
+
+@pytest.mark.asyncio
+async def test_passive_final_keeps_source_link_and_selected_page(
+    recovery_harness, isolated_final_deliveries
+):
+    from ccbot.handlers.card_final_delivery import retry_delivery
+    from ccbot.handlers.card_model import TurnPhase
+
+    h = recovery_harness
+    q = isolated_final_deliveries
+    await card_updates.finalize_task(h.bot, 42, h.session, "final answer A")
+    h.state.events.append(Event("user_msg", "request B", 2.0, is_page_break=True))
+    h.state.turn_phase = TurnPhase.RUNNING
+    h.state.current_page_idx = 0
+    h.state.next_request_sequence += 1
+    h.connected[0] = True
+    item = q.pending(42)[0]
+    item.retry_at = 0
+    assert await q.attempt(item, lambda row: retry_delivery(h.bot, row))
+    assert len(h.sent) == 1
+    payload = h.sent[0][1]
+    assert "final answer A" in payload["rich_message"]["markdown"]
+    assert payload["reply_markup"] == source_session_link()
+    assert h.state.msg_id == 9 and h.state.current_page_idx == 0
+    assert not q.pending(42)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_kind", ["offline", "rate_limit"])
+async def test_superseded_final_link_recovers_after_restart_without_resending(
+    recovery_harness, isolated_final_deliveries, monkeypatch, error_kind
+):
+    import asyncio
+    from ccbot import keyboard_cleanup
+    from ccbot.handlers import card_registry
+    from telegram.error import RetryAfter
+
+    h = recovery_harness
+    q = isolated_final_deliveries
+    sends = []
+    keyboards = {9: "selected session controls"}
+
+    async def switched_send(endpoint, data):
+        sends.append((endpoint, data))
+        h.active[0] = SimpleNamespace(id="other")
+        h.state.in_menu_view = True
+        h.state.msg_id = None
+        keyboards[99] = data.get("reply_markup")
+        return {"message_id": 99, "date": 1, "chat": {"id": 42, "type": "private"}}
+
+    h.bot._post = switched_send
+    error = NetworkError("offline") if error_kind == "offline" else RetryAfter(120)
+    h.bot.edit_message_reply_markup.side_effect = error
+    monkeypatch.setattr(
+        card_registry.session_manager, "get_last_switcher_msg", lambda _: 9
+    )
+    monkeypatch.setattr(card_registry, "_SWITCHER_TRANSIENT_RETRY_SECONDS", 0.01)
+    await card_updates.finalize_task(h.bot, 42, h.session, "final answer A")
+    assert len(sends) == 1 and not q.pending(42)
+    await card_registry.shutdown_switcher_cleanup()
+    path = keyboard_cleanup.cleanup_queue.path
+    restored = keyboard_cleanup.KeyboardCleanup(path)
+    monkeypatch.setattr(keyboard_cleanup, "cleanup_queue", restored)
+    monkeypatch.setattr(card_registry, "_switcher_user_retry_at", {})
+    monkeypatch.setattr(card_registry, "_switcher_retry_at", {})
+
+    async def edit(**kwargs):
+        keyboards[kwargs["message_id"]] = kwargs["reply_markup"]
+
+    h.bot.edit_message_reply_markup = edit
+    card_registry.start_switcher_cleanup(h.bot)
+    if error_kind == "rate_limit":
+        await asyncio.sleep(0.03)
+        assert keyboards[99] != source_session_link()
+        assert len(sends) == 1
+        # Simulate expiry of the persisted Telegram cooldown, not a second send.
+        restored.blocked_until[42] = 0
+        restored.pending[(42, 99)].retry_at = 0
+        restored.save()
+        await card_registry.shutdown_switcher_cleanup()
+        card_registry.start_switcher_cleanup(h.bot)
+    await asyncio.sleep(0.08)
+    assert keyboards == {9: "selected session controls", 99: source_session_link()}
+    assert not restored.pending
+    assert len(sends) == 1 and not q.pending(42)
+    # Later cleanup preserves the static link and the current control surface.
+    await card_registry._strip_stale_switchers(h.bot, 42, 9, "other")
+    assert keyboards == {9: "selected session controls", 99: source_session_link()}

@@ -19,7 +19,13 @@ from ..session import Session, session_manager
 from ..telegram_rate_limit import background_telegram_request
 from .card_binding import restore_carrier, snapshot_carrier
 from .card_types import CardState, Event, TurnPhase
-from .card_registry import _card_lock, _carrier_edit_lock, lookup_session_for_message
+from .card_session_link import session_link_keyboard
+from .card_registry import (
+    _card_lock,
+    _carrier_edit_lock,
+    _register_msg,
+    lookup_session_for_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -137,11 +143,16 @@ async def deliver_final(
 
             with background_telegram_request():
                 sent_message = await send_with_fallback(
-                    bot, item.user_id, text, disable_notification=True
+                    bot,
+                    item.user_id,
+                    text,
+                    disable_notification=True,
+                    reply_markup=session_link_keyboard(item.user_id, item.session_id),
                 )
             if sent_message is None:
                 return False
             final_delivery_queue.bind_ack(item.id, sent_message.message_id)
+            _register_msg(item.user_id, sent_message.message_id, item.session_id)
             logger.info(
                 "final_delivery_passive id=%s session=%s message_id=%s live_message=%s",
                 item.id,

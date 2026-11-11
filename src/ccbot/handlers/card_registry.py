@@ -281,6 +281,31 @@ async def _strip_stale_switchers(
             ]
         )
     )
+    await _reconcile_switcher_keyboards(bot, user_id, targets, keep_msg_id)
+
+
+async def retain_final_session_link(
+    bot: Bot, user_id: int, message_id: int, session_id: str
+) -> None:
+    """Retire global controls without leaving a delivered final unopenable.
+
+    Persist the desired replacement before attempting the edit. A failed edit
+    can then retry after a restart without resending the acknowledged answer.
+    """
+    from ..keyboard_cleanup import cleanup_queue
+
+    cleanup_queue.remember(user_id, message_id, session_id=session_id)
+    _stripped_switchers.pop((user_id, message_id), None)
+    _switcher_cleanup_bots[user_id] = bot
+    await _reconcile_switcher_keyboards(bot, user_id, [message_id], None)
+
+
+async def _reconcile_switcher_keyboards(
+    bot: Bot, user_id: int, targets: list[int], keep_msg_id: int | None
+) -> None:
+    from ..keyboard_cleanup import cleanup_queue
+    from .card_session_link import session_link_keyboard
+
     user_wait = max(
         _switcher_user_retry_at.get(user_id, 0.0) - time.monotonic(),
         cleanup_queue.blocked_until.get(user_id, 0.0) - time.time(),
@@ -318,15 +343,20 @@ async def _strip_stale_switchers(
             continue
         try:
             with background_telegram_request():
+                session_id = cleanup_queue.session_links.get(key)
+                keyboard = (
+                    session_link_keyboard(user_id, session_id) if session_id else None
+                )
                 await bot.edit_message_reply_markup(
-                    chat_id=user_id, message_id=msg_id, reply_markup=None
+                    chat_id=user_id, message_id=msg_id, reply_markup=keyboard
                 )
             _remember_stripped(key)
             logger.info(
-                "keyboard_strip user=%s message_id=%s keep=%s result=ok",
+                "keyboard_strip user=%s message_id=%s keep=%s result=ok session_link=%s",
                 user_id,
                 msg_id,
                 keep_msg_id,
+                bool(keyboard),
             )
         except Exception as exc:
             reason = "temporary"
@@ -403,7 +433,7 @@ def lookup_session_for_message(user_id: int, message_id: int) -> str | None:
 
 
 def latest_registered_session_message(user_id: int, session_id: str) -> int | None:
-    """Find the newest known card, including a final sent without controls."""
+    """Find the newest known card, including a final with a session link."""
     return max(
         (
             mid

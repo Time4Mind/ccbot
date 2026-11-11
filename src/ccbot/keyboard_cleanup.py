@@ -22,6 +22,7 @@ class KeyboardCleanup:
         self.path = path
         self.pending: dict[tuple[int, int], CleanupItem] = {}
         self.blocked_until: dict[int, float] = {}
+        self.session_links: dict[tuple[int, int], str] = {}
         self.loaded = False
 
     def load(self) -> None:
@@ -39,6 +40,11 @@ class KeyboardCleanup:
             int(uid): float(deadline)
             for uid, deadline in raw.get("blocked_until", {}).items()
         }
+        self.session_links = {
+            (row["user_id"], row["message_id"]): row["session_id"]
+            for row in raw.get("session_links", [])
+            if (row["user_id"], row["message_id"]) in self.pending
+        }
         self.loaded = True
 
     def save(self) -> None:
@@ -48,19 +54,33 @@ class KeyboardCleanup:
                 "version": 1,
                 "pending": [asdict(item) for item in self.pending.values()],
                 "blocked_until": self.blocked_until,
+                # Keep pending rows readable by the previous release on rollback.
+                "session_links": [
+                    {"user_id": uid, "message_id": mid, "session_id": sid}
+                    for (uid, mid), sid in self.session_links.items()
+                ],
             },
         )
 
-    def remember(self, user_id: int, message_id: int) -> None:
+    def remember(
+        self, user_id: int, message_id: int, *, session_id: str | None = None
+    ) -> None:
         self.load()
         key = user_id, message_id
-        if key not in self.pending:
+        changed = key not in self.pending
+        if changed:
             self.pending[key] = CleanupItem(*key)
+        if session_id is not None and self.session_links.get(key) != session_id:
+            self.session_links[key] = session_id
+            changed = True
+        if changed:
             self.save()
 
     def forget(self, user_id: int, message_id: int) -> None:
         self.load()
-        if self.pending.pop((user_id, message_id), None) is not None:
+        key = user_id, message_id
+        self.session_links.pop(key, None)
+        if self.pending.pop(key, None) is not None:
             self.save()
 
     def block(self, user_id: int, delay: float) -> None:

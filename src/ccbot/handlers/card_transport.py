@@ -37,6 +37,7 @@ from .card_registry import (
     _legacy,
     lookup_session_for_message,
     mark_switcher_active,
+    retain_final_session_link,
 )
 
 logger = logging.getLogger(__name__)
@@ -207,12 +208,7 @@ async def _send_card_locked(
         if superseded:
             # Routing can advance during the network await. The result is
             # delivered, but it must not take controls from the newer owner.
-            try:
-                await bot.edit_message_reply_markup(
-                    chat_id=user_id, message_id=sent.message_id, reply_markup=None
-                )
-            except Exception:
-                pass
+            await retain_final_session_link(bot, user_id, sent.message_id, sess.id)
             _register_msg(user_id, sent.message_id, sess.id)
             logger.info(
                 "card_sent_superseded user=%s session=%s message_id=%s delivery=%s",

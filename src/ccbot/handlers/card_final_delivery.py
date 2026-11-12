@@ -25,6 +25,7 @@ from .card_registry import (
     _carrier_edit_lock,
     _register_msg,
     lookup_session_for_message,
+    retire_card_keyboard,
 )
 
 logger = logging.getLogger(__name__)
@@ -240,11 +241,12 @@ async def deliver_final(
     old_id = item.payload.get("old_message_id")
     if old_id and old_id != target.msg_id:
         try:
-            await bot.edit_message_reply_markup(
-                chat_id=item.user_id, message_id=old_id, reply_markup=None
-            )
+            await retire_card_keyboard(bot, item.user_id, old_id)
         except Exception as exc:
-            logger.debug("final card keyboard strip failed: %s", exc)
+            logger.debug(
+                "final card keyboard retirement failed error_type=%s",
+                type(exc).__name__,
+            )
     restore_carrier(live, snapshot_carrier(target))
     live.last_rendered = text
     # Only the last queued final may acknowledge the session's latest result.

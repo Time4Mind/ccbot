@@ -491,3 +491,114 @@ async def test_superseded_final_link_recovers_after_restart_without_resending(
     # Later cleanup preserves the static link and the current control surface.
     await card_registry._strip_stale_switchers(h.bot, 42, 9, "other")
     assert keyboards == {9: "selected session controls", 99: source_session_link()}
+
+
+@pytest.mark.asyncio
+async def test_completed_final_link_survives_repeated_cleanup_and_restart(
+    recovery_harness, isolated_final_deliveries, monkeypatch
+):
+    from ccbot import keyboard_cleanup
+    from ccbot.handlers import card_registry
+
+    h = recovery_harness
+    h.connected[0] = True
+    await card_updates.finalize_task(h.bot, 42, h.session, "final answer A")
+    assert not isolated_final_deliveries.pending(42)
+    path = keyboard_cleanup.cleanup_queue.path
+    monkeypatch.setattr(card_registry, "_cards", {})
+    monkeypatch.setattr(card_registry, "_msg_to_session", {})
+    monkeypatch.setattr(
+        card_registry.session_manager, "get_last_switcher_msg", lambda _: 11
+    )
+    for _ in range(2):
+        await card_registry.shutdown_switcher_cleanup()
+        monkeypatch.setattr(
+            keyboard_cleanup, "cleanup_queue", keyboard_cleanup.KeyboardCleanup(path)
+        )
+        monkeypatch.setattr(card_registry, "_stripped_switchers", {})
+        h.bot.edit_message_reply_markup.reset_mock()
+        await card_registry._strip_stale_switchers(h.bot, 42, 17, "other")
+        h.bot.edit_message_reply_markup.assert_awaited_once_with(
+            chat_id=42, message_id=11, reply_markup=source_session_link()
+        )
+        assert not keyboard_cleanup.cleanup_queue.pending
+    assert len(h.sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_new_final_does_not_strip_previous_final_link(
+    recovery_harness, isolated_final_deliveries
+):
+    h = recovery_harness
+    h.connected[0] = True
+    await card_updates.finalize_task(h.bot, 42, h.session, "final answer A")
+    h.state.events.append(Event("user_msg", "request B", 2.0, is_page_break=True))
+    h.state.next_request_sequence += 1
+    await card_updates.finalize_task(h.bot, 42, h.session, "final answer B")
+    edits = [
+        call.kwargs
+        for call in h.bot.edit_message_reply_markup.await_args_list
+        if call.kwargs["message_id"] == 11
+    ]
+    assert edits and all(row["reply_markup"] == source_session_link() for row in edits)
+    assert len(h.sent) == 2 and not isolated_final_deliveries.pending(42)
+
+
+@pytest.mark.asyncio
+async def test_orphan_final_cleanup_keeps_source_link(
+    recovery_harness, isolated_final_deliveries, monkeypatch
+):
+    from ccbot.bot.callbacks.switcher import _strip_orphan_switcher_if_current
+    from ccbot.session import session_manager
+
+    h = recovery_harness
+    h.connected[0] = True
+    await card_updates.finalize_task(h.bot, 42, h.session, "final answer A")
+    monkeypatch.setattr(session_manager, "get_last_switcher_msg", lambda _: 11)
+    h.bot.edit_message_reply_markup.reset_mock()
+    assert await _strip_orphan_switcher_if_current(h.bot, 42, 11)
+    h.bot.edit_message_reply_markup.assert_awaited_once_with(
+        chat_id=42, message_id=11, reply_markup=source_session_link()
+    )
+
+
+@pytest.mark.asyncio
+async def test_final_ack_recovers_interrupted_ownership_save_without_resend(
+    recovery_harness, isolated_final_deliveries, monkeypatch
+):
+    from ccbot import final_delivery, keyboard_cleanup
+    from ccbot.handlers import card_registry
+    from ccbot.handlers.card_final_delivery import retry_delivery
+
+    h = recovery_harness
+    h.connected[0] = True
+    queue = keyboard_cleanup.cleanup_queue
+    original = queue.remember_final
+    interrupted = [False]
+
+    def fail_once(*args, **kwargs):
+        if not interrupted[0]:
+            interrupted[0] = True
+            raise OSError("interrupted ownership save")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(queue, "remember_final", fail_once)
+    await card_updates.finalize_task(h.bot, 42, h.session, "final answer A")
+    # Reload the final journal at the known-receipt checkpoint.
+    restored = final_delivery.FinalDeliveryQueue(isolated_final_deliveries.path)
+    monkeypatch.setattr(final_delivery, "final_delivery_queue", restored)
+    item = restored.pending(42)[0]
+    assert item.message_id == 11
+    item.retry_at = 0
+    assert await restored.attempt(item, lambda row: retry_delivery(h.bot, row))
+    assert len(h.sent) == 1 and not restored.pending(42)
+    monkeypatch.setattr(card_registry, "_cards", {})
+    monkeypatch.setattr(card_registry, "_msg_to_session", {})
+    monkeypatch.setattr(
+        card_registry.session_manager, "get_last_switcher_msg", lambda _: 11
+    )
+    h.bot.edit_message_reply_markup.reset_mock()
+    await card_registry._strip_stale_switchers(h.bot, 42, 17, "other")
+    h.bot.edit_message_reply_markup.assert_awaited_once_with(
+        chat_id=42, message_id=11, reply_markup=source_session_link()
+    )

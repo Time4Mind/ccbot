@@ -8,7 +8,7 @@ import time
 from typing import Any
 
 from telegram import CallbackQuery, Update
-from telegram.error import BadRequest, NetworkError, TelegramError
+from telegram.error import NetworkError, TelegramError
 from telegram.ext import ContextTypes
 
 from ...handlers import bg_status
@@ -52,19 +52,9 @@ async def _strip_orphan_switcher_if_current(
         or session_manager.get_last_switcher_msg(user_id) != orphan_msg_id
     ):
         return False
-    try:
-        await bot.edit_message_reply_markup(
-            chat_id=user_id, message_id=orphan_msg_id, reply_markup=None
-        )
-        return True
-    except BadRequest as exc:
-        error = str(exc).lower()
-        if "message to edit not found" in error or "message is not modified" in error:
-            return True
-        logger.debug("current orphan switcher strip failed: %s", exc)
-    except Exception as exc:
-        logger.debug("current orphan switcher strip failed: %s", exc)
-    return False
+    from ...handlers.card_registry import retire_card_keyboard
+
+    return await retire_card_keyboard(bot, user_id, orphan_msg_id)
 
 
 async def session_switch_intake_handler(

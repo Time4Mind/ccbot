@@ -1,4 +1,4 @@
-"""Durable identities of obsolete Telegram keyboards awaiting cleanup."""
+"""Durable keyboard cleanup and ownership of retained final answers."""
 
 from __future__ import annotations
 from dataclasses import asdict, dataclass
@@ -7,6 +7,8 @@ from pathlib import Path
 import time
 from .config import config
 from .utils import atomic_write_json
+
+_FINAL_SESSION_LIMIT = 2000
 
 
 @dataclass
@@ -23,6 +25,7 @@ class KeyboardCleanup:
         self.pending: dict[tuple[int, int], CleanupItem] = {}
         self.blocked_until: dict[int, float] = {}
         self.session_links: dict[tuple[int, int], str] = {}
+        self.final_sessions: dict[tuple[int, int], str | None] = {}
         self.loaded = False
 
     def load(self) -> None:
@@ -45,6 +48,10 @@ class KeyboardCleanup:
             for row in raw.get("session_links", [])
             if (row["user_id"], row["message_id"]) in self.pending
         }
+        self.final_sessions = {
+            (row["user_id"], row["message_id"]): row["session_id"]
+            for row in raw.get("final_sessions", [])[-_FINAL_SESSION_LIMIT:]
+        }
         self.loaded = True
 
     def save(self) -> None:
@@ -55,12 +62,50 @@ class KeyboardCleanup:
                 "pending": [asdict(item) for item in self.pending.values()],
                 "blocked_until": self.blocked_until,
                 # Keep pending rows readable by the previous release on rollback.
+                "final_sessions": [
+                    {"user_id": uid, "message_id": mid, "session_id": sid}
+                    for (uid, mid), sid in self.final_sessions.items()
+                ],
                 "session_links": [
                     {"user_id": uid, "message_id": mid, "session_id": sid}
                     for (uid, mid), sid in self.session_links.items()
                 ],
             },
         )
+
+    def remember_final(
+        self,
+        user_id: int,
+        message_id: int,
+        session_id: str,
+        *,
+        only_if_unknown: bool = False,
+    ) -> None:
+        """Keep ownership after delivery/cleanup, including across restarts."""
+        self.load()
+        key = user_id, message_id
+        if self.final_sessions.get(key) == session_id or (
+            only_if_unknown and key in self.final_sessions
+        ):
+            return
+        self.final_sessions.pop(key, None)
+        self.final_sessions[key] = session_id
+        if len(self.final_sessions) > _FINAL_SESSION_LIMIT:
+            self.final_sessions.pop(next(iter(self.final_sessions)))
+        self.save()
+
+    def rebind_final(
+        self, user_id: int, message_id: int, session_id: str | None
+    ) -> None:
+        """Forget old content ownership only after another session repaints it."""
+        self.load()
+        key = user_id, message_id
+        owner = self.final_sessions.get(key)
+        if owner is not None and session_id is not None and owner != session_id:
+            # Retain an invalidation receipt: delayed delivery recovery must
+            # not revive the previous owner's link after a successful repaint.
+            self.final_sessions[key] = None
+            self.save()
 
     def remember(
         self, user_id: int, message_id: int, *, session_id: str | None = None

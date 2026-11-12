@@ -115,7 +115,12 @@ A session is defined by its goal, not by its working directory. The user can `cd
 
 Exactly one session is "active" at any time. New free-text messages from the user go to the active session.
 
-The inline switcher lives **only in the most recent bot message**. Previous bot messages have their inline keyboards stripped (`editMessageReplyMarkup` with empty markup) when a new bot message is sent. This keeps the chat from filling with stale buttons.
+The live inline switcher lives **only in the most recent bot message**. When
+another carrier takes over, a retained final answer keeps one button opening
+its source session. Other obsolete keyboards are removed. Final-message
+ownership survives cleanup and restarts, so a later cleanup cannot remove that
+navigation button. Repainting the message for another session replaces its
+ownership only after Telegram confirms the edit.
 
 Switcher layout:
 

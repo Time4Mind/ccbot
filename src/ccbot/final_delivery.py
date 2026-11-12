@@ -194,9 +194,20 @@ class FinalDeliveryQueue:
             if item.id == delivery_id:
                 item.message_id = message_id
                 self.save()
+                from .keyboard_cleanup import cleanup_queue
+
+                cleanup_queue.remember_final(item.user_id, message_id, item.session_id)
                 return
 
     def resolve(self, item: FinalDelivery) -> None:
+        if item.message_id is not None:
+            from .keyboard_cleanup import cleanup_queue
+
+            # Repair a crash between the receipt checkpoint and ownership save
+            # before removing the delivery obligation; never resend the answer.
+            cleanup_queue.remember_final(
+                item.user_id, item.message_id, item.session_id, only_if_unknown=True
+            )
         key = item.payload.get("event_key")
         if key:
             self.completed_keys = [*self.completed_keys[-511:], key]

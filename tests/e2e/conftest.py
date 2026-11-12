@@ -32,7 +32,7 @@ __all__ = ["USER_ID"]
 
 
 @pytest.fixture(autouse=True)
-def clean_state():
+async def clean_state(tmp_path, monkeypatch):
     """Reset the long-lived module-level singletons around each test."""
     from ccbot.handlers import (
         bg_status,
@@ -41,6 +41,22 @@ def clean_state():
         status_polling,
     )
     from ccbot.session import session_manager
+    from ccbot import keyboard_cleanup
+    from ccbot.handlers import card_registry
+
+    await card_registry.shutdown_switcher_cleanup()
+    monkeypatch.setattr(
+        keyboard_cleanup,
+        "cleanup_queue",
+        keyboard_cleanup.KeyboardCleanup(tmp_path / "keyboard-cleanup.json"),
+    )
+    for name in (
+        "_stripped_switchers",
+        "_switcher_retry_at",
+        "_switcher_retry_attempts",
+        "_switcher_user_retry_at",
+    ):
+        monkeypatch.setattr(card_registry, name, {})
 
     def _wipe() -> None:
         session_manager.sessions.clear()
@@ -64,6 +80,7 @@ def clean_state():
 
     _wipe()
     yield
+    await card_registry.shutdown_switcher_cleanup()
     _wipe()
 
 

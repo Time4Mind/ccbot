@@ -15,7 +15,11 @@ from ..handlers.notifications import (
     is_active_for_user,
     refresh_panel,
 )
-from ..request_preprocessing import prompt_preprocessor, should_preprocess
+from ..request_preprocessing import (
+    can_skip_preprocessing,
+    prompt_preprocessor,
+    should_preprocess,
+)
 from ..input_timing import input_stage
 from ..session import session_manager
 
@@ -86,6 +90,10 @@ async def prepare_request_for_dispatch(
     if not should_preprocess(
         str(settings.get("preprocessing_mode", "off")), input_kind
     ) or not _is_user_authored_message(update.message, user_id):
+        return PreparedDispatch(text=text)
+    if can_skip_preprocessing(
+        text, instruction=str(settings.get("preprocessing_instruction", ""))
+    ):
         return PreparedDispatch(text=text)
 
     pinned_session = session_manager.find_session_by_window(wid)

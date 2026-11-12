@@ -1,0 +1,7 @@
+{
+  "source": "src/ccbot/request_preprocessing.py:DEFAULT_PREPROCESSING_INSTRUCTION",
+  "upstream_revision": "dac677842434c5ff8027e8571136c85ecb56cf44",
+  "words": 122,
+  "chars": 911,
+  "sha256": "07d2d37975b687b44cfb5e6ad64295f532fd8590af7e7202d2d767dd1e6ff9d7"
+}

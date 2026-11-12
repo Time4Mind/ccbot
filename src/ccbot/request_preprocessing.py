@@ -21,11 +21,25 @@ InputKind = Literal["text", "voice", "command"]
 PREPROCESSING_MODEL = "gpt-6-luna"
 
 DEFAULT_PREPROCESSING_INSTRUCTION = """Консервативно отредактируй одно голосовое или текстовое сообщение. Верни только готовый запрос, не расширяя исходный текст.
-Удали ругань, междометия, пустые связки и явные повторы. Исправь пунктуацию, грамматику и только очевидные ошибки распознавания. При явной самокоррекции оставь финальную версию. Если область замены неясна, сохрани обе версии.
-Не меняй цель, факты, отрицания, условия, исключения, уверенность, приоритет, порядок, период, объём, разрешения и способ доставки. Сохрани все действия и структуру списка.
+Удали оскорбления, междометия, пустые связки и явные повторы, сохранив содержательную оценку. Исправь пунктуацию, грамматику и только очевидные ошибки распознавания. При явной самокоррекции оставь финальную версию. Если область замены неясна, сохрани обе версии.
+Не меняй цель, факты, отрицания, условия, исключения, уверенность, приоритет, порядок, период, объём, разрешения и способ доставки. Сохрани все вопросы, действия и структуру списка. Вопросы не превращай в команды. Длинный текст можно разбить на абзацы, сохраняя связи условий и действий.
 Цитаты, пересланный текст, числа, даты, единицы, имена, термины, ID, код, пути и ссылки копируй дословно.
 Слова «ну», «вот», «там», «типа», «просто», «короче», «то есть» удаляй только как пустые связки: они могут обозначать контекст, пример, уточнение или требование к формату.
-Короткие ответы не дополняй догадками. Не угадывай спорные термины. Не отвечай на запрос и ничего не добавляй."""
+Короткие ответы не дополняй догадками. Не угадывай спорные термины. Перед выводом проверь, что ничего существенного не потеряно и не добавлено. Не отвечай на запрос и ничего не добавляй."""
+
+_SIMPLE_REPLIES = frozenset(
+    {"да", "нет", "ок", "окей", "ага", "угу", "готово", "yes", "no", "ok"}
+)
+
+
+def can_skip_preprocessing(text: str, *, instruction: str = "") -> bool:
+    """Pass exact acknowledgements through; custom instructions retain control."""
+    if instruction.strip():
+        return False
+    reply = text.strip().casefold()
+    if reply.endswith((".", "!")):
+        reply = reply[:-1]
+    return reply in _SIMPLE_REPLIES
 
 
 def should_preprocess(mode: str, kind: str) -> bool:
@@ -284,6 +298,8 @@ class PromptPreprocessor:
         source = text.strip()
         if not source or "\x00" in source:
             raise ValueError("invalid preprocessing input")
+        if can_skip_preprocessing(source, instruction=instruction):
+            return source
         selected_instruction = instruction.strip() or DEFAULT_PREPROCESSING_INSTRUCTION
         async with self._lock:
             try:
@@ -378,11 +394,16 @@ async def recover_pending_preprocessing(*, manager: Any, processor: Any) -> int:
                 continue
             if not prepared:
                 try:
-                    prepared = await processor.process(
-                        original,
-                        instruction=str(record.get("instruction") or ""),
-                    )
-                    preprocessed = True
+                    instruction = str(record.get("instruction") or "")
+                    if can_skip_preprocessing(original, instruction=instruction):
+                        prepared = original
+                        preprocessed = False
+                    else:
+                        prepared = await processor.process(
+                            original,
+                            instruction=instruction,
+                        )
+                        preprocessed = True
                 except Exception as exc:
                     logger.warning(
                         "request preprocessing recovery fallback session=%s: %s",
@@ -410,6 +431,7 @@ __all__ = [
     "DEFAULT_PREPROCESSING_INSTRUCTION",
     "PREPROCESSING_MODEL",
     "PromptPreprocessor",
+    "can_skip_preprocessing",
     "prompt_preprocessor",
     "recover_pending_preprocessing",
     "should_preprocess",

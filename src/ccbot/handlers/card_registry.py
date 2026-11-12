@@ -270,7 +270,11 @@ async def _strip_stale_switchers(
     cleanup_queue.load()
     for msg_id in targets:
         if (user_id, msg_id) not in _stripped_switchers:
-            cleanup_queue.remember(user_id, msg_id)
+            cleanup_queue.remember(
+                user_id,
+                msg_id,
+                session_id=cleanup_queue.final_sessions.get((user_id, msg_id)),
+            )
     targets = list(
         dict.fromkeys(
             targets
@@ -294,10 +298,23 @@ async def retain_final_session_link(
     """
     from ..keyboard_cleanup import cleanup_queue
 
-    cleanup_queue.remember(user_id, message_id, session_id=session_id)
-    _stripped_switchers.pop((user_id, message_id), None)
+    cleanup_queue.remember_final(user_id, message_id, session_id)
+    await retire_card_keyboard(bot, user_id, message_id)
+
+
+async def retire_card_keyboard(bot: Bot, user_id: int, message_id: int) -> bool:
+    """Remove obsolete controls, retaining navigation for a known final."""
+    from ..keyboard_cleanup import cleanup_queue
+
+    cleanup_queue.load()
+    key = user_id, message_id
+    cleanup_queue.remember(
+        user_id, message_id, session_id=cleanup_queue.final_sessions.get(key)
+    )
+    _stripped_switchers.pop(key, None)
     _switcher_cleanup_bots[user_id] = bot
     await _reconcile_switcher_keyboards(bot, user_id, [message_id], None)
+    return key not in cleanup_queue.pending
 
 
 async def _reconcile_switcher_keyboards(

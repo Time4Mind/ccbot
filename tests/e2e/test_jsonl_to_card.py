@@ -165,11 +165,13 @@ async def test_second_final_turn_spawns_new_card_and_freezes_previous(
     from ccbot.handlers import bg_status
 
     assert bg_status.status_emoji(USER_ID, "cccc3333") == "✅"
-    fake_bot.edit_message_reply_markup.assert_awaited_with(
-        chat_id=USER_ID,
-        message_id=fake_bot.sent_messages[-2].message_id,
-        reply_markup=None,
-    )
+    retired = fake_bot.edit_message_reply_markup.await_args.kwargs
+    assert retired["chat_id"] == USER_ID
+    assert retired["message_id"] == fake_bot.sent_messages[-2].message_id
+    link = retired["reply_markup"].inline_keyboard
+    assert len(link) == 1 and len(link[0]) == 1
+    assert link[0][0].callback_data == "sw:cccc3333"
+    assert len(fake_bot.sent_messages[-1].reply_markup.inline_keyboard) > 1
 
     # Automatic card refreshes must preserve the completion marker until the
     # user acknowledges this exact carrier with a button tap.

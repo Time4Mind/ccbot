@@ -288,7 +288,12 @@ async def _edit_card_unlocked(
         reply_markup=reply_markup,
         refresh_pane=refresh_pane,
     )
-    if edited and state.msg_id == message_id:
+    if edited and message_id is not None and state.msg_id == message_id:
+        from ..keyboard_cleanup import cleanup_queue
+
+        cleanup_queue.rebind_final(
+            user_id, message_id, lookup_session_for_message(user_id, message_id)
+        )
         if state.edit_retry_message_id == message_id:
             state.edit_retry_after = 0.0
             state.edit_retry_message_id = None

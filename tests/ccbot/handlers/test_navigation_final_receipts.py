@@ -606,3 +606,159 @@ async def test_navigation_during_final_preparation_cannot_restore_automatic_send
     assert await q.attempt(item, lambda row: retry_delivery(h.bot, row)) is None
     assert not h.calls
     assert item in q.records
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("switch_during_cleanup", [True, False])
+async def test_normal_final_retains_source_link_after_handoff(
+    navigation, isolated_final_deliveries, monkeypatch, switch_during_cleanup
+):
+    """Replay Nov12: a sent final is retired when another carrier is selected."""
+    h = navigation
+    h.active[0] = h.sess
+    h.state.in_menu_view = False
+    other = Session(id="other", name="Other", window_id="")
+    pointer = [9]
+    keyboards = {}
+    source_text = {}
+    started = asyncio.Event()
+    release = asyncio.Event()
+    if not switch_during_cleanup:
+        release.set()
+    original_post = h.bot._post
+
+    async def post(endpoint, data):
+        result = await original_post(endpoint, data)
+        mid = result["message_id"]
+        keyboards[mid] = data.get("reply_markup")
+        source_text[mid] = data.get("rich_message", {}).get("markdown", "")
+        return result
+
+    async def edit_keyboard(**kwargs):
+        if kwargs["message_id"] == 9:
+            started.set()
+            await release.wait()
+        keyboards[kwargs["message_id"]] = kwargs["reply_markup"]
+
+    h.bot._post = post
+    h.bot.edit_message_reply_markup = edit_keyboard
+    monkeypatch.setattr(
+        card_transport, "_strip_stale_switchers", card_registry._strip_stale_switchers
+    )
+    monkeypatch.setattr(
+        card_carrier, "_strip_stale_switchers", card_registry._strip_stale_switchers
+    )
+    monkeypatch.setattr(session_manager, "get_last_switcher_msg", lambda _: pointer[0])
+    monkeypatch.setattr(
+        session_manager,
+        "set_last_switcher_msg",
+        lambda _, mid: pointer.__setitem__(0, mid),
+    )
+    monkeypatch.setattr(
+        session_manager,
+        "get_session",
+        lambda sid: {h.sess.id: h.sess, other.id: other}.get(sid),
+    )
+    monkeypatch.setattr(
+        session_manager,
+        "select_session",
+        lambda _, sid: h.active.__setitem__(0, other if sid == other.id else h.sess),
+    )
+    monkeypatch.setattr(session_manager, "save_state", lambda: None)
+    facade = {
+        name: card_carrier._legacy(name)
+        for name in (
+            "_ensure_seeded",
+            "_render_card",
+            "build_footer_keyboard",
+            "_edit_card",
+        )
+    }
+    facade["is_active_for_user"] = lambda _, sess: h.active[0].id == sess.id
+    monkeypatch.setattr(card_carrier, "_legacy", facade.__getitem__)
+    finish = asyncio.create_task(
+        card_updates.finalize_task(h.bot, 42, h.sess, "final answer")
+    )
+    if switch_during_cleanup:
+        await asyncio.wait_for(started.wait(), 1)
+    else:
+        await finish
+    switch = asyncio.create_task(
+        card_carrier.activate_card_on_carrier(42, h.sess.id, other.id, 17)
+    )
+    await asyncio.sleep(0)
+    assert h.active[0] is other
+    release.set()
+    await asyncio.wait_for(asyncio.gather(finish, switch), 2)
+    assert await card_carrier.paint_card_on_carrier(h.bot, 42, other, 17)
+    assert "final answer" in source_text[100]
+    assert keyboards[100] is not None, (
+        "Retiring a delivered final must retain navigation"
+    )
+    assert keyboards[100].inline_keyboard[0][0].callback_data == "sw:target"
+    assert keyboards[17].inline_keyboard[0][0].callback_data == "ft:menu"
+    assert pointer[0] == 17 and not isolated_final_deliveries.pending(42)
+
+
+@pytest.mark.asyncio
+async def test_final_ownership_changes_only_after_successful_repaint(
+    navigation, isolated_final_deliveries, monkeypatch
+):
+    from ccbot.bot.callbacks.switcher import _strip_orphan_switcher_if_current
+
+    h = navigation
+    queue = isolated_final_deliveries
+    resolve = queue.resolve
+    # Hold delivery bookkeeping while Telegram accepts a later repaint.
+    monkeypatch.setattr(queue, "resolve", lambda _item: None)
+    h.active[0] = h.sess
+    h.state.in_menu_view = False
+    await card_updates.finalize_task(h.bot, 42, h.sess, "source final")
+    pointer = [100]
+    monkeypatch.setattr(session_manager, "get_last_switcher_msg", lambda _: pointer[0])
+    monkeypatch.setattr(
+        session_manager,
+        "set_last_switcher_msg",
+        lambda _, mid: pointer.__setitem__(0, mid),
+    )
+    other = Session(id="other", name="Other", window_id="")
+    h.active[0] = other
+    h.state.in_menu_view = True
+    facade = {
+        name: card_carrier._legacy(name)
+        for name in (
+            "_ensure_seeded",
+            "_render_card",
+            "build_footer_keyboard",
+            "_edit_card",
+        )
+    }
+    facade["is_active_for_user"] = lambda _, sess: h.active[0].id == sess.id
+    monkeypatch.setattr(card_carrier, "_legacy", facade.__getitem__)
+    monkeypatch.setattr(
+        card_carrier, "_strip_stale_switchers", card_registry._strip_stale_switchers
+    )
+    original = h.bot._post
+
+    async def rejected(endpoint, data):
+        raise RetryAfter(120)
+
+    h.bot._post = rejected
+    with pytest.raises(RetryAfter):
+        await card_carrier.paint_card_on_carrier(h.bot, 42, other, 100)
+    assert await _strip_orphan_switcher_if_current(h.bot, 42, 100)
+    source_link = h.bot.edit_message_reply_markup.await_args.kwargs["reply_markup"]
+    assert source_link is not None
+    assert source_link.inline_keyboard[0][0].callback_data == "sw:target"
+
+    h.bot._post = original
+    assert await card_carrier.paint_card_on_carrier(h.bot, 42, other, 100)
+    item = queue.records[0]
+    resolve(item)
+    h.bot.edit_message_reply_markup.reset_mock()
+    # The carrier now shows Other, so retiring it must not restore Target's link.
+    assert await card_carrier.paint_card_on_carrier(h.bot, 42, other, 17)
+    h.bot.edit_message_reply_markup.assert_awaited_once_with(
+        chat_id=42, message_id=100, reply_markup=None
+    )
+    assert pointer[0] == 17

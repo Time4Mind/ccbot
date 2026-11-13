@@ -94,7 +94,9 @@ def interactive_panel(pane: str) -> tuple[str, str] | None:
     for index, line in enumerate(lines):
         if re.fullmatch(r"\s*Select model\s+esc\s*", line):
             for end in range(index + 1, len(lines)):
-                if "View all providers ctrl+a" in lines[end]:
+                if re.search(
+                    r"(?:View all providers|Connect provider) ctrl\+a", lines[end]
+                ):
                     return "Settings", "\n".join(lines[index : end + 1])
     return None
 

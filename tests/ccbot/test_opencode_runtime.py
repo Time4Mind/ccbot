@@ -71,6 +71,24 @@ def test_resumed_opencode_composer_uses_usage_footer_instead_of_version():
     assert not is_ready(pane + "\nuser@host %")
 
 
+def test_connected_provider_model_picker_exposes_controls_before_composer():
+    pane = """              Select model                                     esc
+              Search
+              Recent
+            ● GPT-6 Luna OpenAI
+              OpenCode
+              Iceman Free                                     Free
+              Connect provider ctrl+a  Favorite ctrl+f
+  ┃
+  ┃  Build · GPT-6 Luna OpenAI
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  /private/tmp/project       21.9K (2%)  ctrl+p commands
+"""
+    panel = extract_interactive_content(pane)
+    assert panel and panel.name == "Settings" and "GPT-6 Luna" in panel.content
+    assert not is_ready(pane)
+
+
 def test_native_question_is_exposed_through_existing_question_controls():
     pane = """     → Asked 1 question
   ┃

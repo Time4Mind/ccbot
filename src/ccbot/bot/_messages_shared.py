@@ -509,7 +509,7 @@ async def forward_command_handler(
         if success:
             # /clear: drop the session association so we re-detect once a
             # new session id is written by the next user message.
-            if cc_slash.strip().lower() == "/clear":
+            if command_name == "clear":
                 logger.info("Clearing session for window %s after /clear", display)
                 if sess is not None and not await reset_session_binding(sess):
                     await safe_reply(
@@ -523,7 +523,7 @@ async def forward_command_handler(
                     await resume_card_view(context.bot, user.id, sess)
                 await safe_reply(
                     update.message,
-                    "🧹 Context cleared. Next message starts a fresh Claude session.",
+                    "🧹 Context cleared. Next message starts a fresh session.",
                 )
             else:
                 repost.commit()

@@ -165,7 +165,16 @@ async def send_literal_chunked(window_id: str, text: str, *, backend: str = "") 
     started = time.monotonic()
     outcome = "error"
     try:
-        sent = await _send_literal_chunked(window_id, text, backend=backend)
+        if backend == "opencode":
+            from .opencode_input import submit
+
+            sent = await submit(
+                window_id,
+                text,
+                lambda: _send_literal_chunked(window_id, text, backend=backend),
+            )
+        else:
+            sent = await _send_literal_chunked(window_id, text, backend=backend)
         outcome = "sent" if sent else "failed"
         return sent
     finally:

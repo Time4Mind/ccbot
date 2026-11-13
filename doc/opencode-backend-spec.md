@@ -37,6 +37,12 @@ Native question and permission panels use the existing Telegram navigation
 controls. One Stop action sends OpenCode's required double Escape while a turn
 is running; dismissing a dialog sends a single Escape.
 
+OpenCode does not retain prompts submitted while its TUI is busy. Literal
+requests therefore wait in a per-window FIFO until the native composer is
+ready, then require a new matching user row in the native store before delivery
+is acknowledged. Waiting never holds the navigation lock, so Stop stays usable.
+An uncertain submission is not retyped automatically.
+
 OpenCode owns its database. CCBot uses SQLite `mode=ro`, `query_only` and a
 consistent transaction; it never migrates or updates native tables. Visible
 messages, reasoning, paired tools, terminal errors and usage are projected to

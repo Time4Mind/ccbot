@@ -468,13 +468,13 @@ class TmuxManager:
         Returns:
             True if successful, False otherwise
 
-        Serialized per window: ordinary literal input is pasted in bounded
-        chunks and submitted once. A concurrent send on the same pane
-        (classically a voice transcription completing right as the user typed
-        text into the same session) would otherwise interleave into the same
-        input box. The lock makes each send atomic against every other send on
-        the pane.
+        Serialize pastes; OpenCode waits for idle/ack without blocking Stop.
         """
+        if backend == "opencode" and literal and enter:
+            # Its prompt FIFO waits for idle/ack separately, keeping Stop usable.
+            return await tmux_input_transport.send_literal_chunked(
+                window_id, text, backend=backend
+            )
         async with self._send_lock_for(window_id):
             return await self._send_keys_locked(
                 window_id, text, enter, literal, backend=backend

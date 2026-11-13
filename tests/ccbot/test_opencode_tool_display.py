@@ -12,6 +12,39 @@ from ccbot.transcript_opencode import project_snapshot
 from ccbot.transcript_parser import TranscriptParser
 
 
+@pytest.mark.parametrize(
+    "summary,visible",
+    [
+        ({"diffs": []}, True),
+        ({"title": "request", "diffs": [{"file": "x"}]}, True),
+        (True, False),
+    ],
+)
+def test_user_diff_summary_is_visible_but_compaction_summary_is_hidden(
+    summary, visible
+):
+    snapshot = {
+        "session": {"id": "ses_display123", "directory": "/fixture"},
+        "usage": [],
+        "messages": [
+            {
+                "id": "user1",
+                "role": "user",
+                "time_created": 1000,
+                "summary": summary,
+                "parts": [
+                    {"id": "text1", "type": "text", "text": "ACTUAL_USER_REQUEST"}
+                ],
+            }
+        ],
+    }
+    original = deepcopy(snapshot)
+    rows = project_snapshot(snapshot)
+    assert snapshot == original
+    parsed, _ = TranscriptParser.parse_entries(rows, pending_tools={})
+    assert [x.text for x in parsed] == (["ACTUAL_USER_REQUEST"] if visible else [])
+
+
 def render_tool(
     tool, arguments, output, metadata=None, status="completed", attachments=None
 ):

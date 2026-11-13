@@ -170,9 +170,37 @@ async def test_live_monitor_refreshes_opencode_projection(native):
     )
     targets = [SessionInfo(session_id=SID, file_path=path)]
     assert await monitor.check_for_updates({SID}, session_infos=targets) == []
+
     add_message(db, "a1", "assistant", "OPENCODE_FINAL")
     updates = await monitor.check_for_updates({SID}, session_infos=targets)
     assert [(item.text, item.stop_reason) for item in updates] == [
         ("OPENCODE_FINAL", "end_turn")
     ]
+    assert await monitor.check_for_updates({SID}, session_infos=targets) == []
+
+
+@pytest.mark.asyncio
+async def test_fast_new_native_turn_is_delivered_then_not_replayed_on_restore(native):
+    from ccbot.session_monitor import SessionInfo, SessionMonitor
+
+    db, _source, cwd = native
+    db.execute("UPDATE session SET time_created=1000 WHERE id=?", (SID,))
+    db.commit()
+    add_message(db, "fast", "assistant", "FAST_CLEAR_REPLY")
+    path = session_transcript_path(SID, str(cwd), "opencode")
+    assert path
+    monitor = SessionMonitor(
+        projects_path=cwd / "projects", state_file=cwd / "monitor-fast.json"
+    )
+    monitor._started_at = 500
+    monitor._last_session_map = {"@1": "ses_previous"}
+    await monitor._detect_and_cleanup_changes({"@1": SID})
+    targets = [SessionInfo(session_id=SID, file_path=path)]
+    updates = await monitor.check_for_updates({SID}, session_infos=targets)
+    assert [(m.text, m.stop_reason) for m in updates] == [
+        ("FAST_CLEAR_REPLY", "end_turn")
+    ]
+    assert await monitor.check_for_updates({SID}, session_infos=targets) == []
+    await monitor._detect_and_cleanup_changes({})
+    await monitor._detect_and_cleanup_changes({"@2": SID})
     assert await monitor.check_for_updates({SID}, session_infos=targets) == []

@@ -13,6 +13,10 @@ def project_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     tools = {}
     aborted_messages = set()
     for message in normalized["messages"]:
+        # OpenCode uses summary objects for visible user-turn file diffs;
+        # ZCode's boolean summary marker instead denotes hidden compaction.
+        if isinstance(message.get("summary"), dict):
+            message.pop("summary")
         aborted = (message.get("error") or {}).get("name") == "MessageAbortedError"
         if aborted:
             aborted_messages.add(message["id"] + ":error")

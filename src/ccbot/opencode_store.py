@@ -134,3 +134,15 @@ def list_sessions(cwd: str, path: Path | None = None) -> list[dict[str, Any]]:
             )
             if SESSION_ID.fullmatch(row["id"])
         ]
+
+
+def created_after(session_id: str, timestamp_ms: float) -> bool:
+    """Distinguish newly born live sessions from restored native history."""
+    try:
+        with open_store() as db:
+            row = db.execute(
+                "SELECT time_created FROM session WHERE id=?", (session_id,)
+            ).fetchone()
+        return row is not None and row["time_created"] >= timestamp_ms
+    except OpenCodeStoreError:
+        return False

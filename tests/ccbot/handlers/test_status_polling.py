@@ -567,6 +567,50 @@ async def test_live_pane_work_keeps_stop_visible_between_transcript_events(
 
 
 @pytest.mark.asyncio
+async def test_opencode_interrupt_footer_keeps_stop_after_unchanged_status(monkeypatch):
+    """Native interrupt chrome stays authoritative during a silent long tool."""
+    import time
+
+    from ccbot.handlers import status_polling
+
+    sess = SimpleNamespace(id="opencode-long", window_id="@1", backend="opencode")
+    state = CardState(
+        msg_id=9,
+        events=[Event(type="tool_use", text="long command", started_at=1.0)],
+        last_event_ts=1.0,
+        turn_phase=TurnPhase.RUNNING,
+    )
+    pane = (
+        "  ┃\n  ┃  Build · GPT-6 Luna OpenAI\n"
+        "  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+        "   ■⬝⬝⬝⬝⬝⬝⬝  esc interrupt     24.1K (2%)  ctrl+p commands\n"
+    )
+    monkeypatch.setattr(status_polling, "get_card_state", lambda *_a: state)
+    monkeypatch.setattr(status_polling, "is_card_in_menu_view", lambda *_a: False)
+    monkeypatch.setattr(status_polling, "is_card_busy", lambda *_a: False)
+    monkeypatch.setattr(status_polling, "is_card_finalized", lambda *_a: False)
+    monkeypatch.setattr(status_polling, "maybe_finalize_stalled", AsyncMock())
+    monkeypatch.setattr(status_polling, "refresh_panel", AsyncMock(return_value=True))
+    monkeypatch.setattr(status_polling, "fire_typing", AsyncMock())
+    monkeypatch.setattr(status_polling, "is_interactive_ui", lambda _p: False)
+    monkeypatch.setattr(status_polling, "get_interactive_window", lambda _u: None)
+    monkeypatch.setitem(
+        status_polling._pane_status_cache,
+        (42, sess.id),
+        ("Working", time.time() - 300),
+    )
+
+    await _drive_typing_indicator(object(), 42, "@1", pane, sess, False)
+    assert _card_is_busy(state) is True
+
+    idle_pane = pane.rsplit("   ■", 1)[0] + (
+        "  /private/tmp/project       24.1K (2%)  ctrl+p commands\n"
+    )
+    await _drive_typing_indicator(object(), 42, "@1", idle_pane, sess, False)
+    assert _card_is_busy(state) is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("footer", "expected"),
     [("gpt-5.6-sol medium", "gpt-5.6-sol"), ("GPT-6.1 Terra high", "GPT-6.1 Terra")],

@@ -357,6 +357,14 @@ class TranscriptParser:
                             tool_input_data = tool_info.input_data
 
                         native_display = block.get("_ccbot_display")
+                        native_tool = block.get("_ccbot_tool")
+                        if tool_info is None and isinstance(native_tool, dict):
+                            if native_tool.get("hidden"):
+                                continue
+                            tool_name = str(native_tool.get("name") or "Tool")
+                            tool_summary = (
+                                f"**{tool_name}**({native_tool.get('args', '')})"
+                            )
                         if is_interrupted:
                             # Show interruption inline with tool summary
                             entry_text = tool_summary or ""
@@ -538,7 +546,10 @@ class TranscriptParser:
         # without emitting entries. In one-shot mode (history), emit them.
         remaining_pending = dict[str, Any](pending_tools)
         if not _carry_over:
+            emitted = {entry.tool_use_id for entry in result}
             for tool_id, tool_info in pending_tools.items():
+                if tool_id in emitted or tool_info.hidden:
+                    continue
                 result.append(
                     ParsedEntry(
                         role="assistant",

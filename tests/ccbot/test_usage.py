@@ -9,6 +9,21 @@ from ccbot.session import Session, SessionManager
 from ccbot.usage import context_pct_for_session, parse_session_usage
 
 
+@pytest.mark.parametrize("language", ["en", "ru", "zh"])
+def test_opencode_usage_labels_its_own_recorded_sessions(monkeypatch, language):
+    from ccbot import i18n
+    from ccbot.opencode_usage import OpenCodeUsageInfo
+    from ccbot.usage import format_usage_breakdown_compact
+
+    monkeypatch.setattr(i18n, "get_user_lang", lambda _uid: language)
+    text = format_usage_breakdown_compact(
+        42, OpenCodeUsageInfo(123, 100, 23, "gpt-6-luna")
+    )
+    assert "OpenCode" in text
+    assert "ZCode" not in text
+    assert "123" in text
+
+
 @pytest.fixture
 def mgr(monkeypatch) -> SessionManager:
     monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)

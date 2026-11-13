@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 ZH: dict[str, str] = {
-    "usage.zcode.tokens": "已记录的 ZCode 会话：{total} tokens（输入 {incoming}，输出 {outgoing}）。",
-    "usage.zcode.unknown_quota": "此 API 连接未提供账户配额和重置时间。",
+    "usage.native.tokens": "已记录的 {backend} 会话：{total} tokens（输入 {incoming}，输出 {outgoing}）。",
+    "usage.native.unknown_quota": "此连接未提供账户配额和重置时间。",
     "auth.zcode.configure": "创建会话前，请在 ZCode 终端中配置模型访问。",
     "auth.zcode.checking": "正在检查 ZCode 连接…",
     "auth.zcode.ready": "✅ ZCode 连接已验证。",

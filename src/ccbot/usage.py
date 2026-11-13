@@ -379,12 +379,13 @@ def format_usage_breakdown_compact(
         if info.total_tokens is not None:
             result += "\n\n" + t(
                 user_id,
-                "usage.zcode.tokens",
+                "usage.native.tokens",
+                backend=label,
                 total=info.total_tokens,
                 incoming=info.input_tokens,
                 outgoing=info.output_tokens,
             )
-        return result + "\n\n" + t(user_id, "usage.zcode.unknown_quota")
+        return result + "\n\n" + t(user_id, "usage.native.unknown_quota")
 
     if isinstance(info, CodexUsageInfo):
         five = f"{info.five_hour.used_percent}%" if info.five_hour else "-"

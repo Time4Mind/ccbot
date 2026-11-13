@@ -334,3 +334,17 @@ async def test_local_stop_uses_the_native_interruption_sequence(monkeypatch):
     )
     assert await terminal_runtime.send_session_key(session, "Escape")
     assert [call.args[1] for call in send.await_args_list] == ["Escape", "Escape"]
+
+
+def test_idle_composer_with_wrapped_project_path_is_ready():
+    from ccbot.opencode_runtime import composer_identity
+
+    pane = """  ┃
+  ┃  Build · GPT-6 Luna OpenAI
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  /private/tmp/ccbot-opencode-deep-20261113/     21.6K (2%) ctrl+p commands
+  permission
+"""
+    assert is_ready(pane)
+    assert composer_identity(pane) == ("GPT-6 Luna", "default")
+    assert not is_ready(pane + "\nuser@host %")

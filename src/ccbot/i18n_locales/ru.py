@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 RU: dict[str, str] = {
-    "usage.zcode.tokens": "Учтённые сессии ZCode: {total} токенов (вход {incoming}, выход {outgoing}).",
-    "usage.zcode.unknown_quota": "Квоты аккаунта и сроки сброса для этого API-подключения не предоставлены.",
+    "usage.native.tokens": "Учтённые сессии {backend}: {total} токенов (вход {incoming}, выход {outgoing}).",
+    "usage.native.unknown_quota": "Квоты аккаунта и сроки сброса для этого подключения не предоставлены.",
     "auth.zcode.configure": "Настройте доступ к модели в терминале ZCode перед созданием сессии.",
     "auth.zcode.checking": "Проверяю подключение ZCode…",
     "auth.zcode.ready": "✅ Подключение ZCode проверено.",

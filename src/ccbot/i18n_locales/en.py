@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 EN: dict[str, str] = {
-    "usage.zcode.tokens": "Recorded ZCode sessions: {total} tokens (input {incoming}, output {outgoing}).",
-    "usage.zcode.unknown_quota": "Account quotas and reset times are not reported for this API connection.",
+    "usage.native.tokens": "Recorded {backend} sessions: {total} tokens (input {incoming}, output {outgoing}).",
+    "usage.native.unknown_quota": "Account quotas and reset times are not reported for this connection.",
     "auth.zcode.configure": "Configure model access in the ZCode terminal before starting a session.",
     "auth.zcode.checking": "Checking ZCode connection…",
     "auth.zcode.ready": "✅ ZCode connection verified.",

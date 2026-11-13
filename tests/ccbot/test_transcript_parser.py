@@ -492,9 +492,10 @@ class TestParseEntries:
         ]
         result, pending = TranscriptParser.parse_entries(entries, pending_tools=None)
         tool_entries = [e for e in result if e.tool_use_id == "t1"]
-        assert len(tool_entries) == 2
+        assert len(tool_entries) == 1
         assert tool_entries[0].content_type == "tool_use"
-        assert tool_entries[1].content_type == "tool_use"
+        assert tool_entries[0].tool_name == "Read"
+        assert tool_entries[0].timestamp
 
     def test_system_tag_filtered(self, make_jsonl_entry, make_text_block):
         entries = [

@@ -17,6 +17,13 @@ def _footer(pane: str) -> str:
         return ""
     # The mini UI anchors its composer on its last nonempty command bar.
     tail = lines[-1]
+    # Narrow panes can wrap the project directory below the command bar.
+    for index in range(max(0, len(lines) - 3), len(lines) - 1):
+        if "ctrl+p commands" in lines[index] and all(
+            re.fullmatch(r"[\w./~ -]+", row) for row in lines[index + 1 :]
+        ):
+            tail = lines[index]
+            break
     if re.match(r"^(?:BUILD|PLAN)\b", tail) and "ctrl+p" in tail:
         return tail
     if (

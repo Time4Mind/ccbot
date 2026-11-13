@@ -2,6 +2,7 @@
 
 from typing import Any
 from copy import deepcopy
+from datetime import datetime, timezone
 
 from .opencode_tools import normalize_tool
 from .transcript_codex import is_harness_tool_input
@@ -43,6 +44,39 @@ def project_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
                 message["parts"][index] = part
                 tools[part["id"]] = part
     rows = project_native_snapshot(normalized)
+    for message in normalized["messages"]:
+        if (message.get("time") or {}).get("completed") and any(
+            part.get("type") == "tool"
+            and (part.get("state") or {}).get("error")
+            == "The user rejected permission to use this specific tool call."
+            for part in message["parts"]
+        ):
+            identities = {part["id"] for part in message["parts"]} | {message["id"]}
+            end = max(
+                (
+                    index
+                    for index, row in enumerate(rows)
+                    if str(row.get("uuid", "")).split(":")[0] in identities
+                ),
+                default=-1,
+            )
+            rows.insert(
+                end + 1,
+                {
+                    "type": "assistant",
+                    "uuid": message["id"] + ":permission-denied",
+                    "sessionId": normalized["session"]["id"],
+                    "cwd": normalized["session"]["directory"],
+                    "timestamp": datetime.fromtimestamp(
+                        message["time"]["completed"] / 1000, timezone.utc
+                    ).isoformat(),
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "⏹ Permission denied"}],
+                        "stop_reason": "end_turn",
+                    },
+                },
+            )
     for row in rows:
         if row.get("uuid") in aborted_messages:
             row.pop("isApiErrorMessage", None)
@@ -61,4 +95,9 @@ def project_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
                 block["_ccbot_hidden"] = is_harness_tool_input(tool["state"]["input"])
             elif phase == "result":
                 block["_ccbot_display"] = tool["_ccbot_display"]
+                block["_ccbot_tool"] = {
+                    "name": tool["tool"],
+                    "args": tool["_ccbot_args"],
+                    "hidden": is_harness_tool_input(tool["state"]["input"]),
+                }
     return rows

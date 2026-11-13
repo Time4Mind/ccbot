@@ -286,3 +286,66 @@ def test_image_tool_result_keeps_original_image_bytes():
         ],
     )
     assert event.image_data == [("image/png", b"x")]
+
+
+def test_pending_native_tool_history_is_not_duplicated_on_restart():
+    rows = [
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "pending1",
+                        "name": "Bash",
+                        "input": {"command": "sleep 10"},
+                    }
+                ]
+            },
+        }
+    ]
+    parsed, _ = TranscriptParser.parse_entries(rows)
+    assert [(p.content_type, p.tool_use_id) for p in parsed] == [
+        ("tool_use", "pending1")
+    ]
+
+
+def test_native_result_retains_tool_identity_without_monitor_pending_state():
+    snapshot = {
+        "session": {"id": "ses_display123", "directory": "/fixture"},
+        "usage": [],
+        "messages": [
+            {
+                "id": "a1",
+                "role": "assistant",
+                "time_created": 1000,
+                "time": {"completed": 2000},
+                "finish": "tool-calls",
+                "parts": [
+                    {
+                        "id": "p1",
+                        "type": "tool",
+                        "tool": "bash",
+                        "callID": "call1",
+                        "state": {
+                            "status": "error",
+                            "input": {"command": "touch sentinel"},
+                            "error": "The user rejected permission to use this specific tool call.",
+                            "time": {"start": 1000, "end": 2000},
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    rows = project_snapshot(snapshot)
+    parsed, _ = TranscriptParser.parse_entries(
+        [r for r in rows if r["uuid"] == "p1:result"], pending_tools={}
+    )
+    assert len(parsed) == 1
+    assert parsed[0].tool_name == "Bash"
+    assert "**Bash**(touch sentinel)" in parsed[0].text
+    assert parsed[0].is_error
+    all_parsed, _ = TranscriptParser.parse_entries(rows, pending_tools={})
+    assert all_parsed[-1].stop_reason == "end_turn"
+    assert all_parsed[-1].text == "⏹ Permission denied"

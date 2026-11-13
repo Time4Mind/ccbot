@@ -224,6 +224,8 @@ class TranscriptParser:
                         inp = block.get("input", {})
                         hidden = bool(block.get("_ccbot_hidden"))
                         summary = transcript_format.format_tool_use_summary(name, inp)
+                        if isinstance(block.get("_ccbot_args"), str):
+                            summary = f"**{name}**({block['_ccbot_args']})"
 
                         # ExitPlanMode: emit plan content as text before tool_use entry
                         if name == "ExitPlanMode" and isinstance(inp, dict):
@@ -354,6 +356,7 @@ class TranscriptParser:
                             tool_name = tool_info.tool_name
                             tool_input_data = tool_info.input_data
 
+                        native_display = block.get("_ccbot_display")
                         if is_interrupted:
                             # Show interruption inline with tool summary
                             entry_text = tool_summary or ""
@@ -361,6 +364,15 @@ class TranscriptParser:
                                 entry_text += "\n⏹ Interrupted"
                             else:
                                 entry_text = "⏹ Interrupted"
+                            if isinstance(native_display, dict) and native_display.get(
+                                "text"
+                            ):
+                                entry_text += (
+                                    "\n"
+                                    + transcript_format.format_expandable_quote(
+                                        str(native_display["text"])
+                                    )
+                                )
                             result.append(
                                 ParsedEntry(
                                     role="assistant",
@@ -368,6 +380,29 @@ class TranscriptParser:
                                     content_type="tool_result",
                                     tool_use_id=_tuid,
                                     timestamp=entry_timestamp,
+                                )
+                            )
+                        elif isinstance(native_display, dict):
+                            display = native_display
+                            entry_text = tool_summary or f"**{tool_name or 'Tool'}**()"
+                            if display.get("summary"):
+                                entry_text += "\n  ⎿  " + str(display["summary"])
+                            entry_text += (
+                                "\n"
+                                + transcript_format.format_expandable_quote(
+                                    str(display.get("text") or result_text)
+                                )
+                            )
+                            result.append(
+                                ParsedEntry(
+                                    role="assistant",
+                                    text=entry_text,
+                                    content_type="tool_result",
+                                    tool_use_id=_tuid,
+                                    tool_name=tool_name,
+                                    timestamp=entry_timestamp,
+                                    image_data=result_images,
+                                    is_error=bool(is_error),
                                 )
                             )
                         elif is_error:

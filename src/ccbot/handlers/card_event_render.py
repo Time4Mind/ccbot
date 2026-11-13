@@ -87,6 +87,12 @@ def _format_tool_args(tool_name: str, args: str) -> str:
         return ""
     if tool_name == "Bash":
         return _fenced_block(args, "bash")
+    if tool_name in ("apply_patch", "ApplyPatch"):
+        return _fenced_block(args, "diff")
+    if "\n" in args:
+        return _fenced_block(
+            args, "json" if args.lstrip().startswith(("{", "[")) else ""
+        )
     return f"`{args}`"
 
 
@@ -99,9 +105,9 @@ def _format_tool_content(tool_name: str, args: str, content: str) -> str:
     if not content:
         return ""
     if tool_name in ("Read", "Write"):
-        lang = _lang_for_path(args)
+        lang = _lang_for_path(args.splitlines()[0] if args else "")
         return _fenced_block(content, lang)
-    if tool_name == "Edit":
+    if tool_name in ("Edit", "apply_patch", "ApplyPatch"):
         return _fenced_block(content, "diff")
     return content
 

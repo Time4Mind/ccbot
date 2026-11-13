@@ -33,6 +33,9 @@ native resume. Input is gated on the native composer and a running OpenCode
 process. `/model` maps to `/models`, `/clear` maps to `/new`; native dialogs remain
 available through terminal and arrow controls. Model availability follows the
 connected provider. The adapter does not invent a separate effort selector.
+Native question and permission panels use the existing Telegram navigation
+controls. One Stop action sends OpenCode's required double Escape while a turn
+is running; dismissing a dialog sends a single Escape.
 
 OpenCode owns its database. CCBot uses SQLite `mode=ro`, `query_only` and a
 consistent transaction; it never migrates or updates native tables. Visible
@@ -41,6 +44,13 @@ an append-only CCBot journal under `$CCBOT_DIR/opencode-transcripts/`. Synthetic
 and model-only inputs are hidden. Stable identities prevent replay duplicates;
 an interrupted append repairs only the CCBot journal. Histories, archive restore,
 cross-backend handoff and worker events retain native backend identity.
+
+Tool cards use the shared command/result spoiler renderer. The adapter retains
+complete arguments before display limits, uses native file text and patch diffs,
+preserves image attachments and unknown MCP tools, and maps native tool names
+to the existing display names. Nonzero shell exit codes appear as tool errors;
+an explicit user abort closes pending tools as Interrupted rather than a
+provider failure. Native output truncation stays visible.
 
 Usage comes from native completed messages. Account quota and context capacity
 remain unknown when the native source does not supply them.

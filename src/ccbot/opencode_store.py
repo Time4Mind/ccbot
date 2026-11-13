@@ -89,13 +89,6 @@ def read_snapshot(
                 if not isinstance(item, dict):
                     raise OpenCodeStoreError("Invalid OpenCode part")
                 item["id"] = part["id"]
-                if item.get("type") == "tool":
-                    # Normalize only for the shared CCBot renderer.
-                    item["tool"] = str(item.get("tool", "Tool")).capitalize()
-                    state = item.get("state") or {}
-                    args = state.get("input") or {}
-                    if "filePath" in args:
-                        args["file_path"] = args["filePath"]
                 data["parts"].append(item)
                 watermark = max(watermark, part["time_updated"])
             if data.get("role") == "assistant" and (data.get("time") or {}).get(

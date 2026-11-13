@@ -19,7 +19,13 @@ def _footer(pane: str) -> str:
     tail = lines[-1]
     if re.match(r"^(?:BUILD|PLAN)\b", tail) and "ctrl+p" in tail:
         return tail
-    if re.match(r"^(?:/|~).+\s+\d+\.\d+\.\d+\s*$", tail):
+    if (
+        re.match(r"^(?:/|~).+", tail)
+        and ("ctrl+p commands" in tail or re.search(r"\s\d+\.\d+\.\d+\s*$", tail))
+    ) or (
+        "ctrl+p commands" in tail
+        and re.search(r"\besc\s+(?:again to\s+)?interrupt\b", tail)
+    ):
         for line in reversed(lines[-16:]):
             if re.match(r"^┃\s+(?:Build|Plan)\s+·\s+", line):
                 return line
@@ -38,6 +44,15 @@ def composer_identity(pane: str) -> tuple[str, str] | None:
     footer = _footer(pane)
     if not footer:
         return None
+    model = re.match(r"^┃\s+(?:Build|Plan)\s+·\s+(.+?)\s+OpenAI\s*$", footer)
+    if model:
+        name = model[1]
+        effort = re.search(r"\s+(low|medium|high|xhigh|max)\s*$", name, re.I)
+        return (
+            (name[: effort.start()].strip(), effort[1].lower())
+            if effort
+            else (name, "default")
+        )
     match = re.search(
         r"\b(gpt-[\w.\-]+)\b(?:\s+(low|medium|high|xhigh|max))?", footer, re.I
     )
@@ -48,13 +63,34 @@ def status_line(pane: str) -> str | None:
     if not _footer(pane):
         return None
     tail = "\n".join(pane.splitlines()[-8:])
-    if re.search(r"\besc\s+(?:to\s+)?interrupt\b", tail, re.I):
+    if re.search(r"\besc\s+(?:(?:again\s+)?to\s+)?interrupt\b", tail, re.I):
         return "Working"
     return None
 
 
 def interactive_panel(pane: str) -> tuple[str, str] | None:
     lines = pane.splitlines()
+    nonempty = [line for line in lines if line.strip()]
+    if nonempty and nonempty[-1].strip() == "┃":
+        for start in range(len(lines) - 1, max(-1, len(lines) - 22), -1):
+            if re.match(r"^\s*┃\s*△ Permission required\s*$", lines[start]):
+                tail = "\n".join(lines[start:])
+                if "Allow once" in tail and "Reject" in tail:
+                    return "OpenCodePermission", "\n".join(
+                        re.sub(r"^\s*┃\s?", "", line) for line in lines[start:]
+                    ).strip()
+        for end in range(len(lines) - 1, -1, -1):
+            if re.match(
+                r"^\s*┃\s*↑↓ select\s+enter submit\s+esc dismiss\s*$", lines[end]
+            ):
+                start = end
+                while start > 0 and lines[start - 1].lstrip().startswith("┃"):
+                    start -= 1
+                content = "\n".join(
+                    re.sub(r"^\s*┃\s?", "", line) for line in lines[start : end + 1]
+                ).strip()
+                if re.search(r"(?m)^\s*1\.\s+", content):
+                    return "AskUserQuestion", content
     for index, line in enumerate(lines):
         if re.fullmatch(r"\s*Select model\s+esc\s*", line):
             for end in range(index + 1, len(lines)):
@@ -65,6 +101,16 @@ def interactive_panel(pane: str) -> tuple[str, str] | None:
 
 def navigation_key(key: str, pane: str) -> str:
     return key
+
+
+def navigation_keys(key: str, pane: str) -> tuple[str, ...]:
+    if (
+        key in ("Escape", "Esc")
+        and status_line(pane)
+        and interactive_panel(pane) is None
+    ):
+        return ("Escape", "Escape")
+    return (key,)
 
 
 async def wait_ready(

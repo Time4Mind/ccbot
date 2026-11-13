@@ -448,9 +448,21 @@ class TmuxWorkerExecutor(WorkerEventPollingMixin, WorkerInboxMixin, WorkerHistor
 
             pane = await self.capture_session(session_id=session_id)
             key = navigation_key(key, pane.get("pane", ""))
-        code, _stdout, stderr = await self._run_tmux(
-            "send-keys", "-t", session.window_id, key
-        )
+        keys = (key,)
+        if session.backend == "opencode" and key in ("Escape", "Esc"):
+            from .opencode_runtime import navigation_keys
+
+            pane = await self.capture_session(session_id=session_id)
+            keys = navigation_keys(key, pane.get("pane", ""))
+        code, stderr = 0, ""
+        for native_key in keys:
+            code, _stdout, stderr = await self._run_tmux(
+                "send-keys", "-t", session.window_id, native_key
+            )
+            if code:
+                break
+            if len(keys) > 1:
+                await asyncio.sleep(0.05)
         return {"ok": code == 0, "error": "" if code == 0 else stderr.strip()}
 
     async def capture_session(

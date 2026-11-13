@@ -56,6 +56,71 @@ def test_live_composer_and_model_menu_do_not_match_shell_or_codex():
     assert parse_status_line("BUILD  ■ esc interrupt       ctrl+p cmd") == "Working"
 
 
+def test_resumed_opencode_composer_uses_usage_footer_instead_of_version():
+    from ccbot.opencode_runtime import composer_identity
+
+    pane = """LIVE_LUNA6_OK
+  ┃
+  ┃
+  ┃  Build · GPT-6 Luna OpenAI
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  /private/tmp/project         22.6K (2%)  ctrl+p commands
+"""
+    assert is_ready(pane)
+    assert composer_identity(pane) == ("GPT-6 Luna", "default")
+    assert not is_ready(pane + "\nuser@host %")
+
+
+def test_native_question_is_exposed_through_existing_question_controls():
+    pane = """     → Asked 1 question
+  ┃
+  ┃  Pick a fixture option
+  ┃
+  ┃  1. Alpha
+  ┃     Choose Alpha
+  ┃  2. Beta
+  ┃     Choose Beta
+  ┃  3. Type your own answer
+  ┃
+  ┃  ↑↓ select  enter submit  esc dismiss
+  ┃
+"""
+    panel = extract_interactive_content(pane)
+    assert panel and panel.name == "AskUserQuestion"
+    assert "Pick a fixture option" in panel.content and "2. Beta" in panel.content
+    assert not is_ready(pane)
+
+
+def test_native_permission_prompt_remains_visible_even_when_footer_wraps():
+    pane = """  ┃
+  ┃  △ Permission required
+  ┃    # Shell command
+  ┃
+  ┃  $ python3 -c "print('PERMISSION_OK')"
+  ┃
+  ┃   Allow once   Allow always   Reject  ctrl+f fullscreen  ⇆ select  enter con
+  ┃
+"""
+    panel = extract_interactive_content(pane)
+    assert panel and panel.name == "OpenCodePermission"
+    assert "Allow once" in panel.content and "Reject" in panel.content
+    assert not is_ready(pane)
+
+
+def test_busy_composer_and_stop_have_native_opencode_semantics():
+    from ccbot.opencode_runtime import navigation_keys, status_line
+
+    pane = """  ┃
+  ┃  Build · GPT-6 Luna OpenAI
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   ⬝⬝⬝⬝⬝⬝⬝■  esc interrupt       tab agents  ctrl+p commands
+"""
+    assert status_line(pane) == "Working"
+    assert not is_ready(pane)
+    assert navigation_keys("Escape", pane) == ("Escape", "Escape")
+    assert navigation_keys("Escape", COMPOSER) == ("Escape",)
+
+
 def test_opencode_hook_retains_native_id_and_project(tmp_path, monkeypatch):
     monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
     monkeypatch.setenv("TMUX_PANE", "%99")
@@ -216,3 +281,26 @@ async def test_opencode_auth_error_does_not_start_claude_login(monkeypatch):
     assert sent.await_count == 1
     assert "OpenCode" in sent.await_args.args[2]
     claude_login.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_local_stop_uses_the_native_interruption_sequence(monkeypatch):
+    from ccbot import terminal_runtime
+    from ccbot.session_models import Session
+
+    pane = "┃ Build · GPT-6 Luna OpenAI\n╹▀▀▀▀▀▀\n■■ esc interrupt  ctrl+p commands"
+    monkeypatch.setattr(
+        terminal_runtime.tmux_manager,
+        "find_window_by_id",
+        AsyncMock(return_value=SimpleNamespace(window_id="@9")),
+    )
+    monkeypatch.setattr(
+        terminal_runtime.tmux_manager, "capture_pane", AsyncMock(return_value=pane)
+    )
+    send = AsyncMock(return_value=True)
+    monkeypatch.setattr(terminal_runtime.tmux_manager, "send_keys", send)
+    session = Session(
+        id="local-stop", name="OpenCode", backend="opencode", window_id="@9"
+    )
+    assert await terminal_runtime.send_session_key(session, "Escape")
+    assert [call.args[1] for call in send.await_args_list] == ["Escape", "Escape"]

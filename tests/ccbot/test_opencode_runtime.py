@@ -71,8 +71,9 @@ def test_resumed_opencode_composer_uses_usage_footer_instead_of_version():
     assert not is_ready(pane + "\nuser@host %")
 
 
-def test_connected_provider_model_picker_exposes_controls_before_composer():
-    pane = """              Select model                                     esc
+@pytest.mark.parametrize("prefix", ["              ", "     ▣  Bu    "])
+def test_connected_provider_model_picker_exposes_controls_before_composer(prefix):
+    pane = f"""{prefix}Select model                                     esc
      ▣  Bu
               Search
               Recent

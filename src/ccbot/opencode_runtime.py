@@ -92,13 +92,14 @@ def interactive_panel(pane: str) -> tuple[str, str] | None:
                 if re.search(r"(?m)^\s*1\.\s+", content):
                     return "AskUserQuestion", content
     for index, line in enumerate(lines):
-        if re.fullmatch(r"\s*Select model\s+esc\s*", line):
+        model_title = re.search(r"\bSelect model\s+esc\s*$", line)
+        if model_title is not None and _footer(pane):
             for end in range(index + 1, len(lines)):
                 if re.search(
                     r"(?:View all providers|Connect provider) ctrl\+a", lines[end]
                 ):
                     # Floating dialogs leave old TUI text to their left.
-                    left = max(0, line.index("Select model") - 2)
+                    left = max(0, model_title.start() - 2)
                     return "Settings", "\n".join(
                         row[left:] for row in lines[index : end + 1]
                     )

@@ -226,3 +226,51 @@ async def test_first_accepted_prompt_finishes_before_next_even_if_composer_idle(
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pasting", [False, True])
+async def test_restart_replays_only_prompt_that_has_not_started_pasting(
+    tmp_path, monkeypatch, pasting
+):
+    from ccbot import opencode_input
+    from ccbot import input_recovery as recovery_module
+    from ccbot.input_recovery import InputRecovery, InputRequest
+
+    recovery = InputRecovery(tmp_path / "input.json")
+    request = InputRequest(
+        "r1", 42, 1, "s1", "@7", "text", {}, state="dispatching", prepared="queued"
+    )
+    recovery.records[request.id] = request
+    recovery.save()
+    monkeypatch.setattr(recovery, "current", lambda: request)
+    monkeypatch.setattr(recovery_module, "input_recovery", recovery)
+    captured = asyncio.Event()
+    sending = asyncio.Event()
+
+    async def capture(window):
+        captured.set()
+        return IDLE if pasting else BUSY
+
+    async def send():
+        sending.set()
+        await asyncio.Event().wait()
+        return True
+
+    monkeypatch.setattr(opencode_input, "_capture", capture)
+    monkeypatch.setattr(opencode_input, "_turn_finished", lambda window: True)
+    monkeypatch.setattr(opencode_input, "_accepted", lambda window: {})
+    monkeypatch.setattr(
+        tmux_input_transport, "zcode_process_is_running", AsyncMock(return_value=True)
+    )
+    task = asyncio.create_task(opencode_input.submit("@7", "queued", send))
+    try:
+        await (sending.wait() if pasting else captured.wait())
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        restored = InputRecovery(recovery.path)
+        restored.load()
+        assert restored.records["r1"].state == ("unknown" if pasting else "prepared")
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

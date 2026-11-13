@@ -18,6 +18,17 @@ READY_TIMEOUT = 120.0
 ACK_TIMEOUT = 10.0
 
 
+def _submission_phase(window: str, *, waiting: bool) -> None:
+    from .input_recovery import input_recovery
+
+    request = input_recovery.current()
+    if request is not None and request.window_id == window:
+        # A restart may replay an untouched FIFO entry. Once paste begins,
+        # an uncertain outcome must retain the normal no-autoretry policy.
+        request.state = "prepared" if waiting else "dispatching"
+        input_recovery.changed(request)
+
+
 async def _capture(window: str) -> str:
     proc = await asyncio.create_subprocess_exec(
         "tmux",
@@ -106,6 +117,7 @@ async def submit(window: str, text: str, send: Callable[[], Awaitable[bool]]) ->
     """Wait without holding navigation locks; never retype uncertain input."""
     from .tmux_input_transport import zcode_process_is_running
 
+    _submission_phase(window, waiting=True)
     lock = _locks.setdefault(window, asyncio.Lock())
     async with lock:
         deadline = time.monotonic() + READY_TIMEOUT
@@ -119,6 +131,7 @@ async def submit(window: str, text: str, send: Callable[[], Awaitable[bool]]) ->
                 return False
             await asyncio.sleep(0.1)
         before = await asyncio.to_thread(_accepted, window)
+        _submission_phase(window, waiting=False)
         if not await send():
             return False
         if text.lstrip().startswith("/"):

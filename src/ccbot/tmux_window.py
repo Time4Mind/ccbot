@@ -186,8 +186,13 @@ async def create_window(
     # Validate directory first
     path = Path(work_dir).expanduser().resolve()
     selected_backend = backend or config_obj.agent_backend
-    if selected_backend not in ("claude", "codex", "zcode"):
+    if selected_backend not in ("claude", "codex", "zcode", "opencode"):
         return False, f"Unsupported agent backend: {selected_backend}", "", ""
+    if selected_backend == "opencode":
+        from .opencode_runtime import auth_state
+
+        if not auth_state().configured:
+            return False, "OpenCode OpenAI subscription is not connected", "", ""
     if not path.exists():
         return False, f"Directory does not exist: {work_dir}", "", ""
     if not path.is_dir():
@@ -238,6 +243,13 @@ async def create_window(
                             cmd = f"{cmd} {config_obj.codex_flags}"
                         if resume_session_id:
                             cmd = f"{cmd} resume {shlex.quote(resume_session_id)}"
+                    elif selected_backend == "opencode":
+                        cmd = config_obj.opencode_command
+                        cmd = f"{cmd} --model {shlex.quote(config_obj.opencode_model)}"
+                        if config_obj.opencode_flags:
+                            cmd = f"{cmd} {config_obj.opencode_flags}"
+                        if resume_session_id:
+                            cmd = f"{cmd} --session {shlex.quote(resume_session_id)}"
                     elif selected_backend == "zcode":
                         cmd = config_obj.zcode_command
                         if config_obj.zcode_flags:
@@ -250,7 +262,7 @@ async def create_window(
                             cmd = f"{cmd} {config_obj.claude_flags}"
                         if resume_session_id:
                             cmd = f"{cmd} --resume {shlex.quote(resume_session_id)}"
-                    if initial_prompt and selected_backend != "zcode":
+                    if initial_prompt and selected_backend not in ("zcode", "opencode"):
                         cmd = f"{cmd} {shlex.quote(initial_prompt)}"
                     # Identify the runtime so Claude (via the
                     # output-format guidance in CLAUDE.md) can
@@ -312,12 +324,24 @@ async def create_window(
     result = await asyncio.to_thread(_create_and_start)
     if (
         result[0]
-        and selected_backend in ("codex", "zcode")
+        and selected_backend in ("codex", "zcode", "opencode")
         and created_pane is not None
     ):
 
         async def _drive_and_rollback_on_failure() -> bool:
             try:
+                if selected_backend == "opencode":
+                    from .opencode_runtime import wait_ready
+
+                    async def capture_opencode() -> str:
+                        return await manager.capture_pane(result[3]) or ""
+
+                    await wait_ready(capture_opencode)
+                    if initial_prompt and not await manager.send_keys(
+                        result[3], initial_prompt, backend="opencode"
+                    ):
+                        raise RuntimeError("Could not submit imported OpenCode context")
+                    return True
                 if selected_backend == "zcode":
                     from .zcode_runtime import wait_ready
 

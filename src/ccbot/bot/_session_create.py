@@ -85,7 +85,7 @@ async def create_and_activate_session(
     )
     backend = (
         selected_backend
-        if selected_backend in ("claude", "codex", "zcode")
+        if selected_backend in ("claude", "codex", "zcode", "opencode")
         else session_manager.agent_backend
     )
     effective_backends = getattr(session_manager, "get_effective_backends", None)
@@ -281,7 +281,7 @@ async def _create_and_activate_session(
             lines.append(t(user.id, "startup.prompt_not_sent", prompt=label))
         return "\n".join(lines)
 
-    if node_id == "local" and backend == "codex":
+    if node_id == "local" and backend in ("codex", "opencode"):
         from .commands.auth import ensure_codex_authenticated
 
         authenticated = await ensure_codex_authenticated(
@@ -289,7 +289,11 @@ async def _create_and_activate_session(
         )
         _log_phase("auth_result", user.id, node_id, started_at)
         if not authenticated:
-            failure = fail_startup(t(user.id, "auth.codex.required"))
+            failure = fail_startup(
+                "OpenCode OpenAI subscription is not connected"
+                if backend == "opencode"
+                else t(user.id, "auth.codex.required")
+            )
             await safe_edit(
                 query,
                 failure,
@@ -298,7 +302,7 @@ async def _create_and_activate_session(
 
     agent_session_id = ""
     if node_id == "local":
-        if backend == "codex":
+        if backend in ("codex", "opencode"):
             create_result = await tmux_manager.create_window(
                 selected_path,
                 resume_session_id=resume_session_id,

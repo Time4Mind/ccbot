@@ -206,7 +206,11 @@ async def generate_name(seed_text: str, backend: str = "claude") -> str | None:
     if not seed:
         return None
     prompt = _PROMPT_TEMPLATE.format(seed=seed)
-    if backend == "zcode":
+    if backend == "opencode":
+        from .opencode_generation import generate
+
+        raw = await generate(config.opencode_command, prompt)
+    elif backend == "zcode":
         from .zcode_generation import generate
 
         raw = await generate(config.zcode_command, prompt)
@@ -263,7 +267,11 @@ async def generate_description(
     if not seed:
         return None
     prompt = _DESCRIPTION_PROMPT_TEMPLATE.format(seed=seed[:500])
-    if backend == "zcode":
+    if backend == "opencode":
+        from .opencode_generation import generate
+
+        raw = await generate(config.opencode_command, prompt)
+    elif backend == "zcode":
         from .zcode_generation import generate
 
         raw = await generate(config.zcode_command, prompt)
@@ -318,7 +326,7 @@ async def maybe_auto_name(
     sess = session_manager.get_session(session_id)
     if sess is None:
         return
-    if sess.backend not in ("claude", "codex", "zcode"):
+    if sess.backend not in ("claude", "codex", "zcode", "opencode"):
         return
 
     if user_id is not None:

@@ -31,11 +31,16 @@ async def probe_ready_backends(
 
             if not auth_state().configured:
                 continue
+        if backend == "opencode":
+            from .opencode_runtime import auth_state
+
+            if not auth_state().configured:
+                continue
         status_args = (
             ["auth", "status"]
             if backend == "claude"
             else ["--version"]
-            if backend == "zcode"
+            if backend in ("zcode", "opencode")
             else ["login", "status"]
         )
         process: asyncio.subprocess.Process | None = None
@@ -89,13 +94,13 @@ def parse_backend_health(
     ready = [
         str(value)
         for value in payload.get("backends", [])
-        if value in ("claude", "codex", "zcode")
+        if value in ("claude", "codex", "zcode", "opencode")
     ]
     configured_source = payload.get("configured_backends", fallback or ready)
     configured = [
         str(value)
         for value in configured_source
-        if str(value) in ("claude", "codex", "zcode")
+        if str(value) in ("claude", "codex", "zcode", "opencode")
     ]
     raw_status = payload.get("backend_status", {})
     status = (

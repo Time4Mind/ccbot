@@ -92,8 +92,13 @@ class Config:
         # Agent backend. ``claude`` remains the default for backwards
         # compatibility; ``codex`` uses OpenAI Codex CLI and its rollout store.
         self.agent_backend = os.getenv("CCBOT_AGENT_BACKEND", "claude").strip().lower()
-        if self.agent_backend not in ("claude", "codex", "zcode"):
-            raise ValueError("CCBOT_AGENT_BACKEND must be 'claude', 'codex' or 'zcode'")
+        if self.agent_backend not in ("claude", "codex", "zcode", "opencode"):
+            raise ValueError(
+                "CCBOT_AGENT_BACKEND must be 'claude', 'codex', 'zcode' or 'opencode'"
+            )
+        self.opencode_command = os.getenv("OPENCODE_COMMAND", "opencode")
+        self.opencode_flags = os.getenv("OPENCODE_FLAGS", "")
+        self.opencode_model = os.getenv("OPENCODE_MODEL", "openai/gpt-6-luna")
         self.zcode_command = os.getenv("ZCODE_COMMAND", "zcode")
         self.zcode_flags = os.getenv("ZCODE_FLAGS", "--mode yolo --locale en-US")
         self.codex_command = os.getenv("CODEX_COMMAND", "codex")

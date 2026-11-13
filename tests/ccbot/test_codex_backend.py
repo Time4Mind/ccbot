@@ -68,6 +68,7 @@ def test_agent_backend_is_exposed_in_settings(
         "st:agent:toggle:claude",
         "st:agent:toggle:codex",
         "st:agent:toggle:zcode",
+        "st:agent:toggle:opencode",
     ]
     assert choices[1].text.startswith("✅ ")
 

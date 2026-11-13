@@ -299,7 +299,7 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                 saved_backend = state.get("agent_backend", config.agent_backend)
                 self.agent_backend = (
                     saved_backend
-                    if saved_backend in ("claude", "codex", "zcode")
+                    if saved_backend in ("claude", "codex", "zcode", "opencode")
                     else config.agent_backend
                 )
                 # Keep legacy call sites and helper modules in sync with the
@@ -500,9 +500,11 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                         "TUI readiness is still unproven",
                         window_id,
                     )
-            if backend in ("codex", "zcode") and not await tmux_manager.wait_startup(
-                window_id
-            ):
+            if backend in (
+                "codex",
+                "zcode",
+                "opencode",
+            ) and not await tmux_manager.wait_startup(window_id):
                 logger.warning("startup checks failed for window %s", window_id)
                 return
             logger.info(
@@ -573,7 +575,11 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
     @staticmethod
     def _pane_has_ready_input(pane: str, backend: str) -> bool:
         """Whether the visible pane ends in the agent's real input box."""
-        if backend == "zcode":
+        if backend == "opencode":
+            from .opencode_runtime import is_ready
+
+            return is_ready(pane)
+        elif backend == "zcode":
             from .zcode_runtime import is_ready
 
             return is_ready(pane)
@@ -583,9 +589,7 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
             return False
         marker = "❯"
         lines = pane.strip().splitlines()
-        # The live input row is pinned near the bottom. Restricting detection
-        # to the tail avoids mistaking a historical user row for readiness
-        # while a resumed transcript is still being restored.
+        # Require the live input in the pane tail, outside restored history.
         return any(line.lstrip().startswith(marker) for line in lines[-6:])
 
     async def wait_for_window_ready(self, window_id: str) -> bool:

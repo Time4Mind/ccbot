@@ -136,7 +136,7 @@ async def _send_carriage_return(window_id: str) -> bool:
     return True
 
 
-async def zcode_process_is_running(window_id: str) -> bool:
+async def zcode_process_is_running(window_id: str, *, backend: str = "zcode") -> bool:
     """Never send a ZCode prompt into a shell after the agent exits."""
     try:
         process = await asyncio.create_subprocess_exec(
@@ -151,7 +151,12 @@ async def zcode_process_is_running(window_id: str) -> bool:
         )
         output, _ = await process.communicate()
         name = os.path.basename(output.decode(errors="replace").strip()).lower()
-        return process.returncode == 0 and name in {"zcode", "zcode-cli", "node"}
+        expected = (
+            {"opencode", "opencode-cli"}
+            if backend == "opencode"
+            else {"zcode", "zcode-cli", "node"}
+        )
+        return process.returncode == 0 and name in expected
     except OSError:
         return False
 
@@ -177,15 +182,23 @@ async def send_literal_chunked(window_id: str, text: str, *, backend: str = "") 
 async def _send_literal_chunked(
     window_id: str, text: str, *, backend: str = ""
 ) -> bool:
-    codex = backend.strip().lower() in ("codex", "zcode")
+    codex = backend.strip().lower() in ("codex", "zcode", "opencode")
+
+    async def opencode_running(window: str) -> bool:
+        return await zcode_process_is_running(window, backend="opencode")
+
     process_running = (
-        zcode_process_is_running
+        opencode_running
+        if backend.strip().lower() == "opencode"
+        else zcode_process_is_running
         if backend.strip().lower() == "zcode"
         else codex_process_is_running
     )
     if codex and not await process_running(window_id):
         logger.warning("Codex input blocked: agent is not running window=%s", window_id)
         return False
+    if backend.strip().lower() == "opencode":
+        text = {"/model": "/models", "/clear": "/new"}.get(text.strip(), text)
     chunks = terminal_input_chunks(text, backend=backend)
     operation = f"ccbot-{secrets.token_hex(8)}"
     pasted = 0

@@ -99,7 +99,7 @@ async def parse_session_usage(file_path: Path) -> list[Turn]:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if obj.get("type") == "zcode_usage":
+                if obj.get("type") in ("zcode_usage", "opencode_usage"):
                     usage = obj["usage"]
                     turns.append(
                         Turn(
@@ -138,11 +138,13 @@ async def context_pct_for_session(sess: Session) -> int | None:
     """
     if not sess.claude_session_id:
         return None
-    if sess.backend in ("codex", "zcode"):
+    if sess.backend in ("codex", "zcode", "opencode"):
         from . import codex_session_io
 
         if sess.backend == "zcode":
             from . import zcode_session_io as codex_session_io
+        elif sess.backend == "opencode":
+            from . import opencode_session_io as codex_session_io
 
         file_path: Path | None = None
         if sess.window_id:
@@ -369,9 +371,11 @@ def format_usage_breakdown_compact(
         return f"*{title}*\n\n" + "\n".join(lines)
 
     from .zcode_usage import ZCodeUsageInfo
+    from .opencode_usage import OpenCodeUsageInfo
 
-    if isinstance(info, ZCodeUsageInfo):
-        result = table([("ZCode", "-", "-", "-", "-")])
+    if isinstance(info, (ZCodeUsageInfo, OpenCodeUsageInfo)):
+        label = "OpenCode" if isinstance(info, OpenCodeUsageInfo) else "ZCode"
+        result = table([(label, "-", "-", "-", "-")])
         if info.total_tokens is not None:
             result += "\n\n" + t(
                 user_id,

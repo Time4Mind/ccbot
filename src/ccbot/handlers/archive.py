@@ -593,7 +593,7 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
         return True, f"Restored {sess.name or sess.id} ({created_wname}){note}"
 
     native_codex_restore = bool(
-        resume_session_id and target_backend in ("codex", "zcode")
+        resume_session_id and target_backend in ("codex", "zcode", "opencode")
     )
     restore_published = asyncio.Event()
 
@@ -664,7 +664,7 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
     # Codex and ZCode retain their native identity on resume. Publish the
     # binding before exposing the window; hooks reconcile it after startup.
     codex_restore_published = False
-    if resume_session_id and target_backend in ("codex", "zcode"):
+    if resume_session_id and target_backend in ("codex", "zcode", "opencode"):
         from ..agent_backends import session_transcript_path
 
         transcript_path = session_transcript_path(

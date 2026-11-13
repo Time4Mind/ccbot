@@ -4,7 +4,9 @@ from pathlib import Path
 
 
 def session_transcript_path(session_id: str, cwd: str, backend: str) -> Path | None:
-    if backend == "zcode":
+    if backend == "opencode":
+        from .opencode_session_io import build_session_file_path
+    elif backend == "zcode":
         from .zcode_session_io import build_session_file_path
     elif backend == "codex":
         from .codex_session_io import build_session_file_path

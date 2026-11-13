@@ -131,10 +131,14 @@ class SessionMonitor:
                 if not isinstance(info, dict) or info.get("backend") not in (
                     "codex",
                     "zcode",
+                    "opencode",
                 ):
                     continue
-                if info.get("backend") == "zcode":
-                    from .zcode_session_io import build_session_file_path
+                if info.get("backend") in ("zcode", "opencode"):
+                    if info.get("backend") == "opencode":
+                        from .opencode_session_io import build_session_file_path
+                    else:
+                        from .zcode_session_io import build_session_file_path
 
                     projected = await asyncio.to_thread(
                         build_session_file_path,
@@ -158,8 +162,10 @@ class SessionMonitor:
                     sessions.append(SessionInfo(session_id=sid, file_path=path))
         except (OSError, json.JSONDecodeError):
             pass
-        if config.agent_backend in ("codex", "zcode") and not sessions:
-            if config.agent_backend == "zcode":
+        if config.agent_backend in ("codex", "zcode", "opencode") and not sessions:
+            if config.agent_backend == "opencode":
+                from .opencode_session_io import scan_active_sessions
+            elif config.agent_backend == "zcode":
                 from .zcode_session_io import scan_active_sessions
             else:
                 from .codex_session_io import scan_active_sessions
@@ -366,8 +372,11 @@ class SessionMonitor:
             if session_info.session_id not in active_session_ids:
                 continue
             try:
-                if session_info.session_id.startswith("sess_"):
-                    from .zcode_session_io import build_session_file_path
+                if session_info.session_id.startswith(("sess_", "ses_")):
+                    if session_info.session_id.startswith("ses_"):
+                        from .opencode_session_io import build_session_file_path
+                    else:
+                        from .zcode_session_io import build_session_file_path
 
                     # Direct targets bypass scan_projects. Refresh the owned
                     # journal each poll so native SQLite changes reach Telegram.

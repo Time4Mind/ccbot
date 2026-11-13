@@ -212,6 +212,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
             claude_command=config.claude_command,
             codex_command=config.codex_command,
             zcode_command=config.zcode_command,
+            opencode_command=config.opencode_command,
         )
         while True:
             configured = tuple(

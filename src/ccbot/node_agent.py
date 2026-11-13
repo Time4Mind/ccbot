@@ -153,7 +153,7 @@ class NodeAgent:
         context_dir: str | Path,
         node_id: str = "",
         display_name: str = "",
-        backends: tuple[str, ...] = ("claude", "codex", "zcode"),
+        backends: tuple[str, ...] = ("claude", "codex", "zcode", "opencode"),
         configured_backends: tuple[str, ...] | None = None,
         backend_probe: Callable[[], Awaitable[tuple[str, ...]]] | None = None,
         receipt_ledger: RequestReceiptLedger | None = None,
@@ -496,7 +496,7 @@ class NodeAgent:
         executor: WorkerSessionExecutor,
         context_dir: str | Path,
         display_name: str = "",
-        backends: tuple[str, ...] = ("claude", "codex", "zcode"),
+        backends: tuple[str, ...] = ("claude", "codex", "zcode", "opencode"),
         ssl: Any = None,
         pairing_nonce: str = "",
         pairing_expires: float = 0.0,
@@ -606,10 +606,10 @@ async def _run_agent_forever(
     configured_backends = tuple(
         value.strip()
         for value in os.environ.get("CCBOT_NODE_BACKENDS", "").split(",")
-        if value.strip() in ("claude", "codex", "zcode")
+        if value.strip() in ("claude", "codex", "zcode", "opencode")
     )
     if not configured_backends:
-        configured_backends = ("claude", "codex", "zcode")
+        configured_backends = ("claude", "codex", "zcode", "opencode")
     backends = await executor.ready_backends(configured_backends, max_age=0.0)
     display_name = (
         name_override.strip()

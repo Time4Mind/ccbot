@@ -162,7 +162,7 @@ class NodeSessionStateMixin:
             dict.fromkeys(
                 backend
                 for backend in node.backends
-                if backend in ("claude", "codex", "zcode")
+                if backend in ("claude", "codex", "zcode", "opencode")
             )
         )
 

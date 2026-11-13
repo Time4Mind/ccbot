@@ -456,6 +456,8 @@ def render_event(
     if event.type == "tool_use":
         if event.is_error:
             glyph = "✗"
+        elif event.text.endswith(" · Interrupted"):
+            glyph = "⏹"
         elif in_flight:
             glyph = "▷"
         else:
@@ -474,6 +476,13 @@ def render_event(
     if event.type == "tool_result":
         # Fallback when the matching tool_use Event isn't found (parser
         # race / restart). Render as a standalone row.
+        glyph = (
+            "✗"
+            if event.is_error
+            else "⏹"
+            if event.text.endswith(" · Interrupted")
+            else "✓"
+        )
         if event.tool_args or event.tool_content:
             body = _build_tool_spoiler_body(
                 event.tool_name or event.text,
@@ -482,8 +491,8 @@ def render_event(
                 command_max_lines=spoiler_line_limits[0],
                 result_max_lines=spoiler_line_limits[1],
             )
-            return _headed_block(f"✓ {event.text}{marker}", body, trim_body=False)
-        return _headed_block(f"✓ {event.text}{marker}", event.body)
+            return _headed_block(f"{glyph} {event.text}{marker}", body, trim_body=False)
+        return _headed_block(f"{glyph} {event.text}{marker}", event.body)
 
     if event.type in ("text", "final_text", "error"):
         # Mid-stream / final / error — inline, no glyph.

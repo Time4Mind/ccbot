@@ -274,6 +274,18 @@ def test_user_abort_closes_tool_pair_without_provider_error():
     assert "Interrupted" in result.text and "partial output" in result.text
     assert not result.is_error
     assert parsed[-1].text == "⏹ Interrupted" and parsed[-1].stop_reason == "end_turn"
+    event = _build_event(
+        NewMessage(
+            session_id="ses_abort123",
+            text=result.text,
+            is_complete=True,
+            content_type="tool_result",
+            tool_use_id=result.tool_use_id,
+        )
+    )
+    assert event.tool_name == "Bash"
+    assert event.tool_args == "sleep 30"
+    assert "⏹ Bash · Interrupted" in render_event(event, in_flight=False, now=3)
 
 
 def test_image_tool_result_keeps_original_image_bytes():

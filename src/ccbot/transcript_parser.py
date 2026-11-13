@@ -369,7 +369,11 @@ class TranscriptParser:
                             # Show interruption inline with tool summary
                             entry_text = tool_summary or ""
                             if entry_text:
-                                entry_text += "\n⏹ Interrupted"
+                                entry_text += (
+                                    "\n  ⎿  Interrupted"
+                                    if isinstance(native_display, dict)
+                                    else "\n⏹ Interrupted"
+                                )
                             else:
                                 entry_text = "⏹ Interrupted"
                             if isinstance(native_display, dict) and native_display.get(
@@ -387,6 +391,7 @@ class TranscriptParser:
                                     text=entry_text,
                                     content_type="tool_result",
                                     tool_use_id=_tuid,
+                                    tool_name=tool_name,
                                     timestamp=entry_timestamp,
                                 )
                             )

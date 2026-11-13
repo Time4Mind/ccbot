@@ -308,8 +308,10 @@ async def test_active_final_answer_spawns_new_card_and_freezes_open_page(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("seeded_before_final", [False, True])
 async def test_first_final_answer_already_seeded_is_not_rendered_twice(
     monkeypatch: pytest.MonkeyPatch,
+    seeded_before_final: bool,
 ) -> None:
     """A new session may expose its transcript only at finalization time."""
     state = CardState()
@@ -317,6 +319,8 @@ async def test_first_final_answer_already_seeded_is_not_rendered_twice(
     sent: list[str] = []
 
     async def ensure_seeded(_uid, _sess, target):
+        if target.events:
+            return
         target.events.extend(
             [
                 Event(
@@ -357,7 +361,11 @@ async def test_first_final_answer_already_seeded_is_not_rendered_twice(
     )
     session = SimpleNamespace(id="s1", window_id="")
 
-    await card_updates.finalize_task(bot, 42, session, "one answer")
+    if seeded_before_final:
+        await ensure_seeded(42, session, state)
+    await card_updates.finalize_task(
+        bot, 42, session, "one answer", source_timestamp="1970-01-01T00:00:02+00:00"
+    )
 
     assert sent == ["test\none answer"]
     assert [event.text for event in state.events] == ["test", "one answer"]

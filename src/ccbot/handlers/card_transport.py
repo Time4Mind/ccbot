@@ -331,7 +331,16 @@ async def _edit_card_content(
     # State.lines keeps accumulating; resume_card_view will catch up.
     if state.in_menu_view:
         return True
-    if reply_markup is None:
+    if state.in_kb_mode and state.kb_prompt and sess is not None:
+        from .kb_mode import build_kb_mode_keyboard
+
+        reply_markup = build_kb_mode_keyboard(
+            user_id,
+            sess.window_id,
+            ui_name=state.kb_ui_name,
+            prompt_content=state.kb_prompt,
+        )
+    elif reply_markup is None:
         reply_markup = _legacy("build_footer_keyboard")(
             user_id, screen="main", is_busy=_card_is_busy(state)
         )

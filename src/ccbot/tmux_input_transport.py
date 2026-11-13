@@ -46,6 +46,10 @@ def terminal_input_chunks(text: str, *, backend: str = "") -> list[bytes]:
     payload = transport_text.encode("utf-8")
     if not payload:
         return [b""]
+    if backend.strip().lower() == "opencode":
+        # OpenCode adds a separator after each bracketed-paste event. Loading
+        # the entire stdin buffer once preserves code and long Unicode input.
+        return [payload]
     chunks: list[bytes] = []
     while payload:
         cut = min(len(payload), _CHUNK_BYTES)

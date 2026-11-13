@@ -16,6 +16,33 @@ IDLE = "  ┃\n  ┃  Build · GPT-6 Luna OpenAI\n  /tmp/lab  24K (2%)  ctrl+p c
 BUSY = IDLE.rsplit("  /tmp", 1)[0] + "  ■⬝⬝  esc interrupt  24K (2%) ctrl+p commands\n"
 
 
+@pytest.mark.asyncio
+async def test_opencode_long_unicode_is_one_literal_paste(monkeypatch):
+    from ccbot import opencode_input
+
+    calls = []
+
+    async def run(*args, input_bytes=None):
+        calls.append((args, input_bytes))
+        return 0, b""
+
+    async def submit(_window, _text, send):
+        return await send()
+
+    monkeypatch.setattr(opencode_input, "submit", submit)
+    monkeypatch.setattr(tmux_input_transport, "_run_tmux", run)
+    monkeypatch.setattr(
+        tmux_input_transport, "zcode_process_is_running", AsyncMock(return_value=True)
+    )
+    text = "first\n" + "абв🙂" * 350 + "\nlast"
+    assert await tmux_input_transport.send_literal_chunked(
+        "@7", text, backend="opencode"
+    )
+    loads = [data for args, data in calls if args[0] == "load-buffer"]
+    assert loads == [text.encode("utf-8")]
+    assert len([args for args, _ in calls if args[0] == "paste-buffer"]) == 1
+
+
 @pytest.fixture
 def native_input(tmp_path, monkeypatch):
     db = sqlite3.connect(tmp_path / "opencode.db")

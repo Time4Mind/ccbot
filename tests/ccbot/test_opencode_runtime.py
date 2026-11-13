@@ -87,6 +87,15 @@ def test_connected_provider_model_picker_exposes_controls_before_composer():
     panel = extract_interactive_content(pane)
     assert panel and panel.name == "Settings" and "GPT-6 Luna" in panel.content
     assert not is_ready(pane)
+    from ccbot.handlers.kb_mode import build_kb_mode_keyboard
+
+    keyboard = build_kb_mode_keyboard(
+        42, "@3", prompt_content=panel.content, ui_name=panel.name
+    )
+    callbacks = [b.callback_data for row in keyboard.inline_keyboard for b in row]
+    assert "aq:down:@3" in callbacks
+    assert "aq:enter:@3" in callbacks
+    assert not any(str(data).startswith("aq:pick:") for data in callbacks)
 
 
 def test_native_question_is_exposed_through_existing_question_controls():

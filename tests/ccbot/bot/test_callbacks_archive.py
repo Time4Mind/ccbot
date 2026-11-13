@@ -206,3 +206,57 @@ class TestArchiveInspectBack:
             )
 
             assert build.await_args.kwargs["page"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("succeeds", [False, True])
+async def test_restore_captures_immediate_prompt_before_callback_ack(
+    monkeypatch, succeeds
+):
+    from ccbot import startup_queue as queue
+    from telegram.ext import ApplicationHandlerStop
+
+    queue.reset_startup_queues_for_test()
+    sess = _make_archived(23, age_hours=2)
+    user = _make_user(77)
+    query = _make_query(f"{CB_ARC_RESTORE}{sess.id}")
+    context = _make_context()
+    update = MagicMock()
+    update.effective_user = user
+    update.message = MagicMock(text="prompt immediately after restore")
+    bound = MagicMock()
+    failed = AsyncMock()
+
+    async def acknowledged(*args, **kwargs):
+        with pytest.raises(ApplicationHandlerStop):
+            await queue.capture_startup_message(update, context)
+        assert queue.pending_startup_count(77) == 1
+
+    async def restored(*args):
+        sess.window_id = "@99"
+        return succeeds, "ok" if succeeds else "startup failed"
+
+    query.answer.side_effect = acknowledged
+    monkeypatch.setattr(archive_cb.session_manager, "get_session", lambda sid: sess)
+    monkeypatch.setattr(
+        archive_cb.session_manager, "set_last_switcher_msg", MagicMock()
+    )
+    monkeypatch.setattr(archive_cb, "restore_session", restored)
+    monkeypatch.setattr(archive_cb, "safe_edit", AsyncMock())
+    monkeypatch.setattr(archive_cb, "paint_card_on_carrier", AsyncMock())
+    monkeypatch.setattr(archive_cb, "reset_card", MagicMock())
+    monkeypatch.setattr(archive_cb, "bind_startup_session", MagicMock())
+    monkeypatch.setattr(archive_cb, "bind_startup_queue", bound)
+    monkeypatch.setattr(queue, "report_failed_startup_entries", failed)
+    try:
+        assert await archive_cb.handle(query, context, user)
+        task = archive_cb._restore_tasks.get((77, sess.id))
+        if task:
+            await task
+        if succeeds:
+            assert bound.call_args.args[:2] == (77, "@99")
+        else:
+            assert not queue.has_startup_queue(77)
+            assert failed.await_args.args[0][0].update is update
+    finally:
+        queue.reset_startup_queues_for_test()

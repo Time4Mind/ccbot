@@ -81,8 +81,12 @@ async def test_forwarded_slash_command_never_uses_leader_tmux(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_forwarded_clear_resets_worker_provider_binding(monkeypatch) -> None:
+@pytest.mark.parametrize("backend", ["claude", "codex", "zcode", "opencode"])
+async def test_forwarded_clear_resets_worker_provider_binding(
+    monkeypatch, backend
+) -> None:
     sess = _remote_session()
+    sess.backend = backend
     update = SimpleNamespace(
         effective_user=SimpleNamespace(id=42),
         message=SimpleNamespace(text="/clear", message_id=10),
@@ -116,7 +120,9 @@ async def test_forwarded_clear_resets_worker_provider_binding(monkeypatch) -> No
     )
 
     assert await messages.forward_command_handler(update, context)
-    sent.assert_awaited_once_with(sess.window_id, "/clear", sess)
+    sent.assert_awaited_once_with(
+        sess.window_id, "/new" if backend in ("zcode", "opencode") else "/clear", sess
+    )
     reset.assert_awaited_once_with(sess)
     clear_window.assert_called_once_with(sess.window_id)
 

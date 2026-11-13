@@ -15,6 +15,7 @@ Progress = Callable[[str], Awaitable[None]]
 _PACKAGES = {
     "claude": "@anthropic-ai/claude-code",
     "codex": "@openai/codex",
+    "opencode": "opencode-ai",
 }
 
 
@@ -23,6 +24,7 @@ def _command(backend: str) -> str:
         "claude": config.claude_command,
         "codex": config.codex_command,
         "zcode": config.zcode_command,
+        "opencode": config.opencode_command,
     }[backend]
     parts = shlex.split(configured)
     return parts[0] if parts else backend

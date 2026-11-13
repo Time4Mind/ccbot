@@ -381,7 +381,11 @@ async def fetch_live_usage() -> object | None:
     from ..session import session_manager
 
     backend = session_manager.agent_backend
-    if backend == "zcode":
+    if backend == "opencode":
+        from ..opencode_usage import fetch_usage
+
+        info = await fetch_usage()
+    elif backend == "zcode":
         from ..zcode_usage import fetch_usage
 
         info = await fetch_usage()

@@ -268,7 +268,7 @@ def _settings_agent_grid(user_id: int) -> list[list[InlineKeyboardButton]]:
                 ("✅ " if name in enabled else "") + name.capitalize(),
                 callback_data=f"{CB_ST_AGENT}toggle:{name}",
             )
-            for name in ("claude", "codex", "zcode")
+            for name in ("claude", "codex", "zcode", "opencode")
         ],
         [
             InlineKeyboardButton(

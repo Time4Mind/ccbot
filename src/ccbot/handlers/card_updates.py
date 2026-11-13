@@ -506,12 +506,12 @@ async def finalize_task(
     attachments: list[Attachment] = []
     final_events: list[Event] = []
     stripped_full = ""
+    now = _parse_timestamp(source_timestamp) if source_timestamp else time.time()
     if cleaned:
         formatted = split_overflow(cleaned)
         cleaned = formatted.text
         attachments = formatted.attachments
 
-        now = _parse_timestamp(source_timestamp) if source_timestamp else time.time()
         stripped_full = _strip_for_card(cleaned)
         chunks = _chunk_final_text(stripped_full, _resolve_line_budget(user_id))
         final_events = [
@@ -559,7 +559,10 @@ async def finalize_task(
                 (
                     event
                     for event in reversed(state.events)
-                    if id(event) not in event_ids_before_seed
+                    if (
+                        id(event) not in event_ids_before_seed
+                        or (source_timestamp and event.started_at == now)
+                    )
                     and event.type == "final_text"
                     and event.text == stripped_full
                 ),

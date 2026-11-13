@@ -31,6 +31,8 @@ from ...handlers.notifications import paint_card_on_carrier, reset_card
 from ...i18n import t
 from ...session import Session, session_manager
 from ...startup_queue import (
+    StartupFlow,
+    begin_startup_queue,
     bind_startup_queue,
     bind_startup_session,
     current_startup_flow,
@@ -47,6 +49,8 @@ async def _restore_and_update(
     context: ContextTypes.DEFAULT_TYPE,
     user: Any,
     sess: Session,
+    *,
+    owned_flow: StartupFlow | None = None,
 ) -> None:
     """Restore outside Telegram's callback deadline, then converge the surface."""
     # A message received without an active session opens the directory picker.
@@ -91,6 +95,11 @@ async def _restore_and_update(
             await safe_edit(query, preview, reply_markup=keyboard)
         return
 
+    if startup_flow is not None and startup_flow is owned_flow:
+        from ...startup_queue import fail_startup_queue, report_failed_startup_entries
+
+        entries = fail_startup_queue(user.id, flow=startup_flow)
+        await report_failed_startup_entries(entries)
     await safe_edit(query, t(user.id, "toast.restore_failed", msg=msg))
 
 
@@ -193,8 +202,15 @@ async def handle(
             await query.answer(t(user.id, "toast.restoring"))
             return True
 
+        # Capture prompts before acknowledging Restore: window creation runs
+        # in the background while another session may still be selected.
+        owned_flow = None
+        if current_startup_flow(user.id) is None:
+            owned_flow = begin_startup_queue(user.id)
         await query.answer(t(user.id, "toast.restoring"))
-        task = asyncio.create_task(_restore_and_update(query, context, user, sess))
+        task = asyncio.create_task(
+            _restore_and_update(query, context, user, sess, owned_flow=owned_flow)
+        )
         _restore_tasks[key] = task
         task.add_done_callback(lambda done, task_key=key: _restore_done(task_key, done))
         return True

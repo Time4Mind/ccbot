@@ -121,6 +121,10 @@ def _install_hook(backend: str = "claude") -> int:
 
     Returns 0 on success, 1 on error.
     """
+    if backend == "opencode":
+        from .opencode_hooks import install_hooks
+
+        return install_hooks(_find_ccbot_path())
     if backend == "zcode":
         from .zcode_hooks import install_hooks
 
@@ -202,13 +206,13 @@ def hook_main() -> None:
     )
     parser.add_argument(
         "--backend",
-        choices=("claude", "codex", "zcode"),
+        choices=("claude", "codex", "zcode", "opencode"),
         default=os.environ.get("CCBOT_AGENT_BACKEND", "claude"),
         help="Agent whose hook configuration should be updated",
     )
     # Parse only known args to avoid conflicts with stdin JSON
     args, _ = parser.parse_known_args(sys.argv[2:])
-    if args.backend == "zcode":
+    if args.backend in ("zcode", "opencode"):
         logging.getLogger().setLevel(logging.WARNING)
 
     if args.install:
@@ -216,8 +220,8 @@ def hook_main() -> None:
         sys.exit(_install_hook(args.backend))
 
     try:
-        if args.backend == "zcode":
-            _process_hook_event(backend="zcode")
+        if args.backend in ("zcode", "opencode"):
+            _process_hook_event(backend=args.backend)
         else:
             _process_hook_event()
     except Exception as e:
@@ -253,6 +257,10 @@ def _process_hook_event(backend: str | None = None) -> None:
             else "claude"
         )
     valid_id = _UUID_RE.fullmatch(session_id)
+    if detected_backend == "opencode":
+        from .opencode_store import SESSION_ID
+
+        valid_id = SESSION_ID.fullmatch(session_id)
     if detected_backend == "zcode":
         from .zcode_store import SESSION_ID
 
@@ -352,6 +360,10 @@ def _process_hook_event(backend: str | None = None) -> None:
                         transcript_path,
                     )
                     return
+                if detected_backend == "opencode":
+                    from .opencode_session_io import ensure_projection
+
+                    transcript_path = str(ensure_projection(session_id, cwd))
                 if detected_backend == "zcode":
                     from .zcode_session_io import ensure_projection
 

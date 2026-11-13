@@ -15,6 +15,7 @@ import asyncio
 import copy
 import json
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Awaitable
@@ -84,6 +85,9 @@ class SessionMonitor:
 
         self.state = MonitorState(state_file=state_file or config.monitor_state_file)
         self.state.load()
+        self._started_at = time.time() * 1000
+        self._seen_native_sessions = set(self.state.tracked_sessions)
+        self._fresh_native_sessions: set[str] = set()
 
         self._running = False
         self._task: asyncio.Task[None] | None = None
@@ -131,10 +135,14 @@ class SessionMonitor:
                 if not isinstance(info, dict) or info.get("backend") not in (
                     "codex",
                     "zcode",
+                    "opencode",
                 ):
                     continue
-                if info.get("backend") == "zcode":
-                    from .zcode_session_io import build_session_file_path
+                if info.get("backend") in ("zcode", "opencode"):
+                    if info.get("backend") == "opencode":
+                        from .opencode_session_io import build_session_file_path
+                    else:
+                        from .zcode_session_io import build_session_file_path
 
                     projected = await asyncio.to_thread(
                         build_session_file_path,
@@ -158,8 +166,10 @@ class SessionMonitor:
                     sessions.append(SessionInfo(session_id=sid, file_path=path))
         except (OSError, json.JSONDecodeError):
             pass
-        if config.agent_backend in ("codex", "zcode") and not sessions:
-            if config.agent_backend == "zcode":
+        if config.agent_backend in ("codex", "zcode", "opencode") and not sessions:
+            if config.agent_backend == "opencode":
+                from .opencode_session_io import scan_active_sessions
+            elif config.agent_backend == "zcode":
                 from .zcode_session_io import scan_active_sessions
             else:
                 from .codex_session_io import scan_active_sessions
@@ -366,8 +376,11 @@ class SessionMonitor:
             if session_info.session_id not in active_session_ids:
                 continue
             try:
-                if session_info.session_id.startswith("sess_"):
-                    from .zcode_session_io import build_session_file_path
+                if session_info.session_id.startswith(("sess_", "ses_")):
+                    if session_info.session_id.startswith("ses_"):
+                        from .opencode_session_io import build_session_file_path
+                    else:
+                        from .zcode_session_io import build_session_file_path
 
                     # Direct targets bypass scan_projects. Refresh the owned
                     # journal each poll so native SQLite changes reach Telegram.
@@ -390,15 +403,19 @@ class SessionMonitor:
                     except OSError:
                         file_size = 0
                         current_mtime = 0.0
+                    fresh_native = (
+                        session_info.session_id in self._fresh_native_sessions
+                    )
                     tracked = TrackedSession(
                         session_id=session_info.session_id,
                         file_path=str(session_info.file_path),
-                        last_byte_offset=file_size,
+                        last_byte_offset=0 if fresh_native else file_size,
                     )
                     self.state.update_session(tracked)
                     self._file_mtimes[session_info.session_id] = current_mtime
                     logger.info(f"Started tracking session: {session_info.session_id}")
-                    continue
+                    if not fresh_native:
+                        continue
 
                 # Check mtime + file size to see if file has changed
                 try:
@@ -563,6 +580,7 @@ class SessionMonitor:
         inactive = sorted((sid for sid in tracked if sid not in active), key=modified)
         for session_id in inactive[: max(0, len(tracked) - limit)]:
             self.state.remove_session(session_id)
+            self._fresh_native_sessions.discard(session_id)
         self.state.save_if_dirty()
 
     async def _detect_and_cleanup_changes(
@@ -576,6 +594,13 @@ class SessionMonitor:
             current_map = await self._load_current_session_map()
 
         sessions_to_remove: set[str] = set()
+        for sid in current_map.values():
+            if sid.startswith("ses_") and sid not in self._seen_native_sessions:
+                from .opencode_store import created_after
+
+                self._seen_native_sessions.add(sid)
+                if await asyncio.to_thread(created_after, sid, self._started_at):
+                    self._fresh_native_sessions.add(sid)
 
         # Check for window session changes (window exists in both, but session_id changed)
         for window_id, old_session_id in self._last_session_map.items():
@@ -608,6 +633,7 @@ class SessionMonitor:
         if sessions_to_remove:
             for session_id in sessions_to_remove:
                 self.state.remove_session(session_id)
+                self._fresh_native_sessions.discard(session_id)
                 self._file_mtimes.pop(session_id, None)
             self.state.save_if_dirty()
 
@@ -630,6 +656,7 @@ class SessionMonitor:
         await self._cleanup_all_stale_sessions()
         # Initialize last known session_map
         self._last_session_map = await self._load_current_session_map()
+        self._seen_native_sessions.update(self._last_session_map.values())
 
         while self._running:
             poll_started = False

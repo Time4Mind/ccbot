@@ -54,6 +54,10 @@ def build_session_file_path(session_id: str, cwd: str) -> Path | None:
     """Resolve a Claude project JSONL or Codex rollout for a session id."""
     if not session_id or not cwd:
         return None
+    if session_id.startswith("ses_"):
+        from .opencode_session_io import build_session_file_path as build_opencode_path
+
+        return build_opencode_path(session_id, cwd)
     if session_id.startswith("sess_"):
         from .zcode_session_io import build_session_file_path as build_zcode_path
 

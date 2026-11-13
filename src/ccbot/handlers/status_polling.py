@@ -212,13 +212,8 @@ ACTIVITY_CAPTURE_GRACE = 2.0
 # action alive and bounds the unchanged-pane stall check.
 UNCHANGED_STATUS_RECHECK = 4.0
 
-# Per-session cache of the last status-line seen by ``parse_status_line``,
-# used to tell "active spinner that just changed text" from "frozen
-# scrollback line that hasn't been pushed off yet". A genuinely-busy
-# claude updates the elapsed time roughly every second
-# (``Working… (17s)`` → ``(18s)`` → …). When the same line repeats
-# across polls for more than ``_PANE_STATUS_STALE_AFTER`` seconds we
-# treat it as stale and stop firing TYPING off of it.
+# Cache elapsed-status changes per session to distinguish active work from
+# frozen scrollback. OpenCode's anchored interrupt footer is handled separately.
 _pane_status_cache: dict[tuple[int, str], tuple[str, float]] = {}
 _PANE_STATUS_STALE_AFTER = 3.0
 _BACKGROUND_TERMINAL_RE = re.compile(
@@ -417,11 +412,17 @@ async def _drive_typing_indicator(
     # Transcript activity and the live pane bridge silent gaps between events.
     status_line = parse_status_line(pane_text) or ""
     compacting = status_line.startswith("Compacting context (")
+    # OpenCode exposes live "esc interrupt" chrome without an elapsed timer.
+    # Its anchored status stays authoritative even when a long tool is silent.
     pane_busy = (
         compacting
         or bool(status_line)
-        and _pane_status_is_changing(
-            user_id, sess.id if sess else window_id, status_line
+        and (
+            getattr(sess, "backend", "") == "opencode"
+            and status_line == "Working"
+            or _pane_status_is_changing(
+                user_id, sess.id if sess else window_id, status_line
+            )
         )
     )
     in_menu = sess is not None and is_card_in_menu_view(user_id, sess.id)

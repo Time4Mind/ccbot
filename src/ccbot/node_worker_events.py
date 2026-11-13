@@ -80,8 +80,14 @@ class WorkerEventPollingMixin:
                         }
                     )
                     session.binding_announced = True
-                if session.backend == "zcode" and session.provider_session_id:
-                    from .zcode_session_io import build_session_file_path
+                if (
+                    session.backend in ("zcode", "opencode")
+                    and session.provider_session_id
+                ):
+                    if session.backend == "opencode":
+                        from .opencode_session_io import build_session_file_path
+                    else:
+                        from .zcode_session_io import build_session_file_path
 
                     await asyncio.to_thread(
                         build_session_file_path,

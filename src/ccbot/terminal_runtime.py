@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
@@ -111,9 +112,21 @@ async def send_session_key(sess: Session, key: str) -> bool:
         key = navigation_key(
             key, await tmux_manager.capture_pane(window.window_id) or ""
         )
-    return await tmux_manager.send_keys(
-        window.window_id, key, enter=False, literal=False
-    )
+    keys = (key,)
+    if sess.backend == "opencode" and key in ("Escape", "Esc"):
+        from .opencode_runtime import navigation_keys
+
+        keys = navigation_keys(
+            key, await tmux_manager.capture_pane(window.window_id) or ""
+        )
+    for native_key in keys:
+        if not await tmux_manager.send_keys(
+            window.window_id, native_key, enter=False, literal=False
+        ):
+            return False
+        if len(keys) > 1:
+            await asyncio.sleep(0.05)
+    return True
 
 
 async def reset_session_binding(sess: Session) -> bool:

@@ -11,9 +11,11 @@ class WorkerCommands(TypedDict):
     claude_command: str
     codex_command: str
     zcode_command: str
+    opencode_command: str
     claude_flags: str
     codex_flags: str
     zcode_flags: str
+    opencode_flags: str
 
 
 def worker_command_options() -> WorkerCommands:
@@ -27,6 +29,10 @@ def worker_command_options() -> WorkerCommands:
         "claude_flags": os.environ.get("CCBOT_CLAUDE_FLAGS", ""),
         "codex_flags": os.environ.get("CCBOT_CODEX_FLAGS", ""),
         "zcode_flags": os.environ.get("ZCODE_FLAGS", "--mode yolo --locale en-US"),
+        "opencode_command": os.environ.get(
+            "CCBOT_OPENCODE_COMMAND", os.environ.get("OPENCODE_COMMAND", "opencode")
+        ),
+        "opencode_flags": os.environ.get("OPENCODE_FLAGS", ""),
     }
 
 

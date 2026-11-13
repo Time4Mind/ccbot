@@ -46,6 +46,7 @@ from .commands.auth import (
 )
 
 logger = logging.getLogger(__name__)
+_opencode_auth_notified: set[int] = set()
 
 
 async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
@@ -77,7 +78,20 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
     if is_auth_failure_event(msg.api_error, msg.text or ""):
         for user_id in sorted(config.allowed_users):
             try:
-                if any(sess.backend == "zcode" for _owner, sess in targets):
+                if any(sess.backend == "opencode" for _owner, sess in targets):
+                    if (
+                        any(owner == user_id for owner, _sess in targets)
+                        and user_id not in _opencode_auth_notified
+                    ):
+                        from ..handlers.message_sender import safe_send
+
+                        await safe_send(
+                            bot,
+                            user_id,
+                            "OpenCode: проверьте подключение OpenAI через `opencode auth login --provider openai`.",
+                        )
+                        _opencode_auth_notified.add(user_id)
+                elif any(sess.backend == "zcode" for _owner, sess in targets):
                     if any(owner == user_id for owner, _sess in targets):
                         await notify_zcode_auth_failure(bot, user_id)
                 else:
@@ -86,6 +100,8 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 logger.debug("auth-expired notice failed for %s: %s", user_id, exc)
     if msg.is_complete and not msg.api_error:
         for owner, owned in targets:
+            if owned.backend == "opencode":
+                _opencode_auth_notified.discard(owner)
             if owned.backend == "zcode":
                 clear_zcode_auth_failure(owner)
     if not targets:

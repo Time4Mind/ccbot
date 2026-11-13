@@ -56,6 +56,57 @@ def _make_sess(sid: str = "s1") -> Session:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_footer", [False, True])
+async def test_automatic_card_refresh_retains_permission_navigation(
+    monkeypatch, explicit_footer
+):
+    from ccbot.handlers import card_transport
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    sess = _make_sess()
+    sess.backend = "opencode"
+    state = CardState(
+        msg_id=999,
+        is_rich_media_msg=True,
+        rich_media_file_id="pane",
+        in_kb_mode=True,
+        kb_ui_name="OpenCodePermission",
+        kb_prompt="Permission required\nAllow once Allow always Reject",
+    )
+    edit = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        card_transport, "lookup_session_for_message", lambda *_a: sess.id
+    )
+    monkeypatch.setattr(
+        card_transport.session_manager, "get_session", lambda _sid: sess
+    )
+    monkeypatch.setattr(
+        card_transport, "file_button_context_for_session", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(card_transport, "_inline_screens_enabled", lambda _uid: True)
+    monkeypatch.setattr(card_transport, "edit_rich_media_card", edit)
+    monkeypatch.setattr(
+        notifications,
+        "build_footer_keyboard",
+        lambda *_a, **_k: InlineKeyboardMarkup(
+            [[InlineKeyboardButton("Stop", callback_data="ft:stop")]]
+        ),
+    )
+    footer = (
+        InlineKeyboardMarkup([[InlineKeyboardButton("Stop", callback_data="ft:stop")]])
+        if explicit_footer
+        else None
+    )
+    assert await card_transport._edit_card_unlocked(
+        AsyncMock(), 42, state, text="Waiting for your input", reply_markup=footer
+    )
+    keyboard = edit.await_args.kwargs["reply_markup"]
+    callbacks = [b.callback_data for row in keyboard.inline_keyboard for b in row]
+    assert "aq:enter:@1" in callbacks and "aq:esc:@1" in callbacks
+    assert "ft:stop" not in callbacks
+
+
+@pytest.mark.asyncio
 async def test_enter_kb_mode_clears_menu_view(monkeypatch):
     """``enter_kb_mode`` MUST clear ``in_menu_view`` before editing the
     card, otherwise ``_edit_card`` short-circuits and the kb keyboard

@@ -31,6 +31,8 @@ def kill_orphan_processes(
         pattern = f"zcode.*--resume[ =]{agent_session_id}"
     elif normalized_backend == "codex":
         pattern = f"codex.*resume[ ]+{agent_session_id}"
+    elif normalized_backend == "opencode":
+        pattern = f"opencode.*--session[ =]{agent_session_id}"
     else:
         logger.warning(
             "kill_orphan_agent_processes: unsupported backend %r, skipping",

@@ -119,13 +119,15 @@ Most-frequently-tweaked optionals:
 | --------------------------- | ------------ | ------ |
 | `CCBOT_DIR`                 | `~/.ccbot`   | Config and state directory |
 | `TMUX_SESSION_NAME`         | `ccbot`      | tmux session that holds all session windows |
-| `CCBOT_AGENT_BACKEND`       | `claude`     | initial global backend (`claude`, `codex`, `zcode`) for a new state file |
+| `CCBOT_AGENT_BACKEND`       | `claude`     | initial backend (`claude`, `codex`, `zcode`, `opencode`) for a new state file |
 | `CLAUDE_COMMAND`            | `claude`     | binary used to start a session |
 | `CLAUDE_FLAGS`              | `--dangerously-skip-permissions` | flags appended to `claude` |
 | `CODEX_COMMAND`             | `codex`      | Codex CLI binary (an absolute Termux path is accepted) |
 | `CODEX_FLAGS`               | bypass + hook trust + hooks + `--no-alt-screen` | flags appended to `codex` |
 | `ZCODE_COMMAND`             | `zcode`      | installed official ZCode CLI |
 | `ZCODE_FLAGS`               | `--mode yolo --locale en-US` | native TUI flags |
+| `OPENCODE_COMMAND`          | `opencode`   | official OpenCode CLI |
+| `OPENCODE_MODEL`            | `openai/gpt-6-luna` | initial and naming model using OpenCode's own OAuth login |
 | `CODEX_NAMING_MODEL`        | `gpt-5.6-luna` | lightweight Codex model for automatic session names |
 | `ARCHIVE_PURGE_AFTER`       | `20d`        | archived sessions purged from state after this |
 | `QUOTA_ALERT_POLL_INTERVAL` | `10m`        | how often the live `/usage` modal is sampled |
@@ -153,9 +155,9 @@ The full list lives in `.env.example` and in
 `doc/dm-multisession-spec.md` § 12. Per-user UI preferences (card
 size, notifications, voice backend, language, …) are not env vars —
 they live behind `≡ Menu → Settings`, see below. The agent is also a
-persisted bot-wide setting at `Settings → Behavior → Agent`: one bot
-instance runs either Claude or Codex. `CCBOT_AGENT_BACKEND` is only the
-initial default when the state file has no saved selection.
+persisted setting at `Settings → Agent`: enable backends and choose the default
+for new sessions. Existing sessions retain their backend. `CCBOT_AGENT_BACKEND`
+is only the initial default when the state file has no saved selection.
 
 ### Docker polling health
 
@@ -215,8 +217,21 @@ See [the backend contract](doc/zcode-backend-spec.md). The opt-in real-provider
 acceptance is `CCBOT_RUN_ZCODE_LIVE=1 uv run pytest tests/ccbot/test_zcode_live.py`;
 it uses isolated fixtures and restores temporary user-hook configuration.
 
-Switching is blocked while the current backend still has live sessions;
-archive or kill them first. Archived sessions retain their original backend.
+For OpenCode, install the official CLI and connect its OpenAI ChatGPT Pro/Plus
+provider, then install the lifecycle plugin:
+
+```bash
+opencode auth login --provider openai
+ccbot hook --install --backend opencode
+```
+
+Enable OpenCode in Settings → Agent. It uses its native TUI, `--session ses_...`
+for resume, and a CCBot-owned journal over read-only native SQLite snapshots.
+Tool calls/results, file contents, patch diffs, errors, images, questions and
+permission dialogs reuse the existing card and terminal surfaces. See the
+[OpenCode backend contract](doc/opencode-backend-spec.md).
+
+Archived sessions retain their original backend.
 Restoring an archive from the other backend performs a cross-agent pickup:
 ccbot parses the source JSONL into a bounded handoff, starts a fresh native
 target session, and records both the new target id and the source provenance.

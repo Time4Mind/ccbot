@@ -67,6 +67,18 @@ async def start_login(bot: Bot, user_id: int, *, backend: str | None = None) -> 
     selected_backend = backend or (
         active.backend if active else session_manager.agent_backend
     )
+    if selected_backend == "opencode":
+        from ...opencode_runtime import auth_state
+
+        ready = auth_state().configured
+        await safe_send(
+            bot,
+            user_id,
+            "OpenCode: OpenAI connected."
+            if ready
+            else "OpenCode: run `opencode auth login --provider openai` on this node and select ChatGPT Pro/Plus.",
+        )
+        return ready
     if selected_backend == "zcode":
         return await _check_zcode_auth(bot, user_id)
     if selected_backend == "codex":
@@ -130,6 +142,13 @@ async def ensure_codex_authenticated(
     bot: Bot, user_id: int, *, backend: str | None = None
 ) -> bool:
     """Return True when Codex can run, otherwise ensure a login is underway."""
+    if (backend or session_manager.agent_backend) == "opencode":
+        from ...opencode_runtime import auth_state
+
+        if auth_state().configured:
+            return True
+        await start_login(bot, user_id, backend="opencode")
+        return False
     if (backend or session_manager.agent_backend) == "zcode":
         from ...zcode_runtime import auth_state
 

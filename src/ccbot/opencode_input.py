@@ -1,0 +1,151 @@
+"""Serialize OpenCode prompts until its TUI and native journal accept them."""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Awaitable, Callable
+import json
+import time
+from weakref import WeakValueDictionary
+from typing import Any
+
+from .opencode_runtime import is_ready
+from .opencode_store import OpenCodeStoreError, open_store
+from .utils import ccbot_dir
+
+_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
+READY_TIMEOUT = 120.0
+ACK_TIMEOUT = 10.0
+
+
+def _submission_phase(window: str, *, waiting: bool) -> None:
+    from .input_recovery import input_recovery
+
+    request = input_recovery.current()
+    if request is not None and request.window_id == window:
+        # A restart may replay an untouched FIFO entry. Once paste begins,
+        # an uncertain outcome must retain the normal no-autoretry policy.
+        request.state = "prepared" if waiting else "dispatching"
+        input_recovery.changed(request)
+
+
+async def _capture(window: str) -> str:
+    proc = await asyncio.create_subprocess_exec(
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        window,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    output, _ = await proc.communicate()
+    return output.decode(errors="replace") if proc.returncode == 0 else ""
+
+
+def _binding(window: str) -> dict[str, Any] | None:
+    try:
+        bindings = json.loads((ccbot_dir() / "session_map.json").read_text())
+        matches = [
+            v
+            for k, v in bindings.items()
+            if k.endswith(":" + window)
+            and isinstance(v, dict)
+            and v.get("backend") == "opencode"
+        ]
+        return matches[0] if len(matches) == 1 else None
+    except (OSError, ValueError):
+        return None
+
+
+def _turn_finished(window: str) -> bool:
+    binding = _binding(window)
+    if binding is None:
+        return True
+    try:
+        with open_store() as db:
+            row = db.execute(
+                "SELECT data FROM message WHERE session_id=? ORDER BY time_created DESC,rowid DESC LIMIT 1",
+                (binding["session_id"],),
+            ).fetchone()
+        if row is None:
+            return True
+        last = json.loads(row["data"])
+        return last.get("role") == "assistant" and bool(
+            (last.get("time") or {}).get("completed") or last.get("error")
+        )
+    except (ValueError, KeyError, OpenCodeStoreError):
+        return False
+
+
+def _accepted(window: str) -> dict[tuple[str, str], str]:
+    try:
+        binding = _binding(window)
+        if binding is None:
+            return {}
+        with open_store() as db:
+            session = db.execute(
+                "SELECT directory FROM session WHERE id=?", (binding["session_id"],)
+            ).fetchone()
+            if session is None or session["directory"] != binding["cwd"]:
+                return {}
+            result = {}
+            for row in db.execute(
+                "SELECT id,data FROM message WHERE session_id=? ORDER BY time_created DESC,rowid DESC LIMIT 40",
+                (binding["session_id"],),
+            ):
+                if json.loads(row["data"]).get("role") != "user":
+                    continue
+                parts = [
+                    json.loads(p["data"])
+                    for p in db.execute(
+                        "SELECT data FROM part WHERE message_id=? ORDER BY time_created,rowid",
+                        (row["id"],),
+                    )
+                ]
+                result[(binding["session_id"], row["id"])] = "\n".join(
+                    p.get("text", "")
+                    for p in parts
+                    if p.get("type") == "text" and not p.get("synthetic")
+                )
+            return result
+    except (OSError, ValueError, KeyError, OpenCodeStoreError):
+        return {}
+
+
+async def submit(window: str, text: str, send: Callable[[], Awaitable[bool]]) -> bool:
+    """Wait without holding navigation locks; never retype uncertain input."""
+    from .tmux_input_transport import zcode_process_is_running
+
+    _submission_phase(window, waiting=True)
+    lock = _locks.setdefault(window, asyncio.Lock())
+    async with lock:
+        deadline = time.monotonic() + READY_TIMEOUT
+        while not is_ready(await _capture(window)) or (
+            not text.lstrip().startswith("/")
+            and not await asyncio.to_thread(_turn_finished, window)
+        ):
+            if time.monotonic() >= deadline or not await zcode_process_is_running(
+                window, backend="opencode"
+            ):
+                return False
+            await asyncio.sleep(0.1)
+        before = await asyncio.to_thread(_accepted, window)
+        _submission_phase(window, waiting=False)
+        if not await send():
+            return False
+        if text.lstrip().startswith("/"):
+            return True
+        deadline = time.monotonic() + ACK_TIMEOUT
+        while time.monotonic() < deadline:
+            accepted = await asyncio.to_thread(_accepted, window)
+            if any(
+                key not in before
+                and value.replace("\r\n", "\n").strip() == text.strip()
+                for key, value in accepted.items()
+            ):
+                return True
+            if not await zcode_process_is_running(window, backend="opencode"):
+                return False
+            await asyncio.sleep(0.1)
+        return False

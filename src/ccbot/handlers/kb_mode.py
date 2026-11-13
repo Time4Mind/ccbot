@@ -78,6 +78,10 @@ def parse_picker_menu(prompt_content: str, ui_name: str = "") -> PickerMenu | No
     """
     if ui_name != "Settings" or not _PICKER_TITLE_RE.search(prompt_content):
         return None
+    # OpenCode marks only the focused row; unmarked rows are selectable too.
+    # Its virtualized provider list must keep native arrow/search controls.
+    if re.search(r"(?:View all providers|Connect provider) ctrl\+a", prompt_content):
+        return None
 
     parsed: list[tuple[str, bool, bool]] = []
     for line in prompt_content.splitlines():

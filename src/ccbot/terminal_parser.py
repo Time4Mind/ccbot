@@ -385,6 +385,10 @@ def extract_interactive_content(pane_text: str) -> InteractiveUIContent | None:
 
     if panel := interactive_panel(pane_text):
         return InteractiveUIContent(panel[1], panel[0])
+    from .opencode_runtime import interactive_panel as opencode_panel
+
+    if panel := opencode_panel(pane_text):
+        return InteractiveUIContent(panel[1], panel[0])
 
     from .codex_wait_prompt import parse_codex_wait_prompt
 
@@ -469,6 +473,10 @@ def parse_status_line(pane_text: str) -> str | None:
     from .zcode_runtime import status_line
 
     if native_status := status_line(pane_text):
+        return native_status
+    from .opencode_runtime import status_line as opencode_status
+
+    if native_status := opencode_status(pane_text):
         return native_status
     lines = pane_text.split("\n")
 

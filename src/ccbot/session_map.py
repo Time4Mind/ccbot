@@ -143,7 +143,9 @@ class SessionMapMixin:
                 continue
             state = self.get_window_state(window_id)
             state.backend = (
-                new_backend if new_backend in ("claude", "codex", "zcode") else "claude"
+                new_backend
+                if new_backend in ("claude", "codex", "zcode", "opencode")
+                else "claude"
             )
             if state.transcript_path != new_transcript_path:
                 state.transcript_path = new_transcript_path
@@ -295,7 +297,11 @@ class SessionMapMixin:
         from . import codex_session_io, session_claude_io
 
         io = codex_session_io if self.agent_backend == "codex" else session_claude_io
-        if self.agent_backend == "zcode":
+        if self.agent_backend == "opencode":
+            from . import opencode_session_io
+
+            io = opencode_session_io
+        elif self.agent_backend == "zcode":
             from . import zcode_session_io
 
             io = zcode_session_io
@@ -318,6 +324,12 @@ class SessionMapMixin:
                 state.session_id,
                 state.cwd,
                 state.transcript_path or None,
+            )
+        elif state.backend == "opencode":
+            from . import opencode_session_io
+
+            session = await opencode_session_io.get_session_direct(
+                state.session_id, state.cwd, state.transcript_path or None
             )
         elif state.backend == "zcode":
             from . import zcode_session_io

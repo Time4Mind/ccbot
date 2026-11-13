@@ -50,7 +50,7 @@ def _available_backends(user_id: int, node: Any) -> tuple[str, ...]:
         dict.fromkeys(
             backend
             for backend in node.backends
-            if backend in ("claude", "codex", "zcode")
+            if backend in ("claude", "codex", "zcode", "opencode")
         )
     )
 

@@ -46,6 +46,10 @@ def terminal_input_chunks(text: str, *, backend: str = "") -> list[bytes]:
     payload = transport_text.encode("utf-8")
     if not payload:
         return [b""]
+    if backend.strip().lower() == "opencode":
+        # OpenCode adds a separator after each bracketed-paste event. Loading
+        # the entire stdin buffer once preserves code and long Unicode input.
+        return [payload]
     chunks: list[bytes] = []
     while payload:
         cut = min(len(payload), _CHUNK_BYTES)
@@ -136,7 +140,7 @@ async def _send_carriage_return(window_id: str) -> bool:
     return True
 
 
-async def zcode_process_is_running(window_id: str) -> bool:
+async def zcode_process_is_running(window_id: str, *, backend: str = "zcode") -> bool:
     """Never send a ZCode prompt into a shell after the agent exits."""
     try:
         process = await asyncio.create_subprocess_exec(
@@ -151,7 +155,12 @@ async def zcode_process_is_running(window_id: str) -> bool:
         )
         output, _ = await process.communicate()
         name = os.path.basename(output.decode(errors="replace").strip()).lower()
-        return process.returncode == 0 and name in {"zcode", "zcode-cli", "node"}
+        expected = (
+            {"opencode", "opencode-cli"}
+            if backend == "opencode"
+            else {"zcode", "zcode-cli", "node"}
+        )
+        return process.returncode == 0 and name in expected
     except OSError:
         return False
 
@@ -160,7 +169,16 @@ async def send_literal_chunked(window_id: str, text: str, *, backend: str = "") 
     started = time.monotonic()
     outcome = "error"
     try:
-        sent = await _send_literal_chunked(window_id, text, backend=backend)
+        if backend == "opencode":
+            from .opencode_input import submit
+
+            sent = await submit(
+                window_id,
+                text,
+                lambda: _send_literal_chunked(window_id, text, backend=backend),
+            )
+        else:
+            sent = await _send_literal_chunked(window_id, text, backend=backend)
         outcome = "sent" if sent else "failed"
         return sent
     finally:
@@ -177,15 +195,23 @@ async def send_literal_chunked(window_id: str, text: str, *, backend: str = "") 
 async def _send_literal_chunked(
     window_id: str, text: str, *, backend: str = ""
 ) -> bool:
-    codex = backend.strip().lower() in ("codex", "zcode")
+    codex = backend.strip().lower() in ("codex", "zcode", "opencode")
+
+    async def opencode_running(window: str) -> bool:
+        return await zcode_process_is_running(window, backend="opencode")
+
     process_running = (
-        zcode_process_is_running
+        opencode_running
+        if backend.strip().lower() == "opencode"
+        else zcode_process_is_running
         if backend.strip().lower() == "zcode"
         else codex_process_is_running
     )
     if codex and not await process_running(window_id):
         logger.warning("Codex input blocked: agent is not running window=%s", window_id)
         return False
+    if backend.strip().lower() == "opencode":
+        text = {"/model": "/models", "/clear": "/new"}.get(text.strip(), text)
     chunks = terminal_input_chunks(text, backend=backend)
     operation = f"ccbot-{secrets.token_hex(8)}"
     pasted = 0

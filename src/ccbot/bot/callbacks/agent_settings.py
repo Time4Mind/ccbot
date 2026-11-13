@@ -29,6 +29,8 @@ async def _ensure_auth(bot: Any, user_id: int, backend: str) -> None:
 
     if backend == "codex":
         await ensure_codex_authenticated(bot, user_id, backend="codex")
+    elif backend == "opencode":
+        await ensure_codex_authenticated(bot, user_id, backend="opencode")
     elif backend == "zcode":
         if await ensure_codex_authenticated(bot, user_id, backend="zcode"):
             from ...node_worker import TmuxWorkerExecutor
@@ -85,7 +87,7 @@ async def handle_agent_value(
     """Apply an Agent-screen value; True means response already completed."""
     if value.startswith("toggle:"):
         backend = value.removeprefix("toggle:")
-        if backend not in ("claude", "codex", "zcode"):
+        if backend not in ("claude", "codex", "zcode", "opencode"):
             await query.answer("Unknown backend", show_alert=True)
             return True
         enabled = backend not in session_manager.get_enabled_backends(user.id)

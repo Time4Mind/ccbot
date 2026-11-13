@@ -73,6 +73,7 @@ def test_resumed_opencode_composer_uses_usage_footer_instead_of_version():
 
 def test_connected_provider_model_picker_exposes_controls_before_composer():
     pane = """              Select model                                     esc
+     ▣  Bu
               Search
               Recent
             ● GPT-6 Luna OpenAI
@@ -87,6 +88,7 @@ def test_connected_provider_model_picker_exposes_controls_before_composer():
     panel = extract_interactive_content(pane)
     assert panel and panel.name == "Settings" and "GPT-6 Luna" in panel.content
     assert not is_ready(pane)
+    assert "▣" not in panel.content
     from ccbot.handlers.kb_mode import build_kb_mode_keyboard
 
     keyboard = build_kb_mode_keyboard(

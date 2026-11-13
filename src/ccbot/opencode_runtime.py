@@ -97,7 +97,11 @@ def interactive_panel(pane: str) -> tuple[str, str] | None:
                 if re.search(
                     r"(?:View all providers|Connect provider) ctrl\+a", lines[end]
                 ):
-                    return "Settings", "\n".join(lines[index : end + 1])
+                    # Floating dialogs leave old TUI text to their left.
+                    left = max(0, line.index("Select model") - 2)
+                    return "Settings", "\n".join(
+                        row[left:] for row in lines[index : end + 1]
+                    )
     return None
 
 

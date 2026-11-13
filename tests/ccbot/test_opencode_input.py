@@ -125,6 +125,10 @@ async def test_old_matching_prompt_never_acknowledges_a_new_send(
         "INSERT INTO part VALUES ('old-part','old','ses_input',1,1,?)",
         (json.dumps({"type": "text", "text": "same prompt"}),),
     )
+    native_input.execute(
+        "INSERT INTO message VALUES ('done','ses_input',2,2,?)",
+        (json.dumps({"role": "assistant", "time": {"completed": 2}}),),
+    )
     native_input.commit()
     monkeypatch.setattr(opencode_input, "_capture", AsyncMock(return_value=IDLE))
     monkeypatch.setattr(opencode_input, "ACK_TIMEOUT", 0.01)
@@ -156,3 +160,42 @@ async def test_unready_or_dead_opencode_never_receives_queued_text(
         "@7", "queued text", backend="opencode"
     )
     send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_first_accepted_prompt_finishes_before_next_even_if_composer_idle(
+    native_input, monkeypatch
+):
+    from ccbot import opencode_input
+
+    native_input.execute(
+        "INSERT INTO message VALUES ('first','ses_input',1,1,?)",
+        (json.dumps({"role": "user"}),),
+    )
+    native_input.execute(
+        "INSERT INTO part VALUES ('first-part','first','ses_input',1,1,?)",
+        (json.dumps({"type": "text", "text": "first"}),),
+    )
+    native_input.commit()
+    monkeypatch.setattr(opencode_input, "_capture", AsyncMock(return_value=IDLE))
+    monkeypatch.setattr(
+        tmux_input_transport, "zcode_process_is_running", AsyncMock(return_value=True)
+    )
+    send = AsyncMock(return_value=False)
+    monkeypatch.setattr(tmux_input_transport, "_send_literal_chunked", send)
+    task = asyncio.create_task(
+        tmux_input_transport.send_literal_chunked("@7", "second", backend="opencode")
+    )
+    try:
+        await asyncio.sleep(0.05)
+        send.assert_not_awaited()
+        native_input.execute(
+            "INSERT INTO message VALUES ('done','ses_input',2,2,?)",
+            (json.dumps({"role": "assistant", "time": {"completed": 2}}),),
+        )
+        native_input.commit()
+        assert not await asyncio.wait_for(task, 2)
+        send.assert_awaited_once()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

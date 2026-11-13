@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 import json
 import time
 from weakref import WeakValueDictionary
+from typing import Any
 
 from .opencode_runtime import is_ready
 from .opencode_store import OpenCodeStoreError, open_store
@@ -31,17 +32,46 @@ async def _capture(window: str) -> str:
     return output.decode(errors="replace") if proc.returncode == 0 else ""
 
 
-def _accepted(window: str) -> dict[tuple[str, str], str]:
+def _binding(window: str) -> dict[str, Any] | None:
     try:
         bindings = json.loads((ccbot_dir() / "session_map.json").read_text())
         matches = [
             v
             for k, v in bindings.items()
-            if k.endswith(":" + window) and v.get("backend") == "opencode"
+            if k.endswith(":" + window)
+            and isinstance(v, dict)
+            and v.get("backend") == "opencode"
         ]
-        if len(matches) != 1:
+        return matches[0] if len(matches) == 1 else None
+    except (OSError, ValueError):
+        return None
+
+
+def _turn_finished(window: str) -> bool:
+    binding = _binding(window)
+    if binding is None:
+        return True
+    try:
+        with open_store() as db:
+            row = db.execute(
+                "SELECT data FROM message WHERE session_id=? ORDER BY time_created DESC,rowid DESC LIMIT 1",
+                (binding["session_id"],),
+            ).fetchone()
+        if row is None:
+            return True
+        last = json.loads(row["data"])
+        return last.get("role") == "assistant" and bool(
+            (last.get("time") or {}).get("completed") or last.get("error")
+        )
+    except (ValueError, KeyError, OpenCodeStoreError):
+        return False
+
+
+def _accepted(window: str) -> dict[tuple[str, str], str]:
+    try:
+        binding = _binding(window)
+        if binding is None:
             return {}
-        binding = matches[0]
         with open_store() as db:
             session = db.execute(
                 "SELECT directory FROM session WHERE id=?", (binding["session_id"],)
@@ -79,7 +109,10 @@ async def submit(window: str, text: str, send: Callable[[], Awaitable[bool]]) ->
     lock = _locks.setdefault(window, asyncio.Lock())
     async with lock:
         deadline = time.monotonic() + READY_TIMEOUT
-        while not is_ready(await _capture(window)):
+        while not is_ready(await _capture(window)) or (
+            not text.lstrip().startswith("/")
+            and not await asyncio.to_thread(_turn_finished, window)
+        ):
             if time.monotonic() >= deadline or not await zcode_process_is_running(
                 window, backend="opencode"
             ):

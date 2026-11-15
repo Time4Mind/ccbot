@@ -170,6 +170,10 @@ async def check_session_processes(
         if not is_reserve:
             sess.exit_reason = reason
             sess.exit_notified_users.clear()
+            if session_manager.is_window_starting(wid):
+                from .input_startup import defer_session
+
+                defer_session(sess.id, wid)
         session_manager.cancel_window_startup(wid)
         # A crash must not silently route the next request into another task.
         session_manager.mark_session_lost(sess.id, fallback=False)

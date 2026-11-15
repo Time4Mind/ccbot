@@ -735,3 +735,40 @@ async def _value(value):
 
 async def _append(values, value) -> None:
     values.append(value)
+
+
+@pytest.mark.parametrize("fast", ["", " fast"])
+async def test_resumed_codex_with_separate_shortcut_footer_is_ready(fast):
+    # Codex 0.169.0: archived history has scrolled the title off-screen;
+    # model identity is followed by the new agents/shortcuts help row.
+    from ccbot.terminal_parser import parse_codex_fast_mode, parse_codex_model_effort
+
+    screen = (
+        "• Previous final answer\n\n  Worked for 10m 55s • Nov 12 at 17:46\n\n"
+        "› Ask Codex to do anything\n\n"
+        f"  GPT-6.1-Sol high{fast} · ~/pet_projects/ccbot · Previous session\n"
+        "  ← for agents · ? for shortcuts            ⚠ 3 warnings · f2 to view\n"
+    )
+    assert parse_codex_model_effort(screen) == ("GPT-6.1-Sol", "high")
+    assert parse_codex_fast_mode(screen) is bool(fast)
+    assert classify_codex_screen(screen) is CodexScreen.READY
+    result = await drive_codex_startup(
+        command="codex resume exact",
+        capture=lambda: _value(screen),
+        current_process=lambda: _value("codex"),
+        send_key=lambda _key: _done(),
+        relaunch=lambda _cmd: _done(),
+        timeout=0.1,
+        poll_interval=0,
+        ready_settle_time=0,
+    )
+    assert not result.updated
+
+
+def test_footer_identity_does_not_scan_past_arbitrary_output():
+    from ccbot.terminal_parser import parse_codex_model_effort
+
+    assert (
+        parse_codex_model_effort("GPT-6.1-Sol high · ~/project\nordinary output")
+        is None
+    )

@@ -70,6 +70,7 @@ class InputRequest:
     session_name: str = ""
     media_failures: int = 0
     media_deferred: bool = False
+    startup_deferred: bool = False
 
 
 class InputRecovery:
@@ -113,6 +114,9 @@ class InputRecovery:
         self.confirmed_rows = raw.get("confirmed_rows", {})
         self.resolved_notices = raw.get("resolved_notices", [])
         for request in self.records.values():
+            request.startup_deferred = raw.get("startup_recovery", {}).get(
+                request.id, False
+            )
             media = raw.get("media_recovery", {}).get(request.id, {})
             # Upgrade a running legacy retry loop without another unbounded run.
             request.media_failures = media.get(
@@ -604,7 +608,7 @@ class InputRecovery:
         from .inbound_queue import enqueue_inbound
 
         for request in sorted(self.records.values(), key=lambda r: r.sequence):
-            if request.state in ("failed", "awaiting_confirmation"):
+            if request.state in ("failed", "awaiting_confirmation", "waiting_session"):
                 continue
             update = Update.de_json(request.update, self.bot)
             context = CallbackContext.from_update(update, application)
@@ -629,7 +633,7 @@ class InputRecovery:
             or not request.notice
             or request.notice_unknown
             or request.notice_retry_at > self.clock()
-            or request.media_deferred
+            or (request.media_deferred or request.startup_deferred)
             and request.notice_id is not None
         ):
             return
@@ -679,9 +683,11 @@ class InputRecovery:
                 request.notice_attempts += 1
                 self.changed(request)
                 return
-        if request.state == "failed" and not request.media_deferred:
+        if request.state == "failed" and not (
+            request.media_deferred or request.startup_deferred
+        ):
             self.complete(request, confirmed=False)
-        elif request.media_deferred:
+        elif request.media_deferred or request.startup_deferred:
             self.save()
         else:
             request.notice = ""

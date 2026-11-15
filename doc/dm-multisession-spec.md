@@ -436,6 +436,16 @@ confirmed delivered. Only final prepared text is submitted; recognition and
 preprocessing results already saved are reused. Remote-node waiting retains the
 durable FIFO rather than treating an in-memory queue admission as submission.
 
+Archive restoration journals incoming messages against the selected source
+session before it has a ready terminal. A failed restore sends a separate
+notification naming that session and retains never-submitted messages after
+their error notices. Restoring the same session resumes these messages in order,
+ahead of new startup inputs. `/requests retry <message-id>` also permits an
+explicit retry once the original session is ready; cancellation removes retry
+eligibility. Requests already submitted or awaiting proof are never automatically
+replayed into a replacement window. A late failure does not undo a newer session
+selection.
+
 Before sending input, persist the exact prepared text and transcript byte offset.
 For photos and image documents, Codex may replace the submitted inbox path with
 a native image wrapper. Confirmation requires one complete wrapper, an actual

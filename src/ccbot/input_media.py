@@ -17,9 +17,10 @@ logger = logging.getLogger(__name__)
 
 def encode_requests(records: dict[str, Any]) -> dict[str, Any]:
     """Keep the v1 request rows readable by the pre-deploy rollback commit."""
-    rows, metadata, names, media = [], {}, {}, {}
+    rows, metadata, names, media, startup = [], {}, {}, {}, {}
     for request in records.values():
         row = asdict(request)
+        startup[request.id] = row.pop("startup_deferred")
         names[request.id] = row.pop("session_name")
         media[request.id] = {
             key: row.pop(key) for key in ("media_failures", "media_deferred")
@@ -33,6 +34,7 @@ def encode_requests(records: dict[str, Any]) -> dict[str, Any]:
         "request_metadata": metadata,
         "session_names": names,
         "media_recovery": media,
+        "startup_recovery": startup,
     }
 
 
@@ -134,14 +136,29 @@ def retry_deferred_media(recovery: Any, request: Any, application: Any) -> bool:
     from .bot import inbound
     from .inbound_queue import enqueue_inbound
 
+    if request.startup_deferred:
+        from .session import session_manager
+
+        source = session_manager.get_session(request.session_id)
+        if (
+            source is None
+            or source.state not in ("active", "idle")
+            or not source.window_id
+            or session_manager.is_window_starting(source.window_id)
+            or request.dispatch_started_at
+            or request.state != "failed"
+        ):
+            return False
+        request.window_id = source.window_id
     if (
-        not request.media_deferred
+        not (request.media_deferred or request.startup_deferred)
         or request.state != "failed"
         or recovery.source(request) is None
     ):
         return False
     request.media_failures = 0
     request.media_deferred = False
+    request.startup_deferred = False
     request.attempts = 0
     request.retry_at = 0
     request.notice = ""
@@ -157,8 +174,8 @@ def retry_deferred_media(recovery: Any, request: Any, application: Any) -> bool:
         request.window_id,
         update,
         CallbackContext.from_update(update, application),
-        kind="voice",
-        processor=getattr(inbound, "_run_voice"),
+        kind=request.kind,
+        processor=getattr(inbound, "_run_" + request.kind),
         recovery_id=request.id,
     )
     return True

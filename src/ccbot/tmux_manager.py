@@ -29,7 +29,7 @@ import libtmux
 from . import tmux_input_transport
 from . import tmux_window as _tmux_window
 from .config import SENSITIVE_ENV_VARS, config
-from .terminal_parser import parse_codex_model_effort
+from .terminal_parser import strip_codex_identity_footer
 from .tmux_control import TmuxControlClient
 from .tmux_process import kill_orphan_processes
 
@@ -583,10 +583,8 @@ class TmuxManager:
     @staticmethod
     def _codex_prompt_contains(pane_text: str, text: str) -> bool:
         """Whether Codex still shows ``text`` in its bottom input prompt."""
-        lines = pane_text.rstrip().splitlines()
         # The live footer includes a session title, not pending input.
-        if parse_codex_model_effort(pane_text) is not None:
-            lines.pop()
+        lines = strip_codex_identity_footer(pane_text).rstrip().splitlines()
         prompt_idx = -1
         # Scan all rows for long wrapped input. The last prompt marker is
         # the live field; submitted turns leave a newer, empty prompt.

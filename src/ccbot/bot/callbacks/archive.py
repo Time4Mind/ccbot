@@ -57,8 +57,10 @@ async def _restore_and_update(
     # Restoring an archive is another way to finish that same selection flow.
     # Only adopt its unbound queue; a separate creation already owns bound ones.
     startup_flow = current_startup_flow(user.id)
-    if startup_flow is not None and (
-        startup_flow.session_id is not None or startup_flow.window_id is not None
+    if (
+        startup_flow is not None
+        and startup_flow is not owned_flow
+        and (startup_flow.session_id is not None or startup_flow.window_id is not None)
     ):
         startup_flow = None
     try:
@@ -79,9 +81,10 @@ async def _restore_and_update(
         if (
             startup_flow is not None
             and is_current_startup_flow(user.id, startup_flow)
-            and startup_flow.session_id is None
+            and startup_flow.session_id in (None, sess.id)
             and startup_flow.window_id is None
         ):
+            startup_flow.context = context
             bind_startup_session(user.id, sess.id)
             bind_startup_queue(user.id, sess.window_id, flow=startup_flow)
         if query.message is not None:
@@ -100,6 +103,10 @@ async def _restore_and_update(
 
         entries = fail_startup_queue(user.id, flow=startup_flow)
         await report_failed_startup_entries(entries)
+    from ...input_startup import defer_session, notify_restore_failure
+
+    defer_session(sess.id)
+    await notify_restore_failure(context.bot, user.id, sess, msg)
     await safe_edit(query, t(user.id, "toast.restore_failed", msg=msg))
 
 
@@ -207,6 +214,8 @@ async def handle(
         owned_flow = None
         if current_startup_flow(user.id) is None:
             owned_flow = begin_startup_queue(user.id)
+            owned_flow.restore_pending = True
+            bind_startup_session(user.id, sess.id)
         await query.answer(t(user.id, "toast.restoring"))
         task = asyncio.create_task(
             _restore_and_update(query, context, user, sess, owned_flow=owned_flow)

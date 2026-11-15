@@ -26,9 +26,9 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         await safe_reply(
             update.message,
-            "Голосовое поставлено на повтор в исходную сессию."
+            "Запрос поставлен на повтор в исходную сессию."
             if retried
-            else "Нет сохранённого голосового для повтора в доступную исходную сессию.",
+            else "Нет сохранённого запроса для повтора в готовую исходную сессию.",
         )
         return
     if len(args) == 2 and args[0] in ("ack", "cancel"):
@@ -45,6 +45,8 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     "Подтверждение принято. Запрос не будет отправлен повторно.",
                 )
             else:
+                item.media_deferred = False
+                item.startup_deferred = False
                 input_recovery.fail(
                     item,
                     "Неопределённая передача отменена пользователем; автоповтора не будет.",
@@ -59,6 +61,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     labels = {
         "accepted": "принят, ожидает обработки",
+        "waiting_session": "сохранён, ожидает восстановления сессии",
         "downloading": "загружается файл",
         "transcribing": "распознаётся",
         "prepared": "подготовлен к передаче",

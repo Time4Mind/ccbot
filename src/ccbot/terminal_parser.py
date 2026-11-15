@@ -28,6 +28,19 @@ _CODEX_MODEL_EFFORT_FOOTER_RE = re.compile(
 )
 
 
+def _codex_footer_match(pane_text: str) -> re.Match[str] | None:
+    lines = [line for line in pane_text.splitlines() if line.strip()]
+    # Codex 0.169 draws shortcut help below the identity row. Only skip
+    # that exact chrome, never search arbitrary history for model-like text.
+    if lines and re.fullmatch(
+        r"\s*(?:← for agents\s*·\s*)?\? for shortcuts"
+        r"(?:\s+⚠\s+\d+ warnings?\s*·\s*f2 to view)?\s*",
+        lines[-1],
+    ):
+        lines.pop()
+    return _CODEX_MODEL_EFFORT_FOOTER_RE.match(lines[-1]) if lines else None
+
+
 def parse_codex_model_effort(pane_text: str) -> tuple[str, str] | None:
     """Read ``<model> <effort> · <cwd>`` from the live Codex footer.
 
@@ -35,10 +48,7 @@ def parse_codex_model_effort(pane_text: str) -> tuple[str, str] | None:
     mandatory, so quoted/copied footer-like text in ordinary output does not
     become session identity.
     """
-    lines = [line for line in pane_text.splitlines() if line.strip()]
-    if not lines:
-        return None
-    match = _CODEX_MODEL_EFFORT_FOOTER_RE.match(lines[-1])
+    match = _codex_footer_match(pane_text)
     if match is not None:
         return match.group("model"), match.group("effort").lower()
     return None
@@ -46,9 +56,20 @@ def parse_codex_model_effort(pane_text: str) -> tuple[str, str] | None:
 
 def parse_codex_fast_mode(pane_text: str) -> bool | None:
     """Read Fast only from a complete live identity footer, not scrollback."""
-    lines = [line for line in pane_text.splitlines() if line.strip()]
-    match = _CODEX_MODEL_EFFORT_FOOTER_RE.match(lines[-1]) if lines else None
+    match = _codex_footer_match(pane_text)
     return bool(match.group("fast")) if match is not None else None
+
+
+def strip_codex_identity_footer(pane_text: str) -> str:
+    """Remove the validated identity and optional help row, preserving input."""
+    if _codex_footer_match(pane_text) is None:
+        return pane_text
+    lines = pane_text.rstrip().splitlines()
+    while lines:
+        line = lines.pop()
+        if _CODEX_MODEL_EFFORT_FOOTER_RE.match(line):
+            break
+    return "\n".join(lines)
 
 
 @dataclass

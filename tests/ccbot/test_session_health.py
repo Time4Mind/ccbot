@@ -369,3 +369,36 @@ async def test_crash_does_not_silently_select_a_different_task(env):
     assert env.sess.state == "lost"
     assert session_manager.get_active_session(42) is None
     assert session_manager.get_session(other.id) is other
+
+
+async def test_startup_process_exit_preserves_unsubmitted_request_before_rollback(
+    env, tmp_path, monkeypatch
+):
+    from telegram import Update
+    from ccbot import input_recovery as recovery_module
+
+    recovery = recovery_module.InputRecovery(tmp_path / "requests.json")
+    monkeypatch.setattr(recovery_module, "input_recovery", recovery)
+    env.sess.created_at = env.sess.activated_at = 0
+    session_manager._resuming_windows.add("@18")
+    update = Update.de_json(
+        {
+            "update_id": 1,
+            "message": {
+                "message_id": 1,
+                "date": 1,
+                "text": "retained prompt",
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 42, "is_bot": False, "first_name": "Test"},
+            },
+        },
+        None,
+    )
+    request = recovery.admit(update, "text", env.sess)
+    await env.tick(10)
+    await env.tick(12)
+    assert env.sess.state == "lost"
+    assert request.startup_deferred
+    assert request.state == "failed"
+    assert request.id in recovery.records
+    assert request.dispatch_started_at == 0

@@ -14,7 +14,17 @@ from ccbot.bot.callbacks.dir_browser import build_backend_picker
 
 
 @pytest.fixture(autouse=True)
-def _clean_default_state():
+def _clean_default_state(monkeypatch):
+    from ccbot import session_health
+
+    monkeypatch.setattr(
+        session_health, "pane_has_children", AsyncMock(return_value=False)
+    )
+    monkeypatch.setattr(
+        default_session.tmux_manager,
+        "find_window_by_id",
+        AsyncMock(return_value=SimpleNamespace(pane_current_command="codex")),
+    )
     saved_sessions = dict(session_manager.sessions)
     saved_backend = session_manager.agent_backend
     saved_settings = {
@@ -349,3 +359,81 @@ def test_manual_new_session_picker_lists_both_enabled_backends(monkeypatch):
         "nb:claude",
         "nb:codex",
     ]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_replaces_reserve_whose_window_contains_only_shell(
+    monkeypatch, tmp_path
+):
+    user_id = 42
+    session_manager.user_settings[user_id] = {
+        "default_session_enabled": True,
+        "default_session_directory": str(tmp_path),
+        "default_session_backend": "codex",
+        "enabled_backends": ["codex"],
+    }
+    monkeypatch.setattr(session_manager, "save_state", lambda: None)
+    monkeypatch.setattr(session_manager, "cancel_window_startup", lambda _w: None)
+    monkeypatch.setattr(session_manager, "mark_window_starting", lambda *_a, **_k: None)
+    old = session_manager.create_session(
+        name="default",
+        window_id="@dead",
+        workdir=str(tmp_path),
+        backend="codex",
+        default_reserve_user_id=user_id,
+    )
+    monkeypatch.setattr(
+        default_session.tmux_manager,
+        "find_window_by_id",
+        AsyncMock(
+            side_effect=lambda wid: SimpleNamespace(
+                pane_current_command="zsh" if wid == "@dead" else "codex"
+            )
+        ),
+    )
+    kill = AsyncMock(return_value=True)
+    monkeypatch.setattr(default_session.tmux_manager, "kill_window", kill)
+    monkeypatch.setattr(
+        default_session.tmux_manager,
+        "create_window",
+        AsyncMock(return_value=(True, "ok", "project", "@healthy")),
+    )
+
+    replacement = await default_session.ensure_default_session(
+        SimpleNamespace(), user_id
+    )
+
+    assert replacement is not old
+    assert replacement is not None and replacement.window_id == "@healthy"
+    assert session_manager.get_session(old.id) is None
+    kill.assert_awaited_once_with("@dead")
+
+
+@pytest.mark.asyncio
+async def test_reserve_returning_to_shell_during_startup_is_not_published(
+    monkeypatch, tmp_path
+):
+    session_manager.user_settings[42] = {
+        "default_session_enabled": True,
+        "default_session_directory": str(tmp_path),
+        "default_session_backend": "codex",
+        "enabled_backends": ["codex"],
+    }
+    monkeypatch.setattr(
+        default_session.tmux_manager,
+        "find_window_by_id",
+        AsyncMock(return_value=SimpleNamespace(pane_current_command="zsh")),
+    )
+    create = AsyncMock(return_value=(True, "ok", "project", "@dead"))
+    monkeypatch.setattr(default_session.tmux_manager, "create_window", create)
+    monkeypatch.setattr(
+        default_session.tmux_manager, "kill_window", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(session_manager, "cancel_window_startup", lambda _w: None)
+    monkeypatch.setattr(session_manager, "save_state", lambda: None)
+    monkeypatch.setattr(session_manager, "mark_window_starting", lambda *_a, **_k: None)
+
+    assert await default_session.ensure_default_session(SimpleNamespace(), 42) is None
+    assert await default_session.ensure_default_session(SimpleNamespace(), 42) is None
+    assert not session_manager.sessions
+    create.assert_awaited_once()

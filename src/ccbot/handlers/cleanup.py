@@ -45,6 +45,9 @@ async def teardown_session_runtime(
     # Import lazily to keep cleanup.py free of the session manager import cycle.
     from ..session import session_manager
     from ..tmux_manager import tmux_manager
+    from ..session_health import expect_session_stop
+
+    expect_session_stop(sess)
 
     provider_session_id = sess.claude_session_id
     window_ids = {sess.window_id} if sess.window_id else set()

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .session_models import reserve_owner, Session
+from .session_health import window_agent_alive
 from .tmux_manager import tmux_manager
 
 logger = logging.getLogger(__name__)
@@ -101,7 +102,18 @@ async def ensure_default_session(bot: Any, user_id: int) -> Session | None:
             ),
             None,
         )
+        if keep is not None and await window_agent_alive(keep.window_id) is False:
+            # A live tmux shell is not a live prewarmed agent.
+            if reserve_owner(keep) == user_id:
+                window_id = keep.window_id
+                session_manager.cancel_window_startup(window_id)
+                session_manager.mark_session_lost(keep.id, fallback=False)
+                await tmux_manager.kill_window(window_id)
+            keep = None
         for stale in reserves:
+            # Admission may have promoted the reserve while the probe awaited.
+            if reserve_owner(stale) != user_id:
+                continue
             if stale is keep:
                 continue
             session_manager.cancel_window_startup(stale.window_id)
@@ -113,7 +125,7 @@ async def ensure_default_session(bot: Any, user_id: int) -> Session | None:
                         "Could not stop stale default reserve %s: %s", stale.id, exc
                     )
             session_manager.delete_session(stale.id)
-        if keep is not None:
+        if keep is not None and reserve_owner(keep) == user_id:
             _start_retries.pop(user_id, None)
             if keep.default_reserve_user_id != user_id:
                 keep.mark_default_reserve(user_id)
@@ -145,7 +157,10 @@ async def ensure_default_session(bot: Any, user_id: int) -> Session | None:
             ),
             None,
         )
-        if orphan is not None:
+        if (
+            orphan is not None
+            and await window_agent_alive(orphan.window_id) is not False
+        ):
             _start_retries.pop(user_id, None)
             orphan.mark_default_reserve(user_id)
             session_manager.save_state()
@@ -175,6 +190,10 @@ async def ensure_default_session(bot: Any, user_id: int) -> Session | None:
             )
         except Exception as exc:
             success, message, window_id = False, type(exc).__name__, ""
+        if success and window_id and await window_agent_alive(window_id) is False:
+            session_manager.cancel_window_startup(window_id)
+            await tmux_manager.kill_window(window_id)
+            success, message = False, "Agent exited before reserve publication"
         if not success or not window_id:
             delay = _defer_failed_start(user_id, retry_key)
             logger.error(

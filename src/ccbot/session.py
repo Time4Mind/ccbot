@@ -42,6 +42,7 @@ from .session_defaults import DEFAULT_IDLE_ARCHIVE_HOURS, IDLE_ARCHIVE_HOUR_CHOI
 from .session_keys import key_matches_window
 from .session_map import SessionMapMixin
 from .session_models import ClaudeSession, Session, SessionState, WindowState
+from .session_health import window_agent_alive, window_has_exited
 from .session_node_state import send_to_remote_session
 from .session_state import SessionStateMixin
 from .terminal_parser import is_interactive_ui, parse_status_line
@@ -697,14 +698,7 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
         self._pending_sends.pop(window_id, None)
 
     async def send_to_window(self, window_id: str, text: str) -> tuple[bool, str]:
-        """Send text to a tmux window by ID.
-
-        For newly-created windows whose TUI is still booting, the text is
-        buffered into ``_pending_sends`` and success is returned immediately.
-        The background watcher drains the buffer in arrival order once the
-        real input prompt appears. This covers both ordinary startup and a
-        long resume compaction without holding the Telegram handler open.
-        """
+        """Buffer startup input; refuse delivery to an exited agent's shell."""
         display = self.get_display_name(window_id)
         logger.debug(
             "send_to_window: window_id=%s (%s), text_len=%d",
@@ -718,6 +712,12 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
         window = await tmux_manager.find_window_by_id(window_id)
         if not window:
             return False, "Window not found (may have been closed)"
+        if (
+            window_id not in self._resuming_windows
+            and window_has_exited(window)
+            and await window_agent_alive(window_id) is not True
+        ):
+            return False, "Agent is not running; input was not sent."
         if window_id in self._resuming_windows:
             queue = self._pending_sends.setdefault(window_id, [])
             queue.append(text)

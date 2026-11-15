@@ -225,7 +225,9 @@ class SessionStateMixin(NodeSessionStateMixin):
         sess.last_event_at = time.time()
         # Don't save on every touch; callers batch via _save_state when appropriate.
 
-    def _replace_terminal_active_session(self, sess: Session) -> None:
+    def _replace_terminal_active_session(
+        self, sess: Session, *, fallback: bool = True
+    ) -> None:
         """Repair both active pointers after a live session becomes terminal."""
         user_ids = set(self.active_sessions) | set(self.active_sessions_by_node)
         for uid in user_ids:
@@ -240,7 +242,7 @@ class SessionStateMixin(NodeSessionStateMixin):
             history = self.active_history.get(uid, [])
             while sess.id in history:
                 history.remove(sess.id)
-            if not (was_node_active or was_legacy_active):
+            if not fallback or not (was_node_active or was_legacy_active):
                 continue
 
             replacement: Session | None = None
@@ -316,8 +318,8 @@ class SessionStateMixin(NodeSessionStateMixin):
         metrics.inc("sessions_completed" if completed else "sessions_archived")
         logger.info("Archived session %s (completed=%s)", session_id, completed)
 
-    def mark_session_lost(self, session_id: str) -> None:
-        """Mark a session as lost (its tmux window vanished externally)."""
+    def mark_session_lost(self, session_id: str, *, fallback: bool = True) -> None:
+        """Mark a session lost; crashes can disable automatic target switching."""
         sess = self.sessions.get(session_id)
         if not sess:
             return
@@ -327,7 +329,7 @@ class SessionStateMixin(NodeSessionStateMixin):
         sess.was_lost = True
         sess.window_id = ""
         sess.pending_preprocessing.clear()
-        self._replace_terminal_active_session(sess)
+        self._replace_terminal_active_session(sess, fallback=fallback)
         # Lost sessions can't make progress; remove from the bg panel.
         from .handlers import bg_status
 

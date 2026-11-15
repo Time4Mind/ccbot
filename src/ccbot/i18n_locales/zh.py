@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 ZH: dict[str, str] = {
+    "session.exit.notice": "⚠️ 会话“{name}”意外停止。\n原因：{reason}\n不会向此会话发送新请求。请打开 /archive 恢复会话或创建新会话。",
+    "session.exit.routing_timeout": "Codex 启动时工作区路由发现超时。",
+    "session.exit.account_read": "代理启动时无法读取账户信息。",
+    "session.exit.auth": "代理因身份验证错误退出。",
+    "session.exit.crash": "代理进程因致命错误退出。",
+    "session.exit.window_missing": "会话终端在机器人外部消失。",
+    "session.exit.agent_exited": "代理进程已退出，终端返回了 shell。具体原因未知。",
     "usage.native.tokens": "已记录的 {backend} 会话：{total} tokens（输入 {incoming}，输出 {outgoing}）。",
     "usage.native.unknown_quota": "此连接未提供账户配额和重置时间。",
     "auth.zcode.configure": "创建会话前，请在 ZCode 终端中配置模型访问。",

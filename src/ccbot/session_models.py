@@ -164,6 +164,9 @@ class Session:
     # from the provider's active context window and survives archive/restore.
     context_path: str = ""
     context_error: str = ""
+    # Only allowlisted process-exit reasons are persisted for crash notices.
+    exit_reason: str = ""
+    exit_notified_users: list[int] = field(default_factory=list)
 
     @property
     def archive_entry_at(self) -> float:
@@ -259,6 +262,8 @@ class Session:
             "created_at_known": self.created_at_known,
             "activated_at": self.activated_at,
             "lost_at": self.lost_at,
+            "exit_reason": self.exit_reason,
+            "exit_notified_users": list(self.exit_notified_users),
             "last_event_at": self.last_event_at,
             "archived_at": self.archived_at,
             "message_count": self.message_count,
@@ -305,6 +310,10 @@ class Session:
             created_at_known=data.get("created_at_known") is True,
             activated_at=float(data.get("activated_at", data.get("created_at", 0.0))),
             lost_at=float(data.get("lost_at", 0.0)),
+            exit_reason=str(data.get("exit_reason", "")),
+            exit_notified_users=[
+                int(uid) for uid in data.get("exit_notified_users", [])
+            ],
             last_event_at=float(data.get("last_event_at", 0.0)),
             archived_at=float(data.get("archived_at", 0.0)),
             message_count=int(data.get("message_count", 0)),

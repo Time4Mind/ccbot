@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 EN: dict[str, str] = {
+    "session.exit.notice": "⚠️ Session “{name}” stopped unexpectedly.\nReason: {reason}\nNew requests will not be sent to this session. Open /archive to restore it or create a new session.",
+    "session.exit.routing_timeout": "Codex timed out while discovering workspace routing during startup.",
+    "session.exit.account_read": "The agent could not read the account during startup.",
+    "session.exit.auth": "The agent exited after an authentication error.",
+    "session.exit.crash": "The agent terminated with a fatal process error.",
+    "session.exit.window_missing": "The session terminal disappeared outside the bot.",
+    "session.exit.agent_exited": "The agent process exited and the terminal returned to its shell. The exact cause is unavailable.",
     "usage.native.tokens": "Recorded {backend} sessions: {total} tokens (input {incoming}, output {outgoing}).",
     "usage.native.unknown_quota": "Account quotas and reset times are not reported for this connection.",
     "auth.zcode.configure": "Configure model access in the ZCode terminal before starting a session.",

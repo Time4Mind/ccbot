@@ -39,7 +39,6 @@ from ..terminal_parser import (
 from ..tmux_manager import tmux_manager
 from . import bg_status
 from .archive import idle_archive_sweep, purge_sweep
-from .cleanup import clear_session_state
 from .codex_wait import dismiss_codex_wait_prompt
 from .kb_mode import should_hide_reserve_ui
 from .card_types import TurnPhase
@@ -703,6 +702,10 @@ async def status_poll_loop(bot: Bot) -> None:
                     captured_activity[wid] = window.activity
 
             remote_checks: list[tuple[int, str]] = []
+            from ..session_health import check_session_processes
+
+            with background_telegram_request():
+                await check_session_processes(bot, windows_by_id, pane_cache, now=now)
             for user_id, wid in pairs:
                 try:
                     sess = session_manager.find_session_by_window(wid)
@@ -719,18 +722,9 @@ async def status_poll_loop(bot: Bot) -> None:
                             last_status_check[wid] = now
                             remote_checks.append((user_id, wid))
                         continue
-                    # Reap tmux windows that vanished externally.
+                    # Process health reconciliation owns lost transitions.
                     w = windows_by_id.get(wid)
                     if not w:
-                        sess = session_manager.find_session_by_window(wid)
-                        if sess is not None:
-                            session_manager.mark_session_lost(sess.id)
-                        await clear_session_state(user_id, wid, bot)
-                        logger.info(
-                            "Reaped lost window: user=%d window_id=%s",
-                            user_id,
-                            wid,
-                        )
                         continue
 
                     cached_pane = pane_cache.get(wid)

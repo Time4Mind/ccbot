@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 RU: dict[str, str] = {
+    "session.exit.notice": "⚠️ Сессия «{name}» неожиданно остановилась.\nПричина: {reason}\nНовые запросы в неё не отправляются. Откройте /archive для восстановления или создайте новую сессию.",
+    "session.exit.routing_timeout": "Codex не дождался определения маршрута рабочей области при запуске (workspace routing discovery timed out).",
+    "session.exit.account_read": "При запуске агент не смог получить данные аккаунта (account/read failed).",
+    "session.exit.auth": "Агент завершился после ошибки авторизации.",
+    "session.exit.crash": "Процесс агента завершился с фатальной ошибкой.",
+    "session.exit.window_missing": "Терминал сессии исчез вне штатного закрытия в боте.",
+    "session.exit.agent_exited": "Процесс агента завершился, терминал вернулся в оболочку. Точная причина неизвестна.",
     "usage.native.tokens": "Учтённые сессии {backend}: {total} токенов (вход {incoming}, выход {outgoing}).",
     "usage.native.unknown_quota": "Квоты аккаунта и сроки сброса для этого подключения не предоставлены.",
     "auth.zcode.configure": "Настройте доступ к модели в терминале ZCode перед созданием сессии.",

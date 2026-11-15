@@ -646,6 +646,13 @@ async def test_prompt_left_in_input_fails_without_retyping_text() -> None:
             True,
         ),
         (
+            "› Ask Codex to do anything\n\n"
+            "  GPT-6.1-Sol high · ~/workdir · Проверь\n"
+            "  ← for agents · ? for shortcuts            ⚠ 3 warnings · f2 to view",
+            "Проверь",
+            True,
+        ),
+        (
             "› Проверь\n\n  GPT-6.1-Sol high fast · ~/workdir · Working",
             "Проверь",
             False,
@@ -662,7 +669,14 @@ async def test_prompt_left_in_input_fails_without_retyping_text() -> None:
             False,
         ),
     ],
-    ids=["title-only", "model-only", "working-in-title", "pending", "multiline"],
+    ids=[
+        "title-only",
+        "model-only",
+        "shortcut-footer",
+        "working-in-title",
+        "pending",
+        "multiline",
+    ],
 )
 async def test_codex_prompt_delivery_ignores_identity_footer(
     pane: str,

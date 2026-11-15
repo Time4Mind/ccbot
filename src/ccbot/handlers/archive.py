@@ -603,25 +603,26 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
         await restore_published.wait()
         if sess.window_id != failed_window_id:
             return
+        from ..input_startup import (
+            defer_session,
+            notify_restore_failure,
+            rollback_selection,
+        )
+
+        defer_session(sess.id, failed_window_id)
         session_manager.cancel_window_startup(failed_window_id)
         await session_manager.remove_provider_session_bindings(sess.claude_session_id)
         for field in fields(Session):
             setattr(sess, field.name, copy.deepcopy(getattr(prior_session, field.name)))
-        if prior_active is None:
-            session_manager.active_sessions.pop(user_id, None)
-        else:
-            session_manager.active_sessions[user_id] = prior_active
-        node_sessions = session_manager.active_sessions_by_node.setdefault(user_id, {})
-        if prior_node_active is None:
-            node_sessions.pop(sess.node_id, None)
-        else:
-            node_sessions[sess.node_id] = prior_node_active
-        if not node_sessions:
-            session_manager.active_sessions_by_node.pop(user_id, None)
-        if prior_history:
-            session_manager.active_history[user_id] = prior_history
-        else:
-            session_manager.active_history.pop(user_id, None)
+        rollback_selection(
+            session_manager,
+            user_id,
+            sess.id,
+            sess.node_id,
+            prior_active,
+            prior_node_active,
+            prior_history,
+        )
         session_manager.save_state()
         logger.warning(
             "Codex archive restore rolled back session=%s window=%s state=%s: %s",
@@ -630,6 +631,7 @@ async def restore_session(bot: Bot, user_id: int, sess: Session) -> tuple[bool, 
             sess.state,
             startup_error,
         )
+        await notify_restore_failure(bot, user_id, sess, startup_error)
 
     if native_codex_restore:
         create_result = await tmux_manager.create_window(

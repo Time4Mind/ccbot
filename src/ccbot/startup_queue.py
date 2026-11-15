@@ -17,6 +17,7 @@ import asyncio
 import logging
 from collections import deque
 from dataclasses import dataclass, field
+from typing import Any
 from telegram import Update
 from telegram.ext import ApplicationHandlerStop, ContextTypes
 
@@ -39,6 +40,8 @@ class StartupFlow:
     window_id: str | None = None
     drain_task: asyncio.Task[None] | None = None
     operation_task: asyncio.Task[None] | None = None
+    restore_pending: bool = False
+    context: Any = None
 
 
 _flows: dict[int, StartupFlow] = {}
@@ -78,7 +81,14 @@ def pending_startup_count(user_id: int) -> int:
 
 def cancel_startup_queue(user_id: int) -> int:
     """Explicitly abandon a cancelled flow and return its unsent count."""
-    return len(fail_startup_queue(user_id))
+    from .input_recovery import input_recovery
+
+    entries = fail_startup_queue(user_id)
+    for entry in entries:
+        request = input_recovery.records.get(input_recovery.key(entry.update))
+        if request is not None and request.state == "waiting_session":
+            input_recovery.complete(request, confirmed=False)
+    return len(entries)
 
 
 def fail_startup_queue(
@@ -160,7 +170,7 @@ async def capture_startup_message(
     flow = _flows.get(user.id)
     if flow is None:
         return
-    if flow.session_id is not None:
+    if flow.session_id is not None and not flow.restore_pending:
         from .session import session_manager
 
         active = session_manager.get_active_session(user.id)
@@ -242,6 +252,9 @@ def _surface_startup_entry(
     )
     if sess is None:
         return
+    from .input_startup import admit_entry
+
+    admit_entry(entry, sess)
     state = get_card_state(user.id, sess)
     message_id = message.message_id
     text = message.text or ""
@@ -355,14 +368,24 @@ async def _drain(user_id: int, window_id: str, flow: StartupFlow) -> None:
                 len(flow.entries),
             )
             entries = fail_startup_queue(user_id, flow=flow, window_id=window_id)
+            if flow.session_id is not None:
+                from .input_startup import defer_session
+
+                defer_session(flow.session_id, window_id)
             for entry in entries:
                 _discard_startup_receipt(entry, window_id)
             await report_failed_startup_entries(entries)
             return
+        if session is not None and flow.context is not None:
+            from .input_startup import resume_deferred
+
+            resume_deferred(session, flow.context, flow.entries)
         while flow.entries:
             entry = flow.entries[0]
             try:
-                delivered = await _replay(entry, window_id)
+                from .input_startup import replay_entry
+
+                delivered = await replay_entry(entry, window_id, _replay)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -418,6 +441,7 @@ def bind_startup_queue(
     if target is None:
         return None
     target.window_id = window_id
+    target.restore_pending = False
     if target.session_id is None:
         for entry in target.entries:
             _surface_startup_entry(entry, window_id=window_id)

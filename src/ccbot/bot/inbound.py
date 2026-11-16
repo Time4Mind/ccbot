@@ -205,6 +205,8 @@ def _enqueue(
                 )
         state.current_page_idx = None
         if kind == "voice":
+            if not state.voice_pending:
+                state.voice_stage = "downloading"
             state.voice_pending = True
         if not card_already_surfaced:
             if kind in ("voice", "text"):

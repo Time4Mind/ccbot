@@ -798,12 +798,18 @@ class TestVoicePendingCardMarker:
         mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock(window_id="@5"))
         mock_tmux.capture_pane = AsyncMock(return_value="")
 
-        from ccbot.handlers.card_model import CardState
+        from ccbot.handlers.card_model import CardState, _render_card
+        from ccbot.session_models import Session
+
+        render_session = Session(id="sess1", name="scraper", window_id="@5")
 
         state = CardState()
         state.current_page_idx = 0
 
         async def _repost_card(bot, user_id, sess):
+            text = _render_card(render_session, state)
+            assert "Voice message is downloading" in text
+            assert "Voice message is being transcribed" not in text
             events.append(
                 "repost_card:"
                 f"voice_pending={state.voice_pending}:"
@@ -811,6 +817,9 @@ class TestVoicePendingCardMarker:
             )
 
         async def _transcribe(*args, **kwargs):
+            text = _render_card(render_session, state)
+            assert "Voice message is being transcribed" in text
+            assert "Voice message is downloading" not in text
             events.append(f"transcribe:voice_pending={state.voice_pending}")
             return "hello"
 
@@ -828,6 +837,7 @@ class TestVoicePendingCardMarker:
             ),
             patch("ccbot.bot.messages.fire_typing", new=AsyncMock()),
             patch("ccbot.bot.messages.safe_reply", new=AsyncMock()),
+            patch("ccbot.bot.messages.refresh_panel", new=AsyncMock()),
             patch("ccbot.bot.messages.get_card_state", return_value=state),
             patch("ccbot.bot.messages.is_active_for_user", return_value=True),
             patch("ccbot.bot.messages.resume_card_view", new=AsyncMock()),

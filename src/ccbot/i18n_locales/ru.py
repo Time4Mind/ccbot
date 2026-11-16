@@ -31,6 +31,7 @@ RU: dict[str, str] = {
         "Отправь его ещё раз."
     ),
     "voice.transcribing": "🎙 Голосовое распознаётся…",
+    "voice.downloading": "🎙 Голосовое загружается…",
     "voice.queued_dropped": "Последующие сообщения тоже не дошли до сессии.",
     "btn.stop": "⏹ Стоп",
     "btn.kill": "✕ Закрыть",

@@ -87,7 +87,7 @@ class TestVoicePendingMarker:
         state.voice_pending = True
         text = _render_card(sess, state)
         assert "🎙" not in text.splitlines()[0]
-        assert "👤 🎙 Voice message is being transcribed…" in text
+        assert "👤 🎙 Voice message is downloading…" in text
         assert text.index("previous answer") < text.index("👤 🎙")
 
     def test_marker_absent_when_not_pending(self) -> None:

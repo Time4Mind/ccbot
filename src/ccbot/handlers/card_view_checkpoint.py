@@ -25,7 +25,11 @@ def checkpoint_views(manager: Any) -> dict[str, dict[str, Any]]:
     result = dict(manager.card_views)
     for user_id, session_id in manager.active_sessions.items():
         state = _cards.get((user_id, session_id))
-        if state is None or state.msg_id != manager.card_msg_id.get(user_id):
+        if (
+            state is None
+            or state.restoring_view
+            or state.msg_id != manager.card_msg_id.get(user_id)
+        ):
             continue
         key = str(user_id)
         # Menus are transient; retain the underlying reading position.

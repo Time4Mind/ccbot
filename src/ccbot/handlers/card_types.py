@@ -121,6 +121,7 @@ class CarrierKind(str, Enum):
 
 @dataclass
 class CardState:
+    restoring_view: bool = field(default=False, kw_only=True)
     msg_id: int | None = None
     # Non-empty only on an immutable durable-final transport snapshot.
     delivery_id: str = ""

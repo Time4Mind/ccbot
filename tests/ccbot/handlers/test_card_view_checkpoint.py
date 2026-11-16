@@ -40,6 +40,8 @@ async def test_checkpoint_restores_selected_content_after_history_shifts(
     monkeypatch.setattr(session_module, "session_manager", restored_manager)
 
     async def seed(uid, session, restored):
+        # A normal background checkpoint can run while transcript loading awaits.
+        restored_manager.save_state()
         # Old history was trimmed; raw numeric indices now refer to another page.
         restored.events = events[1:]
 

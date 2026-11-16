@@ -43,7 +43,7 @@ async def refresh_request_status(recovery: Any, user_id: int, session_id: str) -
         item = max(deferred, key=lambda r: r.sequence)
         state.inbound_status = (
             f"⚠️ Голосовое №{item.message_id} не загружено. "
-            f"Повторить: /requests retry {item.message_id}"
+            f"Повторить: /requests_retry_{item.message_id}"
         )
     state.voice_pending = any(r.kind == "voice" and not r.recognized for r in work)
     # Preserve the error on its own card even when the source is not selected.

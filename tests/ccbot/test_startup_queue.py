@@ -818,3 +818,12 @@ async def test_archive_restore_does_not_steal_or_drop_another_selection(other_fl
 
     assert delivered == [("current selection", "@other")]
     assert not has_startup_queue(42)
+
+
+@pytest.mark.asyncio
+async def test_inline_recovery_command_bypasses_pending_startup():
+    begin_startup_queue(42)
+    await capture_startup_message(
+        _update(17233, text="/requests_retry_17232"), SimpleNamespace(user_data={})
+    )
+    assert pending_startup_count(42) == 0

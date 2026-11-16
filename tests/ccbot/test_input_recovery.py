@@ -1268,7 +1268,7 @@ async def test_media_outage_releases_fifo_with_gap_and_retains_retryable_voice(
     assert len(seen) == 1 and "среднее за час" in seen[0]
     assert "1301" in seen[0] and "не получено" in seen[0]
     failed = env.recovery.records["42:1301"]
-    assert failed.state == "failed" and "/requests retry 1301" in failed.notice
+    assert failed.state == "failed" and "/requests_retry_1301" in failed.notice
     env.recovery.bot = SimpleNamespace(
         send_message=AsyncMock(return_value=SimpleNamespace(message_id=77))
     )
@@ -1522,14 +1522,14 @@ async def test_failed_voice_keeps_recoverable_error_on_its_card_when_notice_is_u
     assert await refresh_request_status(env.recovery, 42, "source")
     paint.assert_not_awaited()
     assert "2401" in state.inbound_status
-    assert "/requests retry 2401" in state.inbound_status
+    assert "/requests_retry_2401" in state.inbound_status
     assert not state.voice_pending
     session_manager.active_sessions[42] = "source"
     assert await refresh_request_status(env.recovery, 42, "source")
     paint.assert_awaited_once()
     from ccbot.handlers.card_model import _render_card
 
-    assert "/requests retry 2401" in _render_card(env.source, state, user_id=42)
+    assert "/requests_retry_2401" in _render_card(env.source, state, user_id=42)
     request.state = "accepted"
     request.media_deferred = False
     assert await refresh_request_status(env.recovery, 42, "source")
@@ -1538,3 +1538,105 @@ async def test_failed_voice_keeps_recoverable_error_on_its_card_when_notice_is_u
     env.recovery.complete(request, confirmed=False)
     assert await refresh_request_status(env.recovery, 42, "source")
     assert state.inbound_status == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token", ["/requests_retry_17232", "/requests_RTRY_17232"])
+async def test_one_click_retry_routes_to_original_request(env, monkeypatch, token):
+    from telegram import User
+    from telegram.ext import CallbackContext
+    from ccbot.bot.app import create_bot
+    from ccbot.config import config
+    from ccbot.bot.commands import requests as command
+
+    req = env.recovery.admit(update(17232), "voice", env.source)
+    req.media_deferred = True
+    env.recovery.fail(req, "download failed")
+    session_manager.active_sessions[42] = "other"
+    received = []
+
+    async def receive(upd, ctx, wid):
+        received.append((wid, upd.message.voice.file_id))
+        return True
+
+    monkeypatch.setattr(inbound, "_run_voice", receive)
+    monkeypatch.setattr(command, "is_user_allowed", lambda _: True)
+    monkeypatch.setattr(command, "safe_reply", AsyncMock())
+    monkeypatch.setattr(config, "telegram_bot_token", "1:testing")
+    application = create_bot()
+    application.bot._bot_user = User(1, "Test", True, username="test_bot")
+    raw = update(17233, token).to_dict()
+    raw["message"]["entities"] = [
+        {"type": "bot_command", "offset": 0, "length": len(token)}
+    ]
+    upd = Update.de_json(raw, application.bot)
+    handler = next(h for h in application.handlers[0] if h.check_update(upd))
+    assert handler.callback is command.requests_command
+    context = CallbackContext(application)
+    await handler.handle_update(upd, application, handler.check_update(upd), context)
+    await until(lambda: not has_pending_inbound("@source"))
+    assert received == [("@source", "file-17232")]
+    assert session_manager.active_sessions[42] == "other"
+    await handler.handle_update(upd, application, handler.check_update(upd), context)
+    assert received == [("@source", "file-17232")]
+
+
+@pytest.mark.asyncio
+async def test_saved_notice_and_request_list_use_whole_command_links(env, monkeypatch):
+    from ccbot.bot.commands import requests as command
+
+    req = env.recovery.admit(update(17232), "voice", env.source)
+    req.media_deferred = True
+    env.recovery.fail(req, "Повторить: /requests retry 17232")
+    env.recovery.bot = AsyncMock()
+    env.recovery.bot.send_message.return_value = SimpleNamespace(message_id=17234)
+    await env.recovery.deliver_notice(req)
+    assert (
+        "/requests_retry_17232"
+        in env.recovery.bot.send_message.call_args.kwargs["text"]
+    )
+    monkeypatch.setattr(command, "is_user_allowed", lambda _: True)
+    reply = AsyncMock()
+    monkeypatch.setattr(command, "safe_reply", reply)
+    await command.requests_command(update(17235, "/requests"), SimpleNamespace(args=[]))
+    assert "/requests_retry_17232" in reply.call_args.args[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verb", ["ack", "cancel", "retry"])
+async def test_inline_unknown_request_actions_never_replay(env, monkeypatch, verb):
+    from ccbot.bot.commands import requests as command
+
+    req = env.recovery.admit(update(17232), "voice", env.source)
+    req.state = "unknown"
+    req.notice = "Получение не подтверждено"
+    env.recovery.changed(req)
+    monkeypatch.setattr(command, "is_user_allowed", lambda _: True)
+    reply = AsyncMock()
+    monkeypatch.setattr(command, "safe_reply", reply)
+    await command.requests_command(
+        update(17233, f"/requests_{verb}_17232"),
+        SimpleNamespace(application=SimpleNamespace()),
+    )
+    assert not has_pending_inbound("@source")
+    if verb == "ack":
+        assert req.id not in env.recovery.records
+    elif verb == "cancel":
+        assert req.state == "failed" and not req.media_deferred
+    else:
+        assert req.state == "unknown"
+        assert "/requests_ack_17232" not in reply.call_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_request_list_has_clickable_unknown_actions(env, monkeypatch):
+    from ccbot.bot.commands import requests as command
+
+    req = env.recovery.admit(update(17232), "voice", env.source)
+    req.state = "unknown"
+    monkeypatch.setattr(command, "is_user_allowed", lambda _: True)
+    reply = AsyncMock()
+    monkeypatch.setattr(command, "safe_reply", reply)
+    await command.requests_command(update(17233, "/requests"), SimpleNamespace(args=[]))
+    assert "/requests_ack_17232" in reply.call_args.args[1]
+    assert "/requests_cancel_17232" in reply.call_args.args[1]

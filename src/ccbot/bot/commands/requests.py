@@ -7,6 +7,7 @@ from telegram.ext import ContextTypes
 
 from .._common import is_user_allowed
 from ...handlers.message_sender import safe_reply
+from ...request_commands import REQUEST_ACTION, clickable_actions
 
 
 async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -16,7 +17,12 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     from ...input_recovery import input_recovery
 
     input_recovery.load()
-    args = context.args or []
+    args = getattr(context, "args", None) or []
+    if action := REQUEST_ACTION.fullmatch(update.message.text or ""):
+        if action[3] and action[3].casefold() != context.bot.username.casefold():
+            return
+        verb = action[1].casefold()
+        args = ["retry" if verb == "rtry" else verb, action[2]]
     if len(args) == 2 and args[0] == "retry":
         from ...input_media import retry_deferred_media
 
@@ -76,10 +82,10 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         line = f"№{item.message_id}, сессия «{session_name(item)}»: {labels.get(item.state, item.state)}"
         if item.notice:
-            line += "\n" + item.notice
+            line += "\n" + clickable_actions(item.notice)
         if item.state == "unknown":
-            line += f"\nПосле проверки сессии: /requests ack {item.message_id} или /requests cancel {item.message_id}"
+            line += f"\nПосле проверки сессии: /requests_ack_{item.message_id} или /requests_cancel_{item.message_id}"
         elif item.state == "failed" and item.notice_unknown:
-            line += f"\nПосле прочтения ошибки: /requests ack {item.message_id}"
+            line += f"\nПосле прочтения ошибки: /requests_ack_{item.message_id}"
         lines.append(line)
     await safe_reply(update.message, "\n\n".join(lines))

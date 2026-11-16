@@ -17,6 +17,7 @@ from telegram.ext import (
 )
 
 from ..startup_queue import capture_startup_message
+from ..request_commands import REQUEST_ACTION
 from ..telegram_rate_limit import PersistentEndpointRateLimiter
 from ..telegram_polling_health import PollingHeartbeatRequest, OutboundHealthRequest
 from ..telegram_proxy_transport import telegram_transport
@@ -152,6 +153,11 @@ def create_bot() -> "Application[Any, Any, Any, Any, Any, Any]":
     application.add_handler(CommandHandler("health", health_command))
     application.add_handler(CommandHandler("delivery", delivery_command))
     application.add_handler(CommandHandler("requests", requests_command))
+    application.add_handler(
+        MessageHandler(
+            filters.COMMAND & filters.Regex(REQUEST_ACTION), requests_command
+        )
+    )
     application.add_handler(CommandHandler("help", help_command))
     # /login stays out of setMyCommands: it is an emergency path surfaced by the
     # "authorization expired" notice (text + 🔐 button), not day-to-day UI.

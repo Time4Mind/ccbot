@@ -282,6 +282,10 @@ async def _surface_new_interactive_ui(
 
     ``is_interactive_ui(pane_text)`` is assumed True by the caller.
     """
+    from ..opencode_picker import switching
+
+    if switching(sess):
+        return True
     # Allow an active reserve's model picker while hiding startup/auth UI.
     if should_hide_reserve_ui(user_id, sess, pane_text):
         return True
@@ -362,6 +366,10 @@ async def _reconcile_no_ui_state(
     Clears a stale bg-session ❓ stash and flips the active card out of a
     dismissed slash-command kb-mode picker.
     """
+    from ..opencode_picker import switching
+
+    if switching(sess):
+        return
     no_ui = not is_interactive_ui(pane_text)
 
     # The prompt is gone — reset the auto-approve escalation counter so the

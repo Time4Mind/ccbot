@@ -76,6 +76,21 @@ def parse_picker_menu(prompt_content: str, ui_name: str = "") -> PickerMenu | No
     selected bullet when available; otherwise the native cursor is the best
     representation of the currently selected model/effort.
     """
+    if ui_name == "OpenCodeVariant":
+        rows = [line.strip() for line in prompt_content.splitlines()]
+        options = tuple(
+            PickerOption(line.lstrip("●◉ "), line.startswith(("●", "◉")))
+            for line in rows
+            if re.fullmatch(r"[●◉ ]*(?:Default|low|medium|high|xhigh|max|ultra)", line)
+        )
+        return (
+            PickerMenu(
+                options,
+                next((i for i, option in enumerate(options) if option.selected), 0),
+            )
+            if options
+            else None
+        )
     if ui_name != "Settings" or not _PICKER_TITLE_RE.search(prompt_content):
         return None
     # OpenCode marks only the focused row; unmarked rows are selectable too.
@@ -143,7 +158,14 @@ def should_hide_reserve_ui(user_id: int, sess: object | None, pane_text: str) ->
         active is None
         or active.id != getattr(sess, "id", None)
         or content is None
-        or parse_picker_menu(content.content, content.name) is None
+        or (
+            parse_picker_menu(content.content, content.name) is None
+            and not (
+                getattr(sess, "backend", "") == "opencode"
+                and content.name in ("Settings", "OpenCodeVariant")
+                and "Select " in content.content
+            )
+        )
     )
 
 
@@ -262,6 +284,11 @@ def build_kb_mode_keyboard(
     def kb(label: str, prefix: str) -> InlineKeyboardButton:
         return InlineKeyboardButton(label, callback_data=f"{prefix}{window_id}"[:64])
 
+    from ..opencode_picker import keyboard as opencode_keyboard
+
+    native_keyboard = opencode_keyboard(user_id, window_id, prompt_content, ui_name)
+    if native_keyboard is not None:
+        return native_keyboard
     picker = parse_picker_menu(prompt_content, ui_name)
     if picker is not None:
         rows = [

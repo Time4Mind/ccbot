@@ -458,3 +458,54 @@ async def test_transcript_event_does_not_close_live_picker(monkeypatch) -> None:
 
     exit_kb.assert_not_awaited()
     session_events.update_session_card.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_footer", [False, True])
+async def test_reposted_card_keeps_mode_choices_during_queued_intake(
+    monkeypatch, explicit_footer
+):
+    """A fresh receipt below a queued message must retain the open model/mode UI."""
+    from types import SimpleNamespace
+    from ccbot.handlers import card_transport, message_sender, card_delivery_receipts
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    sess = _make_sess("queued-picker")
+    sess.backend = "opencode"
+    state = CardState(
+        in_kb_mode=True,
+        kb_ui_name="OpenCodeVariant",
+        kb_prompt="Select variant esc\nSearch\nDefault\nlow\nmedium\nhigh",
+    )
+    send = AsyncMock(return_value=SimpleNamespace(message_id=9999))
+    monkeypatch.setattr(card_transport, "_inline_screens_enabled", lambda _: False)
+    monkeypatch.setattr(
+        card_transport, "file_button_context_for_session", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(message_sender, "send_with_fallback", send)
+    monkeypatch.setattr(card_transport, "_strip_stale_switchers", AsyncMock())
+    monkeypatch.setattr(card_transport, "_register_msg", lambda *_: None)
+    monkeypatch.setattr(
+        card_transport.session_manager, "set_last_switcher_msg", lambda *_: None
+    )
+    monkeypatch.setattr(card_transport.session_manager, "set_card_msg", lambda *_: None)
+    monkeypatch.setattr(card_delivery_receipts, "observe_card_receipt", lambda *_: None)
+    footer = (
+        InlineKeyboardMarkup([[InlineKeyboardButton("Stop", callback_data="ft:stop")]])
+        if explicit_footer
+        else None
+    )
+    assert await card_transport._send_card_locked(
+        AsyncMock(),
+        42,
+        sess,
+        state,
+        text="Select reasoning effort",
+        reply_markup=footer,
+    )
+    labels = [
+        b.text
+        for row in send.await_args.kwargs["reply_markup"].inline_keyboard
+        for b in row
+    ]
+    assert labels == ["Default", "low", "medium", "high", "× Cancel"]

@@ -113,7 +113,16 @@ async def _send_card_locked(
     ``finalize_task`` to attach the idle-state Kill row to a completed
     result instead of the busy-state Stop row.
     """
-    if reply_markup is None:
+    if state.in_kb_mode and state.kb_prompt:
+        from .kb_mode import build_kb_mode_keyboard
+
+        reply_markup = build_kb_mode_keyboard(
+            user_id,
+            sess.window_id,
+            ui_name=state.kb_ui_name,
+            prompt_content=state.kb_prompt,
+        )
+    elif reply_markup is None:
         # Default: a fresh card is being sent because a turn is in
         # flight (update_session_card, repost_card, continuation
         # overflow). ``_card_is_busy`` keys off ``state.msg_id`` which

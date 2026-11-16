@@ -51,10 +51,16 @@ def composer_identity(pane: str) -> tuple[str, str] | None:
     footer = _footer(pane)
     if not footer:
         return None
-    model = re.match(r"^┃\s+(?:Build|Plan)\s+·\s+(.+?)\s+OpenAI\s*$", footer)
+    model = re.match(
+        r"^┃\s+(?:Build|Plan)\s+·\s+(.+?)\s+OpenAI(?:\s+·\s+(.+?))?\s*$", footer
+    )
     if model:
+        if model[2]:
+            return model[1], model[2]
         name = model[1]
-        effort = re.search(r"\s+(low|medium|high|xhigh|max)\s*$", name, re.I)
+        effort = re.search(
+            r"\s+(none|minimal|low|medium|high|xhigh|max)\s*$", name, re.I
+        )
         return (
             (name[: effort.start()].strip(), effort[1].lower())
             if effort
@@ -99,6 +105,24 @@ def interactive_panel(pane: str) -> tuple[str, str] | None:
                 if re.search(r"(?m)^\s*1\.\s+", content):
                     return "AskUserQuestion", content
     for index, line in enumerate(lines):
+        variant_title = re.search(r"\bSelect variant\s+esc\s*$", line)
+        if variant_title is not None and _footer(pane):
+            # Old user/tool blocks can start with ┃ to the LEFT of this
+            # floating dialog. They do not end the dialog: crop that margin
+            # and stop at the actual live composer, located from the footer.
+            footer = _footer(pane)
+            end = next(
+                (
+                    i
+                    for i in range(len(lines) - 1, index, -1)
+                    if lines[i].strip() == footer
+                ),
+                len(lines),
+            )
+            left = max(0, variant_title.start() - 2)
+            return "OpenCodeVariant", "\n".join(
+                row[left:] for row in lines[index:end]
+            ).strip()
         model_title = re.search(r"\bSelect model\s+esc\s*$", line)
         if model_title is not None and _footer(pane):
             for end in range(index + 1, len(lines)):

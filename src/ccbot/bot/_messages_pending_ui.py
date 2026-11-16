@@ -60,6 +60,11 @@ async def _intercept_if_pending_ui(
                 "Your message wasn't sent.",
             )
             return True
+        from ..opencode_picker import switching
+
+        if switching(session_manager.find_session_by_window(wid)):
+            await asyncio.sleep(0.05)
+            continue
         if not pane_text or not is_interactive_ui(pane_text):
             if surfaced and wait_until_clear:
                 logger.info(

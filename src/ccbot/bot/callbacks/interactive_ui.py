@@ -88,6 +88,10 @@ async def confirm_interactive_selection(bot: Any, user_id: int, window_id: str) 
 async def handle(
     query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, user: Any
 ) -> bool:
+    from .opencode_picker import handle as handle_opencode_picker
+
+    if await handle_opencode_picker(query, context, user):
+        return True
     data = query.data or ""
 
     if data.startswith(CB_ASK_PICK):
@@ -148,6 +152,11 @@ async def handle(
         return True
 
     return False
+
+
+async def refresh_after_key(bot: Any, user_id: int, window_id: str) -> None:
+    """Refresh terminal-driven controls after a backend-specific choice."""
+    await _refresh_after_key(bot, user_id, window_id)
 
 
 async def _refresh_after_key(bot: Any, user_id: int, window_id: str) -> None:

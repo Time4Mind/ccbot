@@ -29,7 +29,7 @@ MODELS = [
         "id": "gpt-6.1-sol",
         "providerID": "openai",
         "name": "GPT-6.1 Sol",
-        "variants": {"low": {}, "high": {}, "max": {}},
+        "variants": {"low": {}, "medium": {}, "high": {}, "max": {}},
     },
     {
         "id": "gpt-6.1-terra",
@@ -376,6 +376,7 @@ def test_catalogue_uses_available_native_models_and_rejects_bad_records():
     assert {m.id for m in models} == {"gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra"}
     assert next(m for m in models if m.id == "gpt-6.1-sol").variants == (
         "low",
+        "medium",
         "high",
         "max",
     )
@@ -425,3 +426,42 @@ async def test_pending_prompt_waits_for_explicit_mode_then_resumes(
     await named_callback(p, native, sess, interactive, "high")
     assert await asyncio.wait_for(pending, 1) is False
     assert native.mode == "high" and native.submitted_prompts == []
+
+
+@pytest.mark.asyncio
+async def test_medium_choice_works_when_old_user_block_shares_dialog_rows(
+    native_picker, monkeypatch
+):
+    p, native, sess, interactive = native_picker
+    await named_callback(p, native, sess, interactive, "GPT-6.1 Sol")
+    original_capture = native.capture
+
+    async def with_history(session):
+        text = await original_capture(session)
+        if native.dialog != "variant":
+            return text
+        lines = text.splitlines()
+        prefix = []
+        for line in lines:
+            if line.startswith("┃") or line.startswith("/tmp"):
+                prefix.append(line)
+            elif line:
+                prefix.append(
+                    (
+                        "     ▣  Bu    "
+                        if line.startswith("Select variant")
+                        else "  ┃           "
+                    )
+                    + line
+                )
+            else:
+                prefix.append(line)
+        return "\n".join(prefix)
+
+    monkeypatch.setattr(p, "capture_session_pane", with_history)
+    await named_callback(p, native, sess, interactive, "medium")
+    assert (
+        native.mode == "medium"
+        and native.dialog == ""
+        and native.submitted_prompts == []
+    )

@@ -454,3 +454,29 @@ def test_native_variant_is_interactive_so_it_cannot_consume_a_prompt():
     assert "Default" in panel.content
     assert not is_ready(pane)
     assert not is_ready(pane.replace("Default", "filtered query"))
+
+
+def test_variant_content_survives_history_bars_left_of_floating_dialog():
+    """The visible Search/options may share terminal rows with old user blocks."""
+    pane = """     ▣  Bu    Select variant                                   esc
+
+  ┃           medium
+  ┃  Reply
+  ┃           medium
+
+     TERRA
+
+     ▣  Build · GPT-6.1 Terra · 2.2s
+
+  ┃
+  ┃  Build · GPT-6.1 Sol OpenAI
+  /tmp/lab ctrl+p commands"""
+    from ccbot.opencode_runtime import interactive_panel
+
+    result = interactive_panel(pane)
+    assert result and result[0] == "OpenCodeVariant"
+    assert [x.strip() for x in result[1].splitlines() if x.strip()][:3] == [
+        "Select variant                                   esc",
+        "medium",
+        "medium",
+    ]

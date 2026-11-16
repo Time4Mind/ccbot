@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
+from typing import Any
 import time
 from .config import config
 from .utils import atomic_write_json
@@ -26,6 +27,7 @@ class KeyboardCleanup:
         self.blocked_until: dict[int, float] = {}
         self.session_links: dict[tuple[int, int], str] = {}
         self.final_sessions: dict[tuple[int, int], str | None] = {}
+        self.answer_views: dict[tuple[int, int], dict[str, Any]] = {}
         self.loaded = False
 
     def load(self) -> None:
@@ -52,6 +54,11 @@ class KeyboardCleanup:
             (row["user_id"], row["message_id"]): row["session_id"]
             for row in raw.get("final_sessions", [])[-_FINAL_SESSION_LIMIT:]
         }
+        self.answer_views = {
+            (row["user_id"], row["message_id"]): row["view"]
+            for row in raw.get("answer_views", [])
+            if (row["user_id"], row["message_id"]) in self.final_sessions
+        }
         self.loaded = True
 
     def save(self) -> None:
@@ -59,6 +66,10 @@ class KeyboardCleanup:
             self.path,
             {
                 "version": 1,
+                "answer_views": [
+                    {"user_id": uid, "message_id": mid, "view": view}
+                    for (uid, mid), view in self.answer_views.items()
+                ],
                 "pending": [asdict(item) for item in self.pending.values()],
                 "blocked_until": self.blocked_until,
                 # Keep pending rows readable by the previous release on rollback.
@@ -80,18 +91,49 @@ class KeyboardCleanup:
         session_id: str,
         *,
         only_if_unknown: bool = False,
+        answer: dict[str, Any] | None = None,
     ) -> None:
         """Keep ownership after delivery/cleanup, including across restarts."""
         self.load()
         key = user_id, message_id
+        added_answer = False
+        if (
+            answer is not None
+            and (
+                key not in self.answer_views
+                or self.answer_views[key].get("hash") != answer["hash"]
+            )
+            and (
+                not only_if_unknown
+                or key not in self.final_sessions
+                or self.final_sessions[key] == session_id
+            )
+        ):
+            from .handlers.saved_answers import store
+
+            previous_answer = self.answer_views.get(key)
+            self.answer_views[key] = store(self, user_id, message_id, answer)
+            if previous_answer is not None:
+                from .handlers.saved_answers import discard
+
+                discard(self, user_id, message_id, previous_answer)
+            added_answer = True
         if self.final_sessions.get(key) == session_id or (
             only_if_unknown and key in self.final_sessions
         ):
+            if added_answer:
+                self.save()
             return
         self.final_sessions.pop(key, None)
         self.final_sessions[key] = session_id
         if len(self.final_sessions) > _FINAL_SESSION_LIMIT:
-            self.final_sessions.pop(next(iter(self.final_sessions)))
+            expired = next(iter(self.final_sessions))
+            self.final_sessions.pop(expired)
+            expired_answer = self.answer_views.pop(expired, None)
+            if expired_answer is not None:
+                from .handlers.saved_answers import discard
+
+                discard(self, *expired, expired_answer)
         self.save()
 
     def rebind_final(

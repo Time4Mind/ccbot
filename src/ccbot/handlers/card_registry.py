@@ -321,7 +321,7 @@ async def _reconcile_switcher_keyboards(
     bot: Bot, user_id: int, targets: list[int], keep_msg_id: int | None
 ) -> None:
     from ..keyboard_cleanup import cleanup_queue
-    from .card_session_link import session_link_keyboard
+    from .saved_answers import keyboard as saved_answer_keyboard
 
     user_wait = max(
         _switcher_user_retry_at.get(user_id, 0.0) - time.monotonic(),
@@ -362,7 +362,9 @@ async def _reconcile_switcher_keyboards(
             with background_telegram_request():
                 session_id = cleanup_queue.session_links.get(key)
                 keyboard = (
-                    session_link_keyboard(user_id, session_id) if session_id else None
+                    saved_answer_keyboard(user_id, msg_id, session_id)
+                    if session_id
+                    else None
                 )
                 await bot.edit_message_reply_markup(
                     chat_id=user_id, message_id=msg_id, reply_markup=keyboard

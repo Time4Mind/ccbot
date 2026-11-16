@@ -35,6 +35,7 @@ from . import (
     more_menu,
     nodes,
     settings as settings_callbacks,
+    saved_answer,
     switcher,
     transfer,
     window_picker,
@@ -130,6 +131,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "db",
         "rs",
         "file",
+        "fa",
         "au",
         "sw",
     }:
@@ -142,6 +144,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         getattr(getattr(query, "message", None), "message_id", None),
         active.id if active else None,
     )
+
+    if query.data.startswith("fa:"):
+        record_user_activity(user.id)
+        await saved_answer.handle(query, context, user)
+        return
 
     # Every allowed button tap is an explicit user action, including noop
     # buttons that only dismiss Telegram's spinner.

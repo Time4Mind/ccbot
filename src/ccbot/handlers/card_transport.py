@@ -309,6 +309,9 @@ async def _edit_card_unlocked(
         from .card_delivery_receipts import observe_card_receipt
 
         observe_card_receipt(user_id, state, text)
+        from .saved_answers import observe_page
+
+        observe_page(user_id, state)
     return edited
 
 

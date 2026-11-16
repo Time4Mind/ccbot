@@ -7,9 +7,92 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+import httpx
+from telegram import Bot
+from telegram.request import HTTPXRequest
 
-from ccbot.file_actions import RemoteFileReference
+from ccbot.file_actions import FileReference, RemoteFileReference
 from ccbot.file_delivery import FileDeliveryManager, SubmitResult
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remote", [False, True])
+async def test_file_timeout_reaches_http_request_only_for_file_delivery(
+    monkeypatch, tmp_path: Path, remote: bool
+) -> None:
+    payload = b"file payload"
+    path = tmp_path / "result.zip"
+    path.write_bytes(payload)
+    reference: FileReference = path
+    if remote:
+
+        async def download_to(_node, _session, _path, destination, **_kwargs):
+            destination.write(payload)
+            return {"name": path.name}
+
+        monkeypatch.setattr(
+            "ccbot.file_delivery.get_node_runtime",
+            lambda _node: SimpleNamespace(download_session_file_to=download_to),
+        )
+        reference = RemoteFileReference(
+            node_id="worker-a",
+            session_id="routing-1",
+            path="/worker/result.zip",
+            name=path.name,
+            size=len(payload),
+            version="version-1",
+        )
+
+    requests: list[httpx.Request] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "message_id": 1,
+                    "date": 0,
+                    "chat": {"id": 42, "type": "private"},
+                },
+            },
+        )
+
+    request = HTTPXRequest(
+        read_timeout=20,
+        write_timeout=10,
+        connect_timeout=3,
+        pool_timeout=4,
+        httpx_kwargs={"transport": httpx.MockTransport(respond)},
+    )
+    manager = FileDeliveryManager(
+        telegram_timeout=0.5, staging_dir=tmp_path / "staging"
+    )
+    async with request:
+        bot = Bot("123:test-token", request=request, get_updates_request=request)
+        manager.submit(bot=bot, user_id=42, delivery_key="file", reference=reference)
+        await manager.wait_for_idle()
+        await bot.send_message(chat_id=42, text="normal message")
+
+    assert [r.url.path.rsplit("/", 1)[-1] for r in requests] == [
+        "sendDocument",
+        "sendMessage",
+    ]
+    assert payload in requests[0].content
+    assert requests[0].extensions["timeout"] == {
+        "read": 0.5,
+        "write": 0.5,
+        "connect": 3,
+        "pool": 4,
+    }
+    assert requests[1].extensions["timeout"] == {
+        "read": 20,
+        "write": 10,
+        "connect": 3,
+        "pool": 4,
+    }
+    assert not list((tmp_path / "staging").glob("delivery-*"))
 
 
 @pytest.mark.asyncio

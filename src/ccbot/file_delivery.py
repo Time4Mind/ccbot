@@ -198,6 +198,8 @@ class FileDeliveryManager:
                                 document=source,
                                 filename=filename,
                                 disable_notification=True,
+                                read_timeout=self._telegram_timeout,
+                                write_timeout=self._telegram_timeout,
                             ),
                             timeout=self._telegram_timeout,
                         )

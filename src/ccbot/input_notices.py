@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
+from .request_commands import clickable_actions
 
 if TYPE_CHECKING:
     from .input_recovery import InputRequest
@@ -26,7 +27,7 @@ def notice_text(request: InputRequest) -> str:
     parts = [header]
     if preview:
         parts.append(f"Запрос: «{preview}»")
-    parts.append(request.notice)
+    parts.append(clickable_actions(request.notice))
     if request.state == "unknown" and "/requests" not in request.notice:
         parts.append("Проверить состояние: /requests.")
     return "\n".join(parts)

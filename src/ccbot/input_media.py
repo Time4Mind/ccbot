@@ -101,7 +101,7 @@ async def download_voice(recovery: Any, voice: Any, request: Any) -> bytes:
         request,
         "Не удалось получить голосовое после 5 сетевых сбоев, включая новый клиент. "
         "Голосовое сохранено; следующие сообщения продолжат обработку. "
-        f"Повторить: /requests retry {request.message_id}",
+        f"Повторить: /requests_retry_{request.message_id}",
     )
     raise ValueError(request.notice)
 

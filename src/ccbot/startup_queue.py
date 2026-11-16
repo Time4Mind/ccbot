@@ -185,6 +185,10 @@ async def capture_startup_message(
     if state == STATE_NAMING_DIRECTORY and update.message.text is not None:
         return
     text = (update.message.text or "").strip()
+    from .request_commands import REQUEST_ACTION
+
+    if REQUEST_ACTION.fullmatch(text):
+        return
     command = (
         text.split(maxsplit=1)[0].removeprefix("/").split("@", 1)[0].casefold()
         if text

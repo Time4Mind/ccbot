@@ -732,3 +732,16 @@ Existing used sessions receive no guessed retrospective timestamp repair.
 Multi-page final answers retain message-scoped previous/next controls and a source-session link after the live switcher moves elsewhere. These buttons paginate an immutable answer snapshot and never change the selected session. A callback includes the answer generation, so a delayed click cannot overwrite newer content on a reused message. Page payloads are written once per retained answer, separately from the small keyboard-cleanup metadata; clicks do not rewrite payloads. Single-page answers keep the source-session link.
 
 The active reading position is identified by event content and timestamp, with an answer-relative page fallback when the page budget changes. It is included in existing state checkpoints and flushed before the process releases its singleton lock on a normal shutdown. Pagination does not trigger a state write. An abrupt crash can lose changes since the last checkpoint; unavailable history falls back to the latest page.
+
+
+### Request recovery command links
+
+Recovery notices, card status and `/requests` use single-token commands:
+`/requests_retry_<message_id>`, `/requests_ack_<message_id>` and
+`/requests_cancel_<message_id>`. Telegram can send the complete action with one
+command tap. Legacy `/requests retry|ack|cancel <message_id>` remains supported;
+`/requests_RTRY_<message_id>` is a retry alias. Startup capture exempts these
+control commands. Retry retains the original owner/session and only replays
+requests already eligible for explicit recovery; uncertain submissions still
+require acknowledgement or cancellation. Stored legacy notice text is normalized
+when displayed without changing its recovery state.

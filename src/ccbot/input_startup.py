@@ -47,7 +47,7 @@ def defer_session(session_id: str, window_id: str | None = None) -> None:
             request,
             "Сессия не восстановилась. Запрос сохранён и не отправлен агенту. "
             "После восстановления исходной сессии очередь продолжит обработку. "
-            f"Проверить: /requests; повторить вручную: /requests retry {request.message_id}",
+            f"Проверить: /requests; повторить вручную: /requests_retry_{request.message_id}",
         )
 
 

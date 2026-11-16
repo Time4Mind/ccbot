@@ -30,11 +30,16 @@ and authentication are local to each node.
 
 CCBot launches the native TUI in its own window and uses `--session ses_...` for
 native resume. Input is gated on the native composer and a running OpenCode
-process. `/model` maps to `/models`, `/clear` maps to `/new`; native dialogs remain
-available through terminal and arrow controls. Model availability follows the
+process. `/model` maps to `/models`, `/clear` maps to `/new`. The model picker remains
+available through Telegram controls; the extra native variant picker is
+completed at Default without another user answer. Queued input waits until
+that picker closes, and concurrent observers recheck it before sending keys. Model availability follows the
 connected provider. The adapter does not invent a separate effort selector.
-Native question and permission panels use the existing Telegram navigation
-controls. One Stop action sends OpenCode's required double Escape while a turn
+The CCBot lifecycle plugin disables question, plan-enter and plan-exit tools
+for built-in and configured agents. It converts configured ask permissions and
+native ask defaults to deny while retaining explicit allow/deny rules. Such
+turns return normal text instead of requesting keyboard/menu responses. This
+policy is scoped to CCBot OpenCode processes; other backends are unchanged. One Stop action sends OpenCode's required double Escape while a turn
 is running; dismissing a dialog sends a single Escape.
 
 OpenCode does not retain prompts submitted while its TUI is busy. Literal

@@ -348,3 +348,109 @@ def test_idle_composer_with_wrapped_project_path_is_ready():
     assert is_ready(pane)
     assert composer_identity(pane) == ("GPT-6 Luna", "default")
     assert not is_ready(pane + "\nuser@host %")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("backend", ["opencode", "codex"])
+def test_plugin_disables_interactive_questions_and_denies_asks_without_granting_access(
+    tmp_path, backend
+):
+    plugin = tmp_path / "ccbot.mjs"
+    assert install_hooks("/unused/ccbot", plugin) == 0
+    config = {
+        "permission": {
+            "bash": {"safe *": "allow", "danger *": "deny", "review *": "ask"},
+            "external_directory": {"/approved/*": "allow"},
+        },
+        "agent": {
+            "build": {
+                "description": "keep",
+                "permission": {"question": "allow", "read": {"private/*": "ask"}},
+            },
+            "custom": {"permission": "ask"},
+            "blocked": {"permission": "deny"},
+        },
+    }
+    code = f"""import {{ CCBotPlugin }} from {json.dumps(plugin.as_uri())};
+const p = await CCBotPlugin({{directory: "/fixture"}});
+const cfg = {json.dumps(config)};
+if(p.config) await p.config(cfg);
+console.log(JSON.stringify(cfg));
+"""
+    result = subprocess.run(
+        [shutil.which("node"), "--input-type=module", "-e", code],
+        env=os.environ | {"CCBOT_AGENT_BACKEND": backend},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    actual = json.loads(result.stdout)
+    if backend != "opencode":
+        assert actual == config
+        return
+    assert actual["permission"]["bash"] == {
+        "safe *": "allow",
+        "danger *": "deny",
+        "review *": "deny",
+    }
+    assert actual["permission"]["external_directory"] == {
+        "*": "deny",
+        "/approved/*": "allow",
+    }
+    assert actual["permission"]["read"]["*.env"] == "deny"
+    assert actual["agent"]["build"]["description"] == "keep"
+    assert actual["agent"]["build"]["permission"]["read"]["private/*"] == "deny"
+    for name in ["build", "plan", "custom", "blocked"]:
+        policy = actual["agent"][name]["permission"]
+        assert all(policy[k] == "deny" for k in ["question", "plan_enter", "plan_exit"])
+    assert actual["agent"]["custom"]["permission"]["*"] == "deny"
+    assert actual["agent"]["blocked"]["permission"]["*"] == "deny"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("permission", ["allow", "deny", "ask"])
+def test_noninteractive_policy_preserves_explicit_global_wildcard(tmp_path, permission):
+    plugin = tmp_path / "ccbot.mjs"
+    assert install_hooks("/unused/ccbot", plugin) == 0
+    code = f"""import {{ CCBotPlugin }} from {json.dumps(plugin.as_uri())};
+const p = await CCBotPlugin({{directory: "/fixture"}});
+const cfg = {{ permission: {json.dumps(permission)} }};
+await p.config(cfg);
+console.log(JSON.stringify(cfg.permission));
+"""
+    result = subprocess.run(
+        [shutil.which("node"), "--input-type=module", "-e", code],
+        env=os.environ | {"CCBOT_AGENT_BACKEND": "opencode"},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0
+    assert json.loads(result.stdout) == {
+        "*": "allow" if permission == "allow" else "deny",
+        "question": "deny",
+        "plan_enter": "deny",
+        "plan_exit": "deny",
+    }
+
+
+def test_native_variant_is_interactive_so_it_cannot_consume_a_prompt():
+    pane = """     ▣  Bu    Select variant                                   esc
+
+              Search
+              Default
+              low
+              medium
+              high
+              xhigh
+  ┃
+  ┃  Build · GPT-6.1 Sol OpenAI
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  /private/tmp/lab  14.6K (1%) ctrl+p commands
+"""
+    panel = extract_interactive_content(pane)
+    assert panel and panel.name == "OpenCodeVariant"
+    assert "Default" in panel.content
+    assert not is_ready(pane)
+    assert not is_ready(pane.replace("Default", "filtered query"))

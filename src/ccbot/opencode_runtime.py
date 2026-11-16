@@ -99,6 +99,20 @@ def interactive_panel(pane: str) -> tuple[str, str] | None:
                 if re.search(r"(?m)^\s*1\.\s+", content):
                     return "AskUserQuestion", content
     for index, line in enumerate(lines):
+        variant_title = re.search(r"\bSelect variant\s+esc\s*$", line)
+        if variant_title is not None and _footer(pane):
+            end = next(
+                (
+                    i
+                    for i in range(index + 1, len(lines))
+                    if lines[i].lstrip().startswith("┃")
+                ),
+                len(lines),
+            )
+            left = max(0, variant_title.start() - 2)
+            return "OpenCodeVariant", "\n".join(
+                row[left:] for row in lines[index:end]
+            ).strip()
         model_title = re.search(r"\bSelect model\s+esc\s*$", line)
         if model_title is not None and _footer(pane):
             for end in range(index + 1, len(lines)):

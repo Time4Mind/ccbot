@@ -282,6 +282,10 @@ async def _surface_new_interactive_ui(
 
     ``is_interactive_ui(pane_text)`` is assumed True by the caller.
     """
+    from ..opencode_dialogs import settle_variant
+
+    if await settle_variant(sess, pane_text):
+        return True
     # Allow an active reserve's model picker while hiding startup/auth UI.
     if should_hide_reserve_ui(user_id, sess, pane_text):
         return True

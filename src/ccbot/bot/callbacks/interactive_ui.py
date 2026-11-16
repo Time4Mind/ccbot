@@ -166,6 +166,10 @@ async def _refresh_after_key(bot: Any, user_id: int, window_id: str) -> None:
         # Card-based kb-mode for the active session: capture pane, if
         # the UI is still up re-enter; if it cleared, drop kb-mode.
         pane = await capture_window(window_id)
+        from ...opencode_dialogs import settle_variant
+
+        if pane and await settle_variant(sess, pane):
+            pane = await capture_window(window_id)
         if pane and is_interactive_ui(pane):
             content_obj = extract_interactive_content(pane)
             if content_obj is not None:

@@ -1504,40 +1504,66 @@ async def test_media_dispatch_cannot_repost_over_a_newly_selected_session(
 
 
 @pytest.mark.asyncio
-async def test_failed_voice_keeps_recoverable_error_on_its_card_when_notice_is_uncertain(
-    env, monkeypatch
-):
+async def test_failed_voice_stays_in_original_reply_not_live_card(env, monkeypatch):
     from ccbot.handlers import notifications
+    from ccbot.handlers.card_model import _render_card
 
     state = env.cards["source"]
     state.msg_id = 4000
     monkeypatch.setattr(notifications, "get_card_state", lambda *_: state)
-    paint = AsyncMock(return_value=True)
-    monkeypatch.setattr(notifications, "refresh_panel", paint)
+    monkeypatch.setattr(notifications, "refresh_panel", AsyncMock(return_value=True))
     request = env.recovery.admit(update(2401), "voice", env.source)
     request.media_deferred = True
-    request.notice_unknown = True  # Telegram may have lost the failure-notice response.
-    env.recovery.fail(request, "download failed")
-    session_manager.active_sessions[42] = "other"
-    assert await refresh_request_status(env.recovery, 42, "source")
-    paint.assert_not_awaited()
-    assert "2401" in state.inbound_status
-    assert "/requests_retry_2401" in state.inbound_status
-    assert not state.voice_pending
-    session_manager.active_sessions[42] = "source"
-    assert await refresh_request_status(env.recovery, 42, "source")
-    paint.assert_awaited_once()
+    env.recovery.fail(
+        request, "Голосовое не загружено. Повторить: /requests_retry_2401"
+    )
+    env.recovery.bot = AsyncMock()
+    env.recovery.bot.send_message.return_value.message_id = 2402
+    await env.recovery.deliver_notice(request)
+    notice = env.recovery.bot.send_message.call_args.kwargs
+    assert notice["reply_parameters"].message_id == 2401
+    assert "/requests_retry_2401" in notice["text"]
+    env.recovery.admit(update(2403, "next request"), "text", env.source)
+    for selected in ("other", "source"):
+        session_manager.active_sessions[42] = selected
+        assert await refresh_request_status(env.recovery, 42, "source")
+        assert "2401" not in _render_card(env.source, state, user_id=42)
+    restarted = recovery_module.InputRecovery(env.recovery.path)
+    restarted.load()
+    restarted.bot = env.recovery.bot
+    assert await refresh_request_status(restarted, 42, "source")
+    assert "2401" not in _render_card(env.source, state, user_id=42)
+    await restarted.deliver_notice(restarted.records[request.id])
+    assert restarted.records[request.id].notice_id == 2402
+    assert env.recovery.bot.send_message.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["accepted", "downloading", "transcribing"])
+async def test_voice_card_reports_actual_phase_even_with_queued_voice(
+    env, monkeypatch, phase
+):
+    from ccbot.handlers import notifications
     from ccbot.handlers.card_model import _render_card
 
-    assert "/requests_retry_2401" in _render_card(env.source, state, user_id=42)
-    request.state = "accepted"
-    request.media_deferred = False
+    state = env.cards["source"]
+    state.msg_id = 4000
+    monkeypatch.setattr(notifications, "get_card_state", lambda *_: state)
+    monkeypatch.setattr(notifications, "refresh_panel", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        session_manager, "get_user_settings", lambda _: {"language": "ru"}
+    )
+    request = env.recovery.admit(update(2410), "voice", env.source)
+    request.state = phase
+    env.recovery.admit(update(2411), "voice", env.source)
     assert await refresh_request_status(env.recovery, 42, "source")
-    assert state.inbound_status == "" and state.voice_pending
-    # Acknowledging/discarding the saved request removes the old failure banner.
-    env.recovery.complete(request, confirmed=False)
-    assert await refresh_request_status(env.recovery, 42, "source")
-    assert state.inbound_status == ""
+    text = _render_card(env.source, state, user_id=42)
+    if phase == "transcribing":
+        assert "Голосовое распознаётся" in text
+        assert "Голосовое загружается" not in text
+    else:
+        assert "Голосовое загружается" in text
+        assert "Голосовое распознаётся" not in text
 
 
 @pytest.mark.asyncio

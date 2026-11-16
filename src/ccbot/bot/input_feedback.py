@@ -38,16 +38,16 @@ async def refresh_request_status(recovery: Any, user_id: int, session_id: str) -
             if item.attempts
             else "📎 Файл ожидает загрузки."
         )
-    deferred = [r for r in pending if r.media_deferred and r.state == "failed"]
-    if deferred:
-        item = max(deferred, key=lambda r: r.sequence)
-        state.inbound_status = (
-            f"⚠️ Голосовое №{item.message_id} не загружено. "
-            f"Повторить: /requests_retry_{item.message_id}"
-        )
-    state.voice_pending = any(r.kind == "voice" and not r.recognized for r in work)
-    # Preserve the error on its own card even when the source is not selected.
-    # A lost send-notice response must not make recovery instructions disappear.
+    # Failures stay in the reply to their original message, never in the live
+    # tail of every subsequent turn. Recovery actions also remain in /requests.
+    voices = [r for r in work if r.kind == "voice" and not r.recognized]
+    state.voice_pending = bool(voices)
+    current = min(voices, key=lambda r: r.sequence) if voices else None
+    state.voice_stage = (
+        "transcribing"
+        if current is not None and current.state == "transcribing"
+        else "downloading"
+    )
     if active is None or active.id != session_id:
         return True
     if state.in_menu_view or state.in_kb_mode:

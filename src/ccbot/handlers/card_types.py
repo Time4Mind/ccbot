@@ -254,3 +254,4 @@ class CardState:
     # header. Cleared once the transcribed text is actually dispatched (or
     # transcription fails).
     voice_pending: bool = False
+    voice_stage: str = "downloading"

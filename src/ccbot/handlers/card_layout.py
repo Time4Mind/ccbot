@@ -333,7 +333,7 @@ def _render_card(
         pending_row = render_event(
             Event(
                 type="user_msg",
-                text=t(user_id or 0, "voice.transcribing"),
+                text=t(user_id or 0, f"voice.{state.voice_stage}"),
                 started_at=time.time(),
             ),
             in_flight=False,

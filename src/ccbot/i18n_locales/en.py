@@ -32,6 +32,7 @@ EN: dict[str, str] = {
         "session. Please send it again."
     ),
     "voice.transcribing": "🎙 Voice message is being transcribed…",
+    "voice.downloading": "🎙 Voice message is downloading…",
     "voice.queued_dropped": "Messages sent after it didn't reach the session either.",
     # Footer buttons
     "btn.stop": "⏹ Stop",

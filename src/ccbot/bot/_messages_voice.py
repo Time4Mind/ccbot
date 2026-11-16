@@ -199,6 +199,7 @@ async def _process_voice(
     card_state = get_card_state(user.id, sess) if sess is not None else None
     if sess is not None and card_state is not None:
         card_state.voice_pending = True
+        card_state.voice_stage = "downloading"
         # A pagination tap may have left the card on an older page. A new
         # voice message is a new user turn, so focus the latest page just as
         # the normal prompt flow does before showing the pending row.
@@ -263,6 +264,19 @@ async def _process_voice(
                 )
             return False
 
+        if card_state is not None:
+            card_state.voice_stage = "transcribing"
+            if (
+                surface_pending
+                and sess is not None
+                and is_active_for_user(user.id, sess)
+            ):
+                try:
+                    await refresh_panel(
+                        context.bot, user.id, immediate=True, refresh_pane=False
+                    )
+                except Exception as exc:
+                    logger.debug("voice transcription status repaint failed: %s", exc)
         try:
             with input_stage("stt"):
                 text = await transcribe_voice(ogg_data, user_id=user.id)

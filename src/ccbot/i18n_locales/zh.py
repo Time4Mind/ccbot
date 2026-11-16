@@ -27,6 +27,7 @@ ZH: dict[str, str] = {
     ),
     "voice.transcription_failed": "🎙 语音无法识别且未送达会话。请重新发送。",
     "voice.transcribing": "🎙 正在转写语音消息…",
+    "voice.downloading": "🎙 正在下载语音消息…",
     "voice.queued_dropped": "之后发送的消息也未送达会话。",
     "btn.stop": "⏹ 停止",
     "btn.kill": "✕ 关闭",

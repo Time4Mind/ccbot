@@ -688,6 +688,9 @@ async def restore_card(bot: Bot, user_id: int, sess: Session, card_msg_id: int) 
     )
     state.last_rendered = ""
     await _legacy("_ensure_seeded")(user_id, sess, state)
+    from .card_view_checkpoint import restore_view
+
+    restore_view(session_manager, user_id, sess.id, state)
     from .card_terminal import sync_card_identity
 
     await sync_card_identity(sess, state)

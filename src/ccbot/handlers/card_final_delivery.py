@@ -153,6 +153,7 @@ async def deliver_final(
             if sent_message is None:
                 return False
             final_delivery_queue.bind_ack(item.id, sent_message.message_id)
+            await retire_card_keyboard(bot, item.user_id, sent_message.message_id)
             _register_msg(item.user_id, sent_message.message_id, item.session_id)
             logger.info(
                 "final_delivery_passive id=%s session=%s message_id=%s live_message=%s",

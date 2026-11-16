@@ -104,11 +104,7 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
     # Node-scoped active pointers. ``active_sessions`` remains as the
     # compatibility pointer for the currently selected node.
     active_sessions_by_node: dict[int, dict[str, str]] = field(default_factory=dict)
-    # Stack of previously-active session ids per user (most recent at the
-    # end). Used by ``mark_session_archived`` to auto-pick the next
-    # active session when the current one gets killed — without this the
-    # user ends up with no active session and the live card shows the
-    # empty state. Capped at the last 10 entries per user.
+    # Last 10 selected sessions per user, newest last; archive falls back here.
     active_history: dict[int, list[str]] = field(default_factory=dict)
     # All sessions known to the bot (active, idle, archived, completed, lost).
     # Keyed by Session.id.
@@ -119,15 +115,11 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
     removed_node_ids: set[str] = field(default_factory=set)
     selected_node_ids: dict[int, str] = field(default_factory=dict)
     transfers: dict[str, SessionTransfer] = field(default_factory=dict)
-    # Telegram message_id of the bot message that currently carries the inline
-    # session switcher for each user. Used to strip stale switchers when a new
-    # bot message goes out.
+    # Current switcher carrier per user, for stale keyboard cleanup.
     last_switcher_msg_id: dict[int, int] = field(default_factory=dict)
-    # Telegram message_id of the bot message hosting each user's live card
-    # for their *active* session. Persisted so a bot restart can repaint
-    # the card in place (notifications.restore_card) instead of orphaning
-    # it and starting fresh on the next event. user_id -> message_id.
+    # Active card IDs survive restart for in-place restoration.
     card_msg_id: dict[int, int] = field(default_factory=dict)
+    card_views: dict[str, dict[str, Any]] = field(default_factory=dict)
     # window_id -> display name (window_name)
     window_display_names: dict[str, str] = field(default_factory=dict)
     # User-scoped UI/runtime preferences (set via the inline ⚙ menu).
@@ -159,10 +151,12 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
         self._load_state()
 
     def save_state(self) -> None:
-        # Local import to avoid an init-time cycle: bg_status imports
-        # session_manager, which is constructed by importing this module.
+        # Late imports avoid the session_manager initialization cycle.
         from .handlers import bg_status
 
+        from .handlers.card_view_checkpoint import checkpoint_views
+
+        self.card_views = checkpoint_views(self)
         state: dict[str, Any] = {
             "window_states": {k: v.to_dict() for k, v in self.window_states.items()},
             "user_window_offsets": {
@@ -192,6 +186,7 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
                 str(uid): mid for uid, mid in self.last_switcher_msg_id.items()
             },
             "card_msg_id": {str(uid): mid for uid, mid in self.card_msg_id.items()},
+            "card_views": self.card_views,
             "window_display_names": self.window_display_names,
             "user_settings": {
                 str(uid): vals for uid, vals in self.user_settings.items()
@@ -232,6 +227,11 @@ class SessionManager(SessionMapMixin, SessionStateMixin):
         if config.state_file.exists():
             try:
                 state = json.loads(config.state_file.read_text())
+                self.card_views = {
+                    str(uid): view
+                    for uid, view in state.get("card_views", {}).items()
+                    if str(uid).isdigit() and isinstance(view, dict)
+                }
                 self.window_states = {
                     k: WindowState.from_dict(v)
                     for k, v in state.get("window_states", {}).items()

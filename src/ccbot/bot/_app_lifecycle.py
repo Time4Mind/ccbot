@@ -576,6 +576,8 @@ async def post_shutdown(
     # replacement even if an OS call in that cleanup stalls.
     from ..main import release_singleton_lock
 
+    # Flush before another process may load state; reuse the existing shutdown write.
+    session_manager.save_state()
     release_singleton_lock()
     logger.info("Singleton lock released for replacement")
 
@@ -593,8 +595,3 @@ async def post_shutdown(
     from ..tmux_manager import tmux_manager
 
     await tmux_manager.close_control_client()
-
-    # Flush the newest in-memory activity timestamps before a clean exit.
-    # The periodic status checkpoint keeps crash exposure below one minute;
-    # an orderly deploy/restart loses nothing.
-    session_manager.save_state()

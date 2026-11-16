@@ -480,3 +480,13 @@ def test_variant_content_survives_history_bars_left_of_floating_dialog():
         "medium",
         "medium",
     ]
+
+
+@pytest.mark.parametrize(
+    "mode", ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+)
+def test_live_footer_reports_variant_after_provider(mode):
+    from ccbot.opencode_runtime import composer_identity
+
+    pane = f"┃\n┃ Build · GPT-6.1 Sol OpenAI · {mode}\n/tmp/lab ctrl+p commands"
+    assert composer_identity(pane) == ("GPT-6.1 Sol", mode)

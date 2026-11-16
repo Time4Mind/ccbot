@@ -117,7 +117,7 @@ class NativePicker:
         self.submitted_prompts = []
 
     async def capture(self, _sess):
-        footer = f"\n┃\n┃ Build · {self.model.name}{' ' + self.mode if self.mode != 'default' else ''} OpenAI\n/tmp/lab ctrl+p commands"
+        footer = f"\n┃\n┃ Build · {self.model.name} OpenAI{' · ' + self.mode if self.mode != 'default' else ''}\n/tmp/lab ctrl+p commands"
         if self.dialog == "model":
             labels = [
                 m.name for m in self.models if self.filter.lower() in m.name.lower()
@@ -465,3 +465,20 @@ async def test_medium_choice_works_when_old_user_block_shares_dialog_rows(
         and native.dialog == ""
         and native.submitted_prompts == []
     )
+
+
+@pytest.mark.asyncio
+async def test_reopened_mode_buttons_mark_actual_medium_after_provider(native_picker):
+    p, native, sess, interactive = native_picker
+    await named_callback(p, native, sess, interactive, "GPT-6.1 Sol")
+    await named_callback(p, native, sess, interactive, "medium")
+    native.dialog = "model"
+    await named_callback(p, native, sess, interactive, "GPT-6.1 Sol")
+    pane = await native.capture(sess)
+    from ccbot.opencode_runtime import interactive_panel
+
+    panel = interactive_panel(pane)
+    assert panel
+    content, name = await p.prepare_picker(42, sess, panel[1], panel[0])
+    kb = p.keyboard(42, sess.window_id, content, name)
+    assert any(b.text == "✓ medium" for row in kb.inline_keyboard for b in row)

@@ -246,7 +246,12 @@ def model_identity(
             if match[1].startswith(model.name + " "):
                 tail = match[1][len(model.name) :].strip()
                 mode = next(
-                    (v for v in model.variants if tail.startswith(v + " ")), "default"
+                    (
+                        v
+                        for v in model.variants
+                        if tail.endswith(" · " + v) or tail.startswith(v + " ")
+                    ),
+                    "default",
                 )
                 return model.name, mode
     return composer_identity(pane)

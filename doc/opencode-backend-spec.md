@@ -30,11 +30,19 @@ and authentication are local to each node.
 
 CCBot launches the native TUI in its own window and uses `--session ses_...` for
 native resume. Input is gated on the native composer and a running OpenCode
-process. `/model` maps to `/models`, `/clear` maps to `/new`. The model picker remains
-available through Telegram controls; the extra native variant picker is
-completed at Default without another user answer. Queued input waits until
-that picker closes, and concurrent observers recheck it before sending keys. Model availability follows the
-connected provider. The adapter does not invent a separate effort selector.
+process. `/model` maps to `/models`, `/clear` maps to `/new`. The local model picker
+uses named Telegram buttons, like Codex, for the complete available native
+catalogue (`opencode models --verbose` in the session directory/configuration).
+Recent models and the terminal viewport do not limit the catalogue. Large lists
+use named page buttons. A model is selected through its native search dialog;
+CCBot checks the exact filtered choice before confirming it. Supported native
+variants then appear as named mode buttons, including Default. Default is never
+selected on the user's behalf. A cancelled mode picker retains the model already
+selected, as with Codex's model-then-effort flow. Expired, cross-user and repeated
+model buttons cannot select a mode or submit a prompt. Queued input waits until
+selection finishes, including the short transition between model and mode.
+The catalogue is read on the owning local node; a remote session without catalogue
+support displays an error and Cancel instead of a leader's unrelated models.
 The CCBot lifecycle plugin disables question, plan-enter and plan-exit tools
 for built-in and configured agents. It converts configured ask permissions and
 native ask defaults to deny while retaining explicit allow/deny rules. Such

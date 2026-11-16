@@ -159,11 +159,17 @@ async def handle_interactive_ui(
     if not content:
         return False
 
-    # Build message with navigation keyboard
-    keyboard = _build_interactive_keyboard(window_id, ui_name=content.name)
+    # The floating/background path uses the same choices as the active card.
+    from ..session import session_manager
+    from ..opencode_picker import prepare_picker, keyboard as picker_keyboard
 
-    # Send as plain text (no markdown conversion)
-    text = content.content
+    sess = session_manager.find_session_by_window(window_id)
+    text, ui_name = content.content, content.name
+    if sess is not None and sess.backend == "opencode":
+        text, ui_name = await prepare_picker(user_id, sess, text, ui_name)
+    keyboard = picker_keyboard(user_id, window_id, text, ui_name)
+    if keyboard is None:
+        keyboard = _build_interactive_keyboard(window_id, ui_name=ui_name)
 
     # Check if we have an existing interactive message to edit
     existing_msg_id = _interactive_msgs.get(ikey)

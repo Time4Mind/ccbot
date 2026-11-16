@@ -54,7 +54,9 @@ def composer_identity(pane: str) -> tuple[str, str] | None:
     model = re.match(r"^┃\s+(?:Build|Plan)\s+·\s+(.+?)\s+OpenAI\s*$", footer)
     if model:
         name = model[1]
-        effort = re.search(r"\s+(low|medium|high|xhigh|max)\s*$", name, re.I)
+        effort = re.search(
+            r"\s+(none|minimal|low|medium|high|xhigh|max)\s*$", name, re.I
+        )
         return (
             (name[: effort.start()].strip(), effort[1].lower())
             if effort

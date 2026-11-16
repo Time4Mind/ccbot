@@ -72,6 +72,12 @@ async def enter_kb_mode(
     No-op if state is already in kb-mode with the same prompt — avoids
     pointless edits when status_polling re-detects the prompt each poll.
     """
+    if sess.backend == "opencode":
+        from ..opencode_picker import prepare_picker
+
+        prompt_content, ui_name = await prepare_picker(
+            user_id, sess, prompt_content, ui_name
+        )
     state = get_card_state(user_id, sess)
     # Short-circuit ONLY when the kb-mode card is actually present in
     # chat. A lost carrier can leave ``msg_id`` empty while ``in_kb_mode``
@@ -154,6 +160,10 @@ async def exit_kb_mode(
     acted via a kb key. Wipe both ``in_kb_mode`` and ``kb_prompt`` so
     the Resume button disappears.
     """
+    if clear_pending and sess.backend == "opencode":
+        from ..opencode_picker import discard
+
+        discard(user_id, sess.window_id)
     state = _cards.get((user_id, sess.id))
     if state is None:
         return

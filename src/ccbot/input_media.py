@@ -61,6 +61,7 @@ def schedule_retry(recovery: Any, request: Any, exc: Exception) -> float:
 async def download_voice(recovery: Any, voice: Any, request: Any) -> bytes:
     async with AsyncExitStack() as stack:
         fresh = None
+        fallback_tried = False
         while request.media_failures < 5:
             if recovery.source(request) is None:
                 raise ValueError(
@@ -87,6 +88,21 @@ async def download_voice(recovery: Any, voice: Any, request: Any) -> bytes:
                     raise
                 if not isinstance(exc, RetryAfter):
                     request.media_failures += 1
+                    if not fallback_tried:
+                        from . import voice_mtproto
+
+                        fallback_tried = True
+                        audio = None
+                        failed_stage = request.stage
+                        if voice_mtproto.is_enabled():
+                            with input_stage("download_fallback", request):
+                                audio = await voice_mtproto.download_voice(voice)
+                        if audio is not None:
+                            request.state = "transcribing"
+                            request.retry_at = 0
+                            recovery.changed(request)
+                            return audio
+                        request.stage = failed_stage
                 if request.media_failures >= 5:
                     break
                 schedule_retry(recovery, request, exc)

@@ -29,6 +29,8 @@ SENSITIVE_ENV_VARS = {
     "ALLOWED_USERS",
     "OPENAI_API_KEY",
     "CCBOT_NODE_SECRET",
+    "TG_API_ID",
+    "TG_API_HASH",
 }
 
 
@@ -298,6 +300,10 @@ class Config:
         # host is on a network that cannot reach api.telegram.org directly
         # (e.g. RU-blocked IPs). Accepts http://host:port or socks5://host:port.
         self.tg_proxy_url: str = os.getenv("TG_PROXY_URL", "").strip()
+        # Optional bot-only media recovery credentials; scrubbed below before
+        # any agent subprocess can inherit the environment.
+        self.tg_api_id: str = os.getenv("TG_API_ID", "")
+        self.tg_api_hash: str = os.getenv("TG_API_HASH", "")
         # Explicitly opt in for direct Telegram requests only. Keep the old
         # candidate's key as a migration alias; the canonical setting wins.
         disable_ipv6 = (

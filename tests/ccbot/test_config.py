@@ -193,3 +193,15 @@ class TestTelegramIPConfig:
         monkeypatch.setenv("TG_DISABLE_IPV6", "treu")
         with pytest.raises(ValueError, match="TG_DISABLE_IPV6"):
             Config()
+
+
+@pytest.mark.usefixtures("_base_env")
+def test_media_proxy_is_separate_and_not_in_child_environment(monkeypatch):
+    import os
+
+    monkeypatch.setenv("TG_PROXY_URL", "")
+    monkeypatch.setenv("TG_MEDIA_PROXY_URL", " http://user:password@proxy.test:8080 ")
+    cfg = Config()
+    assert cfg.tg_proxy_url == ""
+    assert cfg.tg_media_proxy_url == "http://user:password@proxy.test:8080"
+    assert "TG_MEDIA_PROXY_URL" not in os.environ

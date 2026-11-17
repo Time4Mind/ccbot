@@ -8,7 +8,7 @@ from contextlib import AsyncExitStack
 from typing import Any
 
 from telegram.error import BadRequest, NetworkError, RetryAfter
-from .telegram_media import fresh_media_bot
+from .telegram_media import fresh_media_bot, media_retry_proxy
 from .input_timing import cause_type, input_stage
 import logging
 
@@ -61,7 +61,9 @@ def schedule_retry(recovery: Any, request: Any, exc: Exception) -> float:
 async def download_voice(recovery: Any, voice: Any, request: Any) -> bytes:
     async with AsyncExitStack() as stack:
         fresh = None
+        route_bots: dict[str, Any] = {}
         fallback_tried = False
+        fallback_failures = 0
         while request.media_failures < 5:
             if recovery.source(request) is None:
                 raise ValueError(
@@ -72,13 +74,30 @@ async def download_voice(recovery: Any, voice: Any, request: Any) -> bytes:
             request.state = "downloading"
             recovery.changed(request)
             try:
-                if request.media_failures >= 3 and fresh is None:
-                    fresh = await stack.enter_async_context(fresh_media_bot(voice))
-                    logger.info("input_media_new_client request_id=%s", request.id)
+                route = media_retry_proxy(request.media_failures + fallback_failures)
+                current = None
+                if route is not None and request.media_failures:
+                    if route not in route_bots:
+                        route_bots[route] = await stack.enter_async_context(
+                            fresh_media_bot(voice, proxy_url=route)
+                        )
+                    current = route_bots[route]
+                elif route is None:
+                    if request.media_failures >= 3 and fresh is None:
+                        fresh = await stack.enter_async_context(fresh_media_bot(voice))
+                        logger.info("input_media_new_client request_id=%s", request.id)
+                    current = fresh
+                if route is not None:
+                    logger.info(
+                        "input_media_route request_id=%s attempt=%s route=%s",
+                        request.id,
+                        request.media_failures + fallback_failures + 1,
+                        "proxy" if route else "direct",
+                    )
                 with input_stage("get_file", request):
                     file = (
-                        await fresh.get_file(voice.file_id)
-                        if fresh is not None
+                        await current.get_file(voice.file_id)
+                        if current is not None
                         else await voice.get_file()
                     )
                 with input_stage("download", request):
@@ -96,7 +115,22 @@ async def download_voice(recovery: Any, voice: Any, request: Any) -> bytes:
                         failed_stage = request.stage
                         if voice_mtproto.is_enabled():
                             with input_stage("download_fallback", request):
-                                audio = await voice_mtproto.download_voice(voice)
+                                alternate_route = media_retry_proxy(
+                                    request.media_failures + fallback_failures
+                                )
+                                if alternate_route is None:
+                                    audio = await voice_mtproto.download_voice(voice)
+                                else:
+                                    logger.info(
+                                        "input_media_fallback_route request_id=%s route=%s",
+                                        request.id,
+                                        "proxy" if alternate_route else "direct",
+                                    )
+                                    audio = await voice_mtproto.download_voice(
+                                        voice, proxy_url=alternate_route
+                                    )
+                            if audio is None:
+                                fallback_failures += 1
                         if audio is not None:
                             request.state = "transcribing"
                             request.retry_at = 0

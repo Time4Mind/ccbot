@@ -1222,12 +1222,20 @@ async def test_document_unacknowledged_submit_never_replays_after_restart(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("alternate", [False, True])
 async def test_media_outage_releases_fifo_with_gap_and_retains_retryable_voice(
-    env, monkeypatch
+    env, monkeypatch, alternate
 ):
     from contextlib import asynccontextmanager
     from ccbot import input_media
 
+    from ccbot.config import config
+
+    monkeypatch.setattr(config, "tg_proxy_url", "")
+    monkeypatch.setattr(
+        config, "tg_media_proxy_url", "http://proxy.test:8080" if alternate else ""
+    )
+    monkeypatch.delenv("TG_MEDIA_MTPROTO_FALLBACK", raising=False)
     seen = []
     attempts = []
 
@@ -1237,12 +1245,14 @@ async def test_media_outage_releases_fifo_with_gap_and_retains_retryable_voice(
             raise ValueError("test bounds legacy infinite retries")
         raise TimedOut()
 
-    async def fresh_get(*_args, **_kwargs):
-        attempts.append("fresh")
-        raise TimedOut()
-
     @asynccontextmanager
-    async def fresh(_voice):
+    async def fresh(_voice, *, proxy_url=None):
+        async def fresh_get(*_args, **_kwargs):
+            attempts.append(
+                ("proxy" if proxy_url else "direct") if alternate else "fresh"
+            )
+            raise TimedOut()
+
         yield SimpleNamespace(get_file=fresh_get)
 
     monkeypatch.setattr(Voice, "get_file", broken)
@@ -1264,7 +1274,11 @@ async def test_media_outage_releases_fifo_with_gap_and_retains_retryable_voice(
     await inbound.voice_intake_handler(update(1301), env.context)
     await inbound.text_intake_handler(update(1302, "среднее за час"), env.context)
     await until(lambda: not has_pending_inbound("@source"))
-    assert attempts == ["shared"] * 3 + ["fresh"] * 2
+    assert attempts == (
+        ["shared", "proxy", "direct", "proxy", "direct"]
+        if alternate
+        else ["shared"] * 3 + ["fresh"] * 2
+    )
     assert len(seen) == 1 and "среднее за час" in seen[0]
     assert "1301" in seen[0] and "не получено" in seen[0]
     failed = env.recovery.records["42:1301"]

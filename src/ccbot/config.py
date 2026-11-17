@@ -31,6 +31,7 @@ SENSITIVE_ENV_VARS = {
     "CCBOT_NODE_SECRET",
     "TG_API_ID",
     "TG_API_HASH",
+    "TG_MEDIA_PROXY_URL",
 }
 
 
@@ -300,6 +301,8 @@ class Config:
         # host is on a network that cannot reach api.telegram.org directly
         # (e.g. RU-blocked IPs). Accepts http://host:port or socks5://host:port.
         self.tg_proxy_url: str = os.getenv("TG_PROXY_URL", "").strip()
+        # Opt-in voice retry route; never changes polling or message delivery.
+        self.tg_media_proxy_url: str = os.getenv("TG_MEDIA_PROXY_URL", "").strip()
         # Optional bot-only media recovery credentials; scrubbed below before
         # any agent subprocess can inherit the environment.
         self.tg_api_id: str = os.getenv("TG_API_ID", "")

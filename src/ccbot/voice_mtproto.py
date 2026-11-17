@@ -113,11 +113,15 @@ def _location(document_id: int, access_hash: int, reference: bytes) -> Any:
     return factory(document_id, access_hash, reference, "")
 
 
-async def _read(voice: Any, expected_size: int) -> bytes:
+async def _read(voice: Any, expected_size: int, proxy_url: str | None = None) -> bytes:
     from .config import config
 
     dc, document_id, access_hash, reference = document_location(voice.file_id)
-    client = _client(int(config.tg_api_id), config.tg_api_hash, config.tg_proxy_url)
+    client = _client(
+        int(config.tg_api_id),
+        config.tg_api_hash,
+        config.tg_proxy_url if proxy_url is None else proxy_url,
+    )
     token = voice.get_bot().token
     try:
         await client.connect()
@@ -151,7 +155,7 @@ async def _read(voice: Any, expected_size: int) -> bytes:
                     await client.disconnect()
 
 
-async def download_voice(voice: Any) -> bytes | None:
+async def download_voice(voice: Any, *, proxy_url: str | None = None) -> bytes | None:
     """Return verified bytes or leave the original bounded retry path in charge."""
     if not is_enabled():
         return None
@@ -165,7 +169,7 @@ async def download_voice(voice: Any) -> bytes | None:
             raise ValueError("Missing or excessive voice size")
         async with asyncio.timeout(_TIMEOUT):
             async with _lock:
-                audio = await _read(voice, size)
+                audio = await _read(voice, size, proxy_url)
         logger.info("voice_mtproto_download_ok bytes=%s", len(audio))
         return audio
     except Exception as exc:

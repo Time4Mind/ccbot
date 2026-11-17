@@ -205,3 +205,40 @@ def test_media_proxy_is_separate_and_not_in_child_environment(monkeypatch):
     assert cfg.tg_proxy_url == ""
     assert cfg.tg_media_proxy_url == "http://user:password@proxy.test:8080"
     assert "TG_MEDIA_PROXY_URL" not in os.environ
+
+
+@pytest.mark.usefixtures("_base_env")
+def test_ordered_proxy_list_is_deduplicated_and_scrubbed(monkeypatch):
+    import os
+
+    monkeypatch.setenv(
+        "TG_MEDIA_PROXY_URLS",
+        '[" http://one.test:8080/ ","socks5://two.test:1080","http://one.test:8080"]',
+    )
+    cfg = Config()
+    assert cfg.tg_media_proxy_urls == ("http://one.test:8080", "socks5://two.test:1080")
+    assert "TG_MEDIA_PROXY_URLS" not in os.environ
+
+
+@pytest.mark.usefixtures("_base_env")
+@pytest.mark.parametrize(
+    "value",
+    [
+        "{}",
+        "[null]",
+        '["not-a-url"]',
+        '["http://private:secret@host:bad"]',
+        '["https://host:443"]',
+    ],
+)
+def test_invalid_proxy_list_fails_without_exposing_url(monkeypatch, value):
+    monkeypatch.setenv("TG_MEDIA_PROXY_URLS", value)
+    with pytest.raises(ValueError, match="TG_MEDIA_PROXY_URLS") as err:
+        Config()
+    assert "secret" not in str(err.value)
+
+
+@pytest.mark.usefixtures("_base_env")
+def test_empty_proxy_list_explicitly_selects_direct_only_cycle(monkeypatch):
+    monkeypatch.setenv("TG_MEDIA_PROXY_URLS", "[]")
+    assert Config().tg_media_proxy_urls == ()

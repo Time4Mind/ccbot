@@ -1222,7 +1222,7 @@ async def test_document_unacknowledged_submit_never_replays_after_restart(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("alternate", [False, True])
+@pytest.mark.parametrize("alternate", [False, True, "cycle"])
 async def test_media_outage_releases_fifo_with_gap_and_retains_retryable_voice(
     env, monkeypatch, alternate
 ):
@@ -1234,6 +1234,13 @@ async def test_media_outage_releases_fifo_with_gap_and_retains_retryable_voice(
     monkeypatch.setattr(config, "tg_proxy_url", "")
     monkeypatch.setattr(
         config, "tg_media_proxy_url", "http://proxy.test:8080" if alternate else ""
+    )
+    monkeypatch.setattr(
+        config,
+        "tg_media_proxy_urls",
+        ("http://proxy.test:8080", "http://other.test:8080")
+        if alternate == "cycle"
+        else None,
     )
     monkeypatch.delenv("TG_MEDIA_MTPROTO_FALLBACK", raising=False)
     seen = []
@@ -1275,7 +1282,20 @@ async def test_media_outage_releases_fifo_with_gap_and_retains_retryable_voice(
     await inbound.text_intake_handler(update(1302, "среднее за час"), env.context)
     await until(lambda: not has_pending_inbound("@source"))
     assert attempts == (
-        ["shared", "proxy", "direct", "proxy", "direct"]
+        [
+            "direct",
+            "proxy",
+            "proxy",
+            "direct",
+            "proxy",
+            "proxy",
+            "direct",
+            "proxy",
+            "proxy",
+            "direct",
+        ]
+        if alternate == "cycle"
+        else ["shared", "proxy", "direct", "proxy", "direct"]
         if alternate
         else ["shared"] * 3 + ["fresh"] * 2
     )
@@ -1342,6 +1362,8 @@ async def test_explicit_media_retry_after_restart_keeps_original_source(
     req = env.recovery.admit(update(1304), "voice", env.source)
     req.media_deferred = True
     req.media_failures = 5
+    req.media_attempts = 10
+    req.media_fallback_tried = True
     env.recovery.fail(req, "media failed")
     restarted = recovery_module.InputRecovery(env.recovery.path)
     restarted.load()
@@ -1350,6 +1372,8 @@ async def test_explicit_media_retry_after_restart_keeps_original_source(
     received = []
 
     async def receive(upd, ctx, wid):
+        retried = restarted.records["42:1304"]
+        assert retried.media_attempts == 0 and not retried.media_fallback_tried
         received.append((wid, upd.message.voice.file_id))
         return True
 

@@ -146,6 +146,7 @@ Most-frequently-tweaked optionals:
 | `CCBOT_RICH_MESSAGES`       | `on`         | `off` disables Bot API 10.3 rich messages (MarkdownV2 only) |
 | `CCBOT_HOST`                | hostname     | deployment label exported to sessions as `CCBOT_HOST` |
 | `TG_PROXY_URL`              | _(unset)_    | outbound proxy for the Bot API (`socks5://…` or `http://…`) |
+| `TG_MEDIA_PROXY_URLS`       | _(unset)_    | ordered JSON array of voice retry proxies; direct first, up to 10 total attempts |
 | `TG_MEDIA_PROXY_URL`        | _(unset)_    | opt in to alternating proxy/direct voice download retries; supplies the proxy when `TG_PROXY_URL` is unset |
 | `TG_DISABLE_IPV6`           | `false`      | use IPv4 for direct Bot API requests and polling; leaves proxy routing unchanged (`TG_FORCE_IPV4` is a legacy alias) |
 | `CCBOT_POLL_STALE_SECONDS`  | `180`        | exit non-zero when real `getUpdates` has not completed successfully for this long |
@@ -529,7 +530,22 @@ half-rendered modal can't fire a phantom alert.
   pre-pass that lets the real run pin `-l` and encode once. Missing
   binary or model? *Settings → 🎙 Voice* offers a one-tap install
   (builds whisper.cpp, downloads both models).
-- **Optional alternating voice routes:** set `TG_MEDIA_PROXY_URL` to a reachable
+- **Ordered voice retry routes:** set `TG_MEDIA_PROXY_URLS` to a JSON array,
+  for example `["http://127.0.0.1:1081", "socks5://127.0.0.1:1082"]`, using
+  only your reachable proxies. The first attempt is always direct, regardless
+  of the polling proxy; then each proxy in order, then the cycle repeats.
+  Exact duplicate URLs are removed. An empty array explicitly selects direct-only
+  retries. This setting takes precedence over the older single-proxy option.
+  There are at most **10 total download attempts**, including the single optional
+  MTProto attempt and rate-limit responses. A rate limit's prescribed delay is
+  respected before the next attempt. `getFile` and its file read share a route;
+  successful downloads and permanent errors stop the cycle immediately.
+  The existing recovery journal preserves the consumed budget and MTProto state
+  across restart, including interrupted attempts. Explicit manual retry resets
+  the budget. Polling, message delivery and STT configuration stay unchanged.
+  This does not shorten timeouts or race requests; a slow successful response
+  can still delay the download.
+- **Legacy single-proxy voice routes:** set `TG_MEDIA_PROXY_URL` to a reachable
   proxy to alternate failed voice download attempts between proxy and direct.
   The first attempt uses the bot's normal route (`TG_PROXY_URL`, or direct).
   If the normal route already uses a proxy, that proxy is reused. Each subsequent

@@ -8,7 +8,12 @@ from contextlib import AsyncExitStack
 from typing import Any
 
 from telegram.error import BadRequest, NetworkError, RetryAfter
-from .telegram_media import fresh_media_bot, media_retry_proxy
+from .telegram_media import (
+    fresh_media_bot,
+    media_retry_proxy,
+    media_cycle_enabled,
+    media_route_label,
+)
 from .input_timing import cause_type, input_stage
 import logging
 
@@ -23,7 +28,13 @@ def encode_requests(records: dict[str, Any]) -> dict[str, Any]:
         startup[request.id] = row.pop("startup_deferred")
         names[request.id] = row.pop("session_name")
         media[request.id] = {
-            key: row.pop(key) for key in ("media_failures", "media_deferred")
+            key: row.pop(key)
+            for key in (
+                "media_failures",
+                "media_deferred",
+                "media_attempts",
+                "media_fallback_tried",
+            )
         }
         metadata[request.id] = {
             key: row.pop(key) for key in ("media_path", "stage", "received_at")
@@ -59,24 +70,33 @@ def schedule_retry(recovery: Any, request: Any, exc: Exception) -> float:
 
 
 async def download_voice(recovery: Any, voice: Any, request: Any) -> bytes:
+    cycle = media_cycle_enabled()
+    limit = 10 if cycle else 5
     async with AsyncExitStack() as stack:
         fresh = None
         route_bots: dict[str, Any] = {}
-        fallback_tried = False
+        fallback_tried = request.media_fallback_tried if cycle else False
         fallback_failures = 0
-        while request.media_failures < 5:
+        while (request.media_attempts if cycle else request.media_failures) < limit:
             if recovery.source(request) is None:
                 raise ValueError(
                     "Исходная сессия больше недоступна. Голосовое не перенаправлено."
                 )
             if request.retry_at > recovery.clock():
                 await recovery.sleep(request.retry_at - recovery.clock())
+            route_index = (
+                request.media_attempts
+                if cycle
+                else request.media_failures + fallback_failures
+            )
+            if cycle:
+                request.media_attempts += 1
             request.state = "downloading"
             recovery.changed(request)
             try:
-                route = media_retry_proxy(request.media_failures + fallback_failures)
+                route = media_retry_proxy(route_index)
                 current = None
-                if route is not None and request.media_failures:
+                if route is not None and (cycle or request.media_failures):
                     if route not in route_bots:
                         route_bots[route] = await stack.enter_async_context(
                             fresh_media_bot(voice, proxy_url=route)
@@ -91,8 +111,8 @@ async def download_voice(recovery: Any, voice: Any, request: Any) -> bytes:
                     logger.info(
                         "input_media_route request_id=%s attempt=%s route=%s",
                         request.id,
-                        request.media_failures + fallback_failures + 1,
-                        "proxy" if route else "direct",
+                        route_index + 1,
+                        media_route_label(route),
                     )
                 with input_stage("get_file", request):
                     file = (
@@ -107,24 +127,31 @@ async def download_voice(recovery: Any, voice: Any, request: Any) -> bytes:
                     raise
                 if not isinstance(exc, RetryAfter):
                     request.media_failures += 1
-                    if not fallback_tried:
+                    if not fallback_tried and (
+                        not cycle or request.media_attempts < limit
+                    ):
                         from . import voice_mtproto
 
                         fallback_tried = True
                         audio = None
                         failed_stage = request.stage
                         if voice_mtproto.is_enabled():
+                            alternate_route = media_retry_proxy(
+                                request.media_attempts
+                                if cycle
+                                else request.media_failures + fallback_failures
+                            )
+                            if cycle:
+                                request.media_attempts += 1
+                                request.media_fallback_tried = True
                             with input_stage("download_fallback", request):
-                                alternate_route = media_retry_proxy(
-                                    request.media_failures + fallback_failures
-                                )
                                 if alternate_route is None:
                                     audio = await voice_mtproto.download_voice(voice)
                                 else:
                                     logger.info(
                                         "input_media_fallback_route request_id=%s route=%s",
                                         request.id,
-                                        "proxy" if alternate_route else "direct",
+                                        media_route_label(alternate_route),
                                     )
                                     audio = await voice_mtproto.download_voice(
                                         voice, proxy_url=alternate_route
@@ -137,7 +164,9 @@ async def download_voice(recovery: Any, voice: Any, request: Any) -> bytes:
                             recovery.changed(request)
                             return audio
                         request.stage = failed_stage
-                if request.media_failures >= 5:
+                if (
+                    request.media_attempts if cycle else request.media_failures
+                ) >= limit:
                     break
                 schedule_retry(recovery, request, exc)
                 continue
@@ -149,8 +178,12 @@ async def download_voice(recovery: Any, voice: Any, request: Any) -> bytes:
     request.retry_at = 0
     recovery.fail(
         request,
-        "Не удалось получить голосовое после 5 сетевых сбоев, включая новый клиент. "
-        "Голосовое сохранено; следующие сообщения продолжат обработку. "
+        (
+            "Не удалось получить голосовое после 10 попыток загрузки. "
+            if cycle
+            else "Не удалось получить голосовое после 5 сетевых сбоев, включая новый клиент. "
+        )
+        + "Голосовое сохранено; следующие сообщения продолжат обработку. "
         f"Повторить: /requests_retry_{request.message_id}",
     )
     raise ValueError(request.notice)
@@ -207,6 +240,8 @@ def retry_deferred_media(recovery: Any, request: Any, application: Any) -> bool:
     ):
         return False
     request.media_failures = 0
+    request.media_attempts = 0
+    request.media_fallback_tried = False
     request.media_deferred = False
     request.startup_deferred = False
     request.attempts = 0

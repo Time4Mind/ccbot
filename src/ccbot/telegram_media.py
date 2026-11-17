@@ -11,8 +11,23 @@ from .config import config
 from .telegram_proxy_transport import telegram_transport
 
 
+def media_cycle_enabled() -> bool:
+    return config.tg_media_proxy_urls is not None
+
+
+def media_route_label(route: str) -> str:
+    if not route:
+        return "direct"
+    if config.tg_media_proxy_urls is not None:
+        return f"proxy{config.tg_media_proxy_urls.index(route) + 1}"
+    return "proxy"
+
+
 def media_retry_proxy(attempt: int) -> str | None:
     """Return an explicit route, or None to preserve legacy media recovery."""
+    if config.tg_media_proxy_urls is not None:
+        routes = ("", *config.tg_media_proxy_urls)
+        return routes[attempt % len(routes)]
     if not config.tg_media_proxy_url:
         return None
     proxy_first = bool(config.tg_proxy_url)

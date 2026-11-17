@@ -12,10 +12,12 @@ INBOX_TTL_HOURS, QUOTA_ALERT_POLL_INTERVAL.
 Key class: Config (singleton instantiated as `config`).
 """
 
+import json
 import logging
 import os
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -29,6 +31,10 @@ SENSITIVE_ENV_VARS = {
     "ALLOWED_USERS",
     "OPENAI_API_KEY",
     "CCBOT_NODE_SECRET",
+    "TG_API_ID",
+    "TG_API_HASH",
+    "TG_MEDIA_PROXY_URL",
+    "TG_MEDIA_PROXY_URLS",
 }
 
 
@@ -46,6 +52,37 @@ def _parse_duration(value: str, default_seconds: float) -> float:
     unit = m.group(2)
     multiplier = {"": 1.0, "s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}[unit]
     return n * multiplier
+
+
+def _parse_media_proxy_urls(value: str | None) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    try:
+        values = json.loads(value)
+        if not isinstance(values, list):
+            raise ValueError
+        result = []
+        for item in values:
+            if not isinstance(item, str):
+                raise ValueError
+            item = item.strip().rstrip("/")
+            url = urlsplit(item)
+            if (
+                url.scheme not in ("http", "socks4", "socks5", "socks5h")
+                or not url.hostname
+                or not url.port
+                or url.path
+                or url.query
+                or url.fragment
+            ):
+                raise ValueError
+            if item not in result:
+                result.append(item)
+        return tuple(result)
+    except (ValueError, TypeError):
+        raise ValueError(
+            "TG_MEDIA_PROXY_URLS must be a JSON array of proxy URLs with explicit ports"
+        ) from None
 
 
 class Config:
@@ -298,6 +335,15 @@ class Config:
         # host is on a network that cannot reach api.telegram.org directly
         # (e.g. RU-blocked IPs). Accepts http://host:port or socks5://host:port.
         self.tg_proxy_url: str = os.getenv("TG_PROXY_URL", "").strip()
+        # Opt-in voice retry route; never changes polling or message delivery.
+        self.tg_media_proxy_url: str = os.getenv("TG_MEDIA_PROXY_URL", "").strip()
+        self.tg_media_proxy_urls = _parse_media_proxy_urls(
+            os.getenv("TG_MEDIA_PROXY_URLS")
+        )
+        # Optional bot-only media recovery credentials; scrubbed below before
+        # any agent subprocess can inherit the environment.
+        self.tg_api_id: str = os.getenv("TG_API_ID", "")
+        self.tg_api_hash: str = os.getenv("TG_API_HASH", "")
         # Explicitly opt in for direct Telegram requests only. Keep the old
         # candidate's key as a migration alias; the canonical setting wins.
         disable_ipv6 = (

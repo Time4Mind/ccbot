@@ -23,6 +23,7 @@ ccbot-node-relay = "ccbot.node_relay:main"
 ccbot-healthcheck = "ccbot.telegram_polling_health:main"
 
 [project.optional-dependencies]
+voice-mtproto = ["telethon>=1.45,<2", "python-socks[asyncio]>=2.8,<3"]
 dev = [
     "pyright>=1.1.0",
     # Pin <9.1 — pytest 9.1 tightened fixture-mark validation and the

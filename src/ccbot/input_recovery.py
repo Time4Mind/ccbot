@@ -68,6 +68,8 @@ class InputRequest:
     stage: str = ""
     received_at: float = 0.0
     session_name: str = ""
+    media_attempts: int = 0
+    media_fallback_tried: bool = False
     media_failures: int = 0
     media_deferred: bool = False
     startup_deferred: bool = False
@@ -125,6 +127,8 @@ class InputRecovery:
                 if request.kind == "voice" and request.state == "downloading"
                 else 0,
             )
+            request.media_attempts = media.get("media_attempts", request.media_failures)
+            request.media_fallback_tried = media.get("media_fallback_tried", False)
             request.media_deferred = media.get("media_deferred", False)
             if request.state == "dispatching":
                 request.state = "unknown"

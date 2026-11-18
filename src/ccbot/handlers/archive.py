@@ -93,17 +93,10 @@ def _format_blurb(messages: list[str]) -> str:
 
 
 async def _collect_user_messages(sess: Session) -> str:
-    """Walk the JSONL and assemble a blurb from the first 1-3 real user
-    messages.
+    """Build a blurb from the first three usable user prompts in the JSONL.
 
-    Keeps scanning until the earliest three usable requests are found.
-    Each request is independently truncated only for display, so a long
-    first request can never make the second one disappear.
-
-    Skips Claude Code's wrapper user-messages (``<system-reminder>``,
-    ``<local-command-caveat>``, bash chrome) and its own UI events
-    (``[Request interrupted by user]``, ``Set model to …``, etc.) —
-    these are CLI plumbing, not actual user prompts.
+    Skip CLI wrapper messages and synthetic UI events. Truncate each
+    prompt independently so a long first prompt cannot hide the next one.
     """
     sid = sess.claude_session_id
     if not sid or not sess.workdir:
@@ -266,7 +259,9 @@ async def _archive_context_status(sess: Session) -> bool | None:
     return bool((await _collect_user_messages(sess)).strip())
 
 
-async def archive_or_delete_session(sess: Session, *, completed: bool) -> bool:
+async def archive_or_delete_session(
+    sess: Session, *, completed: bool, archived_manually: bool | None = None
+) -> bool:
     """Archive resumable sessions and discard proven-empty shells.
 
     Returns True when an archive record remains, False when an empty record
@@ -284,7 +279,9 @@ async def archive_or_delete_session(sess: Session, *, completed: bool) -> bool:
         if deleted:
             logger.info("Deleted empty session instead of archiving: %s", sess.id)
         return False
-    session_manager.mark_session_archived(sess.id, completed=completed)
+    session_manager.mark_session_archived(
+        sess.id, completed=completed, archived_manually=archived_manually
+    )
     return True
 
 
@@ -779,7 +776,9 @@ async def idle_archive_sweep(bot: Bot, user_id: int) -> int:
         if not is_idle_session(sess, idle_hours * 3600.0):
             continue
         await teardown_session_runtime(user_id, sess, bot)
-        if await archive_or_delete_session(sess, completed=False):
+        if await archive_or_delete_session(
+            sess, completed=False, archived_manually=False
+        ):
             archived += 1
     if candidates:
         from .notifications import refresh_session_keyboard

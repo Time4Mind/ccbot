@@ -224,7 +224,7 @@ async def archive_session(user_id: int, bot: Bot, sess: Session) -> None:
     """Kill the tmux window if alive and archive the session."""
     was_default_reserve = reserve_owner(sess) == user_id
     await teardown_session_runtime(user_id, sess, bot)
-    await archive_or_delete_session(sess, completed=False)
+    await archive_or_delete_session(sess, completed=False, archived_manually=True)
     if was_default_reserve:
         from ...default_session import ensure_default_session
 

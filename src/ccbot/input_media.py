@@ -15,6 +15,7 @@ from .telegram_media import (
     media_route_label,
 )
 from .input_timing import cause_type, input_stage
+from .media_gap import media_gap_prefix
 import logging
 
 logger = logging.getLogger(__name__)
@@ -203,13 +204,7 @@ def with_media_gap(recovery: Any, text: str) -> str:
     ]
     if not missing:
         return text
-    return (
-        "[Сообщение ccbot: предыдущее голосовое не получено агентом "
-        "из-за ошибки загрузки, запросы №"
-        + ", №".join(missing)
-        + ". Не восстанавливай его содержание по догадке.]\n\n"
-        + text
-    )
+    return media_gap_prefix(missing) + text
 
 
 def retry_deferred_media(recovery: Any, request: Any, application: Any) -> bool:

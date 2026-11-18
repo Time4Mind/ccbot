@@ -282,7 +282,11 @@ class SessionStateMixin(NodeSessionStateMixin):
                 history.remove(sess.id)
 
     def mark_session_archived(
-        self, session_id: str, *, completed: bool = False
+        self,
+        session_id: str,
+        *,
+        completed: bool = False,
+        archived_manually: bool | None = None,
     ) -> None:
         """Move a session to archived/completed state, drop window_id binding."""
         sess = self.sessions.get(session_id)
@@ -296,6 +300,7 @@ class SessionStateMixin(NodeSessionStateMixin):
             sess.was_lost = True
         sess.state = "completed" if completed else "archived"
         sess.archived_at = time.time()
+        sess.archived_manually = archived_manually
         sess.window_id = ""
         sess.screenshot_file_id = ""
         sess.screenshot_pane_hash = ""

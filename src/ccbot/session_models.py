@@ -118,6 +118,7 @@ class Session:
         lost_at: Last transition into lost, independent of successful archival.
         last_event_at: Unix timestamp of most recent inbound or outbound activity.
         archived_at: Last successful archival timestamp; retained on restore.
+        archived_manually: Source of that archival: manual, idle timeout, or unknown.
         message_count: Cumulative claude turn count.
         was_lost: True if this session passed through the ``lost`` state
             before reaching its terminal state (archived/completed). Used
@@ -142,6 +143,7 @@ class Session:
     lost_at: float = 0.0
     last_event_at: float = 0.0
     archived_at: float = 0.0
+    archived_manually: bool | None = None
     message_count: int = 0
     was_lost: bool = False
     backend: str = "claude"
@@ -266,6 +268,7 @@ class Session:
             "exit_notified_users": list(self.exit_notified_users),
             "last_event_at": self.last_event_at,
             "archived_at": self.archived_at,
+            "archived_manually": self.archived_manually,
             "message_count": self.message_count,
             "was_lost": self.was_lost,
             "backend": self.backend,
@@ -293,6 +296,7 @@ class Session:
         node_id = str(data.get("node_id", "local"))
         provider_session_id = str(data.get("claude_session_id", ""))
         worker_session_id = str(data.get("worker_session_id", ""))
+        archived_manually = data.get("archived_manually")
         if node_id != "local" and "worker_session_id" not in data:
             worker_session_id = provider_session_id
             provider_session_id = ""
@@ -316,6 +320,9 @@ class Session:
             ],
             last_event_at=float(data.get("last_event_at", 0.0)),
             archived_at=float(data.get("archived_at", 0.0)),
+            archived_manually=archived_manually
+            if isinstance(archived_manually, bool)
+            else None,
             message_count=int(data.get("message_count", 0)),
             was_lost=bool(data.get("was_lost", False)),
             backend=data.get("backend", "claude"),

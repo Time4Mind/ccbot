@@ -12,6 +12,7 @@ from .card_text import (
     _trim,
 )
 from .card_types import CardState, Event
+from ..media_gap import strip_media_gap_prefix
 
 __all__ = [
     "_build_event",
@@ -29,8 +30,10 @@ def _build_event(msg: NewMessage) -> Event:
     callers that find no match (race / restart) can fall back to
     appending it.
     """
-    text = _strip_for_card(msg.text or "")
     raw_body = msg.text or ""
+    text = _strip_for_card(
+        strip_media_gap_prefix(raw_body) if msg.role == "user" else raw_body
+    )
     started = _parse_timestamp(msg.timestamp)
 
     if msg.content_type == "thinking":

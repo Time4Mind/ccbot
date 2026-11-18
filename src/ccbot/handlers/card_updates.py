@@ -43,6 +43,7 @@ from .card_registry import (
 )
 from .card_seed import get_card_state, matching_pending_span
 from .card_transport import _deferred_edit
+from ..media_gap import strip_media_gap_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +105,7 @@ def _apply_preprocessing_marker(
 ) -> None:
     if event.type != "user_msg":
         return
-    normalized = raw_text.strip()
+    normalized = strip_media_gap_prefix(raw_text).strip()
     # Preserve the established one-row FIFO fallback for harmless transcript
     # normalisation that is not an exact textual match.
     match_start, matched_count = matching_pending_span(state.pending_prompts, raw_text)

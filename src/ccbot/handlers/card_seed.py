@@ -13,6 +13,7 @@ from typing import Any, cast
 
 
 from ..session import Session, session_manager
+from ..media_gap import strip_media_gap_prefix
 from ..session_monitor import NewMessage
 from ..transfer_runtime import get_node_runtime
 from .card_model import (
@@ -43,7 +44,9 @@ def _prompt_key(text: str) -> str:
     # the user caption before Codex writes the prompt to JSONL.  Telegram's
     # pending receipt intentionally contains only the user-authored caption,
     # so omit standalone transport lines when correlating the two views.
-    without_inbox_refs = _INBOX_ATTACHMENT_LINE_RE.sub("", _strip_for_card(text))
+    without_inbox_refs = _INBOX_ATTACHMENT_LINE_RE.sub(
+        "", _strip_for_card(strip_media_gap_prefix(text))
+    )
     return " ".join(without_inbox_refs.split())
 
 
@@ -302,7 +305,9 @@ def _events_from_parsed_entries(
             api_error=str(_entry_value(p, "api_error", "") or ""),
         )
         ev = _build_event(msg)
-        if ev.type == "user_msg" and sess.was_preprocessed_prompt(msg.text):
+        if ev.type == "user_msg" and sess.was_preprocessed_prompt(
+            strip_media_gap_prefix(msg.text)
+        ):
             ev.user_icon = "👤💻"
         if ct == "tool_result" and _apply_tool_result(pseudo_state, ev):
             continue

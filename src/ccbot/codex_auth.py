@@ -13,6 +13,7 @@ import logging
 import os
 import shlex
 import time
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -59,26 +60,49 @@ def parse_account_result(result: object) -> CodexAccountState | None:
     )
 
 
-def has_cached_managed_credentials() -> bool:
-    """Whether file-backed managed ChatGPT credentials are still present.
+def _codex_home() -> Path:
+    return Path(os.getenv("CODEX_HOME", str(Path.home() / ".codex")))
 
-    This is deliberately only a presence check, not an authentication verdict.
-    It lets startup avoid replacing a refreshable/existing login with an
-    unsolicited device flow when account/read temporarily returns account=null.
-    A real Codex operation still performs the authoritative auth check.
-    """
-    codex_home = Path(os.getenv("CODEX_HOME", str(Path.home() / ".codex")))
-    auth_path = codex_home / "auth.json"
+
+def _cached_chatgpt_tokens() -> dict[str, Any]:
+    auth_path = _codex_home() / "auth.json"
     try:
         payload = json.loads(auth_path.read_text())
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return False
+        return {}
     if not isinstance(payload, dict) or payload.get("auth_mode") != "chatgpt":
-        return False
+        return {}
     tokens = payload.get("tokens")
-    return isinstance(tokens, dict) and bool(
-        tokens.get("refresh_token") or tokens.get("access_token")
-    )
+    return tokens if isinstance(tokens, dict) else {}
+
+
+def has_cached_managed_credentials() -> bool:
+    """Whether file-backed managed ChatGPT credentials are still present.
+
+    This is a presence check. An actual operation checks authentication.
+    """
+    tokens = _cached_chatgpt_tokens()
+    return bool(tokens.get("refresh_token") or tokens.get("access_token"))
+
+
+def cached_chatgpt_account_id() -> str | None:
+    """Only identify a login when Codex uses its file-backed session."""
+    if os.environ.get("CODEX_API_KEY") or os.environ.get("CODEX_ACCESS_TOKEN"):
+        return None
+    for source in (Path("/etc/codex/requirements.toml"), _codex_home() / "config.toml"):
+        try:
+            settings = tomllib.loads(source.read_text())
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            return None
+        if settings.get("cli_auth_credentials_store", "file") != "file":
+            return None
+    tokens = _cached_chatgpt_tokens()
+    if not (tokens.get("refresh_token") or tokens.get("access_token")):
+        return None
+    account_id = tokens.get("account_id")
+    return account_id if isinstance(account_id, str) and account_id else None
 
 
 async def stored_login_available(

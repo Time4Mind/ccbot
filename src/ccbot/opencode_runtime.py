@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+from typing import Any
 
 
 def _footer(pane: str) -> str:
@@ -104,13 +105,23 @@ def interactive_panel(pane: str) -> tuple[str, str] | None:
                 ).strip()
                 if re.search(r"(?m)^\s*1\.\s+", content):
                     return "AskUserQuestion", content
+    composer = _footer(pane)
+    # In a new session the floating picker can cover the entire composer.
+    # The native path/version bar still anchors the dialog to the live pane.
+    version_bar = (
+        nonempty[-1].strip()
+        if nonempty and re.fullmatch(r"[~/].+\s{2,}\d+\.\d+\.\d+", nonempty[-1].strip())
+        else ""
+    )
+    if not (composer or version_bar):
+        return None
     for index, line in enumerate(lines):
         variant_title = re.search(r"\bSelect variant\s+esc\s*$", line)
-        if variant_title is not None and _footer(pane):
+        if variant_title is not None:
             # Old user/tool blocks can start with ┃ to the LEFT of this
             # floating dialog. They do not end the dialog: crop that margin
-            # and stop at the actual live composer, located from the footer.
-            footer = _footer(pane)
+            # and stop at the visible composer or its path/version bar.
+            footer = composer or version_bar
             end = next(
                 (
                     i
@@ -124,7 +135,7 @@ def interactive_panel(pane: str) -> tuple[str, str] | None:
                 row[left:] for row in lines[index:end]
             ).strip()
         model_title = re.search(r"\bSelect model\s+esc\s*$", line)
-        if model_title is not None and _footer(pane):
+        if model_title is not None:
             for end in range(index + 1, len(lines)):
                 if re.search(
                     r"(?:View all providers|Connect provider) ctrl\+a", lines[end]
@@ -169,12 +180,21 @@ class AuthState:
     model: str = ""
 
 
-def auth_state() -> AuthState:
+def _openai_oauth() -> dict[str, Any]:
     data = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share")))
     try:
         providers = json.loads((data / "opencode/auth.json").read_text())
         auth = providers.get("openai") or {}
-        # Report presence only. A successful inference proves current entitlement.
-        return AuthState(auth.get("type") == "oauth" and bool(auth.get("refresh")))
+        return auth if auth.get("type") == "oauth" and auth.get("refresh") else {}
     except (OSError, ValueError, AttributeError, TypeError):
-        return AuthState(False)
+        return {}
+
+
+def auth_state() -> AuthState:
+    return AuthState(bool(_openai_oauth()))
+
+
+def oauth_account_id() -> str | None:
+    """Read the OpenAI subscription account associated with OpenCode."""
+    account_id = _openai_oauth().get("accountId")
+    return account_id if isinstance(account_id, str) and account_id else None

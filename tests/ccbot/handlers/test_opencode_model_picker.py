@@ -104,6 +104,50 @@ def test_native_variant_has_named_mode_buttons_without_auto_default():
     ]
 
 
+@pytest.mark.asyncio
+async def test_direct_variant_menu_shows_native_modes_when_composer_is_covered(
+    monkeypatch,
+):
+    from ccbot import opencode_picker
+    from ccbot.opencode_catalogue import ModelChoice
+    from ccbot.terminal_parser import extract_interactive_content
+
+    pane = """              Select variant                                   esc
+              Search
+              ● Default
+  ┃           low
+  ┃  Buil     high
+  /tmp/lab  ⊙ 1 MCP /status                               1.19.5
+"""
+    panel = extract_interactive_content(pane)
+    assert panel is not None
+    sess = Session(
+        id="oc-hidden-composer-variant",
+        name="test",
+        window_id="@oc-hidden-variant",
+        workdir="/tmp",
+        backend="opencode",
+    )
+    model = ModelChoice("openai", "fixture", "Fixture", ("low", "high", "xhigh"))
+    monkeypatch.setattr(
+        opencode_picker, "load_catalogue", AsyncMock(return_value=(model,))
+    )
+    monkeypatch.setattr(
+        opencode_picker, "capture_session_pane", AsyncMock(return_value=pane)
+    )
+    content, ui = await opencode_picker.prepare_picker(
+        42, sess, panel.content, panel.name
+    )
+    kb = opencode_picker.keyboard(42, sess.window_id, content, ui)
+    assert kb is not None
+    assert [
+        button.text
+        for row in kb.inline_keyboard
+        for button in row
+        if button.callback_data.startswith("oc:pick:")
+    ] == ["Default", "low", "high"]
+
+
 class NativePicker:
     """Native dialogue behavior: filtering, model/mode selection, and command input."""
 

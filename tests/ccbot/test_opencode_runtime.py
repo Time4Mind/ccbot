@@ -101,6 +101,24 @@ def test_connected_provider_model_picker_exposes_controls_before_composer(prefix
     assert not any(str(data).startswith("aq:pick:") for data in callbacks)
 
 
+def test_model_picker_in_empty_session_with_composer_covered():
+    pane = """              Select model                                     esc
+
+              Search
+              Recent
+  ┃  Ask   ● GPT-6 Luna OpenAI
+  ┃          GPT-6.1 Sol OpenAI
+  ┃  Buil    GPT-6.1 Terra OpenAI
+              Connect provider ctrl+a  Favorite ctrl+f
+
+  ~/workdir  ⊙ 1 MCP /status                                   1.19.5
+"""
+    panel = extract_interactive_content(pane)
+    assert panel is not None and panel.name == "Settings"
+    assert "GPT-6.1 Terra" in panel.content
+    assert extract_interactive_content(pane + "\nuser@host %") is None
+
+
 def test_native_question_is_exposed_through_existing_question_controls():
     pane = """     → Asked 1 question
   ┃
@@ -480,6 +498,25 @@ def test_variant_content_survives_history_bars_left_of_floating_dialog():
         "medium",
         "medium",
     ]
+
+
+def test_variant_picker_in_empty_session_with_composer_covered():
+    pane = """              Select variant                                   esc
+
+              Search
+              ● Default
+  ┃           none
+  ┃  Ask     low
+  ┃           medium
+  ┃  Buil    high
+  ╹▀▀▀▀▀▀    xhigh                                                   ▀▀▀▀▀▀▀▀
+  /tmp/lab  ⊙ 1 MCP /status                                    1.19.5
+"""
+    panel = extract_interactive_content(pane)
+    assert panel is not None and panel.name == "OpenCodeVariant"
+    assert "medium" in panel.content
+    assert "/status" not in panel.content
+    assert extract_interactive_content(pane + "\nuser@host %") is None
 
 
 @pytest.mark.parametrize(

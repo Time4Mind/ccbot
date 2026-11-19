@@ -68,11 +68,11 @@ async def _voice_reply(message: Any, text: str) -> None:
 
 
 async def _clear_voice_pending_marker(bot: Bot, user_id: int, sess: Session) -> None:
-    """Repaint the card without the temporary voice_pending user row.
+    """Repaint the card after removing a temporary voice row.
 
     Only needed on the transcription-failure paths — the success path's
     ``_dispatch_text_to_active`` already reposts unconditionally, which
-    naturally drops the marker once ``voice_pending`` is cleared.
+    naturally drops the marker once that request is cleared.
     """
     from ..input_recovery import input_recovery
 
@@ -187,7 +187,7 @@ async def _process_voice(
     # that sits ABOVE the voice message, which the user never sees; the
     # symptom was 35-50 s of apparent dead air while whisper ran (they
     # re-recorded, switched sessions, assumed it was broken).
-    # ``voice_pending`` adds a synthetic trailing user row so the reposted
+    # The voice receipt adds a temporary user row so the reposted
     # card says "voice received, already bound here" exactly where a typed
     # prompt would appear. The header remains stable.
     #
@@ -196,10 +196,10 @@ async def _process_voice(
     # per user and strips every other card's keyboard, so two reposts
     # can no longer desync which message carries the live switcher.
     # Skipped for an orphan window (no Session record).
+    message_id = update.message.message_id
     card_state = get_card_state(user.id, sess) if sess is not None else None
     if sess is not None and card_state is not None:
-        card_state.voice_pending = True
-        card_state.voice_stage = "downloading"
+        card_state.voice_requests.setdefault(message_id, "downloading")
         # A pagination tap may have left the card on an older page. A new
         # voice message is a new user turn, so focus the latest page just as
         # the normal prompt flow does before showing the pending row.
@@ -225,7 +225,7 @@ async def _process_voice(
             )
         except NetworkError as e:
             if sess is not None and card_state is not None:
-                card_state.voice_pending = False
+                card_state.voice_requests.pop(message_id, None)
                 await _clear_voice_pending_marker(context.bot, user.id, sess)
             from ..input_recovery import input_recovery
 
@@ -265,7 +265,7 @@ async def _process_voice(
             return False
 
         if card_state is not None:
-            card_state.voice_stage = "transcribing"
+            card_state.voice_requests[message_id] = "transcribing"
             if (
                 surface_pending
                 and sess is not None
@@ -282,7 +282,7 @@ async def _process_voice(
                 text = await transcribe_voice(ogg_data, user_id=user.id)
         except ValueError:
             if sess is not None and card_state is not None:
-                card_state.voice_pending = False
+                card_state.voice_requests.pop(message_id, None)
                 await _clear_voice_pending_marker(context.bot, user.id, sess)
             await _voice_reply(
                 update.message,
@@ -293,7 +293,7 @@ async def _process_voice(
             return False
         except Exception as e:
             if sess is not None and card_state is not None:
-                card_state.voice_pending = False
+                card_state.voice_requests.pop(message_id, None)
                 await _clear_voice_pending_marker(context.bot, user.id, sess)
             logger.error("Voice transcription failed: %s", e)
             await _voice_reply(
@@ -312,17 +312,18 @@ async def _process_voice(
     if card_state is not None:
         # Replace the recognition placeholder atomically with the recognized
         # request before pane delivery starts. Delivery proof can take seconds;
-        # clearing ``voice_pending`` without a replacement made the card look
+        # clearing the status without a replacement made the card look
         # empty during that interval. The real transcript event consumes this
         # pending row through the normal marker-matching path.
-        request_id = str(update.message.message_id)
-        card_state.voice_pending = False
+        request_id = str(message_id)
+        card_state.voice_requests.pop(message_id, None)
         card_state.pending_prompts = [
             row for row in card_state.pending_prompts if row.request_id != request_id
         ]
         card_state.pending_prompts.append(
             PendingPrompt(request_id=request_id, text=text, user_icon="👤")
         )
+        card_state.pending_prompts.sort(key=lambda row: row.message_id)
         card_state.current_page_idx = None
         if surface_pending and sess is not None and is_active_for_user(user.id, sess):
             try:

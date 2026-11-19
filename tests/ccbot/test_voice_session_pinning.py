@@ -35,6 +35,7 @@ def _make_voice_update(user_id: int = 1) -> MagicMock:
     update.effective_user = MagicMock()
     update.effective_user.id = user_id
     update.message = MagicMock()
+    update.message.message_id = 42
     update.message.voice = MagicMock()
     voice_file = MagicMock()
     voice_file.download_as_bytearray = AsyncMock(return_value=bytearray(b"ogg-bytes"))

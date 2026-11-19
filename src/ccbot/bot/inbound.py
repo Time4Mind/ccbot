@@ -178,6 +178,8 @@ def _enqueue(
                 state.pending_prompts = [
                     row for row in pending_prompts if row.request_id != str(message_id)
                 ]
+                if kind == "voice":
+                    state.voice_requests.pop(message_id, None)
 
             completion = getattr(receipt, "completion", None)
             if completion is not None:
@@ -206,9 +208,7 @@ def _enqueue(
                 )
         state.current_page_idx = None
         if kind == "voice":
-            if not state.voice_pending:
-                state.voice_stage = "downloading"
-            state.voice_pending = True
+            state.voice_requests.setdefault(message_id, "downloading")
         if not card_already_surfaced:
             if kind == "command" and is_native_picker_command(
                 sess, update.message.text or ""
@@ -321,7 +321,7 @@ async def voice_intake_handler(
 ) -> bool:
     if _capture_pending_transfer(update, context):
         return True
-    # _enqueue pins the window and marks voice_pending synchronously. Telegram
+    # _enqueue pins the window and marks the voice receipt synchronously. Telegram
     # receipt work belongs to the background lane, never the update dispatcher.
     if _enqueue(update, context, kind="voice", processor=_run_voice):
         return True

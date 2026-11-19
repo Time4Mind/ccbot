@@ -40,14 +40,13 @@ async def refresh_request_status(recovery: Any, user_id: int, session_id: str) -
         )
     # Failures stay in the reply to their original message, never in the live
     # tail of every subsequent turn. Recovery actions also remain in /requests.
-    voices = [r for r in work if r.kind == "voice" and not r.recognized]
-    state.voice_pending = bool(voices)
-    current = min(voices, key=lambda r: r.sequence) if voices else None
-    state.voice_stage = (
-        "transcribing"
-        if current is not None and current.state == "transcribing"
+    state.voice_requests = {
+        item.message_id: "transcribing"
+        if item.state == "transcribing"
         else "downloading"
-    )
+        for item in work
+        if item.kind == "voice" and not item.recognized
+    }
     if active is None or active.id != session_id:
         return True
     if state.in_menu_view or state.in_kb_mode:

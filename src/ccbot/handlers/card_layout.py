@@ -329,33 +329,30 @@ def _render_card(
         dropped = len(pages[idx]) - len(page_events)
         body = f"… (+{dropped} events trimmed to fit)\n{body}"
     is_latest_page = idx == len(pages) - 1
-    if state.voice_pending and is_latest_page:
-        pending_row = render_event(
-            Event(
-                type="user_msg",
-                text=t(user_id or 0, f"voice.{state.voice_stage}"),
-                started_at=time.time(),
-            ),
-            in_flight=False,
-            now=time.time(),
-        )
-        body = _EVENT_JOINER.join(part for part in (body, pending_row) if part)
     # Pending input is a live tail, not part of historical page contents.
     # Showing it on an older page makes the same request appear after every
     # completed turn and visually corrupts transcript order.
-    for prompt in state.pending_prompts if is_latest_page else ():
-        pending_icon = prompt.user_icon or ("👤💻" if prompt.preprocessed else "💻")
-        prompt_row = render_event(
-            Event(
+    if is_latest_page and (state.voice_requests or state.pending_prompts):
+        now = time.time()
+        request_rows: dict[int, Event] = {}
+        if state.voice_requests:
+            voice_id = min(state.voice_requests)
+            stage = state.voice_requests[voice_id]
+            request_rows[voice_id] = Event(
+                type="user_msg", text=t(user_id or 0, f"voice.{stage}"), started_at=now
+            )
+        for prompt in state.pending_prompts:
+            request_rows[prompt.message_id] = Event(
                 type="user_msg",
                 text=prompt.text,
-                started_at=time.time(),
-                user_icon=pending_icon,
-            ),
-            in_flight=False,
-            now=time.time(),
+                started_at=now,
+                user_icon=prompt.user_icon or ("👤💻" if prompt.preprocessed else "💻"),
+            )
+        rows = (
+            render_event(request_rows[message_id], in_flight=False, now=now)
+            for message_id in sorted(request_rows)
         )
-        body = _EVENT_JOINER.join(part for part in (body, prompt_row) if part)
+        body = _EVENT_JOINER.join(filter(None, (body, *rows)))
     if state.inbound_status and is_latest_page:
         body = _EVENT_JOINER.join(part for part in (body, state.inbound_status) if part)
     parts = [header, "─────"]

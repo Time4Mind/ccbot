@@ -262,6 +262,8 @@ def _surface_startup_entry(
     state = get_card_state(user.id, sess)
     message_id = message.message_id
     text = message.text or ""
+    if message.voice:
+        state.voice_requests.setdefault(message_id, "downloading")
     if text and not text.startswith("/"):
         request_id = str(message_id)
         if not any(row.request_id == request_id for row in state.pending_prompts):
@@ -298,6 +300,7 @@ def _discard_startup_receipt(entry: QueuedInbound, window_id: str) -> None:
         return
     state = get_card_state(user.id, sess)
     message_id = message.message_id
+    state.voice_requests.pop(message_id, None)
     state.pending_prompts = [
         row for row in state.pending_prompts if row.request_id != str(message_id)
     ]

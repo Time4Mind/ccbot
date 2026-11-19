@@ -84,7 +84,7 @@ class TestVoicePendingMarker:
         state.events.append(
             Event(type="final_text", text="previous answer", started_at=1.0)
         )
-        state.voice_pending = True
+        state.voice_requests[15] = "downloading"
         text = _render_card(sess, state)
         assert "🎙" not in text.splitlines()[0]
         assert "👤 🎙 Voice message is downloading…" in text

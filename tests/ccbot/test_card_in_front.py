@@ -419,7 +419,7 @@ class TestInboundCardSurface:
 
         bot = AsyncMock()
         sess = MagicMock(id="surface", backend="claude")
-        state = CardState(msg_id=400, voice_pending=True)
+        state = CardState(msg_id=400, voice_requests={500: "downloading"})
         notifications._cards[(77, "surface")] = state
         release_seed = asyncio.Event()
         events: list[str] = []

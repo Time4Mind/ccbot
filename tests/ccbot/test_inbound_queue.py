@@ -14,8 +14,9 @@ from ccbot.bot.inbound import (
     text_intake_handler,
     voice_intake_handler,
 )
-from ccbot.handlers.card_model import CardState
+from ccbot.handlers.card_model import CardState, PendingPrompt, _render_card
 from ccbot.handlers import bg_status
+from ccbot.session_models import Session
 from ccbot.inbound_queue import (
     enqueue_inbound,
     pending_inbound_count,
@@ -161,6 +162,36 @@ async def test_voice_intake_marks_recognition_without_waiting_for_receipt() -> N
     ):
         assert await voice_intake_handler(voice, context)
     assert observed == [(True, None)]
+
+
+@pytest.mark.asyncio
+async def test_queued_voice_status_stays_between_earlier_and_later_prompts() -> None:
+    context = _context()
+    sess = Session(id="voice-order", name="Voice order", window_id="@A")
+    state = CardState(pending_prompts=[PendingPrompt("18736", "Earlier voice")])
+
+    with (
+        patch("ccbot.bot.inbound.is_user_allowed", return_value=True),
+        patch("ccbot.bot.inbound.active_window", return_value="@A"),
+        patch(
+            "ccbot.bot.inbound.session_manager.find_session_by_window",
+            return_value=sess,
+        ),
+        patch("ccbot.bot.inbound.claim_default_session"),
+        patch("ccbot.bot.inbound.get_card_state", return_value=state),
+        patch("ccbot.bot.inbound.schedule_card_after_message"),
+        patch("ccbot.bot.inbound.refresh_session_keyboard", new=AsyncMock()),
+        patch("ccbot.bot.inbound.enqueue_inbound"),
+    ):
+        assert await voice_intake_handler(_update(18738, voice=True), context)
+        assert await text_intake_handler(_update(18740, text="Later text"), context)
+
+    card = _render_card(sess, state)
+    assert (
+        card.index("Earlier voice")
+        < card.index("Voice message is downloading")
+        < card.index("Later text")
+    )
 
 
 @pytest.mark.asyncio

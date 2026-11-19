@@ -25,6 +25,25 @@ def test_opencode_usage_labels_its_own_recorded_sessions(monkeypatch, language):
     assert "123" in text
 
 
+@pytest.mark.parametrize(
+    ("counts", "compact"),
+    [
+        ((10_000, 9_500, 500), ("10K", "9.5K", "500")),
+        ((10_000_000, 9_999_000, 1_000), ("10M", "10M", "1K")),
+        ((1_250_000_000, 999_999_999, 250_000_001), ("1.2B", "1B", "250M")),
+    ],
+)
+def test_opencode_menu_compacts_all_token_counts(monkeypatch, counts, compact):
+    from ccbot import i18n
+    from ccbot.opencode_usage import OpenCodeUsageInfo
+    from ccbot.usage import format_usage_breakdown_compact
+
+    monkeypatch.setattr(i18n, "get_user_lang", lambda _uid: "en")
+    total, incoming, outgoing = compact
+    text = format_usage_breakdown_compact(42, OpenCodeUsageInfo(*counts))
+    assert f"{total} tokens (input {incoming}, output {outgoing})" in text
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("opencode_account", "codex_store", "shares_quota"),

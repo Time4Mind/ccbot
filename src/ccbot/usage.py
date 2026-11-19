@@ -341,6 +341,20 @@ def _read_daily_quota_budget(used_percent: int, resets_at: int | None) -> float 
     return float(daily_budget) - spent_today
 
 
+def _compact_token_count(count: int | None) -> str:
+    if count is None:
+        return "-"
+    if count < 1_000:
+        return str(count)
+    divisor = 1_000
+    for suffix in ("K", "M", "B"):
+        scaled = round(count / divisor, 1)
+        if scaled < 1_000:
+            break
+        divisor *= 1_000
+    return f"{scaled:.1f}".removesuffix(".0") + suffix
+
+
 def format_usage_breakdown_compact(
     user_id: int,
     info: object,
@@ -409,9 +423,9 @@ def format_usage_breakdown_compact(
                 user_id,
                 "usage.native.tokens",
                 backend=label,
-                total=info.total_tokens,
-                incoming=info.input_tokens,
-                outgoing=info.output_tokens,
+                total=_compact_token_count(info.total_tokens),
+                incoming=_compact_token_count(info.input_tokens),
+                outgoing=_compact_token_count(info.output_tokens),
             )
         return (
             result

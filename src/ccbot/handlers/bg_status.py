@@ -126,6 +126,19 @@ def update_status(
 
     A first-call for an unknown session is always reported as a change.
     """
+    if (
+        status == "needs_action"
+        and interactive_ui is not None
+        and interactive_ui[1] in {"Settings", "OpenCodeVariant", "OpenCodePicker"}
+    ):
+        # A native settings picker is independent of the assistant turn.
+        # Keep its snapshot for switching back to the pane, without replacing
+        # the completion state which remains valid after the picker closes.
+        existing = _bg.get(user_id, {}).get(session_id)
+        if existing is not None and existing.status != "needs_action":
+            existing.pending_interactive_ui = interactive_ui
+        return False
+
     is_new_entry = session_id not in _bg.get(user_id, {})
     entry = _entry(user_id, session_id)
     old_status = entry.status
@@ -233,7 +246,7 @@ def clear_pending_ui(user_id: int, session_id: str) -> bool:
     entry.pending_interactive_ui = None
     if entry.status == "needs_action":
         entry.status = "working"
-    _touch(entry)
+        _touch(entry)
     return True
 
 

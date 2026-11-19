@@ -22,6 +22,51 @@ from ccbot.tmux_manager import TmuxWindow
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["codex", "opencode"])
+@pytest.mark.parametrize("old_status", ["finished", "seen_finished", "working"])
+async def test_model_picker_preserves_session_lifecycle(
+    monkeypatch, sample_pane_codex_model_picker, backend, old_status
+) -> None:
+    from ccbot.handlers import bg_status, notifications, status_polling
+    from ccbot.session_models import Session
+
+    sess = Session(id="picker-status", window_id="@1", name="test", backend=backend)
+    monkeypatch.setattr(bg_status, "_bg", {})
+    bg_status.update_status(42, sess.id, old_status)
+    monkeypatch.setattr(
+        status_polling.session_manager, "find_session_by_window", lambda _w: sess
+    )
+    monkeypatch.setattr(
+        status_polling.session_manager, "get_active_session", lambda _u: sess
+    )
+    monkeypatch.setattr(status_polling, "get_interactive_window", lambda _u: None)
+    monkeypatch.setattr(status_polling, "_drive_typing_indicator", AsyncMock())
+    monkeypatch.setattr(status_polling, "refresh_panel", AsyncMock())
+    monkeypatch.setattr(notifications, "has_pending_kb", lambda *_: (False, False))
+    surface = AsyncMock()
+    monkeypatch.setattr(notifications, "enter_kb_mode", surface)
+    window = SimpleNamespace(window_id="@1")
+    picker = (
+        sample_pane_codex_model_picker
+        if backend == "codex"
+        else (
+            "Select model                          esc\n"
+            "Search\nGPT-6 Luna OpenAI\nConnect provider ctrl+a\n"
+            "/tmp/lab                                     1.19.5"
+        )
+    )
+
+    await update_status_message(AsyncMock(), 42, "@1", window=window, pane_text=picker)
+    surface.assert_awaited_once()
+    await update_status_message(
+        AsyncMock(), 42, "@1", window=window, pane_text="back to composer"
+    )
+
+    assert bg_status.get_status(42, sess.id) == old_status
+    assert bg_status.get_pending_interactive_ui(42, sess.id) is None
+
+
+@pytest.mark.asyncio
 async def test_active_default_reserve_surfaces_model_picker_on_first_poll(
     monkeypatch, sample_pane_codex_model_picker
 ) -> None:

@@ -5,24 +5,22 @@
 
 [English README](README.md) · [Русская документация](README_RU.md)
 
-一个个人 Telegram 机器人,将私聊 1-1 DM 桥接到运行在 tmux 中的 N 个并行
-Claude Code 或 Codex CLI 会话。一位用户、N 个会话、最新机器人消息
-下方的一个内联切换器。
+一个个人 Telegram 机器人，连接 tmux 中并行运行的 Claude Code、Codex、
+ZCode 和 OpenCode 会话。通过最新机器人消息下方的按钮选择活动会话。
 
 ## 为什么
 
-Claude Code 运行在终端里。离开桌子就失去了可见性 — 但会话仍在继续。
+代理运行在终端里。离开电脑后，会话仍会继续。
 ccbot 让你可以:
 
 - **在工作中途从电脑切换到手机。** Claude 正在做重构 — 你出去散步,
   继续在 Telegram 上监控和回复。
 - **随时切换回电脑。** 会话存活在真实的 tmux 窗口里,`tmux attach`
   直接把你带回终端,完整的滚动历史和上下文都还在。
-- **并行运行多个会话。** 每个会话都有自己的 tmux 窗口和自己的
-  `claude` 进程。在 Telegram 中切换活动会话不会暂停其他任何会话。
+- **并行运行多个会话。** 每个会话都有自己的 tmux 窗口和代理进程。
+  在 Telegram 中切换活动会话时，其他会话继续运行。
 
-机器人是 tmux 之上的一层薄薄的控制层 — 你的 Claude Code 进程始终
-在原地。ccbot 只负责读取它的输出并发送按键。
+CCBot 将输入发给 tmux 中的原生 CLI，并在 Telegram 中显示输出。
 
 ## 与 upstream 的区别
 
@@ -63,8 +61,8 @@ ccbot 让你可以:
 ## 先决条件
 
 - **tmux** 在 `PATH` 中
-- **Claude Code** CLI(`claude`)或 **Codex CLI**(`codex`)；Codex
-  可在首次启动时通过 Telegram 完成 device-code 登录
+- 至少安装一个原生 CLI。支持 **Claude Code** (`claude`)、**Codex**
+  (`codex`)、**ZCode** (`zcode`) 和 **OpenCode** (`opencode`)。见[后端设置](#后端设置)。
 - **Python 3.12+**
 - **uv**(推荐)用于依赖管理
 - macOS(Apple Silicon)或 Linux arm64
@@ -82,7 +80,7 @@ git clone https://github.com/Time4Mind/ccbot.git
 cd ccbot
 uv sync
 cp .env.example ~/.ccbot/.env   # 填入 TELEGRAM_BOT_TOKEN + ALLOWED_USERS
-ccbot hook --install            # 一次性:注册 Claude Code hook
+ccbot hook --install --backend claude  # 替换为已安装的后端
 ccbot                           # 前台;生产环境用 systemd 单元
 ```
 
@@ -103,11 +101,15 @@ ccbot                           # 前台;生产环境用 systemd 单元
 | --------------------------- | ------------ | ---- |
 | `CCBOT_DIR`                 | `~/.ccbot`   | 配置和状态目录 |
 | `TMUX_SESSION_NAME`         | `ccbot`      | 装载所有 session 窗口的 tmux 会话 |
-| `CCBOT_AGENT_BACKEND`       | `claude`     | 新 state 的初始全局 backend |
+| `CCBOT_AGENT_BACKEND`       | `claude`     | 新状态的初始后端，可选 `claude`、`codex`、`zcode`、`opencode` |
 | `CLAUDE_COMMAND`            | `claude`     | 启动会话使用的二进制 |
 | `CLAUDE_FLAGS`              | `--dangerously-skip-permissions` | 附加给 `claude` 的 flag |
 | `CODEX_COMMAND`             | `codex`      | Codex CLI 二进制 |
 | `CODEX_FLAGS`               | bypass + hooks + `--no-alt-screen` | 附加给 `codex` 的 flag |
+| `ZCODE_COMMAND`             | `zcode`      | ZCode Agent CLI 可执行文件 |
+| `ZCODE_FLAGS`               | `--mode yolo --locale en-US` | 传给 ZCode 的启动参数 |
+| `OPENCODE_COMMAND`          | `opencode`   | OpenCode CLI 可执行文件 |
+| `OPENCODE_MODEL`            | `openai/gpt-6-luna` | CCBot 启动 OpenCode 和自动命名会话时使用的模型 |
 | `CODEX_NAMING_MODEL`        | `gpt-5.6-luna` | 用于 Codex 自动命名会话的轻量模型 |
 | `SESSION_IDLE_TTL`          | `4h`         | 闲置多久后 active → archived |
 | `ARCHIVE_PURGE_AFTER`       | `14d`        | 归档会话从 state 中清除的时长 |
@@ -129,26 +131,47 @@ ccbot                           # 前台;生产环境用 systemd 单元
 个人 UI 偏好(卡片大小、通知、语音后端、语言……)不是 env 变量,
 它们在 `≡ 菜单 → Settings` 里,见下文。
 
-## Hook 设置
+## 后端设置
 
-机器人通过所选 agent 的两个 lifecycle hook 跟踪 tmux-窗口 ↔
-agent-session 映射:`SessionStart` 捕获新进程,`UserPromptSubmit`
-在每次提交提示时修复过期映射(覆盖 `/resume`、`/clear` 以及机器人
-重启时的竞态)。一次性自动安装:
-
-```bash
-ccbot hook --install
-```
-
-Codex 使用 `~/.codex/hooks.json`：
+在 **菜单 → Settings → Sessions and backends → Agent** 启用已安装的后端并选择默认后端。
+所选节点有多个可用后端时，新建会话会先选择后端，再选择目录。
+原有会话保留各自的后端。
 
 ```bash
+ccbot hook --install --backend claude
 ccbot hook --install --backend codex
 ```
 
-backend 可在 `菜单 → Settings → Agent` 全局切换；当前 backend
-仍有活动会话时禁止切换。跨 agent 恢复归档会创建目标 agent 的新
-原生会话，并用受限 handoff 携带原会话上下文。
+Codex 将 hook 写入 `~/.codex/hooks.json`，可以通过 Telegram 完成设备码登录。
+
+### ZCode
+
+安装官方 ZCode Agent CLI，在 ZCode 内配置提供商，然后安装生命周期 hook。
+
+```bash
+ccbot hook --install --backend zcode
+```
+
+`/model` 显示具名模型按钮，推理强度和模式通过方向键选择。恢复使用
+`--resume sess_<uuid>`。见 [ZCode 后端说明](doc/zcode-backend-spec.md)。
+
+### OpenCode
+
+安装 OpenCode 1.x，在 OpenCode 内用 ChatGPT Pro/Plus 登录 OpenAI，然后安装生命周期插件。
+
+```bash
+opencode auth login --provider openai
+ccbot hook --install --backend opencode
+```
+
+恢复使用 `--session ses_...`。本地会话的 `/model` 从 OpenCode 的原生目录
+加载模型，随后显示该模型的推理强度选项。`OPENCODE_MODEL` 设置从 CCBot 启动时
+的初始模型，也用于自动命名。直接启动 OpenCode 时使用其自身配置。
+
+菜单显示已记录的 OpenCode token 用量。确认两个本地 CLI 使用同一 ChatGPT
+账号时，也会显示共享的 `OpenCode · Codex` 配额。见 [OpenCode 后端说明](doc/opencode-backend-spec.md)。
+
+跨后端恢复归档会在目标后端创建原生会话，并传递原会话的有限上下文。
 
 安装器按事件幂等 — 在旧的仅 `SessionStart` 安装上重跑,只会补上
 缺失的那一条。

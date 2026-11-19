@@ -5,28 +5,26 @@
 
 [中文文档](README_CN.md) · [Русская документация](README_RU.md)
 
-A personal Telegram bot that bridges a private DM to multiple parallel
-Claude Code or Codex CLI sessions running in tmux. One user, N sessions, one inline
-switcher in the most recent bot message.
+A personal Telegram bot for parallel Claude Code, Codex, ZCode, and OpenCode
+sessions running in tmux. Each session uses its own CLI. An inline switcher
+in the most recent bot message selects which session receives input.
 
 ## Why
 
-Claude Code lives in your terminal. Walk away from the desk and you
+Your agent lives in the terminal. Walk away from the desk and you
 lose visibility — but the session keeps running. ccbot lets you:
 
-- **Switch from desktop to phone mid-conversation.** Claude is doing a
+- **Switch from desktop to phone mid-conversation.** An agent is doing a
   refactor; you go for a walk and keep monitoring + replying from
   Telegram.
 - **Switch back to the desktop anytime.** Sessions live in real tmux
   windows, so `tmux attach` brings you straight back into the terminal
   with full scrollback.
 - **Run several sessions in parallel.** Each session is its own tmux
-  window with its own `claude` process. Switching the active session
+  window with its own agent process. Switching the active session
   in Telegram doesn't pause any of the others.
 
-The bot is a thin control layer over tmux — your Claude Code process
-stays exactly where it is. ccbot just reads its output and sends
-keystrokes.
+CCBot sends input to the native CLI in tmux and displays its output in Telegram.
 
 ## Differences from upstream
 
@@ -62,9 +60,9 @@ and not negotiable:
   their highlighting and layout. Existing absolute file paths become a
   filename stem plus an extension-only download button. Kill switch:
   `CCBOT_RICH_MESSAGES=off`. Upstream uses HTML.
-- **Hook-based session tracking.** The selected agent's `SessionStart` +
-  `UserPromptSubmit` hooks write `session_map.json`; the monitor polls
-  it. No reliance on process-tree introspection or claude SDK.
+- **Hook-based session tracking.** Lifecycle hooks or the OpenCode plugin
+  bind each tmux window to the native session ID. The monitor uses that binding
+  for live output, history, and restore.
 - **Voice transcription is local-first.** Parakeet via NeMo-Speech.cpp
   (default, matching Bria), legacy `whisper.cpp`, or Apple Speech via
   PyObjC on macOS - no API key required to run.
@@ -75,8 +73,9 @@ implementation map is in `doc/dm-multisession-plan.md`.
 ## Prerequisites
 
 - **tmux** in `PATH`
-- **Claude Code** CLI (`claude`) or **Codex CLI** (`codex`); Codex can
-  authenticate through Telegram on first launch
+- At least one native CLI installed and available on the host. CCBot supports
+  **Claude Code** (`claude`), **Codex** (`codex`), **ZCode** (`zcode`), and
+  **OpenCode** (`opencode`). See [backend setup](#backend-setup) for login and hooks.
 - **Python 3.12+**
 - **uv** (recommended) for dependency management
 - macOS (Apple Silicon) or Linux x86_64/arm64
@@ -95,7 +94,7 @@ git clone https://github.com/Time4Mind/ccbot.git
 cd ccbot
 uv sync
 cp .env.example ~/.ccbot/.env   # fill in TELEGRAM_BOT_TOKEN + ALLOWED_USERS
-ccbot hook --install            # Claude; add --backend codex for Codex
+ccbot hook --install --backend claude  # use the backend you installed
 ccbot                           # foreground; for prod use the systemd unit
 ```
 
@@ -176,35 +175,40 @@ primary restart actuator. A host fallback should be a narrowly scoped systemd
 unit allowed to restart only the named ccbot container. Do not mount the Docker
 socket into a third-party autoheal container.
 
-## Hook setup
+## Backend setup
 
-The bot tracks tmux-window-to-agent-session mappings via two lifecycle
-hooks: `SessionStart` catches every new agent process, and
-`UserPromptSubmit` self-heals a stale mapping on each prompt (covers
-`/resume`, `/clear`, and bot-restart races). Auto-install once:
+Install the hooks or plugin for each CLI you plan to enable. In Telegram, use
+**Menu → Settings → Sessions and backends → Agent** to enable backends and set a
+default. With multiple backends available on the selected node, the new-session
+picker asks which to use before opening the directory browser.
+
+### Claude Code and Codex
+
+Claude Code and Codex use `SessionStart` and `UserPromptSubmit` to track native
+session IDs. Codex supports its device-code sign-in flow through Telegram.
 
 ```bash
 ccbot hook --install
 ```
 
-For the Codex backend, install the equivalent hooks in
-`~/.codex/hooks.json`, then select Codex in Telegram Settings:
+The Codex hooks are installed in `~/.codex/hooks.json`.
 
 ```bash
 ccbot hook --install --backend codex
 ```
 
-For ZCode, install the official Agent CLI and configure its provider, then run:
+### ZCode
+
+Install the official Agent CLI and configure its provider on the host. Then
+install its lifecycle hooks.
 
 ```bash
 ccbot hook --install --backend zcode
 ```
 
-Enable ZCode in Settings → Agent; existing sessions and the default backend
-stay selected. ZCode uses its native TUI and `--resume sess_<uuid>`. CCBot reads
-its SQLite session store with read-only connections and maintains its own
-normalized journal under `$CCBOT_DIR/zcode-transcripts/`. It does not modify
-native session rows. `ZCODE_SESSION_DB_PATH` overrides the default native store.
+ZCode uses its native TUI and `--resume sess_<uuid>`. CCBot reads the native
+SQLite store in read-only mode and writes a separate history to
+`$CCBOT_DIR/zcode-transcripts/`. `ZCODE_SESSION_DB_PATH` selects a custom store.
 The provider configuration remains in `~/.zcode/v2/provider_config.json` (or
 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`); never put a key in a launch command.
 
@@ -219,23 +223,30 @@ See [the backend contract](doc/zcode-backend-spec.md). The opt-in real-provider
 acceptance is `CCBOT_RUN_ZCODE_LIVE=1 uv run pytest tests/ccbot/test_zcode_live.py`;
 it uses isolated fixtures and restores temporary user-hook configuration.
 
-For OpenCode, install the official CLI and connect its OpenAI ChatGPT Pro/Plus
-provider, then install the lifecycle plugin:
+### OpenCode
+
+Install the official OpenCode 1.x CLI. Sign in to OpenAI with ChatGPT Pro/Plus
+inside OpenCode, then install the CCBot lifecycle plugin.
 
 ```bash
 opencode auth login --provider openai
 ccbot hook --install --backend opencode
 ```
 
-Enable OpenCode in Settings → Agent. It uses its native TUI, `--session ses_...`
-for resume, and a CCBot-owned journal over read-only native SQLite snapshots.
-Tool calls/results, file contents, patch diffs, errors, images, questions and
-permission dialogs reuse the existing card and terminal surfaces. See the
-[OpenCode backend contract](doc/opencode-backend-spec.md).
+OpenCode uses `--session ses_...` for native resume. CCBot reads SQLite
+snapshots in read-only mode and writes its own history to
+`$CCBOT_DIR/opencode-transcripts/`. In local sessions, `/model` shows named
+Telegram buttons from the actual OpenCode catalogue and then the selected
+model's effort variants. `OPENCODE_MODEL` sets the initial model and naming
+model used by CCBot. OpenCode launches outside CCBot use OpenCode's own config.
+
+The menu shows recorded OpenCode token usage. It also shows the shared Codex
+quota as `OpenCode · Codex` when both CLIs are verified to use the same local
+ChatGPT account. See the [OpenCode backend contract](doc/opencode-backend-spec.md).
 
 Archived sessions retain their original backend.
-Restoring an archive from the other backend performs a cross-agent pickup:
-ccbot parses the source JSONL into a bounded handoff, starts a fresh native
+Restoring an archive into a different backend performs a cross-agent pickup.
+CCBot parses the source JSONL into a bounded handoff, starts a fresh native
 target session, and records both the new target id and the source provenance.
 The source transcript is never modified.
 

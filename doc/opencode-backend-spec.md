@@ -21,8 +21,14 @@ Configuration:
 |---|---|---|
 | `OPENCODE_COMMAND` | `opencode` | CLI executable |
 | `OPENCODE_FLAGS` | empty | Additional native TUI flags |
-| `OPENCODE_MODEL` | `openai/gpt-6-luna` | Explicit initial and naming model |
-| `OPENCODE_SESSION_DB_PATH` | `$XDG_DATA_HOME/opencode/opencode.db` | Optional native database override |
+| `OPENCODE_MODEL` | `openai/gpt-6-luna` | Model passed as `--model` by CCBot and used for automatic session names |
+| `OPENCODE_SESSION_DB_PATH` | `$XDG_DATA_HOME/opencode/opencode.db` | Optional native database override. When `XDG_DATA_HOME` is unset, use `~/.local/share` |
+
+Set `model` in OpenCode's own configuration for launches outside CCBot. Within
+CCBot, changing the current model through `/model` affects that session. It
+leaves the configured startup model in place for new launches. The native
+`/new` command in an already running OpenCode 1.19 TUI carries over any model
+selected in that terminal.
 
 Workers also accept `CCBOT_OPENCODE_COMMAND`. They advertise OpenCode only when
 its executable and OpenAI OAuth configuration are present. Worker installation
@@ -35,7 +41,8 @@ uses named Telegram buttons, like Codex, for the complete available native
 catalogue (`opencode models --verbose` in the session directory/configuration).
 Recent models and the terminal viewport do not limit the catalogue. Large lists
 use named page buttons. A model is selected through its native search dialog;
-CCBot checks the exact filtered choice before confirming it. Supported native
+CCBot checks the exact filtered choice and verifies the applied model before
+confirming it, including when the effort dialog covers the composer. Supported native
 variants then appear as named mode buttons, including Default. Default is never
 selected on the user's behalf. A cancelled mode picker retains the model already
 selected, as with Codex's model-then-effort flow. Expired, cross-user and repeated
@@ -71,10 +78,13 @@ to the existing display names. Nonzero shell exit codes appear as tool errors;
 an explicit user abort closes pending tools as Interrupted rather than a
 provider failure. Native output truncation stays visible.
 
-Usage comes from native completed messages. Account quota and context capacity
-remain unknown when the native source does not supply them.
+Recorded token usage comes from native completed messages. When the local
+OpenCode OAuth account matches the verified local Codex account, the menu
+shows current Codex account limits under `OpenCode · Codex`. The quota is the
+shared account quota. If the accounts cannot be matched or the limits cannot
+be read, the menu can still show OpenCode's recorded tokens.
 
-Release acceptance requires repository checks plus real Luna-6 turns through
+Release acceptance requires repository checks plus real turns through
 the connected subscription: text in Russian and English, multiline input, file
 tools, continuation and native resume, stop/error recovery and card delivery.
 Passing synthetic tests alone does not satisfy that release acceptance.

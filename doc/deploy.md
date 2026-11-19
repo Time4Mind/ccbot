@@ -51,7 +51,7 @@ Open a DM with the bot in Telegram. Send any text. The bot should:
 
 1. Announce that no active session exists and present the directory browser.
 2. After you pick a directory, create a tmux window, register a Session,
-   activate it, and forward your text to claude.
+   activate it, and forward your text to the selected backend.
 3. Subsequent assistant turns appear in chat with the inline session
    switcher under the latest content message.
 
@@ -66,9 +66,9 @@ On `systemctl restart ccbot@…`:
    vanished into the `lost` state and clears the user's
    `active_sessions` pointer if it pointed at a lost record. Lost
    sessions are surfaced via `/archive` with a Restore button. Restoration
-   uses the session's enabled backend (`claude --resume` or `codex resume`);
-   cross-agent restore creates a handoff prompt instead of reusing an
-   incompatible native id.
+   uses the session's enabled backend. Claude and ZCode use `--resume`,
+   Codex uses `resume`, and OpenCode uses `--session`. A cross-backend restore
+   creates a new native session with a handoff from the source history.
 3. Idle and archive sweeps resume from `last_event_at`/`archived_at`
    timestamps in `state.json`.
 

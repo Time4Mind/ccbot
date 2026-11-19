@@ -34,6 +34,10 @@ class SubmissionUnknown(Exception):
     """Input may already have reached its original agent."""
 
 
+class SubmissionNotSent(Exception):
+    """The request failed before native input could start."""
+
+
 @dataclass
 class InputRequest:
     id: str
@@ -407,6 +411,14 @@ class InputRecovery:
         request = self.current()
         if request is None:
             return
+        if not success and request.state == "prepared":
+            # OpenCode waits in prepared and persists dispatching before pasting.
+            self.fail(
+                request,
+                "OpenCode не был готов принять ввод. Запрос не отправлен. "
+                "При необходимости отправьте его ещё раз.",
+            )
+            raise SubmissionNotSent()
         if success and not message.startswith("Queued for "):
             if request.strict_codex_proof:
                 request.state = "awaiting_confirmation"
@@ -555,6 +567,8 @@ class InputRecovery:
                         except SubmissionUnknown:
                             pass
                     raise
+                except SubmissionNotSent:
+                    return False
                 except SubmissionUnknown:
                     continue
                 except Exception as exc:

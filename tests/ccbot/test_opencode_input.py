@@ -190,6 +190,120 @@ async def test_unready_or_dead_opencode_never_receives_queued_text(
 
 
 @pytest.mark.asyncio
+async def test_pre_paste_timeout_notifies_and_releases_the_opencode_fifo(
+    native_input, monkeypatch, tmp_path
+):
+    from telegram import Update
+
+    from ccbot import input_recovery, opencode_input
+    from ccbot.bot import _messages_shared
+    from ccbot.inbound_queue import enqueue_inbound, shutdown_inbound_queues
+    from ccbot.session import Session, session_manager
+
+    recovery = input_recovery.InputRecovery(tmp_path / "inputs.json")
+    recovery.bot = AsyncMock()
+    recovery.bot.send_message.return_value.message_id = 500
+    session = Session(id="s1", name="test", window_id="@7", backend="opencode")
+    monkeypatch.setattr(input_recovery, "input_recovery", recovery)
+    monkeypatch.setattr(session_manager, "get_session", lambda _: session)
+    monkeypatch.setattr(session_manager, "find_session_by_window", lambda _: session)
+    monkeypatch.setattr(session_manager, "is_window_starting", lambda _: False)
+    monkeypatch.setattr(session_manager, "touch_session", lambda _: None)
+    monkeypatch.setattr(
+        _messages_shared, "_voice_transcript_checkpoint", lambda _: None
+    )
+    monkeypatch.setattr(opencode_input, "READY_TIMEOUT", 0.01)
+    monkeypatch.setattr(
+        tmux_input_transport, "zcode_process_is_running", AsyncMock(return_value=True)
+    )
+    ready = asyncio.Event()
+
+    async def capture(_window):
+        entry = recovery.current()
+        assert entry is not None
+        if entry.message_id == 1:
+            return BUSY
+        await ready.wait()
+        return IDLE
+
+    async def paste(_window, text, *, backend):
+        assert ready.is_set() and backend == "opencode"
+        native_input.execute(
+            "INSERT INTO message VALUES ('m2','ses_input',2,2,?)",
+            (json.dumps({"role": "user"}),),
+        )
+        native_input.execute(
+            "INSERT INTO part VALUES ('p2','m2','ses_input',2,2,?)",
+            (json.dumps({"type": "text", "text": text}),),
+        )
+        native_input.commit()
+        return True
+
+    send = AsyncMock(side_effect=paste)
+    monkeypatch.setattr(opencode_input, "_capture", capture)
+    monkeypatch.setattr(tmux_input_transport, "_send_literal_chunked", send)
+
+    async def sender(wid, text, _session):
+        accepted = await tmux_input_transport.send_literal_chunked(
+            wid, text, backend="opencode"
+        )
+        return accepted, "Sent" if accepted else "tmux input failed"
+
+    async def processor(update, _, wid):
+        accepted, _ = await recovery.submit(wid, update.message.text, session, sender)
+        return accepted
+
+    def admit(message_id, text):
+        update = Update.de_json(
+            {
+                "update_id": message_id,
+                "message": {
+                    "message_id": message_id,
+                    "date": 1,
+                    "chat": {"id": 42, "type": "private"},
+                    "from": {"id": 42, "is_bot": False, "first_name": "Probe"},
+                    "text": text,
+                },
+            },
+            None,
+        )
+        request = recovery.admit(update, "text", session)
+        assert request is not None
+        receipt = enqueue_inbound(
+            42,
+            "@7",
+            update,
+            None,
+            kind="text",
+            processor=processor,
+            recovery_id=request.id,
+        )
+        return request, receipt.completion
+
+    try:
+        first, first_completion = admit(1, "first")
+        second, second_completion = admit(2, "second")
+        assert not await asyncio.wait_for(first_completion, 1)
+        send.assert_not_awaited()
+        assert native_input.execute("SELECT count(*) FROM part").fetchone()[0] == 0
+        assert first.state == "failed"
+        reloaded = input_recovery.InputRecovery(recovery.path)
+        reloaded.load()
+        assert reloaded.records[first.id].state == "failed"
+        await recovery.deliver_notice(first)
+        recovery.bot.send_message.assert_awaited_once()
+        notice = recovery.bot.send_message.await_args.kwargs
+        assert notice["reply_parameters"].message_id == 1
+        assert "Запрос не отправлен" in notice["text"]
+        ready.set()
+        assert await asyncio.wait_for(second_completion, 2)
+        send.assert_awaited_once_with("@7", "second", backend="opencode")
+        assert second.confirmed
+    finally:
+        await shutdown_inbound_queues()
+
+
+@pytest.mark.asyncio
 async def test_first_accepted_prompt_finishes_before_next_even_if_composer_idle(
     native_input, monkeypatch
 ):

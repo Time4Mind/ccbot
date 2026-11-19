@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import nullcontext
 from pathlib import Path
 
 from telegram import Bot, Update
@@ -47,6 +48,7 @@ from ..handlers.typing import fire_typing
 from ..naming import maybe_auto_name
 from ..i18n import t
 from ..input_recovery import submit_input as submit
+from ..opencode_input import on_prompt_paste
 from ..remote_prompt_queue import remote_prompt_queue
 from ..session import session_manager
 from ..transfer_runtime import get_node_runtime
@@ -164,26 +166,10 @@ async def _dispatch_text_to_active(
     _from_remote_queue: bool = False,
     _prepared_dispatch: Any = None,
 ) -> bool:
-    """Send the user's text to ``wid``'s pane and run the post-send
-    bookkeeping under the repost-intent bracket.
+    """Send to the pinned pane and update its card only while it owns the carrier.
 
-    Card handling is gated on the target session still being the user's
-    ACTIVE one. A voice message pins its window at receipt, so by the
-    time whisper returns the user may well have switched elsewhere — the
-    text still goes to the pinned pane (that is the entire point of
-    pinning), but the session is a *background* one now, and background
-    sessions never post their own chat messages. Doing otherwise dropped
-    a bg session's card as the newest message in the chat and handed it
-    the live switcher, which is what made a later switcher tap appear to
-    edit "the previous message".
-
-    Active path mirrors the original flow: resume the card view + arm
-    repost-intent (so concurrent ``update_session_card`` events buffer
-    rather than spawning a second card), send the keystrokes, fire the
-    early typing indicator, touch + auto-name the session, spawn any
-    ``!cmd`` capture, drive a pending interactive UI, and finally put the
-    live card below the user's message. The try/finally always clears the
-    repost-intent flag even on an early return.
+    Buffer card events during the paste and repost so they cannot create a
+    second card. OpenCode can wait in its input queue before that bracket.
     """
     assert update.message is not None
     import time as _time
@@ -259,25 +245,30 @@ async def _dispatch_text_to_active(
     sess = session_manager.find_session_by_window(wid)
     card_state = None
     owns_card = sess is not None and is_active_for_user(user_id, sess)
-    if owns_card and sess is not None:
-        card_state = get_card_state(user_id, sess)
-    if (
-        owns_card
-        and sess is not None
-        and card_state is not None
-        and not card_state.in_menu_view
-    ):
-        # Buffer events until the visible card is reposted below the prompt.
-        begin_repost_intent(user_id, sess.id)
+    local_opencode = (
+        getattr(sess, "backend", "") == "opencode" and initial_node_id == "local"
+    )
+    intent_sess_id = None
 
-    # Run the rest of the dispatch under a try/finally that always
-    # clears the repost-intent flag — without this, an early return
-    # below leaves the flag set forever and the live card stays silent
-    # for that session until the bot restarts.
-    intent_sess_id = sess.id if (owns_card and sess is not None) else None
+    def begin_card_repost() -> None:
+        nonlocal card_state, intent_sess_id
+        if sess is None or not is_active_for_user(user_id, sess):
+            return
+        card_state = get_card_state(user_id, sess)
+        if not card_state.in_menu_view:
+            intent_sess_id = sess.id
+            begin_repost_intent(user_id, sess.id)
+
+    if not local_opencode:
+        begin_card_repost()
+    # OpenCode may wait behind a long turn. Keep its existing card live until
+    # the actual paste, and recheck ownership if the user navigated meanwhile.
     try:
         _t0 = _time.time()
-        success, message = await submit(wid, text, sess, _send_with_delivery_proof)
+        with (
+            on_prompt_paste(wid, begin_card_repost) if local_opencode else nullcontext()
+        ):
+            success, message = await submit(wid, text, sess, _send_with_delivery_proof)
         metrics.observe("tg_to_claude_latency_ms", (_time.time() - _t0) * 1000.0)
         metrics.inc("tg_messages_in")
         if not success:

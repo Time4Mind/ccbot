@@ -40,12 +40,12 @@ def _footer(pane: str) -> str:
     return ""
 
 
+def composer_is_available(pane: str) -> bool:
+    return bool(_footer(pane)) and interactive_panel(pane) is None
+
+
 def is_ready(pane: str) -> bool:
-    return (
-        bool(_footer(pane))
-        and status_line(pane) is None
-        and interactive_panel(pane) is None
-    )
+    return composer_is_available(pane) and status_line(pane) is None
 
 
 def composer_identity(pane: str) -> tuple[str, str] | None:

@@ -4,21 +4,38 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
 import time
 from weakref import WeakValueDictionary
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .opencode_runtime import is_ready
+from .opencode_runtime import composer_is_available, is_ready
 from .opencode_store import OpenCodeStoreError, open_store
 from .utils import ccbot_dir
 
+if TYPE_CHECKING:
+    from .input_recovery import InputRequest
+
 _locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
+_before_paste: ContextVar[tuple[str, Callable[[], None]] | None] = ContextVar(
+    "opencode_before_paste", default=None
+)
 READY_TIMEOUT = 120.0
 ACK_TIMEOUT = 10.0
 
 
-def _submission_phase(window: str, *, waiting: bool) -> None:
+@contextmanager
+def on_prompt_paste(window: str, callback: Callable[[], None]):
+    token = _before_paste.set((window, callback))
+    try:
+        yield
+    finally:
+        _before_paste.reset(token)
+
+
+def _submission_phase(window: str, *, waiting: bool) -> InputRequest | None:
     from .input_recovery import input_recovery
 
     request = input_recovery.current()
@@ -27,6 +44,8 @@ def _submission_phase(window: str, *, waiting: bool) -> None:
         # an uncertain outcome must retain the normal no-autoretry policy.
         request.state = "prepared" if waiting else "dispatching"
         input_recovery.changed(request)
+        return request
+    return None
 
 
 async def _capture(window: str) -> str:
@@ -56,26 +75,6 @@ def _binding(window: str) -> dict[str, Any] | None:
         return matches[0] if len(matches) == 1 else None
     except (OSError, ValueError):
         return None
-
-
-def _turn_finished(window: str) -> bool:
-    binding = _binding(window)
-    if binding is None:
-        return True
-    try:
-        with open_store() as db:
-            row = db.execute(
-                "SELECT data FROM message WHERE session_id=? ORDER BY time_created DESC,rowid DESC LIMIT 1",
-                (binding["session_id"],),
-            ).fetchone()
-        if row is None:
-            return True
-        last = json.loads(row["data"])
-        return last.get("role") == "assistant" and bool(
-            (last.get("time") or {}).get("completed") or last.get("error")
-        )
-    except (ValueError, KeyError, OpenCodeStoreError):
-        return False
 
 
 def _accepted(window: str) -> dict[tuple[str, str], str]:
@@ -115,26 +114,47 @@ def _accepted(window: str) -> dict[tuple[str, str], str]:
 
 async def submit(window: str, text: str, send: Callable[[], Awaitable[bool]]) -> bool:
     """Wait without holding navigation locks; never retype uncertain input."""
+    from .input_recovery import input_recovery
     from .tmux_input_transport import zcode_process_is_running
 
-    _submission_phase(window, waiting=True)
+    request = _submission_phase(window, waiting=True)
+    command = text.lstrip().startswith("/")
+    # OpenCode accepts normal follow-ups while its current run is working.
+    input_ready = is_ready if command else composer_is_available
+    # Only the local inbound FIFO owns a durable request it can safely keep.
+    deadline = (
+        None
+        if request is not None and not command
+        else time.monotonic() + READY_TIMEOUT
+    )
     lock = _locks.setdefault(window, asyncio.Lock())
     async with lock:
-        deadline = time.monotonic() + READY_TIMEOUT
-        while not is_ready(await _capture(window)) or (
-            not text.lstrip().startswith("/")
-            and not await asyncio.to_thread(_turn_finished, window)
-        ):
-            if time.monotonic() >= deadline or not await zcode_process_is_running(
-                window, backend="opencode"
+        while True:
+            if request is not None and (
+                input_recovery.current() is not request
+                or input_recovery.source(request) is None
             ):
                 return False
-            await asyncio.sleep(0.1)
+            if input_ready(await _capture(window)):
+                break
+            if (deadline is not None and time.monotonic() >= deadline) or (
+                not await zcode_process_is_running(window, backend="opencode")
+            ):
+                return False
+            await asyncio.sleep(0.25)
         before = await asyncio.to_thread(_accepted, window)
+        if request is not None and (
+            input_recovery.current() is not request
+            or input_recovery.source(request) is None
+        ):
+            return False
+        hook = _before_paste.get()
+        if hook is not None and hook[0] == window:
+            hook[1]()
         _submission_phase(window, waiting=False)
         if not await send():
             return False
-        if text.lstrip().startswith("/"):
+        if command:
             return True
         deadline = time.monotonic() + ACK_TIMEOUT
         while time.monotonic() < deadline:

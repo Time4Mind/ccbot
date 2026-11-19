@@ -14,6 +14,12 @@ from ccbot.tmux_manager import TmuxManager
 
 IDLE = "  ┃\n  ┃  Build · GPT-6 Luna OpenAI\n  /tmp/lab  24K (2%)  ctrl+p commands\n"
 BUSY = IDLE.rsplit("  /tmp", 1)[0] + "  ■⬝⬝  esc interrupt  24K (2%) ctrl+p commands\n"
+BLOCKED = (
+    "  ┃  △ Permission required\n"
+    "  ┃  Approve terminal command\n"
+    "  ┃  Allow once   Allow always   Reject\n"
+    "  ┃\n"
+)
 
 
 @pytest.mark.asyncio
@@ -74,7 +80,7 @@ def native_input(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_busy_opencode_preserves_prompt_and_allows_stop(
+async def test_opencode_permission_keeps_prompt_waiting_and_allows_stop(
     native_input, monkeypatch
 ):
     idle = asyncio.Event()
@@ -83,7 +89,7 @@ async def test_busy_opencode_preserves_prompt_and_allows_stop(
     async def process(*args, **kwargs):
         if "capture-pane" in args:
             capture_seen.set()
-            output = IDLE if idle.is_set() else BUSY
+            output = IDLE if idle.is_set() else BLOCKED
         else:
             output = "opencode"
         return SimpleNamespace(
@@ -91,7 +97,9 @@ async def test_busy_opencode_preserves_prompt_and_allows_stop(
         )
 
     async def paste(window, text, *, backend):
-        assert idle.is_set(), "second request pasted while OpenCode is busy"
+        assert idle.is_set(), (
+            "second request pasted while OpenCode shows an approval dialog"
+        )
         now = int(time.time() * 1000)
         native_input.execute(
             "INSERT INTO message VALUES ('m1','ses_input',?,?,?)",
@@ -153,7 +161,7 @@ async def test_old_matching_prompt_never_acknowledges_a_new_send(
         (json.dumps({"type": "text", "text": "same prompt"}),),
     )
     native_input.execute(
-        "INSERT INTO message VALUES ('done','ses_input',2,2,?)",
+        "INSERT INTO message VALUES ('done','ses_input',3,3,?)",
         (json.dumps({"role": "assistant", "time": {"completed": 2}}),),
     )
     native_input.commit()
@@ -176,7 +184,7 @@ async def test_unready_or_dead_opencode_never_receives_queued_text(
 ):
     from ccbot import opencode_input
 
-    monkeypatch.setattr(opencode_input, "_capture", AsyncMock(return_value=BUSY))
+    monkeypatch.setattr(opencode_input, "_capture", AsyncMock(return_value=BLOCKED))
     monkeypatch.setattr(opencode_input, "READY_TIMEOUT", 0.01)
     monkeypatch.setattr(
         tmux_input_transport, "zcode_process_is_running", AsyncMock(return_value=False)
@@ -190,18 +198,21 @@ async def test_unready_or_dead_opencode_never_receives_queued_text(
 
 
 @pytest.mark.asyncio
-async def test_pre_paste_timeout_notifies_and_releases_the_opencode_fifo(
-    native_input, monkeypatch, tmp_path
+@pytest.mark.parametrize("scenario", ["wait", "exit", "restart"])
+async def test_opencode_fifo_waits_past_readiness_deadline_or_reports_exit(
+    native_input, monkeypatch, tmp_path, scenario
 ):
     from telegram import Update
 
     from ccbot import input_recovery, opencode_input
-    from ccbot.bot import _messages_shared
+    from ccbot.bot import _messages_shared, inbound, input_feedback
     from ccbot.inbound_queue import enqueue_inbound, shutdown_inbound_queues
     from ccbot.session import Session, session_manager
 
     recovery = input_recovery.InputRecovery(tmp_path / "inputs.json")
+    exits = scenario == "exit"
     recovery.bot = AsyncMock()
+    recovery.bot.defaults = None
     recovery.bot.send_message.return_value.message_id = 500
     session = Session(id="s1", name="test", window_id="@7", backend="opencode")
     monkeypatch.setattr(input_recovery, "input_recovery", recovery)
@@ -213,28 +224,56 @@ async def test_pre_paste_timeout_notifies_and_releases_the_opencode_fifo(
         _messages_shared, "_voice_transcript_checkpoint", lambda _: None
     )
     monkeypatch.setattr(opencode_input, "READY_TIMEOUT", 0.01)
-    monkeypatch.setattr(
-        tmux_input_transport, "zcode_process_is_running", AsyncMock(return_value=True)
-    )
     ready = asyncio.Event()
+    captures = asyncio.Queue()
+
+    async def process_running(_window, *, backend):
+        entry = recovery.current()
+        return not exits or entry is None or entry.message_id != 1
+
+    monkeypatch.setattr(
+        tmux_input_transport, "zcode_process_is_running", process_running
+    )
 
     async def capture(_window):
         entry = recovery.current()
         assert entry is not None
         if entry.message_id == 1:
-            return BUSY
-        await ready.wait()
-        return IDLE
+            captures.put_nowait(None)
+        return IDLE if ready.is_set() else BLOCKED
 
     async def paste(_window, text, *, backend):
         assert ready.is_set() and backend == "opencode"
+        sequence = 1 if text == "first" else 2
+        moment = 2 * sequence - 1
         native_input.execute(
-            "INSERT INTO message VALUES ('m2','ses_input',2,2,?)",
-            (json.dumps({"role": "user"}),),
+            "INSERT INTO message VALUES (?, 'ses_input', ?, ?, ?)",
+            (f"m{sequence}", moment, moment, json.dumps({"role": "user"})),
         )
         native_input.execute(
-            "INSERT INTO part VALUES ('p2','m2','ses_input',2,2,?)",
-            (json.dumps({"type": "text", "text": text}),),
+            "INSERT INTO part VALUES (?, ?, 'ses_input', ?, ?, ?)",
+            (
+                f"p{sequence}",
+                f"m{sequence}",
+                moment,
+                moment,
+                json.dumps({"type": "text", "text": text}),
+            ),
+        )
+        native_input.execute(
+            "INSERT INTO message VALUES (?, 'ses_input', ?, ?, ?)",
+            (
+                f"a{sequence}",
+                moment + 1,
+                moment + 1,
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "time": {"completed": moment + 1},
+                        "finish": "stop",
+                    }
+                ),
+            ),
         )
         native_input.commit()
         return True
@@ -249,8 +288,12 @@ async def test_pre_paste_timeout_notifies_and_releases_the_opencode_fifo(
         )
         return accepted, "Sent" if accepted else "tmux input failed"
 
+    delivered_second = asyncio.Event()
+
     async def processor(update, _, wid):
         accepted, _ = await recovery.submit(wid, update.message.text, session, sender)
+        if update.message.message_id == 2 and accepted:
+            delivered_second.set()
         return accepted
 
     def admit(message_id, text):
@@ -283,28 +326,53 @@ async def test_pre_paste_timeout_notifies_and_releases_the_opencode_fifo(
     try:
         first, first_completion = admit(1, "first")
         second, second_completion = admit(2, "second")
-        assert not await asyncio.wait_for(first_completion, 1)
-        send.assert_not_awaited()
+        await asyncio.wait_for(captures.get(), 1)
+        if exits:
+            assert not await asyncio.wait_for(first_completion, 1)
+            await recovery.deliver_notice(first)
+            recovery.bot.send_message.assert_awaited_once()
+            notice = recovery.bot.send_message.await_args.kwargs
+            assert notice["reply_parameters"].message_id == 1
+            assert "Запрос не отправлен" in notice["text"]
+        else:
+            # The second poll occurs after the old readiness deadline.
+            await asyncio.wait_for(captures.get(), 1)
+            assert not first_completion.done() and not second_completion.done()
+            assert first.state == "prepared"
+            recovery.bot.send_message.assert_not_awaited()
         assert native_input.execute("SELECT count(*) FROM part").fetchone()[0] == 0
-        assert first.state == "failed"
-        reloaded = input_recovery.InputRecovery(recovery.path)
-        reloaded.load()
-        assert reloaded.records[first.id].state == "failed"
-        await recovery.deliver_notice(first)
-        recovery.bot.send_message.assert_awaited_once()
-        notice = recovery.bot.send_message.await_args.kwargs
-        assert notice["reply_parameters"].message_id == 1
-        assert "Запрос не отправлен" in notice["text"]
-        ready.set()
-        assert await asyncio.wait_for(second_completion, 2)
-        send.assert_awaited_once_with("@7", "second", backend="opencode")
-        assert second.confirmed
+
+        if scenario == "restart":
+            await shutdown_inbound_queues()
+            bot = recovery.bot
+            recovery = input_recovery.InputRecovery(recovery.path)
+            monkeypatch.setattr(input_recovery, "input_recovery", recovery)
+            monkeypatch.setattr(inbound, "_run_text", processor)
+            monkeypatch.setattr(
+                input_feedback, "refresh_request_status", AsyncMock(return_value=True)
+            )
+            ready.set()
+            recovery.start(SimpleNamespace(bot=bot))
+            await asyncio.wait_for(delivered_second.wait(), 2)
+            assert not recovery.records
+            bot.send_message.assert_not_awaited()
+        else:
+            ready.set()
+            if not exits:
+                assert await asyncio.wait_for(first_completion, 2)
+            assert await asyncio.wait_for(second_completion, 2)
+            assert second.confirmed
+        parts = native_input.execute("SELECT data FROM part ORDER BY time_created")
+        assert [json.loads(data)["text"] for (data,) in parts] == (
+            ["second"] if exits else ["first", "second"]
+        )
     finally:
         await shutdown_inbound_queues()
+        await recovery.shutdown()
 
 
 @pytest.mark.asyncio
-async def test_first_accepted_prompt_finishes_before_next_even_if_composer_idle(
+async def test_open_composer_accepts_followup_during_active_tool(
     native_input, monkeypatch
 ):
     from ccbot import opencode_input
@@ -314,32 +382,43 @@ async def test_first_accepted_prompt_finishes_before_next_even_if_composer_idle(
         (json.dumps({"role": "user"}),),
     )
     native_input.execute(
-        "INSERT INTO part VALUES ('first-part','first','ses_input',1,1,?)",
-        (json.dumps({"type": "text", "text": "first"}),),
+        "INSERT INTO message VALUES ('running','ses_input',2,2,?)",
+        (json.dumps({"role": "assistant", "parentID": "first"}),),
+    )
+    native_input.execute(
+        "INSERT INTO part VALUES ('tool','running','ses_input',2,2,?)",
+        (json.dumps({"type": "tool", "state": {"status": "running"}}),),
     )
     native_input.commit()
-    monkeypatch.setattr(opencode_input, "_capture", AsyncMock(return_value=IDLE))
+    monkeypatch.setattr(opencode_input, "_capture", AsyncMock(return_value=BUSY))
+    monkeypatch.setattr(opencode_input, "READY_TIMEOUT", 0.01)
     monkeypatch.setattr(
         tmux_input_transport, "zcode_process_is_running", AsyncMock(return_value=True)
     )
-    send = AsyncMock(return_value=False)
-    monkeypatch.setattr(tmux_input_transport, "_send_literal_chunked", send)
-    task = asyncio.create_task(
-        tmux_input_transport.send_literal_chunked("@7", "second", backend="opencode")
-    )
-    try:
-        await asyncio.sleep(0.05)
-        send.assert_not_awaited()
+
+    async def paste(_window, text, *, backend):
+        assert backend == "opencode"
         native_input.execute(
-            "INSERT INTO message VALUES ('done','ses_input',2,2,?)",
-            (json.dumps({"role": "assistant", "time": {"completed": 2}}),),
+            "INSERT INTO message VALUES ('follow-up','ses_input',3,3,?)",
+            (json.dumps({"role": "user"}),),
+        )
+        native_input.execute(
+            "INSERT INTO part VALUES ('follow-up','follow-up','ses_input',3,3,?)",
+            (json.dumps({"type": "text", "text": text}),),
         )
         native_input.commit()
-        assert not await asyncio.wait_for(task, 2)
-        send.assert_awaited_once()
-    finally:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        return True
+
+    monkeypatch.setattr(tmux_input_transport, "_send_literal_chunked", paste)
+    assert await tmux_input_transport.send_literal_chunked(
+        "@7", "Change the current task", backend="opencode"
+    )
+    assert native_input.execute(
+        "SELECT json_extract(data, '$.text') FROM part WHERE message_id='follow-up'"
+    ).fetchall() == [("Change the current task",)]
+    assert native_input.execute(
+        "SELECT json_extract(data, '$.time.completed') FROM message WHERE id='running'"
+    ).fetchone() == (None,)
 
 
 @pytest.mark.asyncio
@@ -358,13 +437,14 @@ async def test_restart_replays_only_prompt_that_has_not_started_pasting(
     recovery.records[request.id] = request
     recovery.save()
     monkeypatch.setattr(recovery, "current", lambda: request)
+    monkeypatch.setattr(recovery, "source", lambda _: SimpleNamespace())
     monkeypatch.setattr(recovery_module, "input_recovery", recovery)
     captured = asyncio.Event()
     sending = asyncio.Event()
 
     async def capture(window):
         captured.set()
-        return IDLE if pasting else BUSY
+        return IDLE if pasting else BLOCKED
 
     async def send():
         sending.set()
@@ -372,7 +452,6 @@ async def test_restart_replays_only_prompt_that_has_not_started_pasting(
         return True
 
     monkeypatch.setattr(opencode_input, "_capture", capture)
-    monkeypatch.setattr(opencode_input, "_turn_finished", lambda window: True)
     monkeypatch.setattr(opencode_input, "_accepted", lambda window: {})
     monkeypatch.setattr(
         tmux_input_transport, "zcode_process_is_running", AsyncMock(return_value=True)
@@ -385,6 +464,73 @@ async def test_restart_replays_only_prompt_that_has_not_started_pasting(
         restored = InputRecovery(recovery.path)
         restored.load()
         assert restored.records["r1"].state == ("unknown" if pasting else "prepared")
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_waiting_for_opencode_keeps_previous_card_updates_visible(
+    native_input, monkeypatch
+):
+    from ccbot import opencode_input
+    from ccbot.bot import messages
+    from ccbot.handlers import card_registry
+    from ccbot.handlers.card_types import CardState
+    from ccbot.session_models import Session
+
+    session = Session(id="s1", name="test", window_id="@7", backend="opencode")
+    state = CardState()
+    manager = SimpleNamespace(
+        find_session_by_window=lambda _: session,
+        get_active_session=lambda _: session,
+    )
+    monkeypatch.setattr(messages, "session_manager", manager)
+    monkeypatch.setattr(card_registry, "session_manager", manager)
+    monkeypatch.setattr(card_registry, "_repost_intent", set())
+    monkeypatch.setattr(messages, "get_card_state", lambda *_: state)
+    monkeypatch.setattr(messages, "is_active_for_user", lambda *_: True)
+    monkeypatch.setattr(messages, "_send_with_delivery_proof", None, raising=False)
+    monkeypatch.setattr(messages, "safe_reply", AsyncMock())
+    monkeypatch.setattr(
+        tmux_input_transport, "zcode_process_is_running", AsyncMock(return_value=True)
+    )
+    waiting = asyncio.Event()
+    ready = asyncio.Event()
+
+    async def capture(_window):
+        waiting.set()
+        return IDLE if ready.is_set() else BLOCKED
+
+    async def submit(wid, text, *_):
+        ok = await tmux_input_transport.send_literal_chunked(
+            wid, text, backend="opencode"
+        )
+        return ok, ""
+
+    async def paste(*_, **__):
+        assert card_registry._should_buffer(42, session.id, state)
+        return False
+
+    monkeypatch.setattr(messages, "submit", submit)
+    monkeypatch.setattr(opencode_input, "_capture", capture)
+    monkeypatch.setattr(tmux_input_transport, "_send_literal_chunked", paste)
+    task = asyncio.create_task(
+        messages._dispatch_text_to_active(
+            SimpleNamespace(message=SimpleNamespace(message_id=1)),
+            SimpleNamespace(),
+            42,
+            "@7",
+            "second",
+            _prepared_dispatch=SimpleNamespace(text="second"),
+        )
+    )
+    try:
+        await asyncio.wait_for(waiting.wait(), 1)
+        assert not card_registry._should_buffer(42, session.id, state)
+        ready.set()
+        assert not await asyncio.wait_for(task, 2)
+        assert not card_registry._should_buffer(42, session.id, state)
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

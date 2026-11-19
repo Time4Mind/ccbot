@@ -20,8 +20,9 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +261,8 @@ def _process_hook_event(backend: str | None = None) -> None:
     if detected_backend == "opencode":
         from .opencode_store import SESSION_ID
 
+        if payload.get("opencode_origin") != "chat.message":
+            return
         valid_id = SESSION_ID.fullmatch(session_id)
     if detected_backend == "zcode":
         from .zcode_store import SESSION_ID
@@ -363,6 +366,19 @@ def _process_hook_event(backend: str | None = None) -> None:
                 if detected_backend == "opencode":
                     from .opencode_session_io import ensure_projection
 
+                    entries = cast("Mapping[str, object]", session_map)
+                    if any(
+                        key.rsplit(":", 1)[-1] != window_id
+                        and isinstance(entry, dict)
+                        and entry.get("backend") == "opencode"
+                        and entry.get("session_id") == session_id
+                        for key, entry in entries.items()
+                    ):
+                        logger.warning(
+                            "OpenCode session %s is already bound to another window",
+                            session_id,
+                        )
+                        return
                     transcript_path = str(ensure_projection(session_id, cwd))
                 if detected_backend == "zcode":
                     from .zcode_session_io import ensure_projection

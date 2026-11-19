@@ -27,6 +27,7 @@ from .utils import atomic_write_json
 logger = logging.getLogger(__name__)
 _current: ContextVar[str] = ContextVar("ccbot_recoverable_input", default="")
 _CONFIRMATION_GRACE_SECONDS = 30.0
+_UNKNOWN_HOLD_SECONDS = 60.0
 _CONFIRMATION_CHECK_SECONDS = 5.0
 
 
@@ -550,6 +551,9 @@ class InputRecovery:
                 if request.state == "unknown":
                     if self.reconcile_if_due(request):
                         return True
+                    elapsed = self.clock() - request.dispatch_started_at
+                    if elapsed >= _UNKNOWN_HOLD_SECONDS:
+                        return False
                     event = self.events.setdefault(request.id, asyncio.Event())
                     try:
                         await asyncio.wait_for(event.wait(), timeout=1.0)

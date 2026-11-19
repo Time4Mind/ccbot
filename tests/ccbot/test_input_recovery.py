@@ -162,6 +162,54 @@ async def test_unconfirmed_text_is_reported_without_resending(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("restart", [False, True])
+async def test_unknown_head_releases_fifo_after_one_minute(env, monkeypatch, restart):
+    from ccbot.handlers import bg_status
+
+    monkeypatch.setattr(bg_status, "_bg", {})
+    recovery = env.recovery
+    attempts = []
+
+    async def send(_wid, text, _sess):
+        attempts.append(text)
+        return (False, "uncertain") if text == "first" else (True, "sent")
+
+    async def process(upd, _ctx, wid):
+        ok, _ = await recovery.submit(wid, upd.message.text, env.source, send)
+        return ok
+
+    monkeypatch.setattr(inbound, "_run_text", process)
+    assert await inbound.text_intake_handler(update(206, "first"), env.context)
+    await until(lambda: recovery.records["42:206"].state == "unknown")
+    head = recovery.records["42:206"]
+    assert await inbound.text_intake_handler(update(207, "second"), env.context)
+    env.now[0] = head.dispatch_started_at + 59
+    await asyncio.sleep(0)
+    assert attempts == ["first"]
+
+    if restart:
+        from ccbot.bot import input_feedback
+
+        await shutdown_inbound_queues()
+        recovery = recovery_module.InputRecovery(recovery.path)
+        recovery.clock = env.recovery.clock
+        monkeypatch.setattr(recovery_module, "input_recovery", recovery)
+        monkeypatch.setattr(recovery, "deliver_notice", AsyncMock())
+        monkeypatch.setattr(
+            input_feedback, "refresh_request_status", AsyncMock(return_value=True)
+        )
+        env.now[0] += 1
+        recovery.start(Application.builder().token("1:testing").build())
+    else:
+        env.now[0] += 1
+
+    await until(lambda: not has_pending_inbound("@source"))
+    assert attempts == ["first", "second"]
+    assert recovery.records[head.id].state == "unknown"
+    assert recovery.duplicate(update(206, "first"))
+
+
+@pytest.mark.asyncio
 async def test_busy_codex_modal_does_not_turn_missing_text_into_delivery(
     env, monkeypatch, tmp_path
 ):
@@ -580,6 +628,7 @@ async def test_uncertain_agent_submission_reconciles_from_actual_appended_transc
     await entered.wait()
     await shutdown_inbound_queues()
     restarted = recovery_module.InputRecovery(env.recovery.path)
+    restarted.clock = env.recovery.clock
     restarted.load()
     monkeypatch.setattr(recovery_module, "input_recovery", restarted)
     request = restarted.records["42:40"]

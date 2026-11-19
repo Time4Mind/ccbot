@@ -31,8 +31,13 @@ async def test_slow_update_relaunches_exact_command_through_real_tmux(tmp_path):
         " print('\\x1b[2J\\x1b[HOpenAI Codex\\n\\n› Ask anything\\n\\ngpt-5.6 medium · ~/project', flush=True)\n"
         " while True: time.sleep(1)\n"
     )
-    server = libtmux.Server(socket_name=f"ccbot-issue-355-{uuid.uuid4().hex}")
-    session = server.new_session(session_name="update-test", x=120, y=30)
+    # Keep interactive shell initialization out of the updater scenario.
+    server = libtmux.Server(
+        socket_name=f"ccbot-issue-355-{uuid.uuid4().hex}", config_file="/dev/null"
+    )
+    session = server.new_session(
+        session_name="update-test", window_command="/bin/sh", x=120, y=30
+    )
     pane = session.active_window.active_pane
     command = " ".join(
         shlex.quote(str(x)) for x in (sys.executable, script, marker, invocations)

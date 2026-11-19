@@ -31,11 +31,14 @@ async def handle(query: Any, context: Any, user: Any) -> bool:
     await query.answer()
     from .interactive_ui import refresh_after_key
 
+    pane_after_choice = None
     try:
         if action == "pick":
             if len(extra) != 1 or not extra[0].isdigit():
                 return True
-            await picker_ui.choose(picker, sess, int(extra[0]), token)
+            pane_after_choice = await picker_ui.choose(
+                picker, sess, int(extra[0]), token
+            )
         elif action == "page":
             if len(extra) != 1 or not extra[0].isdigit():
                 return True
@@ -59,5 +62,7 @@ async def handle(query: Any, context: Any, user: Any) -> bool:
             await context.bot.send_message(chat_id=user.id, text=str(exc))
         except TelegramError:
             pass
-    await refresh_after_key(context.bot, user.id, sess.window_id)
+    await refresh_after_key(
+        context.bot, user.id, sess.window_id, pane_text=pane_after_choice
+    )
     return True

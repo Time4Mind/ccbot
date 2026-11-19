@@ -106,12 +106,13 @@ async def prepare_picker(
             if picker.busy or picker.phase == phase:
                 return picker.prompt, UI_NAME
         try:
-            models = (
-                picker.models
-                if picker and picker.session_id == sess.id
-                else await load_catalogue(sess)
-            )
-            pane = await capture_session_pane(sess)
+            if picker and picker.session_id == sess.id:
+                models = picker.models
+                pane = await capture_session_pane(sess)
+            else:
+                models, pane = await asyncio.gather(
+                    load_catalogue(sess), capture_session_pane(sess)
+                )
             identity = model_identity(pane, models)
             model = next(
                 (m for m in models if identity and m.name == identity[0]), None
@@ -244,6 +245,11 @@ async def _wait(sess: Session, predicate: Callable[[str], bool]) -> str:
     raise ValueError("OpenCode did not confirm the selection; reopen /model")
 
 
+def _variant_open(pane: str) -> bool:
+    panel = interactive_panel(pane)
+    return panel is not None and panel[0] == "OpenCodeVariant"
+
+
 def _choice_from_row(row: str) -> str:
     return (
         row.strip()
@@ -289,7 +295,7 @@ def model_identity(
     return composer_identity(pane)
 
 
-async def choose(picker: Picker, sess: Session, index: int, token: str) -> None:
+async def choose(picker: Picker, sess: Session, index: int, token: str) -> str:
     async with picker.lock:
         if (
             picker.token != token
@@ -335,48 +341,57 @@ async def choose(picker: Picker, sess: Session, index: int, token: str) -> None:
             await _key(sess, "Enter")
             if picker.phase == "model":
                 model = picker.models[index]
+
+                def selected(p: str) -> bool:
+                    identity = model_identity(p, picker.models)
+                    return identity is not None and identity[0] == model.name
+
+                def selected_ready(p: str) -> bool:
+                    return is_ready(p) and selected(p)
+
                 pane = await _wait(
-                    sess,
-                    lambda p: bool(
-                        (identity := model_identity(p, picker.models))
-                        and identity[0] == model.name
-                        and (
-                            is_ready(p)
-                            or (v := interactive_panel(p))
-                            and v[0] == "OpenCodeVariant"
-                        )
-                    ),
+                    sess, lambda p: _variant_open(p) or selected_ready(p)
                 )
+                if _variant_open(pane) and not selected(pane):
+                    # The automatic dialog can cover the composer completely.
+                    # Reveal the actual model before accepting the selection;
+                    # switching() keeps queued prompts out during this gap.
+                    await _key(sess, "Escape")
+                    pane = await _wait(sess, selected_ready)
+                confirmed_identity = model_identity(pane, picker.models)
+
                 if model.variants:
-                    if interactive_panel(pane) is None:
+                    if not _variant_open(pane):
                         await _text(sess, "/variants")
                         await _key(sess, "Enter")
-                        pane = await _wait(
-                            sess,
-                            lambda p: bool(
-                                (v := interactive_panel(p))
-                                and v[0] == "OpenCodeVariant"
-                            ),
-                        )
+                        pane = await _wait(sess, _variant_open)
                     picker.model = model
                     picker.phase = "variant"
-                    picker.identity = model_identity(pane, picker.models)
+                    picker.identity = (
+                        model_identity(pane, picker.models)
+                        if selected(pane)
+                        else confirmed_identity
+                    )
                     picker.token = secrets.token_hex(6)
                     picker.page = 0
                 else:
                     _pickers.pop((picker.user_id, picker.window_id), None)
             else:
                 expected_effort = "default" if label == "Default" else label
-                await _wait(
+                pane = await _wait(
                     sess,
                     lambda p: (
                         is_ready(p)
                         and bool(
                             (identity := model_identity(p, picker.models))
                             and identity[1] == expected_effort
+                            and (
+                                picker.model is None or identity[0] == picker.model.name
+                            )
                         )
                     ),
                 )
                 _pickers.pop((picker.user_id, picker.window_id), None)
+            return pane
         finally:
             picker.busy = False

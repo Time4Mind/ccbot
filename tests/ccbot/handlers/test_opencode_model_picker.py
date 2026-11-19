@@ -158,6 +158,7 @@ class NativePicker:
         self.dialog = "model"
         self.filter = ""
         self.automatic_variant = automatic_variant
+        self.hide_variant_composer = False
         self.submitted_prompts = []
 
     async def capture(self, _sess):
@@ -185,7 +186,11 @@ class NativePicker:
                 + (self.filter or "Search")
                 + "\n"
                 + "\n".join(labels)
-                + footer
+                + (
+                    "\n/tmp/lab  ⊙ 1 MCP /status                    1.19.5"
+                    if self.hide_variant_composer
+                    else footer
+                )
             )
         return footer
 
@@ -266,6 +271,19 @@ async def named_callback(p, native, sess, interactive, label):
         bot.send_message.await_args_list,
     )
     return button.callback_data
+
+
+@pytest.mark.asyncio
+async def test_model_selection_is_verified_when_variant_hides_composer(native_picker):
+    p, native, sess, interactive = native_picker
+    native.hide_variant_composer = True
+
+    await named_callback(p, native, sess, interactive, "GPT-6.1 Terra")
+    assert native.dialog == "variant"
+    await named_callback(p, native, sess, interactive, "high")
+
+    assert (native.model.id, native.mode) == ("gpt-6.1-terra", "high")
+    assert not native.submitted_prompts
 
 
 @pytest.mark.asyncio

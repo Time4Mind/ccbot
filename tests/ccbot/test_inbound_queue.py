@@ -320,7 +320,7 @@ async def test_local_command_does_not_shift_next_prompt_focus_receipt() -> None:
     context = _context()
     model = _update(20, text="/model")
     prompt = _update(21, text="real prompt")
-    sess = SimpleNamespace(id="s1")
+    sess = SimpleNamespace(id="s1", node_id="local", backend="codex")
     state = CardState(current_page_idx=3)
     receipt = SimpleNamespace(completion=None)
 
@@ -333,9 +333,12 @@ async def test_local_command_does_not_shift_next_prompt_focus_receipt() -> None:
         ),
         patch("ccbot.bot.inbound.get_card_state", return_value=state),
         patch("ccbot.bot.inbound.enqueue_inbound", return_value=receipt),
-        patch("ccbot.bot.inbound.schedule_card_after_message"),
+        patch("ccbot.bot.inbound.schedule_card_after_message") as schedule,
     ):
         assert await command_intake_handler(model, context)
+        schedule.assert_called_once_with(
+            context.bot, 42, sess, 20, fast=True, preserve_turn=True
+        )
         assert await text_intake_handler(prompt, context)
 
     assert state.pending_request_sequences == [(21, 1)]

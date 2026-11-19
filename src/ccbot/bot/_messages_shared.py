@@ -6,9 +6,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -236,7 +237,11 @@ async def _wait_for_voice_transcript(
 
 
 async def _send_with_delivery_proof(
-    wid: str, text: str, sess: Session | None
+    wid: str,
+    text: str,
+    sess: Session | None,
+    *,
+    picker_ready: Callable[[Session], Awaitable[bool]] | None = None,
 ) -> tuple[bool, str]:
     """Submit once and check that the text is not still in the input field.
 
@@ -253,6 +258,8 @@ async def _send_with_delivery_proof(
     if message.startswith("Queued for "):
         return True, message
     if sess is not None and getattr(sess, "node_id", "local") != "local":
+        return True, message
+    if sess is not None and picker_ready is not None and await picker_ready(sess):
         return True, message
     if sess is None or sess.backend != "codex":
         return True, message
@@ -436,6 +443,21 @@ async def _card_repost_bracket(
 _REMOVED_COMMANDS = frozenset({"history", "done", "memory", "compact", "effort"})
 
 
+def is_native_picker_command(sess: Session | None, text: str) -> bool:
+    command = text.split("@", 1)[0].strip()
+    return (
+        sess is not None
+        and getattr(sess, "node_id", "local") == "local"
+        and (
+            (getattr(sess, "backend", None) == "codex" and command == "/model")
+            or (
+                getattr(sess, "backend", None) == "opencode"
+                and command in ("/model", "/models", "/variants")
+            )
+        )
+    )
+
+
 async def forward_command_handler(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -486,7 +508,9 @@ async def forward_command_handler(
     logger.info(
         "Forwarding command %s to window %s (user=%d)", cc_slash, display, user.id
     )
-    await fire_typing(context.bot, user.id, "forward_command", window_id=wid)
+    picker_command = is_native_picker_command(sess, cc_slash)
+    if not picker_command:
+        await fire_typing(context.bot, user.id, "forward_command", window_id=wid)
     if await _intercept_if_pending_ui(
         context.bot,
         user.id,
@@ -495,14 +519,26 @@ async def forward_command_handler(
         wait_until_clear=pinned_wid is not None,
     ):
         return False
+    from ..input_recovery import submit_input
+
+    if picker_command:
+        from .callbacks.interactive_ui import present_native_picker
+
+        sender = partial(
+            _send_with_delivery_proof,
+            picker_ready=partial(present_native_picker, context.bot, user.id),
+        )
+        success, message = await submit_input(wid, cc_slash, sess, sender)
+        if not success:
+            await safe_reply(update.message, f"❌ {message}")
+        return success
+
     async with _card_repost_bracket(
         context.bot,
         user.id,
         sess,
         after_message_id=update.message.message_id,
     ) as repost:
-        from ..input_recovery import submit_input
-
         success, message = await submit_input(
             wid, cc_slash, sess, _send_with_delivery_proof
         )

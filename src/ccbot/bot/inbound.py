@@ -33,6 +33,7 @@ from ..inbound_queue import InboundProcessor, enqueue_inbound
 from ..session import session_manager
 from ..transfer_queue import capture_transfer_message
 from ._common import active_window, is_user_allowed
+from ._messages_shared import is_native_picker_command
 from .messages import (
     document_handler,
     forward_command_handler,
@@ -209,7 +210,18 @@ def _enqueue(
                 state.voice_stage = "downloading"
             state.voice_pending = True
         if not card_already_surfaced:
-            if kind in ("voice", "text"):
+            if kind == "command" and is_native_picker_command(
+                sess, update.message.text or ""
+            ):
+                schedule_card_after_message(
+                    context.bot,
+                    user.id,
+                    sess,
+                    message_id,
+                    fast=True,
+                    preserve_turn=True,
+                )
+            elif kind in ("voice", "text"):
                 schedule_card_after_message(
                     context.bot, user.id, sess, update.message.message_id, fast=True
                 )

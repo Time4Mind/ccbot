@@ -7,6 +7,42 @@ from ccbot.bot.callbacks import interactive_ui
 
 
 @pytest.mark.asyncio
+async def test_codex_picker_refreshes_as_soon_as_effort_is_visible(
+    monkeypatch, sample_pane_codex_model_picker, sample_pane_codex_effort_picker
+):
+    session = SimpleNamespace(backend="codex", node_id="local")
+    monkeypatch.setattr(
+        interactive_ui.session_manager, "find_session_by_window", lambda _: session
+    )
+    moved_cursor = sample_pane_codex_model_picker.replace("› 4.", "  4.").replace(
+        "  1.", "› 1."
+    )
+    capture = AsyncMock(
+        side_effect=[
+            sample_pane_codex_model_picker,
+            moved_cursor,
+            sample_pane_codex_effort_picker,
+        ]
+    )
+    monkeypatch.setattr(interactive_ui, "capture_window", capture)
+    send_keys = AsyncMock(return_value=True)
+    monkeypatch.setattr(interactive_ui, "send_control_keys", send_keys)
+    sleep = AsyncMock()
+    monkeypatch.setattr(interactive_ui.asyncio, "sleep", sleep)
+    refresh = AsyncMock()
+    monkeypatch.setattr(interactive_ui, "_refresh_after_key", refresh)
+    query = SimpleNamespace(data="aq:pick:0:@5", answer=AsyncMock())
+    context = SimpleNamespace(bot=SimpleNamespace())
+
+    assert await interactive_ui.handle(query, context, SimpleNamespace(id=42))
+    send_keys.assert_awaited_once_with("@5", "Up", "Up", "Up", "Enter")
+    refresh.assert_awaited_once_with(
+        context.bot, 42, "@5", pane_text=sample_pane_codex_effort_picker
+    )
+    sleep.assert_awaited_once_with(0.04)
+
+
+@pytest.mark.asyncio
 async def test_picker_button_moves_from_live_cursor_and_confirms(monkeypatch) -> None:
     order = []
     prompt = (

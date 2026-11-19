@@ -383,8 +383,11 @@ async def fetch_live_usage() -> object | None:
     backend = session_manager.agent_backend
     if backend == "opencode":
         from ..opencode_usage import fetch_usage
+        from ..usage import record_fresh_codex_daily_quota
 
         info = await fetch_usage()
+        if info.codex_quota is not None:
+            record_fresh_codex_daily_quota(info.codex_quota)
     elif backend == "zcode":
         from ..zcode_usage import fetch_usage
 

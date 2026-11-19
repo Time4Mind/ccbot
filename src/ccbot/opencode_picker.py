@@ -34,6 +34,7 @@ class Picker:
     identity: tuple[str, str] | None
     phase: str = "model"
     model: ModelChoice | None = None
+    visible_variants: tuple[str, ...] = ()
     token: str = field(default_factory=lambda: secrets.token_hex(6))
     page: int = 0
     busy: bool = False
@@ -42,8 +43,10 @@ class Picker:
 
     @property
     def labels(self) -> tuple[str, ...]:
-        if self.phase == "variant" and self.model:
-            return ("Default", *self.model.variants)
+        if self.phase == "variant":
+            if self.model:
+                return ("Default", *self.model.variants)
+            return self.visible_variants
         return tuple(m.label for m in self.models)
 
     @property
@@ -51,7 +54,9 @@ class Picker:
         title = (
             "Select model"
             if self.phase == "model"
-            else f"Select reasoning effort · {self.model.name if self.model else ''}"
+            else f"Select reasoning effort · {self.model.name}"
+            if self.model
+            else "Select reasoning effort"
         )
         active = " / ".join(self.identity) if self.identity else "—"
         start = self.page * PAGE_SIZE
@@ -111,8 +116,24 @@ async def prepare_picker(
             model = next(
                 (m for m in models if identity and m.name == identity[0]), None
             )
+            visible_variants = ()
             if phase == "variant" and model is None:
-                raise ValueError("Current OpenCode model is not in its catalogue")
+                # An OpenCode variant overlay can hide the current model's
+                # composer. Offer only modes confirmed in the native dialog.
+                known = {
+                    "Default",
+                    *(variant for item in models for variant in item.variants),
+                }
+                rows = [line for line in content.splitlines() if line.strip()]
+                visible_variants = tuple(
+                    dict.fromkeys(
+                        label
+                        for line in rows[2:]
+                        if (label := _choice_from_row(line)) in known
+                    )
+                )
+                if not visible_variants:
+                    raise ValueError("No OpenCode variants visible")
             picker = Picker(
                 user_id,
                 sess.id,
@@ -121,6 +142,7 @@ async def prepare_picker(
                 identity,
                 phase=phase,
                 model=model,
+                visible_variants=visible_variants,
             )
             _pickers[key] = picker
             return picker.prompt, UI_NAME
@@ -222,13 +244,23 @@ async def _wait(sess: Session, predicate: Callable[[str], bool]) -> str:
     raise ValueError("OpenCode did not confirm the selection; reopen /model")
 
 
+def _choice_from_row(row: str) -> str:
+    return (
+        row.strip()
+        .lstrip("●◉›> ")
+        .split("  ", 1)[0]
+        .removesuffix(" (Favorite)")
+        .strip()
+    )
+
+
 def _filtered_first(content: str, labels: tuple[str, ...], expected: str) -> bool:
     # The first nonempty row after the title is the search input, not an option.
     rows = [x.strip().lstrip("●◉›> ") for x in content.splitlines() if x.strip()]
     if len(rows) < 2 or rows[1] != expected:
         return False
     for row in rows[2:]:
-        title = row.split("  ", 1)[0].removesuffix(" (Favorite)").strip()
+        title = _choice_from_row(row)
         if title in labels:
             return title == expected
     return False

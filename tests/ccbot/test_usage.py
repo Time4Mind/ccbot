@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -22,6 +23,93 @@ def test_opencode_usage_labels_its_own_recorded_sessions(monkeypatch, language):
     assert "OpenCode" in text
     assert "ZCode" not in text
     assert "123" in text
+
+
+@pytest.mark.parametrize(
+    ("counts", "compact"),
+    [
+        ((10_000, 9_500, 500), ("10K", "9.5K", "500")),
+        ((10_000_000, 9_999_000, 1_000), ("10M", "10M", "1K")),
+        ((1_250_000_000, 999_999_999, 250_000_001), ("1.2B", "1B", "250M")),
+    ],
+)
+def test_opencode_menu_compacts_all_token_counts(monkeypatch, counts, compact):
+    from ccbot import i18n
+    from ccbot.opencode_usage import OpenCodeUsageInfo
+    from ccbot.usage import format_usage_breakdown_compact
+
+    monkeypatch.setattr(i18n, "get_user_lang", lambda _uid: "en")
+    total, incoming, outgoing = compact
+    text = format_usage_breakdown_compact(42, OpenCodeUsageInfo(*counts))
+    assert f"{total} tokens (input {incoming}, output {outgoing})" in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("opencode_account", "codex_store", "shares_quota"),
+    [
+        ("shared", "file", True),
+        ("other", "file", False),
+        (None, "file", False),
+        ("shared", "keyring", False),
+    ],
+)
+async def test_opencode_menu_uses_live_codex_quota_only_for_same_account(
+    tmp_path, monkeypatch, opencode_account, codex_store, shares_quota
+):
+    from ccbot import codex_usage, opencode_usage
+    from ccbot.usage import format_usage_breakdown_compact
+
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        f'cli_auth_credentials_store = "{codex_store}"\n'
+    )
+    (codex_home / "auth.json").write_text(
+        json.dumps(
+            {
+                "auth_mode": "chatgpt",
+                "tokens": {"refresh_token": "test", "account_id": "shared"},
+            }
+        )
+    )
+    data_home = tmp_path / "data"
+    (data_home / "opencode").mkdir(parents=True)
+    auth = data_home / "opencode/auth.json"
+    auth.write_text(
+        json.dumps(
+            {
+                "openai": {
+                    "type": "oauth",
+                    "refresh": "test",
+                    "accountId": opencode_account,
+                },
+            }
+        )
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    monkeypatch.delenv("CODEX_API_KEY", raising=False)
+    monkeypatch.delenv("CODEX_ACCESS_TOKEN", raising=False)
+    fetch = AsyncMock(
+        return_value=codex_usage.CodexUsageInfo(
+            weekly=codex_usage.CodexRateLimitWindow(13, 10_080, None),
+        )
+    )
+    monkeypatch.setattr(codex_usage, "fetch_codex_usage", fetch)
+
+    info = await opencode_usage.fetch_usage()
+    rendered = format_usage_breakdown_compact(42, info)
+    if shares_quota:
+        assert "| OpenCode · Codex | - | 13% |" in rendered
+        auth.unlink()
+        assert "| OpenCode | - | - | - | - |" in format_usage_breakdown_compact(
+            42, info
+        )
+        fetch.assert_awaited_once_with(allow_rollout_fallback=False)
+    else:
+        assert "| OpenCode | - | - | - | - |" in rendered
+        fetch.assert_not_awaited()
 
 
 @pytest.fixture

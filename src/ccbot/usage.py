@@ -341,6 +341,20 @@ def _read_daily_quota_budget(used_percent: int, resets_at: int | None) -> float 
     return float(daily_budget) - spent_today
 
 
+def _compact_token_count(count: int | None) -> str:
+    if count is None:
+        return "-"
+    if count < 1_000:
+        return str(count)
+    divisor = 1_000
+    for suffix in ("K", "M", "B"):
+        scaled = round(count / divisor, 1)
+        if scaled < 1_000:
+            break
+        divisor *= 1_000
+    return f"{scaled:.1f}".removesuffix(".0") + suffix
+
+
 def format_usage_breakdown_compact(
     user_id: int,
     info: object,
@@ -371,42 +385,60 @@ def format_usage_breakdown_compact(
         return f"*{title}*\n\n" + "\n".join(lines)
 
     from .zcode_usage import ZCodeUsageInfo
-    from .opencode_usage import OpenCodeUsageInfo
+    from .opencode_usage import OpenCodeUsageInfo, shared_quota_for_user
+
+    def codex_row(label: str, quota: CodexUsageInfo) -> tuple[str, str, str, str, str]:
+        five = f"{quota.five_hour.used_percent}%" if quota.five_hour else "-"
+        week = f"{quota.weekly.used_percent}%" if quota.weekly else "-"
+        today = "-"
+        reset = "-"
+        if quota.weekly:
+            budget = _read_daily_quota_budget(
+                quota.weekly.used_percent, quota.weekly.resets_at
+            )
+            if budget is not None:
+                today = f"{budget:.1f}%"
+            if quota.weekly.resets_at is not None:
+                reset = datetime.fromtimestamp(quota.weekly.resets_at).strftime(
+                    "%d.%m %H:%M"
+                )
+        return label, five, week, today, reset
 
     if isinstance(info, (ZCodeUsageInfo, OpenCodeUsageInfo)):
         label = "OpenCode" if isinstance(info, OpenCodeUsageInfo) else "ZCode"
-        result = table([(label, "-", "-", "-", "-")])
+        quota = (
+            shared_quota_for_user(user_id, info)
+            if isinstance(info, OpenCodeUsageInfo)
+            else None
+        )
+        result = table(
+            [
+                codex_row("OpenCode · Codex", quota)
+                if quota
+                else (label, "-", "-", "-", "-")
+            ]
+        )
         if info.total_tokens is not None:
             result += "\n\n" + t(
                 user_id,
                 "usage.native.tokens",
                 backend=label,
-                total=info.total_tokens,
-                incoming=info.input_tokens,
-                outgoing=info.output_tokens,
+                total=_compact_token_count(info.total_tokens),
+                incoming=_compact_token_count(info.input_tokens),
+                outgoing=_compact_token_count(info.output_tokens),
             )
-        return result + "\n\n" + t(user_id, "usage.native.unknown_quota")
+        return (
+            result
+            if quota
+            else result + "\n\n" + t(user_id, "usage.native.unknown_quota")
+        )
 
     if isinstance(info, CodexUsageInfo):
-        five = f"{info.five_hour.used_percent}%" if info.five_hour else "-"
-        week = f"{info.weekly.used_percent}%" if info.weekly else "-"
-        today = "-"
-        reset = "-"
-        if info.weekly:
-            budget = _read_daily_quota_budget(
-                info.weekly.used_percent, info.weekly.resets_at
-            )
-            if budget is not None:
-                today = f"{budget:.1f}%"
-            if info.weekly.resets_at is not None:
-                reset = datetime.fromtimestamp(info.weekly.resets_at).strftime(
-                    "%d.%m %H:%M"
-                )
         signal = max(
             (window.used_percent for window in (info.five_hour, info.weekly) if window),
             default=0,
         )
-        return table([(_quota_emoji(signal) + " Codex", five, week, today, reset)])
+        return table([codex_row(_quota_emoji(signal) + " Codex", info)])
 
     if not isinstance(info, UsageInfo):
         return table([("🔴 -", "-", "-", "-", "-")])

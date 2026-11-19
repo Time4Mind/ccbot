@@ -227,11 +227,17 @@ def read_latest_rollout_usage(
     return None
 
 
-async def fetch_codex_usage(timeout: float = 12.0) -> CodexUsageInfo | None:
+async def fetch_codex_usage(
+    timeout: float = 12.0, *, allow_rollout_fallback: bool = True
+) -> CodexUsageInfo | None:
     """Fetch limits without opening or sending keys to any Codex TUI session."""
     command = shlex.split(config.codex_command)
     if not command:
-        return await asyncio.to_thread(read_latest_rollout_usage)
+        return (
+            await asyncio.to_thread(read_latest_rollout_usage)
+            if allow_rollout_fallback
+            else None
+        )
 
     proc: asyncio.subprocess.Process | None = None
     usage: CodexUsageInfo | None = None
@@ -300,6 +306,6 @@ async def fetch_codex_usage(timeout: float = 12.0) -> CodexUsageInfo | None:
                 except ProcessLookupError:
                     pass
                 await proc.wait()
-    if usage is not None:
+    if usage is not None or not allow_rollout_fallback:
         return usage
     return await asyncio.to_thread(read_latest_rollout_usage)

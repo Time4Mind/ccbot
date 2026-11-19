@@ -1,9 +1,25 @@
 # ZCode backend contract
 
-The approved scope adds ZCode alongside Claude and Codex, with the same CCBot
+ZCode runs alongside Claude, Codex, and OpenCode, with the same CCBot
 session, message, history, attachment, terminal, worker and archive surfaces.
 Existing sessions keep their backend. Enabling ZCode never changes another
 backend's model, credentials, transcript or active window.
+
+## Setup
+
+Install the official ZCode Agent CLI on the host that runs the session.
+Configure its provider in `~/.zcode/v2/provider_config.json` or set
+`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` to the native provider file. Install
+the lifecycle hooks and enable ZCode in **Menu → Settings → Sessions and
+backends → Agent**.
+
+```bash
+ccbot hook --install --backend zcode
+```
+
+`ZCODE_COMMAND` defaults to `zcode`. Workers also accept `CCBOT_ZCODE_COMMAND`.
+Use `ZCODE_SESSION_DB_PATH` only if the native session store differs from
+the path discovered by CCBot.
 
 ## Native runtime and ownership
 
@@ -36,15 +52,14 @@ partially written journal tail is repaired only in this CCBot-owned journal.
    agent creates its own native session and source history stays intact.
 5. File/voice delivery reuses the inbox path; media support follows the model.
 6. Model/mode/effort pickers, compact and terminal capture use ZCode's actual UI.
-   Models share Codex's direct Telegram option buttons and current-value marker;
-   cancellation clears the native command draft.
+   `/model` shows direct Telegram buttons and marks the current model. Effort
+   and mode use the arrow controls. Cancellation clears the native command draft.
 7. Readiness/auth status respects API-key configuration; provider failures are
    reported from structured errors rather than matching assistant prose.
 8. Token/context/cost values come from native usage. Missing account quota or
    reset data is unknown, never zero or an invented Codex 5h/week bucket.
-9. Workers advertise ZCode only when installed/configured; their protocol,
-   restore, input, history and event paths preserve the backend. This release
-   deploys locally; it does not install or restart remote hosts.
+9. Workers advertise ZCode only when installed and configured. Install and
+   authenticate it separately on each worker that will run it.
 
 ## Acceptance
 
@@ -53,6 +68,6 @@ with focused regressions for schema mismatch/read-only access, partial and
 completed tools, hidden inputs, terminal errors, usage/cache accounting,
 idempotent projection and restart, backend persistence/pickers, native resume,
 worker forwarding and cross-agent history. Also run an isolated real tmux
-session through the installed CLI and existing free provider, proving readiness,
+session through the installed CLI and configured provider, proving readiness,
 input, file tools, turn completion, stop/resume and history projection. Keep
 running user sessions, local secrets and other backend defaults intact.

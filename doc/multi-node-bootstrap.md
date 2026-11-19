@@ -23,10 +23,10 @@ ccbot node bootstrap
 | --- | --- | --- |
 | relay | сервер со стабильным внешним IP | двунаправленно пересылает авторизованный transport между leader и worker |
 | leader | основной ccbot | единственный Telegram poller, выдаёт bootstrap payload, хранит реестр нод |
-| worker | целевая машина | запускает `ccbot-node-agent`, локально управляет tmux/Claude/Codex |
+| worker | целевая машина | запускает `ccbot-node-agent` и управляет локальными tmux-сессиями установленных CLI |
 
 Telegram token нужен только leader. Worker его не получает и к Telegram API не
-обращается. Доступ worker к Claude/Codex и к VPN провайдеров остаётся локальным
+обращается. Доступ worker к CLI и к VPN провайдеров остаётся локальным
 для worker. Relay переносит control-plane и контекстные RPC, а не заменяет
 провайдерский VPN.
 
@@ -342,8 +342,11 @@ bastion и worker предварительно заносятся в `known_host
 `CCBOT_NODE_SSH_PORT=22`, а `CCBOT_NODE_SSH_PROXY_JUMP` остаётся пустым.
 
 Если worker receipt есть, а нода не стала `ready`, не объявляй подключение
-завершённым: проверь health payload, наличие `claude`/`codex` в PATH и запуск
-tmux. Если receipt нет, проверь relay address/port, TLS, срок действия payload
+завершённым. Проверь health payload, запуск tmux и доступность выбранного CLI
+в PATH worker. `CCBOT_ZCODE_COMMAND` и `CCBOT_OPENCODE_COMMAND` позволяют
+указать отдельные пути на worker. Установи и авторизуй каждый бэкенд на его
+ноде по [инструкции](../README_RU.md#подключение-бэкендов). Если receipt нет,
+проверь relay address/port, TLS, срок действия payload
 и логи worker.
 
 ## Relay и TLS
@@ -394,7 +397,7 @@ Telegram-карточках или обычных логах.
 
 ## Что не делает bootstrap
 
-- не устанавливает Python, `uv`, tmux, Claude/Codex и VPN на target;
+- не устанавливает Python, `uv`, tmux, CLI агентов или VPN на target;
 - не выдаёт worker Telegram token;
 - не открывает произвольный shell через node API;
 - не устанавливает и не настраивает sshd, WireGuard или bastion автоматически;

@@ -6,9 +6,8 @@
 
 1. systemd-юнит автоматически стартовал tmux + `ccbot` на boot;
 2. в Telegram-DM работали все слэш-команды и инлайн-меню;
-3. SessionStart-хук Claude Code был установлен (для трекинга
-   `session_id ↔ tmux window`);
-4. можно было выбрать Claude Code или OpenAI Codex;
+3. Хуки или плагин выбранного агента привязывали нативные сессии к окнам tmux;
+4. можно было выбрать установленный Claude Code, Codex, ZCode или OpenCode;
 5. голос/медиа работали (whisper.cpp опционально).
 
 Целевая платформа: **Linux x86_64 или arm64**, дистрибутивы на базе
@@ -113,7 +112,7 @@ uv --version
 
 ---
 
-## 4. CLI агента: Claude Code или Codex
+## 4. CLI агента
 
 ccbot — это мост к CLI агента. Установи как минимум один backend.
 
@@ -174,9 +173,9 @@ uv run ccbot hook --install --backend codex
 ```
 
 В Telegram backend включаются независимо через
-`Меню → Настройки → Сессии и бэкенды → Агент`. Если активны оба, новая
-сессия сначала предлагает Claude/Codex, затем браузер директорий. Последний
-backend выключить нельзя. Для предзапущенной сессии в том же разделе выбери
+`Меню → Настройки → Сессии и бэкенды → Агент`. Если на выбранной ноде
+доступно несколько бэкендов, новая сессия сначала предлагает выбрать бэкенд,
+затем директорию. Для предзапущенной сессии в том же разделе выбери
 директорию и default backend, затем включи `Резервная сессия`.
 
 При запуске через systemd unit должен разрешать запись не только в
@@ -190,6 +189,39 @@ JSONL. Шаблон `scripts/ccbot.service` уже содержит этот п�
 бюджета. Точка отсчёта хранится в
 `~/.ccbot/codex_quota_day.json`, поэтому этот файл стоит включать в backup
 вместе со `state.json`.
+
+### ZCode
+
+Установи официальный ZCode Agent CLI, настрой провайдера в ZCode и проверь
+`zcode --version` от имени пользователя сервиса. Если бинарь расположен вне
+`PATH` сервиса, задай абсолютный путь в `ZCODE_COMMAND`. Установка хуков
+описана в [разделе 8](#8-session-hook). См.
+[конфигурацию ZCode](zcode-backend-spec.md#setup).
+
+### OpenCode
+
+Установи OpenCode 1.x и проверь `opencode --version` от имени пользователя
+сервиса. В его терминале запусти `opencode auth login --provider openai`
+и авторизуйся через ChatGPT Pro/Plus. Используй `OPENCODE_COMMAND`, если
+нужен абсолютный путь к CLI. `OPENCODE_MODEL` задаёт стартовую модель
+OpenCode в CCBot. После установки плагина из раздела 8 включи OpenCode в
+меню агента и проверь создание сессии. См.
+[конфигурацию OpenCode](opencode-backend-spec.md).
+
+Шаблон systemd делает домашний каталог доступным только на чтение. После
+установки юнита из раздела 10 добавь каталоги нужных CLI через
+`sudo systemctl edit "ccbot@$USER.service"`. Пример drop-in для пользователя
+`art` с домашним каталогом `/home/art`.
+
+```ini
+[Service]
+ReadWritePaths=
+ReadWritePaths=/opt/ccbot /home/art/.ccbot -/home/art/.claude -/home/art/.codex -/home/art/.zcode -/home/art/.config/opencode -/home/art/.local/share/opencode -/home/art/.local/state/opencode -/home/art/.cache/opencode
+```
+
+Сохрани дополнительные пути своего сервиса в этой строке. Для переопределённых
+путей XDG укажи реальные каталоги OpenCode. Проверь запуск из systemd после
+настройки.
 
 ---
 
@@ -294,18 +326,21 @@ WHISPER_MODEL_PATH=/home/USER/.ccbot/models/ggml-medium.bin
 
 ## 8. Session hook
 
-Хук пишет `~/.ccbot/session_map.json` при каждом старте/ресуме агента
-— без него бот не сможет связать tmux-окно с native session/thread id.
+Установи хуки или плагин для каждого включаемого CLI. Они помогают боту
+сопоставить tmux-окно с нативной сессией.
 
 ```bash
 cd /opt/ccbot
 uv run ccbot hook --install --backend claude  # для Claude
 uv run ccbot hook --install --backend codex   # для Codex
+uv run ccbot hook --install --backend zcode   # для ZCode
+uv run ccbot hook --install --backend opencode # для OpenCode
 ```
 
-Проверка: для Claude блок `hooks.SessionStart` появляется в
-`~/.claude/settings.json`; для Codex hooks записываются в
-`~/.codex/hooks.json`.
+Для Claude и Codex проверь `~/.claude/settings.json` и
+`~/.codex/hooks.json` соответственно. Для ZCode установщик добавляет
+нативные хуки, для OpenCode - плагин CCBot. Открой новую сессию выбранного
+бэкенда и проверь, что вывод появляется в Telegram.
 
 ---
 
@@ -346,7 +381,8 @@ tmux kill-session -t ccbot
 `command -v uv`. Если `uv` лежит не в системном PATH, замени
 `/usr/bin/env uv` в `/etc/systemd/system/ccbot@.service` на найденный
 абсолютный путь. В `/etc/ccbot/ccbot.env` также задай абсолютные
-`CLAUDE_COMMAND`/`CODEX_COMMAND` либо добавь каталоги CLI
+пути к нужным `CLAUDE_COMMAND`, `CODEX_COMMAND`, `ZCODE_COMMAND` или
+`OPENCODE_COMMAND` либо добавь каталоги CLI
 (`~/.claude/local`, `~/.local/bin`) в `Environment=PATH=...` юнита.
 
 ```bash

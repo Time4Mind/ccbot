@@ -104,6 +104,10 @@ class PendingPrompt:
     inbox_attachment: bool = False
     created_at: float = field(default_factory=time.time)
 
+    @property
+    def message_id(self) -> int:
+        return int(self.request_id)
+
 
 class TurnPhase(str, Enum):
     """Whether the active assistant turn may expose live terminal media."""
@@ -253,5 +257,8 @@ class CardState:
     # typed prompts appear, rather than adding transient state to the card
     # header. Cleared once the transcribed text is actually dispatched (or
     # transcription fails).
-    voice_pending: bool = False
-    voice_stage: str = "downloading"
+    voice_requests: dict[int, str] = field(default_factory=dict)
+
+    @property
+    def voice_pending(self) -> bool:
+        return bool(self.voice_requests)

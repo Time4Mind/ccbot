@@ -103,25 +103,20 @@ async def send_session_key(sess: Session, key: str) -> bool:
         return bool(result.get("ok"))
     if not sess.window_id:
         return False
-    window = await tmux_manager.find_window_by_id(sess.window_id)
-    if window is None:
-        return False
     if sess.backend == "zcode" and key in ("Escape", "Esc"):
         from .zcode_runtime import navigation_key
 
-        key = navigation_key(
-            key, await tmux_manager.capture_pane(window.window_id) or ""
-        )
+        key = navigation_key(key, await tmux_manager.capture_pane(sess.window_id) or "")
     keys = (key,)
     if sess.backend == "opencode" and key in ("Escape", "Esc"):
         from .opencode_runtime import navigation_keys
 
         keys = navigation_keys(
-            key, await tmux_manager.capture_pane(window.window_id) or ""
+            key, await tmux_manager.capture_pane(sess.window_id) or ""
         )
     for native_key in keys:
         if not await tmux_manager.send_keys(
-            window.window_id, native_key, enter=False, literal=False
+            sess.window_id, native_key, enter=False, literal=False
         ):
             return False
         if len(keys) > 1:

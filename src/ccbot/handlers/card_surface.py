@@ -288,6 +288,7 @@ def schedule_card_after_message(
     message_id: int,
     *,
     fast: bool = False,
+    preserve_turn: bool = False,
 ) -> asyncio.Task[bool]:
     """Schedule a non-blocking card receipt for Telegram intake."""
     state = get_card_state(user_id, sess)
@@ -298,9 +299,14 @@ def schedule_card_after_message(
     async def receipt() -> bool:
         with hold_inbound_admission(window_id):
             try:
-                if fast:
+                if fast or preserve_turn:
                     return await surface_card_after_message(
-                        bot, user_id, sess, message_id, fast=True
+                        bot,
+                        user_id,
+                        sess,
+                        message_id,
+                        fast=fast,
+                        preserve_turn=preserve_turn,
                     )
                 return await surface_card_after_message(bot, user_id, sess, message_id)
             finally:

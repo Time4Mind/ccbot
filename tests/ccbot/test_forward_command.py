@@ -33,6 +33,43 @@ def _make_context() -> MagicMock:
 
 class TestForwardCommand:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("backend", ["codex", "opencode"])
+    async def test_model_uses_native_picker_as_delivery_proof(self, backend):
+        from ccbot.bot import forward_command_handler
+        from ccbot.session_models import Session
+
+        update, context = _make_update("/model"), _make_context()
+        sess = Session(id="picker-proof", name="model", window_id="@5", backend=backend)
+        with (
+            patch("ccbot.bot.messages.is_user_allowed", return_value=True),
+            patch("ccbot.bot.messages.session_manager") as manager,
+            patch("ccbot.bot.messages.tmux_manager") as tmux,
+            patch(
+                "ccbot.bot.messages.session_is_reachable",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "ccbot.bot.messages._intercept_if_pending_ui",
+                new=AsyncMock(return_value=False),
+            ),
+            patch("ccbot.bot.messages.fire_typing", new=AsyncMock()) as typing,
+            patch(
+                "ccbot.bot.callbacks.interactive_ui.present_native_picker",
+                new=AsyncMock(return_value=True),
+            ) as present,
+        ):
+            manager.find_session_by_window.return_value = sess
+            manager.send_to_window = AsyncMock(return_value=(True, "ok"))
+            tmux.ensure_codex_prompt_submitted = AsyncMock(return_value=True)
+
+            assert await forward_command_handler(update, context, pinned_wid="@5")
+
+        manager.send_to_window.assert_awaited_once_with("@5", "/model")
+        present.assert_awaited_once_with(context.bot, 1, sess)
+        tmux.ensure_codex_prompt_submitted.assert_not_awaited()
+        typing.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_model_keeps_the_card_already_sent_by_intake(self):
         from ccbot.handlers import notifications
         from ccbot.session_models import Session

@@ -33,6 +33,7 @@ from ..inbound_queue import InboundProcessor, enqueue_inbound
 from ..session import session_manager
 from ..transfer_queue import capture_transfer_message
 from ._common import active_window, is_user_allowed
+from ._messages_shared import is_native_picker_command
 from .messages import (
     document_handler,
     forward_command_handler,
@@ -177,6 +178,8 @@ def _enqueue(
                 state.pending_prompts = [
                     row for row in pending_prompts if row.request_id != str(message_id)
                 ]
+                if kind == "voice":
+                    state.voice_requests.pop(message_id, None)
 
             completion = getattr(receipt, "completion", None)
             if completion is not None:
@@ -205,11 +208,20 @@ def _enqueue(
                 )
         state.current_page_idx = None
         if kind == "voice":
-            if not state.voice_pending:
-                state.voice_stage = "downloading"
-            state.voice_pending = True
+            state.voice_requests.setdefault(message_id, "downloading")
         if not card_already_surfaced:
-            if kind in ("voice", "text"):
+            if kind == "command" and is_native_picker_command(
+                sess, update.message.text or ""
+            ):
+                schedule_card_after_message(
+                    context.bot,
+                    user.id,
+                    sess,
+                    message_id,
+                    fast=True,
+                    preserve_turn=True,
+                )
+            elif kind in ("voice", "text"):
                 schedule_card_after_message(
                     context.bot, user.id, sess, update.message.message_id, fast=True
                 )
@@ -309,7 +321,7 @@ async def voice_intake_handler(
 ) -> bool:
     if _capture_pending_transfer(update, context):
         return True
-    # _enqueue pins the window and marks voice_pending synchronously. Telegram
+    # _enqueue pins the window and marks the voice receipt synchronously. Telegram
     # receipt work belongs to the background lane, never the update dispatcher.
     if _enqueue(update, context, kind="voice", processor=_run_voice):
         return True

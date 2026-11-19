@@ -72,6 +72,18 @@ async def _run_tmux(*args: str, input_bytes: bytes | None = None) -> tuple[int, 
     return proc.returncode or 0, stderr
 
 
+async def send_control_keys(window_id: str, *keys: str) -> bool:
+    """Deliver one ordered sequence of non-literal keys to a local tmux window."""
+    code, stderr = await _run_tmux("send-keys", "-t", window_id, "--", *keys)
+    if code:
+        logger.warning(
+            "tmux control keys failed window=%s: %s",
+            window_id,
+            stderr.decode(errors="replace").strip(),
+        )
+    return code == 0
+
+
 async def _delete_buffer(buffer_name: str) -> None:
     try:
         await _run_tmux("delete-buffer", "-b", buffer_name)

@@ -623,7 +623,7 @@ async def test_recovery_feedback_coalesces_current_state_and_does_not_replay_sta
 
     state = env.cards["source"]
     state.msg_id = 100
-    state.voice_pending = True
+    state.voice_requests[101] = "downloading"
     monkeypatch.setattr(notifications, "get_card_state", lambda *_: state)
     repaint = AsyncMock(return_value=True)
     surface = AsyncMock(side_effect=disconnected())

@@ -37,13 +37,10 @@ export const CCBotPlugin = async ({ directory }) => ({
       agent.permission = { ...policyObject(agent.permission), ...noQuestions };
     }
   },
-  event: async ({ event }) => {
-    if (!process.env.TMUX_PANE || process.env.CCBOT_AGENT_BACKEND !== "opencode") return;
-    let id;
-    if (event.type === "session.created") id = event.properties.info.id;
-    if (event.type === "message.updated" && event.properties.info.role === "user")
-      id = event.properties.info.sessionID;
-    if (!id) return;
+  // Lifecycle events are shared by other OpenCode windows in this project.
+  // This hook runs only when this instance accepts an actual prompt.
+  "chat.message": async ({ sessionID }) => {
+    if (!sessionID || !process.env.TMUX_PANE || process.env.CCBOT_AGENT_BACKEND !== "opencode") return;
     await new Promise((resolve) => {
       const child = spawn(COMMAND, ["hook", "--backend", "opencode"], {
         stdio: ["pipe", "ignore", "ignore"], timeout: 5000,
@@ -51,8 +48,8 @@ export const CCBotPlugin = async ({ directory }) => ({
       child.on("error", resolve);
       child.on("close", resolve);
       child.stdin.on("error", () => {});
-      child.stdin.end(JSON.stringify({session_id: id, cwd: directory,
-        hook_event_name: "UserPromptSubmit"}));
+      child.stdin.end(JSON.stringify({session_id: sessionID, cwd: directory,
+        hook_event_name: "UserPromptSubmit", opencode_origin: "chat.message"}));
     });
   },
 });

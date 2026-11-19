@@ -181,6 +181,7 @@ def test_opencode_hook_retains_native_id_and_project(tmp_path, monkeypatch):
         "session_id": "ses_hookAcceptance123",
         "cwd": str(tmp_path),
         "hook_event_name": "UserPromptSubmit",
+        "opencode_origin": "chat.message",
     }
     monkeypatch.setattr(hook.sys, "stdin", io.StringIO(json.dumps(payload)))
     hook._process_hook_event(backend="opencode")
@@ -189,6 +190,35 @@ def test_opencode_hook_retains_native_id_and_project(tmp_path, monkeypatch):
     assert binding["session_id"] == "ses_hookAcceptance123"
     assert Path(binding["transcript_path"]).is_file()
     assert "opencode-transcripts" in binding["transcript_path"]
+
+
+@pytest.mark.parametrize(
+    ("origin", "native_id"),
+    [(None, "ses_foreign123"), ("chat.message", "ses_alreadyBound123")],
+)
+def test_opencode_hook_preserves_ownership(tmp_path, monkeypatch, origin, native_id):
+    monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
+    monkeypatch.setenv("TMUX_PANE", "%99")
+    monkeypatch.setattr(
+        hook.subprocess,
+        "run",
+        lambda *a, **kw: SimpleNamespace(stdout="ccbot::@9:test\n"),
+    )
+    mapping = tmp_path / "session_map.json"
+    initial = {
+        "ccbot:@8": {"session_id": "ses_alreadyBound123", "backend": "opencode"},
+        "ccbot:@9": {"session_id": "ses_current123", "backend": "opencode"},
+    }
+    mapping.write_text(json.dumps(initial))
+    payload = {
+        "session_id": native_id,
+        "cwd": str(tmp_path),
+        "hook_event_name": "UserPromptSubmit",
+        "opencode_origin": origin,
+    }
+    monkeypatch.setattr(hook.sys, "stdin", io.StringIO(json.dumps(payload)))
+    hook._process_hook_event(backend="opencode")
+    assert json.loads(mapping.read_text()) == initial
 
 
 def test_plugin_install_is_idempotent_and_preserves_global_config(tmp_path):
@@ -215,7 +245,12 @@ def test_native_plugin_publishes_user_session_to_exact_hook_command(tmp_path):
     assert install_hooks(str(receiver), plugin) == 0
     code = f"""import {{ CCBotPlugin }} from {json.dumps(plugin.as_uri())};
 const p = await CCBotPlugin({{ directory: {json.dumps(str(tmp_path))} }});
-await p.event({{ event: {{ type: "message.updated", properties: {{ info: {{ role: "user", sessionID: "ses_plugin123" }} }} }} }});
+for (const event of [
+  {{type: "session.created", properties: {{info: {{id: "ses_foreign456"}}}}}},
+  {{type: "message.updated", properties: {{info: {{role: "user", sessionID: "ses_foreign456"}}}}}},
+]) await p.event?.({{event}});
+if ((await import("node:fs")).existsSync({json.dumps(str(result))})) throw new Error("Foreign update reached the hook");
+await p["chat.message"]?.({{sessionID: "ses_plugin123"}}, {{}});
 """
     completed = subprocess.run(
         [shutil.which("node"), "--input-type=module", "-e", code],
@@ -231,6 +266,7 @@ await p.event({{ event: {{ type: "message.updated", properties: {{ info: {{ role
             "session_id": "ses_plugin123",
             "cwd": str(tmp_path),
             "hook_event_name": "UserPromptSubmit",
+            "opencode_origin": "chat.message",
         },
     }
 

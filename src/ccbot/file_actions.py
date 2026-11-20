@@ -11,6 +11,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TypeAlias
+from urllib.parse import unquote
 
 from .handlers.callback_data import CB_FILE_SEND
 from .config import config
@@ -52,14 +53,16 @@ _remote_validation_cache: dict[
 _REMOTE_VALID_SECONDS = 300.0
 _REMOTE_REJECTED_SECONDS = 15.0
 
-_FENCED_CODE_RE = re.compile(r"```[\s\S]*?(?:```|$)")
-_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
-_MARKDOWN_LOCAL_LINK_RE = re.compile(r"\[[^\]\n]*\]\(<?((?:~)?/[^)>\n]+)>?\)")
-_BARE_ABSOLUTE_PATH_RE = re.compile(r"(?<![\w`])(/[^\s`<>\[\]{}()]+)")
-_BARE_HOME_PATH_RE = re.compile(r"(?<![\w/`])(~\/[^\s`<>\[\]{}()]+)")
-_RELATIVE_INBOX_PATH_RE = re.compile(
-    r"(?<![\w/`])((?:\./)?\.ccbot-inbox/[^\s`<>\[\]{}()]+)"
+# Treat a whole link as one token, including web links and missing files.
+# Rescanning pieces of a rejected link could turn a suffix into an absolute path.
+_FILE_MENTION = re.compile(
+    r"```[\s\S]*?(?:```|$)"
+    r"|\[[^\]\n]*\]\((?:<(?P<angle>[^>\n]+)>|(?P<link>[^)\n]+))\)"
+    r"|`(?P<inline>[^`\n]+)`"
+    r"|https?://[^\s`<>]+"
+    r"|(?<![\w/`])(?P<bare>(?:~?/|(?:\./)?\.ccbot-inbox/)[^\s`<>\[\]{}()]+)"
 )
+_URI_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 _TRAILING_PROSE = ".,;:!?"
 
 
@@ -159,30 +162,24 @@ def resolve_file_reference(token: str) -> FileReference | None:
     return reference
 
 
-def _candidate_paths(text: str) -> list[str]:
-    candidates: list[str] = []
-
-    def collect(segment: str) -> None:
-        for pattern in (
-            _MARKDOWN_LOCAL_LINK_RE,
-            _INLINE_CODE_RE,
-            _RELATIVE_INBOX_PATH_RE,
-            _BARE_HOME_PATH_RE,
-            _BARE_ABSOLUTE_PATH_RE,
-        ):
-            for match in pattern.finditer(segment):
-                value = match.group(1)
-                while value and value[-1] in _TRAILING_PROSE:
-                    value = value[:-1]
-                if value and value not in candidates:
-                    candidates.append(value)
-
-    last = 0
-    for match in _FENCED_CODE_RE.finditer(text):
-        collect(text[last : match.start()])
-        last = match.end()
-    collect(text[last:])
-    return candidates
+def _mentioned_path(match: re.Match[str]) -> str | None:
+    if match.lastgroup is None:
+        return None
+    raw = match[match.lastgroup]
+    if raw.startswith("//") or _URI_SCHEME.match(raw):
+        return None
+    if match.lastgroup in ("link", "angle"):
+        if "?" in raw:
+            return None
+        path = unquote(raw.partition("#")[0])
+        if not path or path.startswith("//"):
+            return None
+        if path.startswith(("/", "~")) and not raw.startswith(("/", "~/")):
+            return None
+        return path
+    if raw.startswith(("/", "~/", ".ccbot-inbox/", "./.ccbot-inbox/")):
+        return raw
+    return None
 
 
 async def file_button_context_for_session(
@@ -206,7 +203,12 @@ async def file_button_context_for_session(
         )
         return RemoteFileButtonContext(references)
     now = time.monotonic()
-    for candidate in _candidate_paths(text):
+    paths = dict.fromkeys(
+        path.rstrip(_TRAILING_PROSE)
+        for match in _FILE_MENTION.finditer(text)
+        if (path := _mentioned_path(match))
+    )
+    for candidate in paths:
         cache_key = (node_id, routing_id, candidate)
         cached = _remote_validation_cache.get(cache_key)
         if cached is not None and cached[0] > now:
@@ -273,12 +275,12 @@ def _button_for_path(
         candidate_path = Path(candidate).expanduser()
         if candidate_path.is_absolute():
             path = candidate_path.resolve(strict=True)
-        elif file_base_dir is not None and candidate_path.parts[:1] == (
-            ".ccbot-inbox",
-        ):
-            inbox_root = (file_base_dir / ".ccbot-inbox").resolve(strict=True)
-            path = (file_base_dir / candidate_path).resolve(strict=True)
-            path.relative_to(inbox_root)
+        elif file_base_dir is not None:
+            root = file_base_dir.resolve(strict=True)
+            path = (root / candidate_path).resolve(strict=True)
+            path.relative_to(root)
+            if candidate_path.parts[:1] == (".ccbot-inbox",):
+                path.relative_to((root / ".ccbot-inbox").resolve(strict=True))
         else:
             return None
     except (OSError, RuntimeError, ValueError):
@@ -294,45 +296,13 @@ def _button_for_path(
     )
 
 
-def _replace_outside_fences(segment: str, file_base_dir: FileButtonContext) -> str:
-    def replace_link(match: re.Match[str]) -> str:
-        replacement = _button_for_path(match.group(1), file_base_dir)
-        return replacement if replacement is not None else match.group(0)
-
-    segment = _MARKDOWN_LOCAL_LINK_RE.sub(replace_link, segment)
-
-    def replace_inline(match: re.Match[str]) -> str:
-        replacement = _button_for_path(match.group(1), file_base_dir)
-        return replacement if replacement is not None else match.group(0)
-
-    segment = _INLINE_CODE_RE.sub(replace_inline, segment)
-
-    def replace_relative_inbox(match: re.Match[str]) -> str:
-        replacement = _button_for_path(match.group(1), file_base_dir)
-        return replacement if replacement is not None else match.group(0)
-
-    segment = _RELATIVE_INBOX_PATH_RE.sub(replace_relative_inbox, segment)
-
-    def replace_home_path(match: re.Match[str]) -> str:
-        replacement = _button_for_path(match.group(1), file_base_dir)
-        return replacement if replacement is not None else match.group(0)
-
-    segment = _BARE_HOME_PATH_RE.sub(replace_home_path, segment)
-
-    def replace_bare(match: re.Match[str]) -> str:
-        replacement = _button_for_path(match.group(1), file_base_dir)
-        return replacement if replacement is not None else match.group(0)
-
-    return _BARE_ABSOLUTE_PATH_RE.sub(replace_bare, segment)
-
-
 def add_file_buttons(text: str, file_base_dir: FileButtonContext = None) -> str:
-    """Replace local paths with a filename stem and extension download button."""
-    out: list[str] = []
-    last = 0
-    for match in _FENCED_CODE_RE.finditer(text):
-        out.append(_replace_outside_fences(text[last : match.start()], file_base_dir))
-        out.append(match.group(0))
-        last = match.end()
-    out.append(_replace_outside_fences(text[last:], file_base_dir))
-    return "".join(out)
+    """Replace file mentions with a filename stem and extension download button."""
+
+    def replace(match: re.Match[str]) -> str:
+        path = _mentioned_path(match)
+        if path is not None:
+            return _button_for_path(path, file_base_dir) or match[0]
+        return match[0]
+
+    return _FILE_MENTION.sub(replace, text)

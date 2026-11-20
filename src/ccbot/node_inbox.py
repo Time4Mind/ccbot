@@ -260,10 +260,8 @@ class WorkerInboxMixin:
             candidate = Path(raw_path).expanduser()
             if candidate.is_absolute():
                 path = candidate.resolve(strict=True)
-            elif candidate.parts[:1] == (".ccbot-inbox",):
-                path = (root / candidate).resolve(strict=True)
             else:
-                raise ValueError("relative worker file path is not allowed")
+                path = (root / candidate).resolve(strict=True)
             path.relative_to(root)
         except (OSError, RuntimeError, ValueError) as exc:
             logger.info(

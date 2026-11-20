@@ -78,6 +78,38 @@ async def test_remote_card_renders_validated_worker_file_button(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
+async def test_remote_relative_report_link_uses_owning_workdir(tmp_path, monkeypatch):
+    root = tmp_path / "worker"
+    root.mkdir()
+    report = root / "REPORT-v007.md"
+    report.write_text("worker report")
+    executor = TmuxWorkerExecutor(workdir=root)
+    monkeypatch.setattr(
+        executor, "_find_session", AsyncMock(return_value=SimpleNamespace(workdir=root))
+    )
+
+    async def stat(_node, sid, path):
+        return await executor.stat_session_file(session_id=sid, path=path)
+
+    monkeypatch.setattr(
+        file_actions,
+        "get_node_runtime",
+        lambda _: SimpleNamespace(stat_session_file=stat),
+    )
+    session = Session(
+        id="relative", name="Remote", node_id="worker", worker_session_id="routing"
+    )
+    text = "[Расчёт и проверки](REPORT-v007.md)"
+    context = await file_actions.file_button_context_for_session(session, text)
+    rendered = rich.to_rich_markdown(text, file_base_dir=context)
+    token = re.search(r'data="file:([0-9a-f]+)">md</tg-button>', rendered)
+    assert token
+    reference = file_actions.resolve_file_reference(token[1])
+    assert isinstance(reference, file_actions.RemoteFileReference)
+    assert reference.path == str(report) and reference.node_id == "worker"
+
+
+@pytest.mark.asyncio
 async def test_remote_card_edit_keeps_worker_file_button(monkeypatch) -> None:
     worker_path = "/worker/project/final.svg"
     session = Session(

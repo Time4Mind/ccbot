@@ -537,3 +537,25 @@ def test_live_footer_reports_variant_after_provider(mode):
 
     pane = f"┃\n┃ Build · GPT-6.1 Sol OpenAI · {mode}\n/tmp/lab ctrl+p commands"
     assert composer_identity(pane) == ("GPT-6.1 Sol", mode)
+
+
+@pytest.mark.parametrize("agent", ["Build", "Plan"])
+def test_auto_mode_accepts_input_and_preserves_model_and_effort(agent):
+    from ccbot.opencode_runtime import (
+        composer_identity,
+        composer_is_available,
+        status_line,
+    )
+    from ccbot.opencode_picker import model_identity
+    from ccbot.opencode_catalogue import ModelChoice
+
+    composer = f"┃\n┃  {agent} auto · GPT-6.2 Sol OpenAI · high\n╹▀▀▀▀\n"
+    idle = composer + "/workdir  81.9K (8%)  ctrl+p commands"
+    busy = composer + "■■⬝  esc interrupt  81.9K (8%)  ctrl+p commands"
+    assert is_ready(idle)
+    assert composer_identity(idle) == ("GPT-6.2 Sol", "high")
+    assert model_identity(
+        idle, (ModelChoice("OpenAI", "sol", "GPT-6.2 Sol", ("high",)),)
+    ) == ("GPT-6.2 Sol", "high")
+    assert not is_ready(busy) and composer_is_available(busy) and status_line(busy)
+    assert not is_ready(idle + "\nuser@host %")

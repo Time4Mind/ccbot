@@ -52,6 +52,9 @@ The catalogue is read on the owning local node; a remote session without catalog
 support displays an error and Cancel instead of a leader's unrelated models.
 OpenCode applies its own permission rules for each agent. When an operation
 requires confirmation, CCBot exposes the native permission dialog in the card.
+Set `OPENCODE_FLAGS=--auto` in the bot's environment to have OpenCode approve
+permission requests automatically for that installation. Explicit denials still
+apply. The setting takes effect when an OpenCode process starts or resumes.
 Relative Markdown links to existing files resolve inside the session's working
 directory and use the same download buttons as absolute file references.
 One Stop action sends OpenCode's required double Escape while a turn

@@ -12,6 +12,9 @@ import re
 from typing import Any
 
 
+COMPOSER_PREFIX = r"^\s*┃\s+(?:Build|Plan)(?: auto)?\s+·\s+"
+
+
 def _footer(pane: str) -> str:
     lines = [line.strip() for line in pane.splitlines() if line.strip()]
     if not lines:
@@ -35,7 +38,7 @@ def _footer(pane: str) -> str:
         and re.search(r"\besc\s+(?:again to\s+)?interrupt\b", tail)
     ):
         for line in reversed(lines[-16:]):
-            if re.match(r"^┃\s+(?:Build|Plan)\s+·\s+", line):
+            if re.match(COMPOSER_PREFIX, line):
                 return line
     return ""
 
@@ -52,9 +55,7 @@ def composer_identity(pane: str) -> tuple[str, str] | None:
     footer = _footer(pane)
     if not footer:
         return None
-    model = re.match(
-        r"^┃\s+(?:Build|Plan)\s+·\s+(.+?)\s+OpenAI(?:\s+·\s+(.+?))?\s*$", footer
-    )
+    model = re.match(COMPOSER_PREFIX + r"(.+?)\s+OpenAI(?:\s+·\s+(.+?))?\s*$", footer)
     if model:
         if model[2]:
             return model[1], model[2]

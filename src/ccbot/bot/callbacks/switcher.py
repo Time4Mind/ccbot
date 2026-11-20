@@ -307,8 +307,7 @@ async def handle(
                 # Fallback: session has no window (lost/archived restore in
                 # flight) → fall through to a short preview so the user at
                 # least sees the header.
-                painted = False
-                delivery_unknown = False
+                painted: bool | None = False
                 if sess.window_id and query.message is not None:
                     try:
                         cached_file_id = getattr(sess, "screenshot_file_id", "")
@@ -341,7 +340,7 @@ async def handle(
                                 )
                             )
                     except (NetworkError, TimeoutError) as e:
-                        delivery_unknown = True
+                        painted = None
                         logger.debug(
                             "card paint delivery unknown: %s", type(e).__name__
                         )
@@ -360,7 +359,9 @@ async def handle(
                             )
                         )
                     except Exception as e:
-                        logger.debug("paint_card_on_carrier failed: %s", e)
+                        # A local error can follow a successful Telegram edit.
+                        painted = None
+                        logger.warning("Card paint outcome unknown: %s", e)
                 current = session_manager.get_active_session(user.id)
                 still_selected = current is not None and current.id == target_id
                 if painted and still_selected and count_finished_view:
@@ -368,7 +369,7 @@ async def handle(
                         await refresh_session_keyboard(context.bot, user.id)
                 # A selection repaints the tapped carrier in place. A newer
                 # frozen answer is history, not a reason to post another card.
-                if not painted and not delivery_unknown and still_selected:
+                if painted is False and still_selected:
                     try:
                         preview = await render_session_preview(sess)
                         keyboard = build_footer_keyboard(

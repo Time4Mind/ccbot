@@ -8,10 +8,14 @@ short answer substring as the identity of a turn.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 
 from ..final_delivery import FinalDelivery
 from .card_types import CardState, Event
 from .card_pagination import paginate_events_for_card, _resolved_page_idx
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -131,4 +135,8 @@ def observe_card_receipt(user_id: int, state: CardState, rendered: str) -> None:
     session_id = lookup_session_for_message(user_id, state.msg_id)
     active = session_manager.get_active_session(user_id)
     if active is not None and active.id == session_id:
-        acknowledge_visible_final(user_id, active.id, state, rendered)
+        try:
+            acknowledge_visible_final(user_id, active.id, state, rendered)
+        except OSError as exc:
+            # Telegram already accepted this card. A later view retries the receipt.
+            logger.warning("Card %s final receipt not persisted: %s", state.msg_id, exc)

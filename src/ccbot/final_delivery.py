@@ -72,6 +72,7 @@ class FinalDeliveryQueue:
         self._wakeups: dict[tuple[int, str], asyncio.Event] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._loaded = False
+        self._checkpoint_pending = False
         self._driver: Driver | None = None
         self._ready: Callable[[FinalDelivery], bool] | None = None
 
@@ -84,26 +85,45 @@ class FinalDeliveryQueue:
             raw = {"deliveries": []}
         # Fail closed on damaged state: silently overwriting it loses answers.
         records = [FinalDelivery(**row) for row in raw["deliveries"]]
+        recovered = False
         for item in records:
             if item.status == "preparing":
+                recovered = True
                 item.status = "pending"
             if item.status == "in_flight":
+                recovered = True
                 item.status = "pending" if item.message_id is not None else "unknown"
         self.records = records
         self.completed_keys = raw.get("completed_keys", [])
         self._loaded = True
-        if records:
-            self.save()
+        if recovered:
+            self._try_checkpoint()
 
     def save(self) -> None:
+        self._write_records(self.records, self.completed_keys)
+
+    def _write_records(
+        self, records: list[FinalDelivery], completed_keys: list[str]
+    ) -> None:
         atomic_write_json(
             self.path,
             {
                 "version": 1,
-                "deliveries": [asdict(r) for r in self.records],
-                "completed_keys": self.completed_keys,
+                "deliveries": [asdict(r) for r in records],
+                "completed_keys": completed_keys,
             },
+            indent=None,
         )
+        self._checkpoint_pending = False
+
+    def _try_checkpoint(self) -> None:
+        # Keep recovery and history-only decisions in memory if storage is full.
+        # The next navigation or successful queue write checkpoints them.
+        try:
+            self.save()
+        except OSError as exc:
+            self._checkpoint_pending = True
+            logger.warning("Final delivery journal write deferred: %s", exc)
 
     def pending(
         self,
@@ -138,8 +158,9 @@ class FinalDeliveryQueue:
             ):
                 item.payload["delivery_mode"] = "history"
                 changed += 1
+        if changed or self._checkpoint_pending:
+            self._try_checkpoint()
         if changed:
-            self.save()
             logger.info(
                 "final_delivery_history user=%s session=%s retained=%s",
                 user_id,
@@ -219,11 +240,13 @@ class FinalDeliveryQueue:
                 answer=snapshot(item),
             )
         key = item.payload.get("event_key")
-        if key:
-            self.completed_keys = [*self.completed_keys[-511:], key]
-        self.records.remove(item)
+        completed = [*self.completed_keys[-511:], key] if key else self.completed_keys
+        remaining = self.records.copy()
+        remaining.remove(item)
+        self._write_records(remaining, completed)
+        self.records = remaining
+        self.completed_keys = completed
         self._locks.pop(item.id, None)
-        self.save()
         logger.info(
             "final_delivery_confirmed id=%s session=%s message_id=%s",
             item.id,

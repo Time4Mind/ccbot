@@ -1,6 +1,7 @@
 """Navigation confirms the exact displayed final without sending another card."""
 
 import asyncio
+import errno
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -161,6 +162,43 @@ async def test_background_final_open_is_one_edit_and_no_additional_send(
     assert "ожидает доставки" not in h.calls[0][1]["rich_message"]["markdown"]
     assert await card_carrier.paint_card_on_carrier(h.bot, 42, h.sess, 9)
     assert all(endpoint == "editMessageText" for endpoint, _ in h.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_at", ["navigation", "receipt", "resolution"])
+async def test_full_disk_keeps_final_visible_and_reconciles_on_next_open(
+    navigation, isolated_final_deliveries, monkeypatch, fail_at
+):
+    from ccbot import final_delivery
+
+    h = navigation
+    q = isolated_final_deliveries
+    await card_updates.finalize_task(
+        h.bot, 42, h.sess, "actual final", event_key="disk-full-turn"
+    )
+    h.active[0] = h.sess
+    write = final_delivery.atomic_write_json
+
+    def disk_full(path, data, **kwargs):
+        if (
+            fail_at == "navigation"
+            or (fail_at == "receipt" and h.calls)
+            or (fail_at == "resolution" and not data["deliveries"])
+        ):
+            raise OSError(errno.ENOSPC, "disk full")
+        write(path, data, **kwargs)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(final_delivery, "atomic_write_json", disk_full)
+        assert await card_carrier.paint_card_on_carrier(h.bot, 42, h.sess, 9)
+        assert "actual final" in h.calls[-1][1]["rich_message"]["markdown"]
+        assert q.pending(42, include_history=True)
+
+    assert await card_carrier.paint_card_on_carrier(h.bot, 42, h.sess, 9)
+    assert [method for method, _ in h.calls] == ["editMessageText"] * 2
+    restarted = final_delivery.FinalDeliveryQueue(q.path)
+    assert not restarted.pending(42, include_history=True)
+    assert restarted.contains_event("disk-full-turn")
 
 
 @pytest.mark.asyncio

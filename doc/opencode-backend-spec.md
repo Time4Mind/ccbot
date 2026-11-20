@@ -50,11 +50,11 @@ model buttons cannot select a mode or submit a prompt. Queued input waits until
 selection finishes, including the short transition between model and mode.
 The catalogue is read on the owning local node; a remote session without catalogue
 support displays an error and Cancel instead of a leader's unrelated models.
-The CCBot lifecycle plugin disables question, plan-enter and plan-exit tools
-for built-in and configured agents. It converts configured ask permissions and
-native ask defaults to deny while retaining explicit allow/deny rules. Such
-turns return normal text instead of requesting keyboard/menu responses. This
-policy is scoped to CCBot OpenCode processes; other backends are unchanged. One Stop action sends OpenCode's required double Escape while a turn
+OpenCode applies its own permission rules for each agent. When an operation
+requires confirmation, CCBot exposes the native permission dialog in the card.
+Relative Markdown links to existing files resolve inside the session's working
+directory and use the same download buttons as absolute file references.
+One Stop action sends OpenCode's required double Escape while a turn
 is running; dismissing a dialog sends a single Escape.
 
 OpenCode does not retain prompts submitted while its TUI is busy. Literal

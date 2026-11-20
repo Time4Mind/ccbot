@@ -206,6 +206,43 @@ class TestToRichMarkdown:
         assert match is not None
         assert resolve_file_button(match.group(1)) == path.resolve()
 
+    def test_opencode_relative_report_link_resolves_in_the_session(
+        self, tmp_path: Path
+    ) -> None:
+        from ccbot.handlers.card_text import _strip_for_card
+
+        report = tmp_path / "tasks/beri-zaryad/CHARGERANLT-1827/REPORT-v007.md"
+        report.parent.mkdir(parents=True)
+        report.write_text("checked report")
+        text = "[Расчёт и проверки](tasks/beri-zaryad/CHARGERANLT-1827/REPORT-v007.md)."
+        out = rich.to_rich_markdown(_strip_for_card(text), file_base_dir=tmp_path)
+        match = re.search(r'data="file:([0-9a-f]+)">md</tg-button>', out)
+        assert match and resolve_file_button(match[1]) == report.resolve()
+        assert "REPORT-v007 " in out and out.endswith(".")
+
+    def test_relative_links_cannot_escape_or_capture_external_links(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "project"
+        root.mkdir()
+        outside = tmp_path / "report.md"
+        outside.touch()
+        (root / "linked.md").symlink_to(outside)
+        (root / "report.md").touch()
+        for link in (
+            "../report.md",
+            "linked.md",
+            "missing.md",
+            "https://example.org/report.md",
+            "//example.org/report.md",
+            "#report.md",
+        ):
+            source = f"[Report]({link})"
+            assert rich.to_rich_markdown(source, file_base_dir=root) == source
+        assert "<tg-button" not in rich.to_rich_markdown(
+            "```md\n[Report](report.md)\n```", file_base_dir=root
+        )
+
     def test_home_relative_path_becomes_file_button(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

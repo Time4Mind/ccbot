@@ -17,16 +17,17 @@ from pathlib import Path
 import time
 from typing import Any, Awaitable, Callable
 
-from telegram import ReplyParameters, Update
+from telegram import ReplyParameters
 from telegram.error import BadRequest, NetworkError, RetryAfter
 
 from .config import config
 from .final_delivery import RETRY_DELAYS, before_submission
+from . import input_composer_queue as composer_queue
 from .utils import atomic_write_json
 
 logger = logging.getLogger(__name__)
 _current: ContextVar[str] = ContextVar("ccbot_recoverable_input", default="")
-_CONFIRMATION_GRACE_SECONDS = 30.0
+_CONFIRMATION_GRACE_SECONDS = 60.0
 _UNKNOWN_HOLD_SECONDS = 60.0
 _CONFIRMATION_CHECK_SECONDS = 5.0
 
@@ -253,7 +254,11 @@ class InputRecovery:
         previous = request.state
         if previous == "unknown":
             self.dirty.add((request.user_id, request.session_id))
-        if confirmed and previous == "unknown" and request.notice_id is not None:
+        if (
+            confirmed
+            and previous in ("unknown", "awaiting_confirmation")
+            and request.notice_id is not None
+        ):
             from .input_notices import session_name
 
             name = session_name(request)
@@ -401,10 +406,24 @@ class InputRecovery:
         from .input_timing import input_stage
         from .input_media import with_media_gap
 
-        text = with_media_gap(self, text)
+        request = self.current()
+        prepared = request.prepared if request else ""
+        payload = with_media_gap(self, text)
         with input_stage("dispatch"):
-            await self.before_dispatch(wid, text)
-            success, message = await sender(wid, text, session)
+            await self.before_dispatch(wid, payload)
+            try:
+                if (
+                    request
+                    and request.strict_codex_proof
+                    and composer_queue.earlier_waiter(self, request)
+                ):
+                    raise composer_queue.ComposerBusy()
+                success, message = await sender(wid, payload, session)
+            except composer_queue.ComposerBusy:
+                if request is None:
+                    raise
+                composer_queue.defer(self, request, prepared)
+                raise SubmissionNotSent() from None
         self.after_dispatch(success, message)
         return success, message
 
@@ -495,15 +514,13 @@ class InputRecovery:
                     else None,
                 )
                 return
-        if now >= request.confirmation_deadline:
-            from .handlers import bg_status
-
-            if bg_status.get_status(request.user_id, request.session_id) == "working":
-                # Codex can queue a follow-up until the current turn or
-                # compaction ends. Absence of a row while busy proves nothing.
-                request.confirmation_deadline = now + _CONFIRMATION_GRACE_SECONDS
-                self.save()
-                return
+        # Older journals may contain a deadline repeatedly extended by the card.
+        deadline = (
+            request.submitted_at + _CONFIRMATION_GRACE_SECONDS
+            if request.submitted_at
+            else request.confirmation_deadline
+        )
+        if now >= deadline:
             request.state = "unknown"
             request.notice = "Запрос принят ботом, но его получение агентом не подтверждено. Автоповтор остановлен; проверьте исходную сессию и /requests."
             self._next_reconcile.pop(request.id, None)
@@ -625,27 +642,9 @@ class InputRecovery:
     def start(self, application: Any) -> None:
         self.load()
         self.bot = application.bot
-        from telegram.ext import CallbackContext
-        from .bot import inbound
-        from .inbound_queue import enqueue_inbound
-
-        for request in sorted(self.records.values(), key=lambda r: r.sequence):
-            if request.state in ("failed", "awaiting_confirmation", "waiting_session"):
-                continue
-            update = Update.de_json(request.update, self.bot)
-            context = CallbackContext.from_update(update, application)
-            processor = getattr(inbound, "_run_" + request.kind)
-            enqueue_inbound(
-                request.user_id,
-                request.window_id,
-                update,
-                context,
-                kind=request.kind,
-                processor=processor,
-                recovery_id=request.id,
-            )
+        composer_queue.restore_inputs(self, application)
         self.task = asyncio.create_task(
-            self.feedback_loop(), name="input-recovery-feedback"
+            self.feedback_loop(application), name="input-recovery-feedback"
         )
 
     async def deliver_notice(self, request: InputRequest) -> None:
@@ -715,11 +714,14 @@ class InputRecovery:
             request.notice = ""
             self.save()
 
-    async def feedback_loop(self) -> None:
+    async def feedback_loop(self, application: Any = None) -> None:
         from .bot.input_feedback import refresh_request_status
 
+        scheduled: set[str] = set()
         while True:
             try:
+                if application is not None:
+                    await composer_queue.resume_waiting(self, application, scheduled)
                 if (
                     self.resolved_notices
                     and self.bot is not None

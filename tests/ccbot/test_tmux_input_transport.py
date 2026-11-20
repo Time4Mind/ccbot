@@ -1,5 +1,7 @@
 """Literal terminal input is pasted in bounded UTF-8-safe chunks."""
 
+import asyncio
+
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -31,6 +33,7 @@ async def test_codex_request_never_reaches_a_shell_after_agent_exit(
     command, allowed
 ) -> None:
     manager = TmuxManager(session_name="ccbot")
+    manager.capture_pane = AsyncMock(side_effect=["›", "› Пересчитай пайплайн"])
     process = MagicMock(returncode=0)
     process.communicate = AsyncMock(return_value=(command, b""))
     with (
@@ -76,7 +79,9 @@ async def test_codex_exit_after_paste_never_submits_text_to_shell() -> None:
             new=AsyncMock(return_value=True),
         ) as submit,
     ):
-        assert not await TmuxManager().send_keys("@67", "request", backend="codex")
+        manager = TmuxManager()
+        manager.capture_pane = AsyncMock(side_effect=["›", "› request"])
+        assert not await manager.send_keys("@67", "request", backend="codex")
     submit.assert_not_awaited()
 
 
@@ -149,6 +154,7 @@ async def test_literal_input_pastes_chunks_in_order_then_one_carriage_return(
     running_codex,
 ) -> None:
     manager = TmuxManager(session_name="ccbot")
+    manager.capture_pane = AsyncMock(side_effect=["›", "› first", "› firstsecond"])
     with (
         patch.object(
             tmux_input_transport,
@@ -176,8 +182,11 @@ async def test_literal_input_pastes_chunks_in_order_then_one_carriage_return(
 
 
 @pytest.mark.asyncio
-async def test_ambiguous_paste_is_not_retried_and_finalizes_once(running_codex) -> None:
+async def test_ambiguous_codex_paste_does_not_submit_partial_input(
+    running_codex,
+) -> None:
     manager = TmuxManager(session_name="ccbot")
+    manager.capture_pane = AsyncMock(side_effect=["›", "› first"])
     with (
         patch.object(
             tmux_input_transport,
@@ -196,9 +205,8 @@ async def test_ambiguous_paste_is_not_retried_and_finalizes_once(running_codex) 
         patch("ccbot.tmux_input_transport.secrets.token_hex", return_value="op"),
     ):
         assert not await manager.send_keys("@5", "payload", backend="codex")
-    assert paste.await_count == 3
-    assert paste.await_args_list[-1] == call("@5", "ccbot-op-barrier", b" ")
-    send_enter.assert_awaited_once_with("@5")
+    assert paste.await_count == 2
+    send_enter.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -220,3 +228,83 @@ async def test_bang_command_keeps_existing_tui_path() -> None:
     ):
         assert await manager.send_keys("@5", "!pwd", backend="claude")
     send_chunked.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("opens_after_paste", [False, True])
+async def test_codex_prompt_waits_for_approval_without_answering_it(
+    monkeypatch, running_codex, opens_after_paste
+):
+    manager = TmuxManager()
+    modal = not opens_after_paste
+    draft = ""
+    approvals_from_prompt = []
+    submitted = []
+
+    async def capture(_wid):
+        nonlocal modal
+        if modal:
+            asyncio.get_running_loop().call_later(0.015, close_approval)
+            return (
+                "Would you like to run the following command?\n"
+                "› 1. Yes, proceed (y)\n  2. No (esc)\n"
+                "Press enter to confirm or esc to cancel"
+            )
+        return (
+            f"› {draft or 'Ask Codex to do anything'}\n  GPT-6.2-Astra high · ~/workdir"
+        )
+
+    def close_approval():
+        nonlocal modal
+        modal = False
+
+    async def paste(_wid, _name, chunk):
+        nonlocal draft, modal
+        if not modal:
+            draft += chunk.decode()
+        if opens_after_paste:
+            modal = True
+        return True, False
+
+    async def enter(_wid):
+        if modal:
+            approvals_from_prompt.append(True)
+        else:
+            submitted.append(draft.strip())
+        return True
+
+    monkeypatch.setattr(manager, "capture_pane", capture)
+    monkeypatch.setattr(tmux_input_transport, "_paste_chunk", paste)
+    monkeypatch.setattr(tmux_input_transport, "_send_carriage_return", enter)
+    assert await manager.send_keys("@134", "Тоже ок. Дальше.", backend="codex")
+    assert not approvals_from_prompt
+    assert submitted == ["Тоже ок. Дальше."]
+
+
+@pytest.mark.asyncio
+async def test_codex_does_not_press_enter_when_the_paste_disappeared(
+    monkeypatch, running_codex
+):
+    manager = TmuxManager()
+    manager.capture_pane = AsyncMock(return_value="› Ask Codex to do anything")
+    monkeypatch.setattr(
+        tmux_input_transport, "_paste_chunk", AsyncMock(return_value=(True, False))
+    )
+    enter = AsyncMock(return_value=True)
+    monkeypatch.setattr(tmux_input_transport, "_send_carriage_return", enter)
+    assert not await manager.send_keys("@134", "исчезнувший текст", backend="codex")
+    enter.assert_not_awaited()
+
+
+def test_numbered_codex_draft_with_warning_footer_and_scrolled_long_draft():
+    from ccbot.codex_input import composer, matches_draft
+
+    pane = "› 1. Проверь статус\n\n  GPT-6.2-Sol high · ~/workdir\n  ⚠ 1 warning · f2 to view"
+    assert composer(pane) == "1. Проверь статус"
+    assert (
+        composer(pane.replace("⚠ 1 warning · f2 to view", "tab to queue message"))
+        == "1. Проверь статус"
+    )
+    tail = "строка " * 18
+    assert matches_draft(tail, "начало " * 200 + tail, allow_folded=False)
+    assert not matches_draft("статус", "1. Проверь статус", allow_folded=False)

@@ -33,8 +33,8 @@ def _codex_footer_match(pane_text: str) -> re.Match[str] | None:
     # Codex 0.169 draws shortcut help below the identity row. Only skip
     # that exact chrome, never search arbitrary history for model-like text.
     if lines and re.fullmatch(
-        r"\s*(?:← for agents\s*·\s*)?\? for shortcuts"
-        r"(?:\s+⚠\s+\d+ warnings?\s*·\s*f2 to view)?\s*",
+        r"\s*(?:(?:(?:← for agents\s*·\s*)?\? for shortcuts|tab to queue message)"
+        r"(?:\s+⚠\s+\d+ warnings?\s*·\s*f2 to view)?|⚠\s+\d+ warnings?\s*·\s*f2 to view)\s*",
         lines[-1],
     ):
         lines.pop()

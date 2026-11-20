@@ -129,7 +129,9 @@ def test_late_binding_recovers_distinct_identical_requests_after_restart(
     assert restored.reconcile(restored.records["42:2"])
 
 
-def test_busy_session_does_not_emit_unconfirmed_warning(tmp_path, monkeypatch):
+def test_unconfirmed_request_warns_after_one_minute_even_if_card_is_busy(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(bg_status, "_bg", {})
     bg_status.update_status(42, "s", "working")
     recovery = InputRecovery(tmp_path / "journal")
@@ -145,12 +147,17 @@ def test_busy_session_does_not_emit_unconfirmed_warning(tmp_path, monkeypatch):
         state="awaiting_confirmation",
         prepared="request",
         strict_codex_proof=True,
-        confirmation_deadline=90.0,
+        submitted_at=39.0,
+        confirmation_deadline=400.0,  # Legacy deadline extended by a busy card.
     )
     recovery.records[request.id] = request
+    recovery.clock = lambda: 98.9
     recovery.check_confirmation(request)
-    assert request.state == "awaiting_confirmation"
-    assert not request.notice
+    assert request.state == "awaiting_confirmation" and not request.notice
+    recovery.clock = lambda: 99.0
+    recovery.check_confirmation(request)
+    assert request.state == "unknown"
+    assert "не подтверждено" in request.notice
 
 
 def test_replaced_transcript_recovers_after_checkpoint(tmp_path, monkeypatch):

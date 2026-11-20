@@ -29,7 +29,6 @@ import libtmux
 from . import tmux_input_transport
 from . import tmux_window as _tmux_window
 from .config import SENSITIVE_ENV_VARS, config
-from .terminal_parser import strip_codex_identity_footer
 from .tmux_control import TmuxControlClient
 from .tmux_process import kill_orphan_processes
 
@@ -458,18 +457,28 @@ class TmuxManager:
     ) -> bool:
         """Send keys to a specific window.
 
-        Args:
-            window_id: The window ID to send to
-            text: Text to send
-            enter: Whether to press enter after the text
-            literal: If True, send text literally. If False, interpret special keys
-                     like "Up", "Down", "Left", "Right", "Escape", "Enter".
+        Send literal text or named control keys, optionally followed by Enter.
 
         Returns:
             True if successful, False otherwise
 
         Serialize pastes; OpenCode waits for idle/ack without blocking Stop.
         """
+        if (
+            backend == "codex"
+            and literal
+            and enter
+            and not text.lstrip().startswith("/")
+        ):
+            from .codex_input import ComposerGuard
+
+            # Serialize prompts while allowing the approval keyboard to clear
+            # a modal that the prompt is waiting on.
+            async with self._send_lock_for(f"codex-prompt:{window_id}"):
+                guard = ComposerGuard(window_id, self.capture_pane)
+                return await tmux_input_transport.send_literal_chunked(
+                    window_id, text, backend=backend, guard=guard
+                )
         if backend == "opencode" and literal and enter:
             # Its prompt FIFO waits for idle/ack separately, keeping Stop usable.
             return await tmux_input_transport.send_literal_chunked(
@@ -583,23 +592,12 @@ class TmuxManager:
     @staticmethod
     def _codex_prompt_contains(pane_text: str, text: str) -> bool:
         """Whether Codex still shows ``text`` in its bottom input prompt."""
-        # The live footer includes a session title, not pending input.
-        lines = strip_codex_identity_footer(pane_text).rstrip().splitlines()
-        prompt_idx = -1
-        # Scan all rows for long wrapped input. The last prompt marker is
-        # the live field; submitted turns leave a newer, empty prompt.
-        for i in range(len(lines) - 1, -1, -1):
-            if re.match(r"^\s*[›>](?:\s|$)", lines[i]):
-                prompt_idx = i
-                break
-        if prompt_idx < 0:
+        from .codex_input import composer
+
+        draft = composer(pane_text)
+        if draft is None:
             return False
-        if any(
-            re.search(r"\bWorking\b|esc to interrupt", line, re.IGNORECASE)
-            for line in lines[prompt_idx + 1 :]
-        ):
-            return False
-        prompt = " ".join(" ".join(lines[prompt_idx:]).split())
+        prompt = " ".join(draft.split())
         needle = " ".join(text.split())
         if not needle:
             return False
@@ -688,6 +686,7 @@ class TmuxManager:
         # Drop the per-window send lock — tmux never reuses window ids, so
         # the entry would otherwise linger for the process lifetime.
         self._send_locks.pop(window_id, None)
+        self._send_locks.pop(f"codex-prompt:{window_id}", None)
         return killed
 
     def has_client_for_window(self, window_id: str) -> bool:

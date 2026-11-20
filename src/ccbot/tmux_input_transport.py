@@ -8,6 +8,8 @@ import os
 import secrets
 import time
 
+from .codex_input import ComposerGuard
+
 logger = logging.getLogger(__name__)
 
 _CHUNK_BYTES = 900
@@ -177,7 +179,9 @@ async def zcode_process_is_running(window_id: str, *, backend: str = "zcode") ->
         return False
 
 
-async def send_literal_chunked(window_id: str, text: str, *, backend: str = "") -> bool:
+async def send_literal_chunked(
+    window_id: str, text: str, *, backend: str = "", guard: ComposerGuard | None = None
+) -> bool:
     started = time.monotonic()
     outcome = "error"
     try:
@@ -190,7 +194,9 @@ async def send_literal_chunked(window_id: str, text: str, *, backend: str = "") 
                 lambda: _send_literal_chunked(window_id, text, backend=backend),
             )
         else:
-            sent = await _send_literal_chunked(window_id, text, backend=backend)
+            sent = await _send_literal_chunked(
+                window_id, text, backend=backend, guard=guard
+            )
         outcome = "sent" if sent else "failed"
         return sent
     finally:
@@ -205,7 +211,7 @@ async def send_literal_chunked(window_id: str, text: str, *, backend: str = "") 
 
 
 async def _send_literal_chunked(
-    window_id: str, text: str, *, backend: str = ""
+    window_id: str, text: str, *, backend: str = "", guard: ComposerGuard | None = None
 ) -> bool:
     codex = backend.strip().lower() in ("codex", "zcode", "opencode")
 
@@ -219,7 +225,7 @@ async def _send_literal_chunked(
         if backend.strip().lower() == "zcode"
         else codex_process_is_running
     )
-    if codex and not await process_running(window_id):
+    if not guard and codex and not await process_running(window_id):
         logger.warning("Codex input blocked: agent is not running window=%s", window_id)
         return False
     if backend.strip().lower() == "opencode":
@@ -227,22 +233,32 @@ async def _send_literal_chunked(
     chunks = terminal_input_chunks(text, backend=backend)
     operation = f"ccbot-{secrets.token_hex(8)}"
     pasted = 0
+    draft = ""
     for index, chunk in enumerate(chunks):
-        if index and codex and not await process_running(window_id):
+        if guard and not await guard.ready(draft):
+            return False
+        if not guard and index and codex and not await process_running(window_id):
             return False
         name = operation if index == 0 else f"{operation}-{index}"
         ok, ambiguous = await _paste_chunk(window_id, name, chunk)
         if not ok:
+            if guard:
+                # Never submit an incomplete or ambiguous Codex paste.
+                return False
             if pasted or ambiguous:
-                if codex and not await process_running(window_id):
+                if not guard and codex and not await process_running(window_id):
                     return False
                 if backend.strip().lower() == "codex" and not chunk.endswith(b" "):
                     await _paste_chunk(window_id, f"{operation}-barrier", b" ")
                 await _send_carriage_return(window_id)
             return False
         pasted += 1
+        if guard:
+            draft += chunk.decode()
         await asyncio.sleep(_CHUNK_PACE)
-    if codex and not await process_running(window_id):
+    if guard and not await guard.ready(draft, submitting=True):
+        return False
+    if not guard and codex and not await process_running(window_id):
         return False
     if backend.strip().lower() == "zcode" and text.strip() in {
         "/model",

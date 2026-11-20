@@ -44,6 +44,8 @@ async def _intercept_if_pending_ui(
     wait_until_clear: bool = False,
 ) -> bool:
     """Surface a pending prompt before it can consume ordinary input."""
+    from ..input_recovery import input_recovery
+
     surfaced = False
     while True:
         try:
@@ -87,6 +89,19 @@ async def _intercept_if_pending_ui(
             if not surfaced:
                 await handle_interactive_ui(bot, user_id, wid)
                 surfaced = True
+        # Keep the controls visible. A local journaled Codex input can
+        # preprocess now and defer durably at the actual paste boundary.
+        request = input_recovery.current()
+        source = session_manager.find_session_by_window(wid)
+        if (
+            request
+            and request.window_id == wid
+            and source
+            and source.backend == "codex"
+            and source.node_id == "local"
+            and not (getattr(reply_to, "text", "") or "").lstrip().startswith("/")
+        ):
+            return False
         if wait_until_clear:
             await asyncio.sleep(0.25)
             continue

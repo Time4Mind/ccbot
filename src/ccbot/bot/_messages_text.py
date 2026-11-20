@@ -301,10 +301,15 @@ async def _dispatch_text_to_active(
         status_changed = False
         if sess is not None:
             card_state = get_card_state(user_id, sess)
-            card_state.turn_phase = TurnPhase.RUNNING
-            status_changed = bg_status.update_status(
-                user_id, sess.id, "working", force=True
-            )
+            if (
+                sess.backend != "codex"
+                or initial_node_id != "local"
+                or text.lstrip().startswith("/")
+            ):
+                card_state.turn_phase = TurnPhase.RUNNING
+                status_changed = bg_status.update_status(
+                    user_id, sess.id, "working", force=True
+                )
             session_manager.touch_session(sess.id)
             # ``maybe_auto_name`` honours the user's ``haiku_naming``
             # setting and the directory-basename guard internally — we

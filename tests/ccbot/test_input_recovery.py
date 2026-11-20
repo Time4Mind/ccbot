@@ -1753,3 +1753,67 @@ async def test_request_list_has_clickable_unknown_actions(env, monkeypatch):
     await command.requests_command(update(17233, "/requests"), SimpleNamespace(args=[]))
     assert "/requests_ack_17232" in reply.call_args.args[1]
     assert "/requests_cancel_17232" in reply.call_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_approval_queue_survives_restart_and_delivers_two_requests_in_order(
+    env, monkeypatch
+):
+    from ccbot import input_composer_queue, tmux_input_transport
+    from ccbot.tmux_manager import tmux_manager
+
+    env.source.backend = "codex"
+    blocked = True
+    draft = ""
+    submitted = []
+    recovery = env.recovery
+
+    async def capture(_window):
+        if blocked:
+            return "› 1. Yes, proceed (y)\n  2. No (esc)\nPress enter to confirm or esc to cancel"
+        return f"› {draft or 'Ask Codex'}\n  GPT-6.2-Sol high · ~/workdir"
+
+    async def paste(_window, _name, data):
+        nonlocal draft
+        assert not blocked
+        draft += data.decode()
+        return True, False
+
+    async def enter(_window):
+        nonlocal draft
+        assert not blocked
+        submitted.append(draft.strip())
+        draft = ""
+        return True
+
+    async def sender(wid, text, _session):
+        return await tmux_manager.send_keys(wid, text, backend="codex"), "Sent"
+
+    async def process(upd, _ctx, wid):
+        ok, _ = await recovery.submit(wid, upd.message.text, env.source, sender)
+        return ok
+
+    monkeypatch.setattr(tmux_manager, "capture_pane", capture)
+    monkeypatch.setattr(
+        tmux_input_transport, "codex_process_is_running", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(tmux_input_transport, "_paste_chunk", paste)
+    monkeypatch.setattr(tmux_input_transport, "_send_carriage_return", enter)
+    monkeypatch.setattr(inbound, "_run_text", process)
+    for number, text in [(21, "первый"), (22, "второй")]:
+        await inbound.text_intake_handler(update(number, text), env.context)
+    await until(lambda: not has_pending_inbound("@source"))
+    assert submitted == []
+    recovery = recovery_module.InputRecovery(env.recovery.path)
+    recovery.load()
+    assert [r.state for r in recovery.records.values()] == ["waiting_composer"] * 2
+    monkeypatch.setattr(recovery_module, "input_recovery", recovery)
+
+    application = Application.builder().token("1:testing").build()
+    scheduled = set()
+    blocked = False
+    for _ in range(2):
+        await input_composer_queue.resume_waiting(recovery, application, scheduled)
+        await until(lambda: not has_pending_inbound("@source"))
+    assert submitted == ["первый", "второй"]
+    assert [r.state for r in recovery.records.values()] == ["awaiting_confirmation"] * 2

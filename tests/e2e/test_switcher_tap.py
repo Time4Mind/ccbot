@@ -352,3 +352,56 @@ async def test_notification_jump_selects_remote_node_before_card_paint(
     assert painted == [remote.id]
     assert session_manager.get_selected_node_id(USER_ID) == "worker-b"
     assert session_manager.get_active_session(USER_ID) is remote
+
+
+@pytest.mark.asyncio
+async def test_switch_preserves_accepted_card_after_local_write_error(
+    fake_tmux, fake_bot, projects_path, no_card_lag, monkeypatch
+):
+    import errno
+
+    from ccbot.config import config
+
+    fake_tmux.add_window("@200", name="target", cwd=WORKDIR_B, pane="idle\n")
+    target = seed_session(
+        session_manager,
+        sid="bbbbbbbb",
+        name="target",
+        window_id="@200",
+        workdir=WORKDIR_B,
+        claude_session_id=SID_B,
+    )
+    write_session_map(
+        config.session_map_file,
+        window_id="@200",
+        claude_session_id=SID_B,
+        cwd=WORKDIR_B,
+    )
+    transcript = make_jsonl_path(projects_path, WORKDIR_B, SID_B)
+    for request, answer in [
+        ("first request", "older answer"),
+        ("second request", "latest answer"),
+    ]:
+        append_jsonl(transcript, user_turn(request, cwd=WORKDIR_B))
+        append_jsonl(transcript, assistant_turn(answer))
+
+    user = FakeUser(USER_ID)
+
+    async def tap(data):
+        query = FakeCallbackQuery(
+            data=data, user=user, message_id=8000, chat_id=USER_ID, bot=fake_bot
+        )
+        await callback_handler(
+            FakeUpdate(user=user, callback_query=query), _ctx(fake_bot)
+        )
+        return fake_bot.edits[-1]["text"]
+
+    def full_disk(*args):
+        raise OSError(errno.ENOSPC, "disk full")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(session_manager, "set_last_switcher_msg", full_disk)
+        first = await tap(f"sw:{target.id}")
+    assert "latest answer" in first
+    assert "second request" in await tap("pg:prev")
+    assert first == await tap("pg:next")

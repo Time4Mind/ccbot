@@ -13,7 +13,12 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .i18n import t
 from .opencode_catalogue import ModelChoice, load_catalogue
-from .opencode_runtime import composer_identity, interactive_panel, is_ready
+from .opencode_runtime import (
+    COMPOSER_PREFIX,
+    composer_identity,
+    interactive_panel,
+    is_ready,
+)
 from .session_models import Session
 from .terminal_runtime import PaneCaptureError, capture_session_pane, send_session_key
 from .tmux_manager import tmux_manager
@@ -277,7 +282,7 @@ def model_identity(
 ) -> tuple[str, str] | None:
     # Match known model names longest first, so a base model never absorbs Fast/Flex.
     for line in reversed(pane.splitlines()[-16:]):
-        match = re.match(r"^\s*┃\s+(?:Build|Plan)\s+·\s+(.+)$", line)
+        match = re.match(COMPOSER_PREFIX + r"(.+)$", line)
         if not match:
             continue
         for model in sorted(models, key=lambda m: -len(m.name)):

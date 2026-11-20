@@ -70,6 +70,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "waiting_session": "сохранён, ожидает восстановления сессии",
         "downloading": "загружается файл",
         "transcribing": "распознаётся",
+        "waiting_composer": "в очереди до закрытия диалога Codex",
         "prepared": "подготовлен к передаче",
         "dispatching": "передаётся",
         "awaiting_confirmation": "ожидает подтверждения от агента",

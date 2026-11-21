@@ -44,3 +44,13 @@ def resolved_text(item: dict[str, Any]) -> str:
         or "неизвестная сессия"
     )
     return f"Сессия «{name}» · запрос №{item['message_id']}: получение агентом подтверждено."
+
+
+def resolution(request: InputRequest) -> dict[str, Any]:
+    return {
+        "user_id": request.user_id,
+        "notice_id": request.notice_id,
+        "message_id": request.message_id,
+        "session_id": request.session_id,
+        "session_name": session_name(request),
+    }

@@ -40,7 +40,7 @@ def journal_path(session_id: str) -> Path:
     return ccbot_dir() / "opencode-transcripts" / f"{session_id}.jsonl"
 
 
-def _header(path: Path) -> dict[str, Any]:
+def projection_header(path: Path) -> dict[str, Any]:
     try:
         with path.open() as handle:
             data = json.loads(handle.readline())
@@ -50,7 +50,7 @@ def _header(path: Path) -> dict[str, Any]:
 
 
 def session_id_for_path(path: Path) -> str:
-    return str(_header(path).get("sessionId") or "")
+    return str(projection_header(path).get("sessionId") or "")
 
 
 def ensure_projection(session_id: str, cwd: str, source: Path | None = None) -> Path:
@@ -68,7 +68,7 @@ def ensure_projection(session_id: str, cwd: str, source: Path | None = None) -> 
             with path.open("w") as handle:
                 handle.write(json.dumps(data, ensure_ascii=False) + "\n")
             path.chmod(0o600)
-        header = _header(path)
+        header = projection_header(path)
         if (
             header.get("sessionId") != session_id
             or Path(header.get("cwd", "")).resolve() != Path(cwd).resolve()
@@ -81,7 +81,7 @@ def refresh_transcript(
     session_id: str, cwd: str, source: Path | None = None
 ) -> Path | None:
     path = journal_path(session_id)
-    header = _header(path)
+    header = projection_header(path)
     source = source or (
         Path(header["database_path"])
         if header.get("database_path")

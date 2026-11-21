@@ -198,7 +198,7 @@ async def test_unready_or_dead_opencode_never_receives_queued_text(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scenario", ["wait", "exit", "restart"])
+@pytest.mark.parametrize("scenario", ["wait", "exit", "restart", "photo"])
 async def test_opencode_fifo_waits_past_readiness_deadline_or_reports_exit(
     native_input, monkeypatch, tmp_path, scenario
 ):
@@ -211,6 +211,7 @@ async def test_opencode_fifo_waits_past_readiness_deadline_or_reports_exit(
 
     recovery = input_recovery.InputRecovery(tmp_path / "inputs.json")
     exits = scenario == "exit"
+    first_payload = ".ccbot-inbox/queued.jpg" if scenario == "photo" else "first"
     recovery.bot = AsyncMock()
     recovery.bot.defaults = None
     recovery.bot.send_message.return_value.message_id = 500
@@ -244,7 +245,10 @@ async def test_opencode_fifo_waits_past_readiness_deadline_or_reports_exit(
 
     async def paste(_window, text, *, backend):
         assert ready.is_set() and backend == "opencode"
-        sequence = 1 if text == "first" else 2
+        if scenario == "photo" and text == first_payload:
+            record_image(native_input, "photo", first_payload)
+            return True
+        sequence = 1 if text == first_payload else 2
         moment = 2 * sequence - 1
         native_input.execute(
             "INSERT INTO message VALUES (?, 'ses_input', ?, ?, ?)",
@@ -324,7 +328,7 @@ async def test_opencode_fifo_waits_past_readiness_deadline_or_reports_exit(
         return request, receipt.completion
 
     try:
-        first, first_completion = admit(1, "first")
+        first, first_completion = admit(1, first_payload)
         second, second_completion = admit(2, "second")
         await asyncio.wait_for(captures.get(), 1)
         if exits:
@@ -362,6 +366,14 @@ async def test_opencode_fifo_waits_past_readiness_deadline_or_reports_exit(
                 assert await asyncio.wait_for(first_completion, 2)
             assert await asyncio.wait_for(second_completion, 2)
             assert second.confirmed
+        if scenario == "photo":
+            assert first.confirmed and second.confirmed
+            assert [c.args[1] for c in send.await_args_list] == [
+                first_payload,
+                "second",
+            ]
+            recovery.bot.send_message.assert_not_awaited()
+            return
         parts = native_input.execute("SELECT data FROM part ORDER BY time_created")
         assert [json.loads(data)["text"] for (data,) in parts] == (
             ["second"] if exits else ["first", "second"]
@@ -452,7 +464,7 @@ async def test_restart_replays_only_prompt_that_has_not_started_pasting(
         return True
 
     monkeypatch.setattr(opencode_input, "_capture", capture)
-    monkeypatch.setattr(opencode_input, "_accepted", lambda window: {})
+    monkeypatch.setattr(opencode_input, "native_checkpoint", lambda window: None)
     monkeypatch.setattr(
         tmux_input_transport, "zcode_process_is_running", AsyncMock(return_value=True)
     )
@@ -534,3 +546,141 @@ async def test_waiting_for_opencode_keeps_previous_card_updates_visible(
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+def record_image(db, mid, path, caption="", *, marker="[Image 1]", session="ses_input"):
+    db.execute(
+        "INSERT INTO message VALUES (?,?,1,1,?)",
+        (mid, session, json.dumps({"role": "user"})),
+    )
+    parts = [{"type": "text", "text": (caption + "\n\n" if caption else "") + marker}]
+    if path:
+        parts.append({"type": "file", "mime": "image/jpeg", "source": {"path": path}})
+    for i, part in enumerate(parts):
+        db.execute(
+            "INSERT INTO part VALUES (?,?,?,1,1,?)",
+            (f"{mid}-{i}", mid, session, json.dumps(part)),
+        )
+    db.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caption", "path", "stored_caption", "session", "expected"),
+    [
+        ("", ".ccbot-inbox/photo.jpg", "", "ses_input", True),
+        ("Посмотри", ".ccbot-inbox/photo.jpg", "Посмотри", "ses_input", True),
+        ("", ".ccbot-inbox/other.jpg", "", "ses_input", False),
+        ("", None, "", "ses_input", False),
+        ("Посмотри", ".ccbot-inbox/photo.jpg", "", "ses_input", False),
+        ("", ".ccbot-inbox/photo.jpg", "", "other", False),
+    ],
+)
+async def test_image_receipt(
+    native_input, monkeypatch, caption, path, stored_caption, session, expected
+):
+    from ccbot import opencode_input
+
+    photo = ".ccbot-inbox/photo.jpg"
+    record_image(native_input, "old", photo, caption)
+
+    async def paste():
+        record_image(native_input, "new", path, stored_caption, session=session)
+        return True
+
+    monkeypatch.setattr(opencode_input, "_capture", AsyncMock(return_value=IDLE))
+    monkeypatch.setattr(opencode_input, "ACK_TIMEOUT", 0.05)
+    monkeypatch.setattr(
+        tmux_input_transport, "zcode_process_is_running", AsyncMock(return_value=True)
+    )
+    payload = f"{caption}\n\n{photo}" if caption else photo
+    assert await opencode_input.submit("@7", payload, paste) is expected
+
+
+@pytest.mark.asyncio
+async def test_restart_matches_late_image_and_corrects_inflight_warning(
+    native_input, tmp_path, monkeypatch
+):
+    from ccbot import input_recovery, opencode_input
+    from ccbot.bot import input_feedback
+
+    photo = ".ccbot-inbox/late.jpg"
+    recovery = input_recovery.InputRecovery(tmp_path / "inputs.json")
+    request = input_recovery.InputRequest(
+        "r", 42, 3, "s1", "@7", "photo", {}, prepared=photo
+    )
+    recovery.records["r"] = request
+    monkeypatch.setattr(input_recovery, "input_recovery", recovery)
+    monkeypatch.setattr(recovery, "current", lambda: request)
+    monkeypatch.setattr(recovery, "source", lambda _: True)
+    monkeypatch.setattr(opencode_input, "_capture", AsyncMock(return_value=IDLE))
+    monkeypatch.setattr(opencode_input, "ACK_TIMEOUT", 0.0)
+    record_image(native_input, "old", photo)
+    paste = AsyncMock(return_value=True)
+    assert not await opencode_input.submit("@7", photo, paste)
+    restored = input_recovery.InputRecovery(recovery.path)
+    restored.load()
+    request = restored.records["r"]
+    assert request.state == "unknown" and not restored.reconcile(request)
+    bot = restored.bot = AsyncMock()
+
+    async def send_warning(**kwargs):
+        record_image(native_input, "late", photo)
+        assert restored.reconcile(request)
+        return SimpleNamespace(message_id=53)
+
+    bot.send_message.side_effect = send_warning
+    await restored.deliver_notice(request)
+    assert request.confirmed
+    again = input_recovery.InputRecovery(recovery.path)
+    again.load()
+    again.bot = bot
+
+    async def stop(_):
+        raise asyncio.CancelledError()
+
+    again.sleep = stop
+    monkeypatch.setattr(
+        input_feedback, "refresh_request_status", AsyncMock(return_value=True)
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await again.feedback_loop()
+    edit = bot.edit_message_text.await_args
+    assert edit and edit.kwargs["message_id"] == 53
+    assert "получение агентом подтверждено" in edit.kwargs["text"]
+    paste.assert_awaited_once()
+
+
+def test_pre_upgrade_unknown_photo_uses_original_store_after_dispatch(
+    native_input, tmp_path
+):
+    from ccbot.input_recovery import InputRecovery, InputRequest
+    from ccbot.opencode_session_io import ensure_projection
+
+    checkpoint = ensure_projection("ses_input", "/tmp/lab")
+    photo = ".ccbot-inbox/legacy.jpg"
+    journal = InputRecovery(tmp_path / "input.json")
+    request = InputRequest(
+        "r",
+        42,
+        1,
+        "s1",
+        "@7",
+        "photo",
+        {},
+        state="unknown",
+        checkpoint={
+            "path": str(checkpoint),
+            "offset": checkpoint.stat().st_size,
+            "backend": "opencode",
+        },
+        prepared=photo,
+        dispatch_started_at=1.0,
+    )
+    journal.records[request.id] = request
+    record_image(native_input, "old", photo)
+    assert not journal.reconcile(request)
+    record_image(native_input, "new", photo)
+    native_input.execute("UPDATE message SET time_created=1001 WHERE id='new'")
+    native_input.commit()
+    assert journal.reconcile(request) and request.confirmed

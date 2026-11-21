@@ -21,6 +21,8 @@ from telegram import ReplyParameters
 from telegram.error import BadRequest, NetworkError, RetryAfter
 
 from .config import config
+from .input_notices import resolution
+from .opencode_receipt import recovered_receipt
 from .final_delivery import RETRY_DELAYS, before_submission
 from . import input_composer_queue as composer_queue
 from .utils import atomic_write_json
@@ -259,18 +261,7 @@ class InputRecovery:
             and previous in ("unknown", "awaiting_confirmation")
             and request.notice_id is not None
         ):
-            from .input_notices import session_name
-
-            name = session_name(request)
-            self.resolved_notices.append(
-                {
-                    "user_id": request.user_id,
-                    "notice_id": request.notice_id,
-                    "message_id": request.message_id,
-                    "session_id": request.session_id,
-                    "session_name": name,
-                }
-            )
+            self.resolved_notices.append(resolution(request))
         request.state = "delivered"
         request.confirmed = confirmed
         self.records.pop(request.id, None)
@@ -481,6 +472,13 @@ class InputRecovery:
 
         if request.checkpoint is None:
             return False
+        if "native" in request.checkpoint or (
+            request.checkpoint["backend"] == "opencode" and request.kind == "photo"
+        ):
+            if recovered_receipt(request):
+                self.complete(request)
+                return True
+            return False
         checkpoint = _VoiceTranscriptCheckpoint(
             Path(request.checkpoint["path"]),
             request.checkpoint["offset"],
@@ -684,6 +682,8 @@ class InputRecovery:
                         disable_notification=True,
                     )
                     request.notice_id = message.message_id
+                    if request.state == "delivered" and request.confirmed:
+                        self.resolved_notices.append(resolution(request))
                     request.notice_unknown = False
                     self.save()
         except Exception as exc:

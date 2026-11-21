@@ -6,14 +6,12 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
-import json
 import time
 from weakref import WeakValueDictionary
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from .opencode_runtime import composer_is_available, is_ready
-from .opencode_store import OpenCodeStoreError, open_store
-from .utils import ccbot_dir
+from .opencode_receipt import native_checkpoint, received
 
 if TYPE_CHECKING:
     from .input_recovery import InputRequest
@@ -62,56 +60,6 @@ async def _capture(window: str) -> str:
     return output.decode(errors="replace") if proc.returncode == 0 else ""
 
 
-def _binding(window: str) -> dict[str, Any] | None:
-    try:
-        bindings = json.loads((ccbot_dir() / "session_map.json").read_text())
-        matches = [
-            v
-            for k, v in bindings.items()
-            if k.endswith(":" + window)
-            and isinstance(v, dict)
-            and v.get("backend") == "opencode"
-        ]
-        return matches[0] if len(matches) == 1 else None
-    except (OSError, ValueError):
-        return None
-
-
-def _accepted(window: str) -> dict[tuple[str, str], str]:
-    try:
-        binding = _binding(window)
-        if binding is None:
-            return {}
-        with open_store() as db:
-            session = db.execute(
-                "SELECT directory FROM session WHERE id=?", (binding["session_id"],)
-            ).fetchone()
-            if session is None or session["directory"] != binding["cwd"]:
-                return {}
-            result = {}
-            for row in db.execute(
-                "SELECT id,data FROM message WHERE session_id=? ORDER BY time_created DESC,rowid DESC LIMIT 40",
-                (binding["session_id"],),
-            ):
-                if json.loads(row["data"]).get("role") != "user":
-                    continue
-                parts = [
-                    json.loads(p["data"])
-                    for p in db.execute(
-                        "SELECT data FROM part WHERE message_id=? ORDER BY time_created,rowid",
-                        (row["id"],),
-                    )
-                ]
-                result[(binding["session_id"], row["id"])] = "\n".join(
-                    p.get("text", "")
-                    for p in parts
-                    if p.get("type") == "text" and not p.get("synthetic")
-                )
-            return result
-    except (OSError, ValueError, KeyError, OpenCodeStoreError):
-        return {}
-
-
 async def submit(window: str, text: str, send: Callable[[], Awaitable[bool]]) -> bool:
     """Wait without holding navigation locks; never retype uncertain input."""
     from .input_recovery import input_recovery
@@ -142,7 +90,9 @@ async def submit(window: str, text: str, send: Callable[[], Awaitable[bool]]) ->
             ):
                 return False
             await asyncio.sleep(0.25)
-        before = await asyncio.to_thread(_accepted, window)
+        before = (
+            await asyncio.to_thread(native_checkpoint, window) if not command else None
+        )
         if request is not None and (
             input_recovery.current() is not request
             or input_recovery.source(request) is None
@@ -151,6 +101,10 @@ async def submit(window: str, text: str, send: Callable[[], Awaitable[bool]]) ->
         hook = _before_paste.get()
         if hook is not None and hook[0] == window:
             hook[1]()
+        if request is not None and before is not None:
+            if request.checkpoint is None:
+                request.checkpoint = {"backend": "opencode", "path": "", "offset": 0}
+            request.checkpoint["native"] = before
         _submission_phase(window, waiting=False)
         if not await send():
             return False
@@ -158,11 +112,11 @@ async def submit(window: str, text: str, send: Callable[[], Awaitable[bool]]) ->
             return True
         deadline = time.monotonic() + ACK_TIMEOUT
         while time.monotonic() < deadline:
-            accepted = await asyncio.to_thread(_accepted, window)
-            if any(
-                key not in before
-                and value.replace("\r\n", "\n").strip() == text.strip()
-                for key, value in accepted.items()
+            if before is not None and await asyncio.to_thread(
+                received,
+                before,
+                text,
+                photo=request is not None and request.kind == "photo",
             ):
                 return True
             if not await zcode_process_is_running(window, backend="opencode"):

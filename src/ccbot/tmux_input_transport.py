@@ -170,7 +170,7 @@ async def zcode_process_is_running(window_id: str, *, backend: str = "zcode") ->
         output, _ = await process.communicate()
         name = os.path.basename(output.decode(errors="replace").strip()).lower()
         expected = (
-            {"opencode", "opencode-cli"}
+            {"opencode", "opencode-cli", "opencode.exe"}
             if backend == "opencode"
             else {"zcode", "zcode-cli", "node"}
         )

@@ -23,8 +23,14 @@ def _footer(pane: str) -> str:
     tail = lines[-1]
     # Narrow panes can wrap the project directory below the command bar.
     for index in range(max(0, len(lines) - 3), len(lines) - 1):
-        if "ctrl+p commands" in lines[index] and all(
-            re.fullmatch(r"[\w./~ -]+", row) for row in lines[index + 1 :]
+        command_bar = lines[index]
+        if (
+            "ctrl+p commands" in command_bar
+            and (
+                command_bar.startswith(("/", "~", "BUILD ", "PLAN "))
+                or re.search(r"\besc\s+(?:again to\s+)?interrupt\b", command_bar)
+            )
+            and all(re.fullmatch(r"[\w./~ -]+", row) for row in lines[index + 1 :])
         ):
             tail = lines[index]
             break

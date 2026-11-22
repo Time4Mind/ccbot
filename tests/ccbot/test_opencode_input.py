@@ -5,7 +5,7 @@ import json
 import sqlite3
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
@@ -33,7 +33,7 @@ async def test_opencode_long_unicode_is_one_literal_paste(monkeypatch):
         return 0, b""
 
     async def submit(_window, _text, send):
-        return await send()
+        return await send(lambda: True)
 
     monkeypatch.setattr(opencode_input, "submit", submit)
     monkeypatch.setattr(tmux_input_transport, "_run_tmux", run)
@@ -98,7 +98,8 @@ async def test_opencode_permission_keeps_prompt_waiting_and_allows_stop(
             returncode=0, communicate=AsyncMock(return_value=(output.encode(), b""))
         )
 
-    async def paste(window, text, *, backend):
+    async def paste(window, text, before_paste):
+        assert before_paste()
         assert idle.is_set(), (
             "second request pasted while OpenCode shows an approval dialog"
         )
@@ -116,7 +117,7 @@ async def test_opencode_permission_keeps_prompt_waiting_and_allows_stop(
 
     monkeypatch.setattr(tmux_input_transport.asyncio, "create_subprocess_exec", process)
     raw = AsyncMock(side_effect=paste)
-    monkeypatch.setattr(tmux_input_transport, "_send_literal_chunked", raw)
+    monkeypatch.setattr(tmux_input_transport, "_send_opencode_input", raw)
     manager = TmuxManager()
 
     async def locked(window, text, enter, literal, *, backend):
@@ -142,7 +143,7 @@ async def test_opencode_permission_keeps_prompt_waiting_and_allows_stop(
         )
         idle.set()
         assert await asyncio.wait_for(task, 2)
-        raw.assert_awaited_once_with("@7", "follow-up\n🙂", backend="opencode")
+        raw.assert_awaited_once_with("@7", "follow-up\n🙂", ANY)
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
@@ -173,7 +174,7 @@ async def test_old_matching_prompt_never_acknowledges_a_new_send(
         tmux_input_transport, "zcode_process_is_running", AsyncMock(return_value=True)
     )
     send = AsyncMock(return_value=True)
-    monkeypatch.setattr(tmux_input_transport, "_send_literal_chunked", send)
+    monkeypatch.setattr(tmux_input_transport, "_send_opencode_input", send)
     assert not await tmux_input_transport.send_literal_chunked(
         "@7", "same prompt", backend="opencode"
     )
@@ -192,7 +193,7 @@ async def test_unready_or_dead_opencode_never_receives_queued_text(
         tmux_input_transport, "zcode_process_is_running", AsyncMock(return_value=False)
     )
     send = AsyncMock(return_value=True)
-    monkeypatch.setattr(tmux_input_transport, "_send_literal_chunked", send)
+    monkeypatch.setattr(tmux_input_transport, "_send_opencode_input", send)
     assert not await tmux_input_transport.send_literal_chunked(
         "@7", "queued text", backend="opencode"
     )
@@ -245,8 +246,9 @@ async def test_opencode_fifo_waits_past_readiness_deadline_or_reports_exit(
             captures.put_nowait(None)
         return IDLE if ready.is_set() else BLOCKED
 
-    async def paste(_window, text, *, backend):
-        assert ready.is_set() and backend == "opencode"
+    async def paste(_window, text, before_paste):
+        assert before_paste()
+        assert ready.is_set()
         if scenario == "photo" and text == first_payload:
             record_image(native_input, "photo", first_payload)
             return True
@@ -286,7 +288,7 @@ async def test_opencode_fifo_waits_past_readiness_deadline_or_reports_exit(
 
     send = AsyncMock(side_effect=paste)
     monkeypatch.setattr(opencode_input, "_capture", capture)
-    monkeypatch.setattr(tmux_input_transport, "_send_literal_chunked", send)
+    monkeypatch.setattr(tmux_input_transport, "_send_opencode_input", send)
 
     async def sender(wid, text, _session):
         accepted = await tmux_input_transport.send_literal_chunked(
@@ -410,8 +412,8 @@ async def test_open_composer_accepts_followup_during_active_tool(
         tmux_input_transport, "zcode_process_is_running", AsyncMock(return_value=True)
     )
 
-    async def paste(_window, text, *, backend):
-        assert backend == "opencode"
+    async def paste(_window, text, before_paste):
+        assert before_paste()
         native_input.execute(
             "INSERT INTO message VALUES ('follow-up','ses_input',3,3,?)",
             (json.dumps({"role": "user"}),),
@@ -423,7 +425,7 @@ async def test_open_composer_accepts_followup_during_active_tool(
         native_input.commit()
         return True
 
-    monkeypatch.setattr(tmux_input_transport, "_send_literal_chunked", paste)
+    monkeypatch.setattr(tmux_input_transport, "_send_opencode_input", paste)
     assert await tmux_input_transport.send_literal_chunked(
         "@7", "Change the current task", backend="opencode"
     )
@@ -460,7 +462,8 @@ async def test_restart_replays_only_prompt_that_has_not_started_pasting(
         captured.set()
         return IDLE if pasting else BLOCKED
 
-    async def send():
+    async def send(begin_paste):
+        assert begin_paste()
         sending.set()
         await asyncio.Event().wait()
         return True
@@ -522,13 +525,14 @@ async def test_waiting_for_opencode_keeps_previous_card_updates_visible(
         )
         return ok, ""
 
-    async def paste(*_, **__):
+    async def paste(_wid, _text, before_paste):
+        assert before_paste()
         assert card_registry._should_buffer(42, session.id, state)
         return False
 
     monkeypatch.setattr(messages, "submit", submit)
     monkeypatch.setattr(opencode_input, "_capture", capture)
-    monkeypatch.setattr(tmux_input_transport, "_send_literal_chunked", paste)
+    monkeypatch.setattr(tmux_input_transport, "_send_opencode_input", paste)
     task = asyncio.create_task(
         messages._dispatch_text_to_active(
             SimpleNamespace(message=SimpleNamespace(message_id=1)),
@@ -586,7 +590,8 @@ async def test_image_receipt(
     photo = ".ccbot-inbox/photo.jpg"
     record_image(native_input, "old", photo, caption)
 
-    async def paste():
+    async def paste(begin_paste):
+        assert begin_paste()
         record_image(native_input, "new", path, stored_caption, session=session)
         return True
 
@@ -618,7 +623,7 @@ async def test_restart_matches_late_image_and_corrects_inflight_warning(
     monkeypatch.setattr(opencode_input, "_capture", AsyncMock(return_value=IDLE))
     monkeypatch.setattr(opencode_input, "ACK_TIMEOUT", 0.0)
     record_image(native_input, "old", photo)
-    paste = AsyncMock(return_value=True)
+    paste = AsyncMock(side_effect=lambda begin_paste: begin_paste())
     assert not await opencode_input.submit("@7", photo, paste)
     restored = input_recovery.InputRecovery(recovery.path)
     restored.load()
@@ -748,7 +753,8 @@ async def test_first_voice_binds_after_paste(
 
     append("ses_input", "old")
 
-    async def paste():
+    async def paste(begin_paste):
+        assert begin_paste()
         append("ses_other", "concurrent")
         bind("@8", "ses_other")
         if timing == "live":
@@ -829,3 +835,147 @@ def test_legacy_first_voice_requires_the_first_native_user_message(
         )
     native_input.commit()
     assert recovery.reconcile(request) is confirmed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "missing",
+        "shell",
+        "load",
+        "vanished_at_paste",
+        "paste_exception",
+        "server_lost",
+        "after_paste",
+        "enter",
+        "no_receipt",
+    ],
+)
+async def test_fifo_distinguishes_refusal_from_uncertain_paste(
+    native_input, tmp_path, monkeypatch, caplog, failure
+):
+    from ccbot import input_recovery, opencode_input
+    from ccbot.bot import _messages_shared
+    from ccbot.inbound_queue import enqueue_inbound, shutdown_inbound_queues
+    from ccbot.session import Session, session_manager, tmux_manager
+
+    recovery = input_recovery.InputRecovery(tmp_path / "inputs.json")
+    session = Session(id="s", name="test", window_id="@7", backend="opencode")
+    monkeypatch.setattr(input_recovery, "input_recovery", recovery)
+    monkeypatch.setattr(session_manager, "get_session", lambda _: session)
+    monkeypatch.setattr(session_manager, "find_session_by_window", lambda _: session)
+    monkeypatch.setattr(session_manager, "is_window_starting", lambda _: False)
+    monkeypatch.setattr(
+        _messages_shared, "_voice_transcript_checkpoint", lambda _: None
+    )
+    monkeypatch.setattr(opencode_input, "_capture", AsyncMock(return_value=IDLE))
+    monkeypatch.setattr(opencode_input, "ACK_TIMEOUT", 0.2)
+    actions = {1: [], 2: []}
+
+    async def window(_):
+        if recovery.current().message_id == 1 and failure == "missing":
+            return None
+        return SimpleNamespace(window_id="@7", pane_current_command="opencode")
+
+    monkeypatch.setattr(tmux_manager, "find_window_by_id", window)
+
+    async def running(*_, **kwargs):
+        i = recovery.current().message_id
+        return (
+            i == 2
+            or failure != "shell"
+            and not (failure == "after_paste" and "paste-buffer" in actions[i])
+        )
+
+    monkeypatch.setattr(tmux_input_transport, "zcode_process_is_running", running)
+
+    def native_row(i):
+        native_input.execute(
+            "INSERT INTO message VALUES (?, 'ses_input',1,1,?)",
+            (f"m{i}", json.dumps({"role": "user"})),
+        )
+        native_input.execute(
+            "INSERT INTO part VALUES (?, ?, 'ses_input',1,1,?)",
+            (f"p{i}", f"m{i}", json.dumps({"type": "text", "text": f"prompt {i}"})),
+        )
+        native_input.commit()
+
+    async def run(command, *args, **kwargs):
+        i = recovery.current().message_id
+        actions[i].append(command)
+        if i == 1 and (failure, command) in {
+            ("load", "load-buffer"),
+            ("enter", "send-keys"),
+        }:
+            return 1, b"unavailable"
+        if i == 1 and command == "paste-buffer":
+            if failure == "vanished_at_paste":
+                return 1, b"can't find pane: @7"
+            if failure == "server_lost":
+                return 1, b"server exited unexpectedly"
+            if failure == "paste_exception":
+                raise TimeoutError()
+        if command == "send-keys" and (i != 1 or failure != "no_receipt"):
+            native_row(i)
+        return 0, b""
+
+    monkeypatch.setattr(tmux_input_transport, "_run_tmux", run)
+
+    async def processor(update, context, wid):
+        async def sender(wid, text, _session):
+            return await session_manager.send_to_window(wid, text)
+
+        ok, _ = await recovery.submit(
+            wid, f"prompt {update.message.message_id}", session, sender
+        )
+        return ok
+
+    def enqueue(i):
+        req = input_recovery.InputRequest(
+            f"42:{i}", 42, i, session.id, "@7", "text", {}, sequence=i
+        )
+        recovery.records[req.id] = req
+        update = SimpleNamespace(message=SimpleNamespace(message_id=i))
+        return req, enqueue_inbound(
+            42, "@7", update, None, kind="text", processor=processor, recovery_id=req.id
+        ).completion
+
+    try:
+        first, done = enqueue(1)
+        second, next_done = enqueue(2)
+        if failure in (
+            "after_paste",
+            "enter",
+            "no_receipt",
+            "server_lost",
+            "paste_exception",
+        ):
+            async with asyncio.timeout(2):
+                while first.state != "unknown":
+                    await asyncio.sleep(0.01)
+            assert not actions[2]
+            assert actions[1].count("paste-buffer") == 1
+            assert actions[1].count("send-keys") == int(
+                failure in ("enter", "no_receipt")
+            )
+            restored = input_recovery.InputRecovery(recovery.path)
+            restored.load()
+            assert not restored.reconcile(restored.records[first.id])
+            native_row(1)
+            assert restored.reconcile(restored.records[first.id])
+            assert recovery.reconcile(first)
+            assert await asyncio.wait_for(done, 2)
+        else:
+            assert not await asyncio.wait_for(done, 2)
+            assert first.state == "failed" and "Запрос не отправлен" in first.notice
+            assert actions[1].count("paste-buffer") == int(
+                failure == "vanished_at_paste"
+            )
+            assert "send-keys" not in actions[1]
+            if failure == "shell":
+                assert "OpenCode input blocked" in caplog.text
+        assert await asyncio.wait_for(next_done, 2) and second.confirmed
+        assert actions[2].count("paste-buffer") == actions[2].count("send-keys") == 1
+    finally:
+        await shutdown_inbound_queues()

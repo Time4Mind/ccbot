@@ -336,17 +336,17 @@ class InputRecovery:
             if self.source(request) is None:
                 raise ValueError("Исходная сессия больше недоступна.")
             await self.sleep(0.5)
-        if self.source(request) is None or wid != request.window_id:
+        source = self.source(request)
+        if source is None or wid != request.window_id:
             raise ValueError(
                 "Исходная сессия больше недоступна; запрос не перенаправлен."
             )
         checkpoint = _voice_transcript_checkpoint(wid)
-        source = self.source(request)
-        request.strict_codex_proof = bool(
-            source is not None
-            and getattr(source, "backend", "") == "codex"
-            and getattr(source, "node_id", "local") == "local"
-            and not text.lstrip().startswith("/")
+        local_backend = getattr(source, "backend", "")
+        if getattr(source, "node_id", "local") != "local":
+            local_backend = ""
+        request.strict_codex_proof = (
+            local_backend == "codex" and not text.lstrip().startswith("/")
         )
         request.checkpoint = (
             {
@@ -381,7 +381,7 @@ class InputRecovery:
                 }
         request.prepared = text
         request.dispatch_started_at = self.clock()
-        request.state = "dispatching"
+        request.state = "prepared" if local_backend == "opencode" else "dispatching"
         self.changed(request)
         logger.info(
             "input_dispatch_started session=%s window=%s message_id=%s checkpoint=%s",
@@ -426,7 +426,7 @@ class InputRecovery:
             # OpenCode waits in prepared and persists dispatching before pasting.
             self.fail(
                 request,
-                "OpenCode не был готов принять ввод. Запрос не отправлен. "
+                "Не удалось передать ввод в OpenCode. Запрос не отправлен. "
                 "При необходимости отправьте его ещё раз.",
             )
             raise SubmissionNotSent()

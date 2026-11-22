@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 import logging
 import os
 import secrets
@@ -94,7 +95,11 @@ async def _delete_buffer(buffer_name: str) -> None:
 
 
 async def _paste_chunk(
-    window_id: str, buffer_name: str, chunk: bytes
+    window_id: str,
+    buffer_name: str,
+    chunk: bytes,
+    *,
+    before_paste: Callable[[], Awaitable[bool]] | None = None,
 ) -> tuple[bool, bool]:
     """Paste one chunk; second result marks an ambiguous paste outcome."""
     loaded = False
@@ -110,6 +115,8 @@ async def _paste_chunk(
             )
             return False, False
         loaded = True
+        if before_paste is not None and not await before_paste():
+            return False, False
         try:
             # tmux otherwise replaces LF with CR, which submits each line as
             # a separate prompt in an interactive agent TUI. Bracketed paste
@@ -127,7 +134,18 @@ async def _paste_chunk(
                 window_id,
                 stderr.decode(errors="replace"),
             )
-            return False, False
+            # tmux explicitly rejects missing targets before writing to the pane.
+            # A lost server/client connection can also return nonzero after input.
+            rejected = stderr.startswith(
+                (
+                    b"can't find pane:",
+                    b"can't find window:",
+                    b"can't find session:",
+                    b"no server running on ",
+                    b"no sessions",
+                )
+            )
+            return False, before_paste is not None and not rejected
         loaded = False
         return True, False
     except Exception as exc:
@@ -182,6 +200,7 @@ async def zcode_process_is_running(window_id: str, *, backend: str = "zcode") ->
 async def send_literal_chunked(
     window_id: str, text: str, *, backend: str = "", guard: ComposerGuard | None = None
 ) -> bool:
+    backend = backend.strip().lower()
     started = time.monotonic()
     outcome = "error"
     try:
@@ -191,7 +210,7 @@ async def send_literal_chunked(
             sent = await submit(
                 window_id,
                 text,
-                lambda: _send_literal_chunked(window_id, text, backend=backend),
+                lambda begin: _send_opencode_input(window_id, text, begin),
             )
         else:
             sent = await _send_literal_chunked(
@@ -210,26 +229,51 @@ async def send_literal_chunked(
         )
 
 
+async def _send_opencode_input(
+    window_id: str, text: str, begin_paste: Callable[[], bool]
+) -> bool:
+    from .opencode_input import PasteNotSent
+
+    async def running() -> bool:
+        if await zcode_process_is_running(window_id, backend="opencode"):
+            return True
+        logger.warning(
+            "OpenCode input blocked: agent is not running window=%s", window_id
+        )
+        return False
+
+    async def before_paste() -> bool:
+        return await running() and begin_paste()
+
+    text = {"/model": "/models", "/clear": "/new"}.get(text.strip(), text)
+    ok, ambiguous = await _paste_chunk(
+        window_id,
+        f"ccbot-{secrets.token_hex(8)}",
+        text.encode(),
+        before_paste=before_paste,
+    )
+    if not ok:
+        if not ambiguous:
+            raise PasteNotSent()
+        return False
+    await asyncio.sleep(_CHUNK_PACE)
+    return await running() and await _send_carriage_return(window_id)
+
+
 async def _send_literal_chunked(
     window_id: str, text: str, *, backend: str = "", guard: ComposerGuard | None = None
 ) -> bool:
-    codex = backend.strip().lower() in ("codex", "zcode", "opencode")
-
-    async def opencode_running(window: str) -> bool:
-        return await zcode_process_is_running(window, backend="opencode")
-
+    codex = backend.strip().lower() in ("codex", "zcode")
     process_running = (
-        opencode_running
-        if backend.strip().lower() == "opencode"
-        else zcode_process_is_running
+        zcode_process_is_running
         if backend.strip().lower() == "zcode"
         else codex_process_is_running
     )
     if not guard and codex and not await process_running(window_id):
-        logger.warning("Codex input blocked: agent is not running window=%s", window_id)
+        logger.warning(
+            "%s input blocked: agent is not running window=%s", backend, window_id
+        )
         return False
-    if backend.strip().lower() == "opencode":
-        text = {"/model": "/models", "/clear": "/new"}.get(text.strip(), text)
     chunks = terminal_input_chunks(text, backend=backend)
     operation = f"ccbot-{secrets.token_hex(8)}"
     pasted = 0

@@ -24,6 +24,10 @@ READY_TIMEOUT = 120.0
 ACK_TIMEOUT = 10.0
 
 
+class PasteNotSent(Exception):
+    """tmux could establish that no prompt bytes reached the pane."""
+
+
 @contextmanager
 def on_prompt_paste(window: str, callback: Callable[[], None]):
     token = _before_paste.set((window, callback))
@@ -40,8 +44,10 @@ def _submission_phase(window: str, *, waiting: bool) -> InputRequest | None:
     if request is not None and request.window_id == window:
         # A restart may replay an untouched FIFO entry. Once paste begins,
         # an uncertain outcome must retain the normal no-autoretry policy.
-        request.state = "prepared" if waiting else "dispatching"
-        input_recovery.changed(request)
+        state = "prepared" if waiting else "dispatching"
+        if request.state != state:
+            request.state = state
+            input_recovery.changed(request)
         return request
     return None
 
@@ -60,7 +66,9 @@ async def _capture(window: str) -> str:
     return output.decode(errors="replace") if proc.returncode == 0 else ""
 
 
-async def submit(window: str, text: str, send: Callable[[], Awaitable[bool]]) -> bool:
+async def submit(
+    window: str, text: str, send: Callable[[Callable[[], bool]], Awaitable[bool]]
+) -> bool:
     """Wait without holding navigation locks; never retype uncertain input."""
     from .input_recovery import input_recovery
     from .tmux_input_transport import zcode_process_is_running
@@ -102,15 +110,34 @@ async def submit(window: str, text: str, send: Callable[[], Awaitable[bool]]) ->
             or input_recovery.source(request) is None
         ):
             return False
-        hook = _before_paste.get()
-        if hook is not None and hook[0] == window:
-            hook[1]()
-        if request is not None and before is not None:
-            if request.checkpoint is None:
-                request.checkpoint = {"backend": "opencode", "path": "", "offset": 0}
-            request.checkpoint["native"] = before
-        _submission_phase(window, waiting=False)
-        if not await send():
+
+        def begin_paste() -> bool:
+            if request is not None:
+                if (
+                    input_recovery.current() is not request
+                    or input_recovery.source(request) is None
+                ):
+                    return False
+                if before is not None:
+                    if request.checkpoint is None:
+                        request.checkpoint = {
+                            "backend": "opencode",
+                            "path": "",
+                            "offset": 0,
+                        }
+                    request.checkpoint["native"] = before
+            hook = _before_paste.get()
+            if hook is not None and hook[0] == window:
+                hook[1]()
+            _submission_phase(window, waiting=False)
+            return True
+
+        try:
+            if not await send(begin_paste):
+                return False
+        except PasteNotSent:
+            if request is not None and request.state == "dispatching":
+                _submission_phase(window, waiting=True)
             return False
         if command:
             return True

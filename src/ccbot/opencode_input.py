@@ -11,7 +11,7 @@ from weakref import WeakValueDictionary
 from typing import TYPE_CHECKING
 
 from .opencode_runtime import composer_is_available, is_ready
-from .opencode_receipt import native_checkpoint, received
+from .opencode_receipt import bind_pending_checkpoint, native_checkpoint, received
 
 if TYPE_CHECKING:
     from .input_recovery import InputRequest
@@ -91,7 +91,11 @@ async def submit(window: str, text: str, send: Callable[[], Awaitable[bool]]) ->
                 return False
             await asyncio.sleep(0.25)
         before = (
-            await asyncio.to_thread(native_checkpoint, window) if not command else None
+            await asyncio.to_thread(
+                native_checkpoint, window, request.session_id if request else ""
+            )
+            if not command
+            else None
         )
         if request is not None and (
             input_recovery.current() is not request
@@ -112,6 +116,9 @@ async def submit(window: str, text: str, send: Callable[[], Awaitable[bool]]) ->
             return True
         deadline = time.monotonic() + ACK_TIMEOUT
         while time.monotonic() < deadline:
+            if before and "session_id" not in before:
+                if bind_pending_checkpoint(before) and request is not None:
+                    input_recovery.save()
             if before is not None and await asyncio.to_thread(
                 received,
                 before,

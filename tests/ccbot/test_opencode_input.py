@@ -51,6 +51,8 @@ async def test_opencode_long_unicode_is_one_literal_paste(monkeypatch):
 
 @pytest.fixture
 def native_input(tmp_path, monkeypatch):
+    from ccbot.config import config
+
     db = sqlite3.connect(tmp_path / "opencode.db")
     db.executescript("""
         CREATE TABLE session(id TEXT PRIMARY KEY, directory TEXT, title TEXT,
@@ -67,7 +69,7 @@ def native_input(tmp_path, monkeypatch):
     (tmp_path / "session_map.json").write_text(
         json.dumps(
             {
-                "test:@7": {
+                f"{config.tmux_session_name}:@7": {
                     "backend": "opencode",
                     "session_id": "ses_input",
                     "cwd": "/tmp/lab",
@@ -464,7 +466,7 @@ async def test_restart_replays_only_prompt_that_has_not_started_pasting(
         return True
 
     monkeypatch.setattr(opencode_input, "_capture", capture)
-    monkeypatch.setattr(opencode_input, "native_checkpoint", lambda window: None)
+    monkeypatch.setattr(opencode_input, "native_checkpoint", lambda *_: None)
     monkeypatch.setattr(
         tmux_input_transport, "zcode_process_is_running", AsyncMock(return_value=True)
     )
@@ -684,3 +686,146 @@ def test_pre_upgrade_unknown_photo_uses_original_store_after_dispatch(
     native_input.execute("UPDATE message SET time_created=1001 WHERE id='new'")
     native_input.commit()
     assert journal.reconcile(request) and request.confirmed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timing", ["live", "restart"])
+async def test_first_voice_binds_after_paste(
+    native_input, tmp_path, monkeypatch, timing
+):
+    from ccbot import input_recovery, opencode_input
+    from ccbot.config import config
+    from ccbot.session import Session, session_manager
+
+    session = Session(
+        id="local",
+        name="voice",
+        backend="opencode",
+        workdir="/tmp/lab",
+        window_id="@7",
+        activated_at=1,
+    )
+    monkeypatch.setattr(session_manager, "sessions", {session.id: session})
+    recovery = input_recovery.InputRecovery(tmp_path / "inputs.json")
+    spoken = "Первый голосовой запрос"
+    request = input_recovery.InputRequest(
+        "r", 42, 3, session.id, "@7", "voice", {}, prepared=spoken
+    )
+    recovery.records["r"] = request
+    monkeypatch.setattr(input_recovery, "input_recovery", recovery)
+    monkeypatch.setattr(recovery, "current", lambda: request)
+    monkeypatch.setattr(opencode_input, "_capture", AsyncMock(return_value=IDLE))
+    monkeypatch.setattr(
+        tmux_input_transport, "zcode_process_is_running", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(opencode_input, "ACK_TIMEOUT", 1 if timing == "live" else 0)
+    mapping = tmp_path / "session_map.json"
+    mapping.write_text("{}")
+    native_input.execute(
+        "INSERT INTO session VALUES ('ses_other', '/tmp/lab','other',NULL,1)"
+    )
+
+    def append(sid, mid):
+        now = int(time.time() * 1000)
+        native_input.execute(
+            "INSERT INTO message VALUES (?,?,?,?,?)",
+            (mid, sid, now, now, json.dumps({"role": "user"})),
+        )
+        native_input.execute(
+            "INSERT INTO part VALUES (?,?,?,?,?,?)",
+            (mid, mid, sid, now, now, json.dumps({"type": "text", "text": spoken})),
+        )
+        native_input.commit()
+
+    def bind(window, sid):
+        data = json.loads(mapping.read_text())
+        data[f"{config.tmux_session_name}:{window}"] = {
+            "backend": "opencode",
+            "session_id": sid,
+            "cwd": "/tmp/lab",
+        }
+        mapping.write_text(json.dumps(data))
+
+    append("ses_input", "old")
+
+    async def paste():
+        append("ses_other", "concurrent")
+        bind("@8", "ses_other")
+        if timing == "live":
+            append("ses_input", "first")
+            bind("@7", "ses_input")
+        return True
+
+    send = AsyncMock(side_effect=paste)
+    accepted = await opencode_input.submit("@7", spoken, send)
+    if timing == "live":
+        assert accepted
+    else:
+        assert not accepted
+        restored = input_recovery.InputRecovery(recovery.path)
+        restored.load()
+        row = restored.records["r"]
+        assert row.state == "unknown" and not restored.reconcile(row)
+        bind("@7", "ses_input")
+        session.activated_at = 2
+        assert not restored.reconcile(row)  # window reclaimed after dispatch
+        session.activated_at = 1
+        assert not restored.reconcile(row)  # identical old message in this window
+        bind("@7", "ses_other")  # a later rebind cannot redirect the receipt
+        restored = input_recovery.InputRecovery(recovery.path)
+        restored.load()
+        row = restored.records["r"]
+        assert not restored.reconcile(row)
+        append("ses_input", "first")
+        assert restored.reconcile(row) and row.confirmed
+    send.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "first_text,confirmed", [("voice", True), ("different", False)]
+)
+def test_legacy_first_voice_requires_the_first_native_user_message(
+    native_input, tmp_path, monkeypatch, first_text, confirmed
+):
+    from ccbot.input_recovery import InputRecovery, InputRequest
+    from ccbot.session import Session, session_manager
+
+    s = Session(
+        id="local",
+        name="voice",
+        backend="opencode",
+        workdir="/tmp/lab",
+        window_id="@7",
+        activated_at=7,
+        claude_session_id="ses_input",
+    )
+    monkeypatch.setattr(session_manager, "sessions", {s.id: s})
+    recovery = InputRecovery(tmp_path / "inputs.json")
+    request = InputRequest(
+        "r",
+        42,
+        3,
+        s.id,
+        "@7",
+        "voice",
+        {},
+        prepared="voice",
+        state="unknown",
+        dispatch_started_at=8,
+    )
+    recovery.records["r"] = request
+    native_input.execute(
+        "ALTER TABLE session ADD COLUMN time_created INTEGER DEFAULT 8210"
+    )
+    for idx, value in enumerate([first_text, "voice"]):
+        mid = f"m{idx}"
+        native_input.execute(
+            "INSERT INTO message VALUES (?, 'ses_input', ?, 1, ?)",
+            (mid, 8219 + idx, json.dumps({"role": "user"})),
+        )
+        native_input.execute(
+            "INSERT INTO part VALUES (?,?,'ses_input',1,1,?)",
+            (mid, mid, json.dumps({"type": "text", "text": value})),
+        )
+    native_input.commit()
+    assert recovery.reconcile(request) is confirmed

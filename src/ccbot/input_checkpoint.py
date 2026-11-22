@@ -13,7 +13,24 @@ def restore_checkpoint(
     recovery: InputRecovery, request: InputRequest, scan_positions: dict[str, int]
 ) -> bool:
     if not request.strict_codex_proof:
-        return request.checkpoint is not None
+        from .opencode_receipt import bind_pending_checkpoint, legacy_first_checkpoint
+
+        if request.checkpoint is None:
+            native = legacy_first_checkpoint(request)
+            if native is None:
+                return False
+            request.checkpoint = {
+                "backend": "opencode",
+                "path": "",
+                "offset": 0,
+                "native": native,
+            }
+            recovery.save()
+        elif (native := request.checkpoint.get("native")) and bind_pending_checkpoint(
+            native
+        ):
+            recovery.save()
+        return True
     from .session import WindowState, session_manager
     from .codex_session_io import build_session_file_path
 

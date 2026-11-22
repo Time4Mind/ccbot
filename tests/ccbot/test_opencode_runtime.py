@@ -56,6 +56,18 @@ def test_live_composer_and_model_menu_do_not_match_shell_or_codex():
     assert parse_status_line("BUILD  ■ esc interrupt       ctrl+p cmd") == "Working"
 
 
+def test_fresh_composer_without_tip_above_the_version_bar():
+    pane = """  ┃  Ask anything…
+  ┃  Build auto · GPT-6.2 Sol OpenAI
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                       tab agents  ctrl+p commands
+
+  /private/tmp/project                                      1.19.5
+"""
+    assert is_ready(pane)
+    assert not is_ready(pane + "\nuser@host %")
+
+
 def test_resumed_opencode_composer_uses_usage_footer_instead_of_version():
     from ccbot.opencode_runtime import composer_identity
 

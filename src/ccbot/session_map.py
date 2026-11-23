@@ -123,6 +123,7 @@ class SessionMapMixin:
 
         valid_wids: set[str] = set()
         changed = False
+        retry = False
 
         for key, info in session_map.items():
             # Extract window_id from any accepted key shape.
@@ -134,6 +135,21 @@ class SessionMapMixin:
             if not window_id:
                 continue
             valid_wids.add(window_id)
+            if info.get("backend") == "opencode" and self.find_session_by_window(
+                window_id
+            ):
+                from .session_map_store import reconcile_opencode_entry
+
+                try:
+                    binding = await asyncio.to_thread(
+                        reconcile_opencode_entry, config.session_map_file, key, info
+                    )
+                except (OSError, ValueError):
+                    retry = True
+                    continue
+                if binding is None:
+                    continue
+                info = binding
             new_sid = info.get("session_id", "")
             new_cwd = info.get("cwd", "")
             new_wname = info.get("window_name", "")
@@ -198,7 +214,7 @@ class SessionMapMixin:
 
         if changed:
             self.save_state()
-        return True
+        return not retry
 
     async def publish_codex_restore_binding(
         self,

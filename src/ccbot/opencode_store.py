@@ -54,6 +54,24 @@ def open_store(path: Path | None = None) -> Generator[sqlite3.Connection, None, 
         db.close()
 
 
+def root_session_id(session_id: str, cwd: str) -> str | None:
+    """Resolve the native owner within this project, including nested tasks."""
+    with open_store() as db:
+        # UNION terminates even if a damaged database has a parent cycle.
+        row = db.execute(
+            """WITH RECURSIVE lineage(id, parent_id, directory) AS (
+                   SELECT id, parent_id, directory FROM session WHERE id=?
+                   UNION
+                   SELECT s.id, s.parent_id, s.directory FROM session s
+                   JOIN lineage l ON s.id=l.parent_id
+               ) SELECT id, directory FROM lineage WHERE parent_id IS NULL""",
+            (session_id,),
+        ).fetchone()
+    if row and Path(row["directory"]).resolve() == Path(cwd).resolve():
+        return row["id"]
+    return None
+
+
 def read_snapshot(
     session_id: str, cwd: str, *, path: Path | None = None, since: int = 0
 ) -> dict[str, Any] | None:

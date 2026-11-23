@@ -259,11 +259,13 @@ def _process_hook_event(backend: str | None = None) -> None:
         )
     valid_id = _UUID_RE.fullmatch(session_id)
     if detected_backend == "opencode":
-        from .opencode_store import SESSION_ID
+        from .opencode_store import SESSION_ID, root_session_id
 
         if payload.get("opencode_origin") != "chat.message":
             return
         valid_id = SESSION_ID.fullmatch(session_id)
+        if valid_id and root_session_id(session_id, cwd) != session_id:
+            return
     if detected_backend == "zcode":
         from .zcode_store import SESSION_ID
 

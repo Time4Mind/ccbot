@@ -37,19 +37,27 @@ def enqueue_saved(request: InputRequest, application: Any) -> asyncio.Future[boo
     from .inbound_queue import enqueue_inbound
 
     update = Update.de_json(request.update, application.bot)
+    kind = (
+        "command"
+        if request.kind == "text"
+        and update.message
+        and (update.message.text or "").startswith("/")
+        else request.kind
+    )
     return enqueue_inbound(
         request.user_id,
         request.window_id,
         update,
         CallbackContext.from_update(update, application),
         kind=request.kind,
-        processor=getattr(inbound, "_run_" + request.kind),
+        processor=getattr(inbound, "_run_" + kind),
         recovery_id=request.id,
     ).completion
 
 
 def restore_inputs(recovery: InputRecovery, application: Any) -> None:
     background = {
+        "unknown",
         "failed",
         "awaiting_confirmation",
         "waiting_session",

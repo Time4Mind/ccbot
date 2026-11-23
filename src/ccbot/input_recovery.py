@@ -19,6 +19,7 @@ from telegram import ReplyParameters
 from telegram.error import BadRequest, NetworkError, RetryAfter
 
 from .config import config
+from .input_manual_retry import remember_outcome
 from .input_notices import resolution
 from .opencode_tls_retry import tls_retries
 from .opencode_receipt import recovered_receipt
@@ -29,7 +30,6 @@ from .utils import atomic_write_json
 logger = logging.getLogger(__name__)
 _current: ContextVar[str] = ContextVar("ccbot_recoverable_input", default="")
 _CONFIRMATION_GRACE_SECONDS = 60.0
-_UNKNOWN_HOLD_SECONDS = 60.0
 _CONFIRMATION_CHECK_SECONDS = 5.0
 
 
@@ -83,8 +83,6 @@ class InputRequest:
 
 
 class InputRecovery:
-    """A private journal plus lifecycle-owned, coalescing feedback worker."""
-
     def __init__(self, path: Path) -> None:
         self.path = path
         self.records: dict[str, InputRequest] = {}
@@ -96,7 +94,7 @@ class InputRecovery:
         self.loaded = False
         self.bot: Any = None
         self.task: asyncio.Task[None] | None = None
-        self.events: dict[str, asyncio.Event] = {}
+        self.retry_sources: dict[str, dict[str, Any]] = {}
         self.dirty: set[tuple[int, str]] = set()
         self.clock: Callable[[], float] = time.time
         self.sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
@@ -118,6 +116,11 @@ class InputRecovery:
             )
             for row in raw.get("requests", [])
         }
+        self.retry_sources = raw.get("retry_sources", {})
+        self.dirty.update(
+            (e["source"]["user_id"], e["source"]["session_id"])
+            for e in self.retry_sources.values()
+        )
         self.completed = raw.get("completed", [])
         self.confirmed_through = raw.get("confirmed_through", {})
         self.confirmed_rows = raw.get("confirmed_rows", {})
@@ -143,7 +146,7 @@ class InputRecovery:
             if (
                 request.state == "unknown"
                 and request.notice_id is not None
-                and not request.session_name
+                and ("retry_sources" not in raw or not request.session_name)
             ):
                 request.notice = (
                     request.notice
@@ -163,6 +166,7 @@ class InputRecovery:
                 "version": 1,
                 **encode_requests(self.records),
                 "completed": self.completed,
+                "retry_sources": self.retry_sources,
                 "confirmed_through": self.confirmed_through,
                 "confirmed_rows": self.confirmed_rows,
                 "resolved_notices": self.resolved_notices,
@@ -233,9 +237,14 @@ class InputRecovery:
         return self.records.get(_current.get())
 
     def changed(self, request: InputRequest) -> None:
-        if request.kind in ("voice", "photo", "document") or request.state in (
-            "unknown",
-            "failed",
+        if (
+            request.kind in ("voice", "photo", "document")
+            or request.state
+            in (
+                "unknown",
+                "failed",
+            )
+            or request.id in self.retry_sources
         ):
             self.dirty.add((request.user_id, request.session_id))
         self.save()
@@ -253,9 +262,10 @@ class InputRecovery:
         )
 
     def complete(self, request: InputRequest, *, confirmed: bool = True) -> None:
+        if self.records.get(request.id) is not request:
+            return
         previous = request.state
-        if previous == "unknown":
-            self.dirty.add((request.user_id, request.session_id))
+        remember_outcome(self, request, confirmed)
         if (
             confirmed
             and previous in ("unknown", "awaiting_confirmation")
@@ -265,7 +275,8 @@ class InputRecovery:
         request.state = "delivered"
         request.confirmed = confirmed
         self.records.pop(request.id, None)
-        self.completed.append(request.id)
+        if request.id not in self.retry_sources or request.id not in self.completed:
+            self.completed.append(request.id)
         self._scan_positions.pop(request.id, None)
         self._next_reconcile.pop(request.id, None)
         self.changed(request)
@@ -279,8 +290,6 @@ class InputRecovery:
             if request.received_at
             else None,
         )
-        if request.id in self.events:
-            self.events[request.id].set()
 
     def fail(self, request: InputRequest, notice: str) -> None:
         from .handlers import bg_status
@@ -291,8 +300,6 @@ class InputRecovery:
         request.state = "failed"
         request.notice = notice
         self.changed(request)
-        if request.id in self.events:
-            self.events[request.id].set()
 
     def ui_error(self, user_id: int, session_id: str, exc: BaseException) -> None:
         if (
@@ -564,17 +571,7 @@ class InputRecovery:
                     )
                     return False
                 if request.state == "unknown":
-                    if self.reconcile_if_due(request):
-                        return True
-                    elapsed = self.clock() - request.dispatch_started_at
-                    if elapsed >= _UNKNOWN_HOLD_SECONDS:
-                        return False
-                    event = self.events.setdefault(request.id, asyncio.Event())
-                    try:
-                        await asyncio.wait_for(event.wait(), timeout=1.0)
-                    except TimeoutError:
-                        pass
-                    continue
+                    return self.reconcile_if_due(request)
                 try:
                     if request.retry_at > self.clock():
                         await self.sleep(request.retry_at - self.clock())
@@ -704,6 +701,8 @@ class InputRecovery:
                 request.notice_attempts += 1
                 self.changed(request)
                 return
+        if self.records.get(request.id) is not request:
+            return
         if request.state == "failed" and not (
             request.media_deferred or request.startup_deferred
         ):
@@ -774,8 +773,9 @@ class InputRecovery:
                             continue
                         await self.deliver_notice(request)
                 for uid, sid in tuple(self.dirty):
-                    if await refresh_request_status(self, uid, sid):
-                        self.dirty.discard((uid, sid))
+                    self.dirty.discard((uid, sid))
+                    if not await refresh_request_status(self, uid, sid):
+                        self.dirty.add((uid, sid))
             except asyncio.CancelledError:
                 raise
             except Exception:

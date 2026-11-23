@@ -347,6 +347,11 @@ def to_rich_markdown(text: str, *, file_base_dir: FileButtonContext = None) -> s
     text = _escape_outside_code(text)
     text = _EXPHEADED_RE.sub(_render_details_headed, text)
     text = _EXPQUOTE_RE.sub(_render_details, text)
+    text = re.sub(
+        r"(?m)^(⚠ Запрос №([0-9]+) · [^\n]+\n)(/requests_retry_\2)$",
+        r'\1<tg-button type="callback_data" data="retry:\2">\3</tg-button>',
+        text,
+    )
     text = _sub_wrap_tables(text)
     return _multiline_shell_fences_to_code(text)
 

@@ -163,7 +163,7 @@ async def test_unconfirmed_text_is_reported_without_resending(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("restart", [False, True])
-async def test_unknown_head_releases_fifo_after_one_minute(env, monkeypatch, restart):
+async def test_unknown_head_releases_fifo_immediately(env, monkeypatch, restart):
     from ccbot.handlers import bg_status
 
     monkeypatch.setattr(bg_status, "_bg", {})
@@ -183,9 +183,7 @@ async def test_unknown_head_releases_fifo_after_one_minute(env, monkeypatch, res
     await until(lambda: recovery.records["42:206"].state == "unknown")
     head = recovery.records["42:206"]
     assert await inbound.text_intake_handler(update(207, "second"), env.context)
-    env.now[0] = head.dispatch_started_at + 59
-    await asyncio.sleep(0)
-    assert attempts == ["first"]
+    await until(lambda: attempts == ["first", "second"])
 
     if restart:
         from ccbot.bot import input_feedback
@@ -198,10 +196,7 @@ async def test_unknown_head_releases_fifo_after_one_minute(env, monkeypatch, res
         monkeypatch.setattr(
             input_feedback, "refresh_request_status", AsyncMock(return_value=True)
         )
-        env.now[0] += 1
         recovery.start(Application.builder().token("1:testing").build())
-    else:
-        env.now[0] += 1
 
     await until(lambda: not has_pending_inbound("@source"))
     assert attempts == ["first", "second"]
@@ -638,11 +633,10 @@ async def test_uncertain_agent_submission_reconciles_from_actual_appended_transc
         restarted.run(request.id, process, update(40), env.context, "@source")
     )
     await asyncio.sleep(0)
-    assert sends == ["recognized"] and not resumed.done()
+    assert sends == ["recognized"] and not await resumed
     with transcript.open("a") as stream:
         stream.write(row)
     assert restarted.reconcile(request)
-    assert await resumed
     assert sends == ["recognized"] and restarted.duplicate(update(40))
 
 
@@ -1591,7 +1585,7 @@ async def test_media_dispatch_cannot_repost_over_a_newly_selected_session(
 
 
 @pytest.mark.asyncio
-async def test_failed_voice_stays_in_original_reply_not_live_card(env, monkeypatch):
+async def test_failed_voice_stays_in_original_reply_and_live_card(env, monkeypatch):
     from ccbot.handlers import notifications
     from ccbot.handlers.card_model import _render_card
 
@@ -1614,15 +1608,90 @@ async def test_failed_voice_stays_in_original_reply_not_live_card(env, monkeypat
     for selected in ("other", "source"):
         session_manager.active_sessions[42] = selected
         assert await refresh_request_status(env.recovery, 42, "source")
-        assert "2401" not in _render_card(env.source, state, user_id=42)
+        assert "/requests_retry_2401" in _render_card(env.source, state, user_id=42)
     restarted = recovery_module.InputRecovery(env.recovery.path)
     restarted.load()
     restarted.bot = env.recovery.bot
     assert await refresh_request_status(restarted, 42, "source")
-    assert "2401" not in _render_card(env.source, state, user_id=42)
+    assert "/requests_retry_2401" in _render_card(env.source, state, user_id=42)
     await restarted.deliver_notice(restarted.records[request.id])
     assert restarted.records[request.id].notice_id == 2402
     assert env.recovery.bot.send_message.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_only_current_missing_request_is_repeated_after_assistant_work(
+    env, monkeypatch
+):
+    from ccbot.handlers import notifications
+    from ccbot.handlers.card_model import Event, _render_card
+    from ccbot.rich import to_rich_markdown
+
+    state = env.cards["source"]
+    state.msg_id = 30000
+    monkeypatch.setattr(notifications, "get_card_state", lambda *_: state)
+    monkeypatch.setattr(notifications, "refresh_panel", AsyncMock(return_value=True))
+    for number in (17350, 17356, 20264):
+        req = env.recovery.admit(update(number), "voice", env.source)
+        req.state, req.received_at = "unknown", float(number)
+    state.events = [
+        Event("user_msg", "предыдущий запрос", 20000, is_page_break=True),
+        Event("final_text", "итог предыдущего запроса", 20300),
+    ]
+    await refresh_request_status(env.recovery, 42, "source")
+    tail = to_rich_markdown(_render_card(env.source, state, user_id=42))
+    assert 'data="retry:20264"' in tail
+    assert "17350" not in tail and "17356" not in tail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["text", "voice", "document", "photo"])
+async def test_historical_failure_stays_at_request_after_next_user_turn(
+    env, monkeypatch, kind
+):
+    from ccbot.handlers import notifications
+    from ccbot.handlers.card_model import Event, _render_card, paginate_events_for_card
+
+    state = env.cards["source"]
+    state.msg_id = 30000
+    monkeypatch.setattr(notifications, "get_card_state", lambda *_: state)
+    monkeypatch.setattr(notifications, "refresh_panel", AsyncMock(return_value=True))
+    rec = env.recovery
+    original = (
+        file_update(20264, kind)
+        if kind in ("document", "photo")
+        else update(20264, None if kind == "voice" else "запрос")
+    )
+    req = rec.admit(original, kind, env.source)
+    req.state, req.prepared, req.received_at = "unknown", "запрос", 1000
+    rec.changed(req)
+    state.events = [
+        Event("user_msg", "раньше", 900, is_page_break=True),
+        Event("user_msg", "позже", 1100, is_page_break=True),
+    ]
+
+    async def pages():
+        assert await refresh_request_status(rec, 42, "source")
+        result = []
+        for idx in range(len(paginate_events_for_card(state, 42))):
+            state.current_page_idx = idx
+            result.append(_render_card(env.source, state, user_id=42))
+        return result
+
+    history = await pages()
+    assert "раньше" in history[0] and "/requests_retry_20264" not in history[0]
+    assert "запрос" in history[1] and "/requests_retry_20264" in history[1]
+    from ccbot.rich import to_rich_markdown
+
+    button = '<tg-button type="callback_data" data="retry:20264">/requests_retry_20264</tg-button>'
+    assert button in to_rich_markdown(history[1])
+    assert button not in to_rich_markdown(history[-1])
+    assert "позже" in history[-1] and "/requests_retry_20264" not in history[-1]
+    rec.complete(req)
+    history = await pages()
+    assert "запрос" in history[1]
+    assert all("/requests_retry_20264" not in page for page in history)
+    assert "позже" in history[-1]
 
 
 @pytest.mark.asyncio
@@ -1716,7 +1785,7 @@ async def test_saved_notice_and_request_list_use_whole_command_links(env, monkey
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("verb", ["ack", "cancel", "retry"])
+@pytest.mark.parametrize("verb", ["ack", "cancel"])
 async def test_inline_unknown_request_actions_never_replay(env, monkeypatch, verb):
     from ccbot.bot.commands import requests as command
 
@@ -1734,11 +1803,68 @@ async def test_inline_unknown_request_actions_never_replay(env, monkeypatch, ver
     assert not has_pending_inbound("@source")
     if verb == "ack":
         assert req.id not in env.recovery.records
-    elif verb == "cancel":
-        assert req.state == "failed" and not req.media_deferred
     else:
-        assert req.state == "unknown"
-        assert "/requests_ack_17232" not in reply.call_args.args[1]
+        assert req.state == "failed" and not req.media_deferred
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("late_receipt", [False, True])
+async def test_manual_retry_overrides_unknown_outcome_after_restart(
+    env, monkeypatch, late_receipt
+):
+    from ccbot.bot.commands import requests as command
+
+    recovery = env.recovery
+    request = recovery.admit(update(20264), "voice", env.source)
+    request.state = "unknown"
+    request.recognized = "распознано"
+    request.prepared = "готовый запрос"
+    request.notice = "Доставка не подтверждена. Проверьте /requests."
+    recovery.changed(request)
+    recovery.bot = AsyncMock()
+    recovery.bot.send_message.return_value = SimpleNamespace(message_id=20266)
+    await recovery.deliver_notice(request)
+    assert "/requests_retry_20264" in recovery.bot.send_message.call_args.kwargs["text"]
+    if late_receipt:
+        recovery.complete(request)
+    recovery = recovery_module.InputRecovery(recovery.path)
+    monkeypatch.setattr(recovery_module, "input_recovery", recovery)
+    session_manager.active_sessions[42] = "other"
+    attempts = []
+
+    async def receive(upd, ctx, wid):
+        attempts.append((wid, recovery.current().prepared))
+        return True
+
+    monkeypatch.setattr(inbound, "_run_voice", receive)
+    monkeypatch.setattr(command, "is_user_allowed", lambda _: True)
+    monkeypatch.setattr(command, "safe_reply", AsyncMock())
+    ctx = SimpleNamespace(application=Application.builder().token("1:testing").build())
+    for number in (20270, 20270, 20271):
+        await command.requests_command(update(number, "/requests_retry_20264"), ctx)
+        await until(lambda: not has_pending_inbound("@source"))
+    assert attempts == [("@source", "готовый запрос")] * 2
+
+
+@pytest.mark.asyncio
+async def test_card_retry_button_routes_once_to_original_session(env, monkeypatch):
+    from ccbot.bot import callbacks
+
+    request = env.recovery.admit(update(20264), "voice", env.source)
+    request.state = "unknown"
+    request.prepared = "исходный запрос"
+    session_manager.active_sessions[42] = "other"
+    query = SimpleNamespace(data="retry:20264", id="tap", answer=AsyncMock())
+    click = SimpleNamespace(callback_query=query, effective_user=SimpleNamespace(id=42))
+    ctx = SimpleNamespace(application=Application.builder().token("1:testing").build())
+    monkeypatch.setattr(callbacks, "is_user_allowed", lambda uid: uid == 42)
+    send = AsyncMock(return_value=True)
+    monkeypatch.setattr(inbound, "_run_voice", send)
+    for _ in range(2):
+        await callbacks.callback_handler(click, ctx)
+        await until(lambda: not has_pending_inbound("@source"))
+    send.assert_awaited_once()
+    assert send.await_args.args[2] == "@source"
 
 
 @pytest.mark.asyncio
@@ -1751,6 +1877,7 @@ async def test_request_list_has_clickable_unknown_actions(env, monkeypatch):
     reply = AsyncMock()
     monkeypatch.setattr(command, "safe_reply", reply)
     await command.requests_command(update(17233, "/requests"), SimpleNamespace(args=[]))
+    assert "/requests_retry_17232" in reply.call_args.args[1]
     assert "/requests_ack_17232" in reply.call_args.args[1]
     assert "/requests_cancel_17232" in reply.call_args.args[1]
 

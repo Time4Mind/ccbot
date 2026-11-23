@@ -305,6 +305,11 @@ def _render_card(
     # to fit the new size. Idempotent: chunks below budget stay intact.
     _rechunk_oversized_finals_inplace(state, line_budget)
 
+    if user_id is not None and not state.delivery_id and not state.recovery_rows_loaded:
+        from ..input_recovery import input_recovery
+        from .card_input_recovery import refresh_rows
+
+        refresh_rows(state, input_recovery, user_id, sess.id)
     pages = paginate_events_for_card(state, user_id)
     idx = _resolved_page_idx(state, len(pages))
 
@@ -341,7 +346,10 @@ def _render_card(
             request_rows[voice_id] = Event(
                 type="user_msg", text=t(user_id or 0, f"voice.{stage}"), started_at=now
             )
+        recovering = {row.message_id for row in state.recovery_rows}
         for prompt in state.pending_prompts:
+            if prompt.message_id in recovering:
+                continue
             request_rows[prompt.message_id] = Event(
                 type="user_msg",
                 text=prompt.text,

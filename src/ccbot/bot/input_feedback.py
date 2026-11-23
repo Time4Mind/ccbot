@@ -38,8 +38,9 @@ async def refresh_request_status(recovery: Any, user_id: int, session_id: str) -
             if item.attempts
             else "📎 Файл ожидает загрузки."
         )
-    # Failures stay in the reply to their original message, never in the live
-    # tail of every subsequent turn. Recovery actions also remain in /requests.
+    from ..handlers.card_input_recovery import refresh_rows
+
+    refresh_rows(state, recovery, user_id, session_id)
     state.voice_requests = {
         item.message_id: "transcribing"
         if item.state == "transcribing"

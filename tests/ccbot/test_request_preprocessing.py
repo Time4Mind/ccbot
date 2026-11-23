@@ -64,7 +64,7 @@ def test_preprocessing_scope(mode: str, kind: str, expected: bool) -> None:
 
 def test_builtin_instruction_is_the_approved_literal() -> None:
     assert DEFAULT_PREPROCESSING_INSTRUCTION.startswith(
-        "Консервативно отредактируй одно голосовое или текстовое сообщение."
+        "Верни только реплику пользователя."
     )
 
 

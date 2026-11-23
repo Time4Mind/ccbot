@@ -43,6 +43,7 @@ class ParsedEntry:
     # API failure from an assistant that merely *talks about* one — matching
     # error text against arbitrary assistant output produces false positives.
     api_error: str = ""
+    opencode_message_id: str = ""
 
 
 @dataclass

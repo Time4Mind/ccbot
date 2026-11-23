@@ -263,6 +263,18 @@ def _events_from_parsed_entries(
     # assistant text). Keep only entries from the last CARD_SEED_TURNS
     # boundaries - earlier history stays in JSONL for transcript recovery or
     # other history paths.
+    if sess.backend == "opencode":
+        from ..opencode_tls_retry import tls_retries
+
+        parsed_list = [
+            p
+            for p in parsed_list
+            if not tls_retries.hidden_on_card(
+                sess,
+                _entry_value(p, "opencode_message_id", ""),
+                _entry_value(p, "api_error", ""),
+            )
+        ]
     end_turn_idxs: list[int] = []
     for i in range(len(parsed_list) - 1, -1, -1):
         p = parsed_list[i]

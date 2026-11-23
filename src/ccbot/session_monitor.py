@@ -61,6 +61,7 @@ class NewMessage:
     # The only trustworthy auth-failure signal: assistant text that merely
     # mentions such an error must never be mistaken for one.
     api_error: str = ""
+    opencode_message_id: str = ""
 
 
 class SessionMonitor:
@@ -476,6 +477,7 @@ class SessionMonitor:
                             timestamp=entry.timestamp or "",
                             is_error=entry.is_error,
                             api_error=entry.api_error,
+                            opencode_message_id=entry.opencode_message_id,
                         )
                     )
 

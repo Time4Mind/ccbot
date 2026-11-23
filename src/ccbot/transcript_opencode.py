@@ -12,12 +12,17 @@ from .transcript_zcode import project_snapshot as project_native_snapshot
 def project_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     normalized = deepcopy(snapshot)
     tools = {}
+    from .opencode_tls_proof import handshake_error
+
+    tls_errors = set()
     aborted_messages = set()
     for message in normalized["messages"]:
         # OpenCode uses summary objects for visible user-turn file diffs;
         # ZCode's boolean summary marker instead denotes hidden compaction.
         if isinstance(message.get("summary"), dict):
             message.pop("summary")
+        if message.get("role") == "assistant" and handshake_error(message.get("error")):
+            tls_errors.add(message["id"] + ":error")
         aborted = (message.get("error") or {}).get("name") == "MessageAbortedError"
         if aborted:
             aborted_messages.add(message["id"] + ":error")
@@ -87,6 +92,13 @@ def project_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         if row.get("error") == "zcode_request_failed":
             row["error"] = "opencode_request_failed"
         identity, separator, phase = str(row.get("uuid") or "").rpartition(":")
+        if phase in ("text", "error"):
+            row["opencode_message_id"] = identity
+        if (
+            row.get("uuid") in tls_errors
+            and row.get("error") == "opencode_request_failed"
+        ):
+            row["error"] = "opencode_tls_handshake"
         if separator and identity in tools:
             tool = tools[identity]
             block = row["message"]["content"][0]

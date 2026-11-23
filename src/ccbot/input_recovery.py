@@ -1,8 +1,6 @@
-"""Durable recovery of voice admission and requests queued behind it.
+"""Durable recovery of inbound requests and delivery proofs.
 
-The journal owns request identity and submission checkpoints, while the existing
-per-session FIFO owns execution. An unacknowledged agent submission is never
-replayed automatically. Telegram notices are retried separately from processing.
+The per-session FIFO owns execution. Never replay unacknowledged submissions.
 """
 
 from __future__ import annotations
@@ -22,6 +20,7 @@ from telegram.error import BadRequest, NetworkError, RetryAfter
 
 from .config import config
 from .input_notices import resolution
+from .opencode_tls_retry import tls_retries
 from .opencode_receipt import recovered_receipt
 from .final_delivery import RETRY_DELAYS, before_submission
 from . import input_composer_queue as composer_queue
@@ -218,6 +217,7 @@ class InputRecovery:
             received_at=self.clock(),
             session_name=getattr(session, "name", ""),
         )
+        tls_retries.admit(session, key)
         self.records[key] = request
         self.changed(request)
         logger.info(

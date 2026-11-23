@@ -133,6 +133,9 @@ async def handle(
         if sess is None or not sess.window_id:
             await query.answer(t(user.id, "toast.no_session"), show_alert=False)
             return True
+        from ...opencode_tls_retry import tls_retries
+
+        tls_retries.cancel(sess)
         if not await send_session_key(sess, "Escape"):
             await query.answer(t(user.id, "toast.window_gone"), show_alert=False)
             return True

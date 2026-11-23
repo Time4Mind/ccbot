@@ -227,7 +227,12 @@ def _footer_top_row(
 
     row: list[InlineKeyboardButton] = []
     if _has_active_session(user_id):
-        if is_busy:
+        from ..opencode_tls_retry import tls_retries
+
+        active = session_manager.get_active_session(user_id)
+        if is_busy or (
+            active and active.backend == "opencode" and tls_retries.progress(active)
+        ):
             row.append(
                 InlineKeyboardButton(t(user_id, "btn.stop"), callback_data=CB_FT_STOP)
             )

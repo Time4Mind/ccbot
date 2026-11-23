@@ -283,7 +283,10 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not wid:
         await safe_reply(update.message, "❌ No active session.")
         return
+    from ...opencode_tls_retry import tls_retries
+
     sess = session_manager.find_session_by_window(wid)
+    tls_retries.cancel(sess)
     if sess is not None and sess.node_id != "local":
         from ...transfer_runtime import get_node_runtime
 

@@ -313,6 +313,9 @@ class TranscriptParser:
                 for entry in result[pre_count:]:
                     entry.stop_reason = stop_reason
                     entry.api_error = api_error
+                    entry.opencode_message_id = str(
+                        data.get("opencode_message_id") or ""
+                    )
 
             elif msg_type == "user":
                 # Check for tool_result blocks and merge with pending tools
@@ -541,6 +544,9 @@ class TranscriptParser:
                             ParsedEntry(
                                 role="user",
                                 text=combined,
+                                opencode_message_id=str(
+                                    data.get("opencode_message_id") or ""
+                                ),
                                 content_type="text",
                                 timestamp=entry_timestamp,
                             )

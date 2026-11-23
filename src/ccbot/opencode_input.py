@@ -126,6 +126,9 @@ async def submit(
                             "offset": 0,
                         }
                     request.checkpoint["native"] = before
+                    from .opencode_tls_retry import tls_retries
+
+                    tls_retries.prepare(request, before, text)
             hook = _before_paste.get()
             if hook is not None and hook[0] == window:
                 hook[1]()

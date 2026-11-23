@@ -353,6 +353,13 @@ def _render_card(
             for message_id in sorted(request_rows)
         )
         body = _EVENT_JOINER.join(filter(None, (body, *rows)))
+    if sess.backend == "opencode" and is_latest_page and not state.delivery_id:
+        from ..opencode_tls_retry import tls_retries
+
+        if attempt := tls_retries.progress(sess):
+            body = _EVENT_JOINER.join(
+                filter(None, (body, f"Переподключение {attempt}/10"))
+            )
     if state.inbound_status and is_latest_page:
         body = _EVENT_JOINER.join(part for part in (body, state.inbound_status) if part)
     parts = [header, "─────"]

@@ -181,7 +181,9 @@ def test_busy_composer_and_stop_have_native_opencode_semantics():
     assert navigation_keys("Escape", COMPOSER) == ("Escape",)
 
 
-def test_opencode_hook_retains_native_id_and_project(tmp_path, monkeypatch):
+def test_opencode_hook_retains_native_id_and_project(
+    tmp_path, monkeypatch, opencode_native
+):
     monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
     monkeypatch.setenv("TMUX_PANE", "%99")
     monkeypatch.setattr(
@@ -190,7 +192,7 @@ def test_opencode_hook_retains_native_id_and_project(tmp_path, monkeypatch):
         lambda *a, **kw: SimpleNamespace(stdout="ccbot::@9:test\n"),
     )
     payload = {
-        "session_id": "ses_hookAcceptance123",
+        "session_id": "ses_ccbotAcceptance123",
         "cwd": str(tmp_path),
         "hook_event_name": "UserPromptSubmit",
         "opencode_origin": "chat.message",
@@ -199,7 +201,7 @@ def test_opencode_hook_retains_native_id_and_project(tmp_path, monkeypatch):
     hook._process_hook_event(backend="opencode")
     binding = json.loads((tmp_path / "session_map.json").read_text())["ccbot:@9"]
     assert binding["backend"] == "opencode"
-    assert binding["session_id"] == "ses_hookAcceptance123"
+    assert binding["session_id"] == "ses_ccbotAcceptance123"
     assert Path(binding["transcript_path"]).is_file()
     assert "opencode-transcripts" in binding["transcript_path"]
 
@@ -208,7 +210,12 @@ def test_opencode_hook_retains_native_id_and_project(tmp_path, monkeypatch):
     ("origin", "native_id"),
     [(None, "ses_foreign123"), ("chat.message", "ses_alreadyBound123")],
 )
-def test_opencode_hook_preserves_ownership(tmp_path, monkeypatch, origin, native_id):
+def test_opencode_hook_preserves_ownership(
+    tmp_path, monkeypatch, origin, native_id, opencode_native
+):
+    db, _, _ = opencode_native
+    db.execute("UPDATE session SET id=?", (native_id,))
+    db.commit()
     monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
     monkeypatch.setenv("TMUX_PANE", "%99")
     monkeypatch.setattr(

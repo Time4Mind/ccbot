@@ -19,16 +19,22 @@ if TYPE_CHECKING:
 
 def _binding(window: str) -> dict[str, Any] | None:
     try:
-        bindings = json.loads((ccbot_dir() / "session_map.json").read_text())
+        from .session_map_store import reconcile_opencode_entry
+
+        path = ccbot_dir() / "session_map.json"
+        bindings = json.loads(path.read_text())
         matches = [
-            v
+            (k, v)
             for k, v in bindings.items()
             if key_matches_window(k, window)
             and isinstance(v, dict)
             and v.get("backend") == "opencode"
         ]
-        return matches[0] if len(matches) == 1 else None
-    except (OSError, ValueError):
+        if len(matches) != 1:
+            return None
+        key, entry = matches[0]
+        return reconcile_opencode_entry(path, key, entry)
+    except (KeyError, OSError, ValueError):
         return None
 
 

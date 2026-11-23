@@ -12,30 +12,6 @@ from ccbot.transcript_parser import TranscriptParser
 SID = "ses_ccbotAcceptance123"
 
 
-@pytest.fixture
-def native(tmp_path, monkeypatch):
-    path = tmp_path / "opencode.db"
-    monkeypatch.setenv("CCBOT_DIR", str(tmp_path / "ccbot"))
-    monkeypatch.setenv("OPENCODE_SESSION_DB_PATH", str(path))
-    db = sqlite3.connect(path)
-    db.executescript("""
-        CREATE TABLE session(id TEXT PRIMARY KEY, directory TEXT, title TEXT,
-            parent_id TEXT, time_created INTEGER, time_updated INTEGER,
-            time_archived INTEGER);
-        CREATE TABLE message(id TEXT PRIMARY KEY, session_id TEXT,
-            time_created INTEGER, time_updated INTEGER, data TEXT);
-        CREATE TABLE part(id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT,
-            time_created INTEGER, time_updated INTEGER, data TEXT);
-    """)
-    db.execute(
-        "INSERT INTO session VALUES (?, ?, 'Test', NULL, 100, 100, NULL)",
-        (SID, str(tmp_path)),
-    )
-    db.commit()
-    yield db, path, tmp_path
-    db.close()
-
-
 def add_message(db, identity, role, text, *, hidden=False, completed=True):
     data = {"role": role, "time": {"created": 100}, "modelID": "gpt-6-luna"}
     if role == "assistant" and completed:
@@ -69,8 +45,8 @@ def rows(path):
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-def test_opencode_history_is_read_only_and_idempotent(native):
-    db, source, cwd = native
+def test_opencode_history_is_read_only_and_idempotent(opencode_native):
+    db, source, cwd = opencode_native
     add_message(db, "u1", "user", "Question")
     add_message(db, "hidden", "user", "Hidden harness", hidden=True)
     add_message(db, "a1", "assistant", "Answer")
@@ -91,8 +67,8 @@ def test_opencode_history_is_read_only_and_idempotent(native):
     assert session_transcript_path("../../unsafe", str(cwd), "opencode") is None
 
 
-def test_running_tool_becomes_one_paired_result(native):
-    db, _source, cwd = native
+def test_running_tool_becomes_one_paired_result(opencode_native):
+    db, _source, cwd = opencode_native
     add_message(db, "a1", "assistant", "", completed=False)
     tool = {
         "type": "tool",
@@ -125,10 +101,10 @@ def test_running_tool_becomes_one_paired_result(native):
     assert sum(row.get("uuid") == "tool:call" for row in rows(path)) == 1
 
 
-def test_restart_repairs_only_owned_journal_and_preserves_native_store(native):
+def test_restart_repairs_only_owned_journal_and_preserves_native_store(opencode_native):
     from ccbot import opencode_session_io as io
 
-    db, source, cwd = native
+    db, source, cwd = opencode_native
     add_message(db, "u1", "user", "Question")
     path = session_transcript_path(SID, str(cwd), "opencode")
     assert path
@@ -159,10 +135,10 @@ def test_missing_or_incompatible_store_is_not_created_or_migrated(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_live_monitor_refreshes_opencode_projection(native):
+async def test_live_monitor_refreshes_opencode_projection(opencode_native):
     from ccbot.session_monitor import SessionInfo, SessionMonitor
 
-    db, _source, cwd = native
+    db, _source, cwd = opencode_native
     path = session_transcript_path(SID, str(cwd), "opencode")
     assert path
     monitor = SessionMonitor(
@@ -180,10 +156,12 @@ async def test_live_monitor_refreshes_opencode_projection(native):
 
 
 @pytest.mark.asyncio
-async def test_fast_new_native_turn_is_delivered_then_not_replayed_on_restore(native):
+async def test_fast_new_native_turn_is_delivered_then_not_replayed_on_restore(
+    opencode_native,
+):
     from ccbot.session_monitor import SessionInfo, SessionMonitor
 
-    db, _source, cwd = native
+    db, _source, cwd = opencode_native
     db.execute("UPDATE session SET time_created=1000 WHERE id=?", (SID,))
     db.commit()
     add_message(db, "fast", "assistant", "FAST_CLEAR_REPLY")
@@ -204,3 +182,53 @@ async def test_fast_new_native_turn_is_delivered_then_not_replayed_on_restore(na
     await monitor._detect_and_cleanup_changes({})
     await monitor._detect_and_cleanup_changes({"@2": SID})
     assert await monitor.check_for_updates({SID}, session_infos=targets) == []
+
+
+@pytest.mark.parametrize("other_window", [False, True])
+def test_old_child_repair_preserves_newer_or_other_window_binding(
+    opencode_native, other_window
+):
+    from ccbot.session_map_store import reconcile_opencode_entry
+
+    db, _, cwd = opencode_native
+    db.execute(
+        "INSERT INTO session VALUES ('ses_child', ?, 'child', ?, 1, 1, NULL)",
+        (str(cwd), SID),
+    )
+    db.commit()
+    mapping = cwd / "session_map.json"
+    stale = {"backend": "opencode", "session_id": "ses_child", "cwd": str(cwd)}
+    current_root = {**stale, "session_id": SID}
+    current = (
+        {"ccbot:@1": stale, "ccbot:@2": current_root}
+        if other_window
+        else {"ccbot:@1": current_root}
+    )
+    mapping.write_text(json.dumps(current))
+    before = mapping.read_bytes()
+    assert reconcile_opencode_entry(mapping, "ccbot:@1", stale) is None
+    assert mapping.read_bytes() == before
+
+
+def test_input_before_monitor_poll_uses_root_receipt(opencode_native):
+    from ccbot.opencode_receipt import native_checkpoint
+    from ccbot.config import config
+    from ccbot.utils import ccbot_dir
+
+    db, _, cwd = opencode_native
+    db.execute(
+        "INSERT INTO session VALUES ('ses_child', ?, 'child', ?, 1, 1, NULL)",
+        (str(cwd), SID),
+    )
+    db.commit()
+    mapping = ccbot_dir() / "session_map.json"
+    mapping.parent.mkdir(exist_ok=True)
+    key = f"{config.tmux_session_name}:@1"
+    mapping.write_text(
+        json.dumps(
+            {key: {"backend": "opencode", "session_id": "ses_child", "cwd": str(cwd)}}
+        )
+    )
+    checkpoint = native_checkpoint("@1")
+    assert checkpoint and checkpoint["session_id"] == SID
+    assert json.loads(mapping.read_text())[key]["session_id"] == SID

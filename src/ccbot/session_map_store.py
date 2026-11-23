@@ -73,3 +73,42 @@ def remove_session_map_entries(map_file: Path, session_id: str) -> list[str]:
             return removed
         finally:
             fcntl.flock(lock_handle, fcntl.LOCK_UN)
+
+
+def reconcile_opencode_entry(
+    map_file: Path, key: str, observed: dict[str, str]
+) -> dict[str, str] | None:
+    """Heal a child row left by an older hook without clobbering a newer bind."""
+    from .opencode_store import root_session_id
+    from .opencode_session_io import ensure_projection
+
+    sid, cwd = observed.get("session_id"), observed.get("cwd")
+    if not sid or not cwd:
+        return None
+    root = root_session_id(sid, cwd)
+    if root is None:
+        return None
+    if root == sid:
+        return observed
+
+    with map_file.with_suffix(".lock").open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        current = json.loads(map_file.read_text())
+        if current.get(key) != observed:
+            return None
+        if any(
+            other.rsplit(":", 1)[-1] != key.rsplit(":", 1)[-1]
+            and isinstance(row, dict)
+            and row.get("backend") == "opencode"
+            and row.get("session_id") == root
+            for other, row in current.items()
+        ):
+            return None
+        repaired = {
+            **observed,
+            "session_id": root,
+            "transcript_path": str(ensure_projection(root, cwd)),
+        }
+        current[key] = repaired
+        atomic_write_json(map_file, current)
+        return repaired

@@ -70,6 +70,12 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         await session_manager.load_session_map()
         targets = session_manager.all_user_sessions_with_claude_id(msg.session_id)
 
+    if targets and msg.opencode_message_id:
+        from ..opencode_tls_retry import tls_retries
+
+        if await tls_retries.event(targets[0][1], msg, bot):
+            return
+
     # A dead OAuth login makes every session fail identically. Surface it once
     # with the /login affordance instead of letting the raw CLI error scroll by
     # in each card — the bot itself needs no Claude auth, so it can fix this.

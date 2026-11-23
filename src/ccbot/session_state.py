@@ -292,6 +292,9 @@ class SessionStateMixin(NodeSessionStateMixin):
         sess = self.sessions.get(session_id)
         if not sess:
             return
+        from .opencode_tls_retry import tls_retries
+
+        tls_retries.cancel(sess)
         if sess.state == "lost":
             # Carry the lost-marker into archival so /archive can tag it
             # explicitly (per user feedback on pivot #38). Without this

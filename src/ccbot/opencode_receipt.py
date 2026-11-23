@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from .input_recovery import InputRequest
 
 
-def _binding(window: str) -> dict[str, Any] | None:
+def window_binding(window: str) -> dict[str, Any] | None:
     try:
         from .session_map_store import reconcile_opencode_entry
 
@@ -41,7 +41,7 @@ def _binding(window: str) -> dict[str, Any] | None:
 def native_checkpoint(window: str, owner_id: str = "") -> dict[str, Any] | None:
     from .session import session_manager
 
-    binding = _binding(window)
+    binding = window_binding(window)
     path = database_path().resolve()
     try:
         with open_store(path) as db:
@@ -98,7 +98,7 @@ def bind_pending_checkpoint(checkpoint: dict[str, Any]) -> bool:
         or owner.activated_at != checkpoint["activated_at"]
     ):
         return False
-    binding = _binding(window)
+    binding = window_binding(window)
     if (
         not binding
         or not binding.get("session_id")

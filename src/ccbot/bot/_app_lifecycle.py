@@ -24,6 +24,7 @@ from ..handlers.quota_alerts import quota_alerts_loop
 from ..handlers.notifications import card_timer_loop, shutdown_card_surface_tasks
 from ..handlers.status_polling import status_poll_loop
 from ..handlers.card_registry import start_switcher_cleanup, shutdown_switcher_cleanup
+from ..opencode_tls_retry import tls_retries
 from ..metrics import metrics_flush_loop
 from ..session import session_manager
 from ..session_monitor import NewMessage, SessionMonitor
@@ -352,6 +353,7 @@ async def post_init(application: "Application[Any, Any, Any, Any, Any, Any]") ->
 
     set_remote_message_handler(message_callback)
     monitor.set_message_callback(message_callback)
+    tls_retries.restore(application.bot)
     monitor.start()
     session_monitor = monitor
     logger.info("Session monitor started")
@@ -440,6 +442,7 @@ async def post_shutdown(
     application: "Application[Any, Any, Any, Any, Any, Any]",
 ) -> None:
     """Stop background tasks, flush queues, close HTTP clients."""
+    await tls_retries.shutdown()
     global \
         _status_poll_task, \
         _card_timer_task, \

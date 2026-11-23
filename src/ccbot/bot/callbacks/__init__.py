@@ -131,6 +131,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "db",
         "rs",
         "file",
+        "retry",
         "fa",
         "au",
         "sw",
@@ -144,6 +145,26 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         getattr(getattr(query, "message", None), "message_id", None),
         active.id if active else None,
     )
+
+    if family == "retry":
+        from ...input_manual_retry import manual_retry
+        from ...input_recovery import input_recovery
+
+        input_recovery.load()
+        record_user_activity(user.id)
+        queued = manual_retry(
+            input_recovery,
+            user.id,
+            query.data.removeprefix("retry:"),
+            query.id,
+            context.application,
+        )
+        await query.answer(
+            "Запрос поставлен на повтор."
+            if queued
+            else "Повтор недоступен для этой сессии."
+        )
+        return
 
     if query.data.startswith("fa:"):
         record_user_activity(user.id)

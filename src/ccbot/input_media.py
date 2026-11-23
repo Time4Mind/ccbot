@@ -15,7 +15,7 @@ from .telegram_media import (
     media_route_label,
 )
 from .input_timing import cause_type, input_stage
-from .media_gap import media_gap_prefix
+from .media_gap import media_gap_prefix, strip_media_gap_prefix
 import logging
 
 logger = logging.getLogger(__name__)
@@ -192,7 +192,11 @@ async def download_voice(recovery: Any, voice: Any, request: Any) -> bytes:
 
 def with_media_gap(recovery: Any, text: str) -> str:
     current = recovery.current()
-    if current is None or text.lstrip().startswith("/"):
+    if (
+        current is None
+        or text.lstrip().startswith("/")
+        or strip_media_gap_prefix(text) != text
+    ):
         return text
     missing = [
         str(r.message_id)

@@ -114,4 +114,4 @@ async def test_pending_short_reply_recovery_does_not_call_editor_or_mark_rewrite
 
 
 def test_builtin_instruction_stays_compact() -> None:
-    assert len(DEFAULT_PREPROCESSING_INSTRUCTION.split()) <= 170
+    assert len(DEFAULT_PREPROCESSING_INSTRUCTION) <= 401

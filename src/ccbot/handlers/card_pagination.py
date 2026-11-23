@@ -171,7 +171,9 @@ def paginate_events_for_card(
     """
     budget = _resolve_line_budget(user_id)
     spoiler_lines = resolve_spoiler_line_budgets(user_id)
-    events = state.events
+    from .card_input_recovery import with_recovery_rows
+
+    events = with_recovery_rows(state.events, state.recovery_rows)
     if not events:
         return [[]]
 
@@ -220,6 +222,25 @@ def paginate_events_for_card(
     latest_pages = _split_page_by_budget(
         events[latest_start:], budget, spoiler_line_limits=spoiler_lines
     )
+    if state.recovery_rows:
+        # Only the most recent user input can have a live retry action.
+        # Assistant activity may paginate it away without superseding it.
+        row = state.recovery_rows[-1]
+        last = latest_pages[-1]
+        if row.tail and row.anchor not in last:
+            latest_input = next(
+                (
+                    e
+                    for e in reversed(events)
+                    if e.type in ("user_msg", "input_recovery")
+                ),
+                None,
+            )
+            if latest_input is row.anchor:
+                tail = Event("input_status", row.tail, row.anchor.started_at)
+                latest_pages[-1:] = _split_page_by_budget(
+                    [*last, tail], budget, spoiler_line_limits=spoiler_lines
+                )
     return [*prefix_pages, *latest_pages] or [[]]
 
 

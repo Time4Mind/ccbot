@@ -28,8 +28,9 @@ def notice_text(request: InputRequest) -> str:
     if preview:
         parts.append(f"Запрос: «{preview}»")
     parts.append(clickable_actions(request.notice))
-    if request.state == "unknown" and "/requests" not in request.notice:
-        parts.append("Проверить состояние: /requests.")
+    retry = f"/requests_retry_{request.message_id}"
+    if request.state in ("unknown", "failed") and retry not in parts[-1]:
+        parts.append(f"Повторить: {retry}")
     return "\n".join(parts)
 
 
@@ -43,13 +44,17 @@ def resolved_text(item: dict[str, Any]) -> str:
         or item.get("session_id")
         or "неизвестная сессия"
     )
-    return f"Сессия «{name}» · запрос №{item['message_id']}: получение агентом подтверждено."
+    text = f"Сессия «{name}» · запрос №{item['message_id']}: получение агентом подтверждено."
+    if item.get("retryable"):
+        text += f"\nОтправить ещё раз: /requests_retry_{item['message_id']}"
+    return text
 
 
 def resolution(request: InputRequest) -> dict[str, Any]:
     return {
         "user_id": request.user_id,
         "notice_id": request.notice_id,
+        "retryable": request.state == "unknown",
         "message_id": request.message_id,
         "session_id": request.session_id,
         "session_name": session_name(request),

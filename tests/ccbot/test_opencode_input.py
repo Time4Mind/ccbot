@@ -954,7 +954,8 @@ async def test_fifo_distinguishes_refusal_from_uncertain_paste(
             async with asyncio.timeout(2):
                 while first.state != "unknown":
                     await asyncio.sleep(0.01)
-            assert not actions[2]
+            assert not await asyncio.wait_for(done, 2)
+            assert await asyncio.wait_for(next_done, 2)
             assert actions[1].count("paste-buffer") == 1
             assert actions[1].count("send-keys") == int(
                 failure in ("enter", "no_receipt")
@@ -965,7 +966,6 @@ async def test_fifo_distinguishes_refusal_from_uncertain_paste(
             native_row(1)
             assert restored.reconcile(restored.records[first.id])
             assert recovery.reconcile(first)
-            assert await asyncio.wait_for(done, 2)
         else:
             assert not await asyncio.wait_for(done, 2)
             assert first.state == "failed" and "Запрос не отправлен" in first.notice

@@ -741,7 +741,12 @@ Recovery notices, card status and `/requests` use single-token commands:
 `/requests_cancel_<message_id>`. Telegram can send the complete action with one
 command tap. Legacy `/requests retry|ack|cancel <message_id>` remains supported;
 `/requests_RTRY_<message_id>` is a retry alias. Startup capture exempts these
-control commands. Retry retains the original owner/session and only replays
-requests already eligible for explicit recovery; uncertain submissions still
-require acknowledgement or cancellation. Stored legacy notice text is normalized
+control commands. An explicit retry sends the saved request to its original session, including
+after an uncertain attempt or a late confirmation. Reprocessing the same
+Telegram command update does not enqueue a second copy. Uncertain requests
+release the FIFO immediately. The live card shows the numbered retry command
+at the original request. Only the latest user input can also show a retry on
+the last page while delivery awaits confirmation.
+A rich card renders the command as a button. On confirmation the historical
+failure is replaced by the submitted text and the outstanding action clears. Stored legacy notice text is normalized
 when displayed without changing its recovery state.

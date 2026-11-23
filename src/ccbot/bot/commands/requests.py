@@ -24,11 +24,14 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         verb = action[1].casefold()
         args = ["retry" if verb == "rtry" else verb, action[2]]
     if len(args) == 2 and args[0] == "retry":
-        from ...input_media import retry_deferred_media
+        from ...input_manual_retry import manual_retry
 
-        item = input_recovery.records.get(f"{user.id}:{args[1]}")
-        retried = item is not None and retry_deferred_media(
-            input_recovery, item, context.application
+        retried = manual_retry(
+            input_recovery,
+            user.id,
+            args[1],
+            update.message.message_id,
+            context.application,
         )
         await safe_reply(
             update.message,
@@ -39,11 +42,27 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     if len(args) == 2 and args[0] in ("ack", "cancel"):
         item = input_recovery.records.get(f"{user.id}:{args[1]}")
+        archived = input_recovery.retry_sources.get(f"{user.id}:{args[1]}", {})
+        if item is None and archived.get("status") == "failed":
+            archived["status"] = "dismissed"
+            input_recovery.dirty.add((user.id, archived["source"]["session_id"]))
+            input_recovery.save()
+            await safe_reply(update.message, "Ошибка снята с карточки.")
+            return
         if (
             item is not None
             and item.user_id == user.id
             and item.state in ("unknown", "failed")
         ):
+            from ...input_manual_retry import remember
+
+            remember(
+                input_recovery,
+                item,
+                "dismissed"
+                if args[0] == "cancel" or item.state == "failed"
+                else "confirmed",
+            )
             if args[0] == "ack":
                 input_recovery.complete(item, confirmed=item.state == "unknown")
                 await safe_reply(
@@ -62,6 +81,15 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 )
             return
     pending = [r for r in input_recovery.records.values() if r.user_id == user.id]
+    from ...input_recovery import InputRequest
+
+    pending.extend(
+        InputRequest(**entry["source"], state="failed", notice_unknown=True)
+        for key, entry in input_recovery.retry_sources.items()
+        if entry["source"]["user_id"] == user.id
+        and entry["status"] == "failed"
+        and key not in input_recovery.records
+    )
     if not pending:
         await safe_reply(update.message, "Нет запросов, ожидающих восстановления.")
         return
@@ -84,6 +112,11 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         line = f"№{item.message_id}, сессия «{session_name(item)}»: {labels.get(item.state, item.state)}"
         if item.notice:
             line += "\n" + clickable_actions(item.notice)
+        if (
+            item.state in ("failed", "unknown")
+            and f"/requests_retry_{item.message_id}" not in line
+        ):
+            line += f"\nПовторить: /requests_retry_{item.message_id}"
         if item.state == "unknown":
             line += f"\nПосле проверки сессии: /requests_ack_{item.message_id} или /requests_cancel_{item.message_id}"
         elif item.state == "failed" and item.notice_unknown:

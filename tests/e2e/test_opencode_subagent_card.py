@@ -34,10 +34,15 @@ async def test_final_reaches_card_after_subagent_without_new_prompt(
     monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
     monkeypatch.setenv("TMUX_PANE", "%9")
     monkeypatch.setattr(config, "session_map_file", mapping)
+    monkeypatch.setattr(hook.os, "getppid", lambda: 40)
     monkeypatch.setattr(
         hook.subprocess,
         "run",
-        lambda *a, **kw: SimpleNamespace(stdout="ccbot::@151:test\n"),
+        lambda args, **kw: SimpleNamespace(
+            stdout="40 30 40 40 opencode\n"
+            if args[0] == "ps"
+            else "/dev/pts/9|ccbot::@151:test\n",
+        ),
     )
     fake_tmux.add_window(window, name="test", cwd=str(tmp_path))
     owner = seed_session(

@@ -112,8 +112,13 @@ def bind_pending_checkpoint(checkpoint: dict[str, Any]) -> bool:
     return True
 
 
+def normalize_prompt(text: str) -> str:
+    """OpenCode paste can change line endings and add outer whitespace."""
+    return text.replace("\r\n", "\n").strip()
+
+
 def received(checkpoint: dict[str, Any], payload: str, *, photo: bool) -> bool:
-    expected = payload.replace("\r\n", "\n").strip()
+    expected = normalize_prompt(payload)
     try:
         session_id = checkpoint.get("session_id")
         if not session_id:
@@ -148,10 +153,8 @@ def received(checkpoint: dict[str, Any], payload: str, *, photo: bool) -> bool:
                     "AND NOT coalesce(json_extract(data,'$.synthetic'),0) ORDER BY time_created,rowid",
                     (session_id, row["id"]),
                 ).fetchall()
-                text = (
+                text = normalize_prompt(
                     "\n".join(p["text"] or "" for p in parts if p["kind"] == "text")
-                    .replace("\r\n", "\n")
-                    .strip()
                 )
                 files = [p for p in parts if p["kind"] == "file"]
                 if not files:

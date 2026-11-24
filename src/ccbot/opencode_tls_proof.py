@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from .opencode_receipt import normalize_prompt
 from .opencode_store import open_store
 
 _TLS = re.compile(
@@ -31,7 +32,20 @@ def handshake_error(error: Any) -> bool:
 
 
 def digest(text: str) -> str:
-    return hashlib.sha256(text.replace("\r\n", "\n").encode()).hexdigest()
+    return "v2:" + hashlib.sha256(normalize_prompt(text).encode()).hexdigest()
+
+
+def matches_digest(native: str, expected: str) -> bool:
+    current = digest(native)
+    if expected.startswith("v2:"):
+        return expected == current
+    # Unversioned chains hashed the submitted text with only CRLF normalized.
+    # The TUI may have appended one space to those original bytes.
+    raw = native.replace("\r\n", "\n")
+    return expected == current.removeprefix("v2:") or any(
+        hashlib.sha256(value.encode()).hexdigest() == expected
+        for value in (raw, raw.removesuffix(" "))
+    )
 
 
 @dataclass(frozen=True)
@@ -81,11 +95,11 @@ def inspect_attempt(
             not isinstance(text, str)
             or not text.strip()
             or text.lstrip().startswith("/")
-            or digest(text) != expected
+            or not matches_digest(text, expected)
         ):
             return None
         if not error_id:
-            return Attempt(user, text)
+            return Attempt(user, normalize_prompt(text))
         if len(rows) != 2 or rows[1]["id"] != error_id:
             return None
         reply = json.loads(rows[1]["data"])
@@ -101,4 +115,4 @@ def inspect_attempt(
             p.get("type") not in ("step-start", "step-finish") for p in parts(error_id)
         ):
             return None
-        return Attempt(user, text, rows[1]["rowid"])
+        return Attempt(user, normalize_prompt(text), rows[1]["rowid"])

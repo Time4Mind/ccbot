@@ -1,6 +1,7 @@
 """Native OpenCode messages through the monitor, retry transport and card."""
 
 import asyncio
+import hashlib
 import json
 import os
 from types import SimpleNamespace
@@ -27,6 +28,10 @@ TLS = "EPROTO: The TLS handshake failed. Does the server speak TLS on this port?
     "mode",
     [
         "success",
+        "pasted",
+        "legacy_paste",
+        "different_text",
+        "later_same",
         "exhaust",
         "stop",
         "new",
@@ -42,7 +47,10 @@ async def test_retry_one_logical_voice_turn(
 ):
     db, dbpath, cwd = opencode_native
     sid, wid = "ses_ccbotAcceptance123", "@8"
-    text = "Проверь готовый текст."
+    text = "Retry  check\nline two"
+    sent = (
+        " \tRetry  check\r\nline two  " if mode in ("pasted", "legacy_paste") else text
+    )
     sess = seed_session(
         session_manager,
         sid="tls" + mode,
@@ -94,7 +102,16 @@ async def test_retry_one_logical_voice_turn(
     ledger.admit(sess, request.id)
     checkpoint = native_checkpoint(wid, sess.id)
     assert checkpoint
-    ledger.prepare(request, checkpoint, text)
+    ledger.prepare(request, checkpoint, sent)
+    if mode == "legacy_paste":
+        # On-disk chain written by the previous release.
+        saved = json.loads(ledger.path.read_text())
+        saved["chains"][sess.id]["payload_hash"] = hashlib.sha256(
+            sent.replace("\r\n", "\n").encode()
+        ).hexdigest()
+        ledger.path.write_text(json.dumps(saved))
+        ledger = retries.TLSRetries(ledger.path)
+        monkeypatch.setattr(retries, "tls_retries", ledger)
     await poll()
     pastes = []
     seq = 0
@@ -134,11 +151,13 @@ async def test_retry_one_logical_voice_turn(
         def paste(begin):
             assert begin()
             pastes.append(asyncio.get_running_loop().time())
-            return user(payload)
+            return user(payload + " ")
 
         async def native_send(begin):
             parent = paste(begin)
-            if mode == "success":
+            if mode == "success" or (
+                mode in ("pasted", "legacy_paste") and len(pastes) == 2
+            ):
                 record(
                     "assistant",
                     [dict(type="text", text="ANSWER OK")],
@@ -160,7 +179,10 @@ async def test_retry_one_logical_voice_turn(
         ),
     )
     monkeypatch.setattr(tmux_manager, "send_keys", transport)
-    parent = user(text)
+    native = sent.replace("\r\n", "\n") + " "
+    if mode == "different_text":
+        native = native.replace("Retry  check", "Retry check")
+    parent = user(native)
     if mode == "tool":
         record(
             "assistant",
@@ -177,8 +199,10 @@ async def test_retry_one_logical_voice_turn(
             finish="tool-calls",
         )
     error(parent, "APIError" if mode == "other_error" else "UnknownError")
+    if mode == "later_same":
+        user(native)
     events = await poll()
-    if mode in ("tool", "other_error"):
+    if mode in ("tool", "other_error", "different_text", "later_same"):
         assert not ledger.progress(sess) and not pastes
         assert any("EPROTO" in m.text for m in fake_bot.sent_messages)
         return
@@ -228,8 +252,9 @@ async def test_retry_one_logical_voice_turn(
                     ledger.restore(fake_bot)
             await poll()
         texts = [m.text for m in fake_bot.sent_messages]
-        if mode == "success":
-            assert len(pastes) == 1 and pastes[0] - start >= delay - 0.2
+        if mode in ("success", "pasted", "legacy_paste"):
+            assert len(pastes) == (1 if mode == "success" else 2)
+            assert pastes[0] - start >= delay - 0.2
             assert sum(t.count("ANSWER OK") for t in texts) == 1
             assert all("EPROTO" not in t for t in texts)
         elif mode == "exhaust":

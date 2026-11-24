@@ -314,6 +314,7 @@ class TLSRetries:
                 or self.proof(sess, chain, error) != attempt
             ):
                 raise PasteNotSent()
+            chain.payload_hash = digest(attempt.text)
             chain.floor = attempt.error_row
             chain.phase = "sent"
             self.save()

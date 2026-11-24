@@ -42,6 +42,41 @@ _HOOK_COMMAND_SUFFIX = "ccbot hook"
 _HOOK_EVENTS: tuple[str, ...] = ("SessionStart", "UserPromptSubmit")
 
 
+def _opencode_publishes_from_pane(tty: str, publisher: int) -> bool:
+    """Only the interactive OpenCode process may publish this pane's binding."""
+    if not tty.startswith("/dev/"):
+        return False
+    snapshot = subprocess.run(
+        ["ps", "-t", tty, "-o", "pid=,ppid=,pgid=,tpgid=,comm="],
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+    processes: dict[int, tuple[int, int, int, str]] = {}
+    for line in snapshot.stdout.splitlines():
+        pid, ppid, group, foreground, command = line.split(None, 4)
+        processes[int(pid)] = (
+            int(ppid),
+            int(group),
+            int(foreground),
+            Path(command).name,
+        )
+    if publisher not in processes:
+        return False
+    parent, group, foreground, executable = processes[publisher]
+    if group != foreground:
+        return False
+    # npm or a shell wrapper can lead the foreground job. Walk back to it:
+    # a second OpenCode beneath the first is a tool, even in the same job.
+    foreground_seen = publisher == foreground
+    while parent in processes:
+        foreground_seen |= parent == foreground
+        parent, _, _, command = processes.pop(parent)
+        if command in (executable, "opencode"):
+            return False
+    return foreground_seen
+
+
 def _codex_transcript_matches(path_str: str, session_id: str) -> bool:
     """Reject a Codex hook whose id disagrees with rollout metadata."""
     if not path_str:
@@ -299,6 +334,9 @@ def _process_hook_event(backend: str | None = None) -> None:
     # the canonical name shared by every member of the group, so it
     # always points at the source. Fall back to ``session_name`` only
     # when ``session_group`` is empty (no grouping in play).
+    window_format = "#{session_name}:#{session_group}:#{window_id}:#{window_name}"
+    if detected_backend == "opencode":
+        window_format = "#{pane_tty}|" + window_format
     result = subprocess.run(
         [
             "tmux",
@@ -306,12 +344,16 @@ def _process_hook_event(backend: str | None = None) -> None:
             "-t",
             pane_id,
             "-p",
-            "#{session_name}:#{session_group}:#{window_id}:#{window_name}",
+            window_format,
         ],
         capture_output=True,
         text=True,
     )
     raw_output = result.stdout.strip()
+    if detected_backend == "opencode":
+        tty, _, raw_output = raw_output.partition("|")
+        if not _opencode_publishes_from_pane(tty, os.getppid()):
+            return
     # Expected format: "session_name:session_group:@id:window_name"
     parts = raw_output.split(":", 3)
     if len(parts) < 4:

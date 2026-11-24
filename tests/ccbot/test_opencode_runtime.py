@@ -181,16 +181,32 @@ def test_busy_composer_and_stop_have_native_opencode_semantics():
     assert navigation_keys("Escape", COMPOSER) == ("Escape",)
 
 
+def mock_opencode_pane(monkeypatch, hook_parent):
+    processes = (
+        "30 1 30 40 zsh\n"
+        "40 30 40 40 /usr/bin/node\n"  # npm launcher
+        "41 40 40 40 /opt/bin/opencode\n"
+        "42 41 40 40 /bin/bash\n"
+        "43 42 40 40 /opt/bin/opencode\n"  # nested CLI in the same process group
+    )
+    monkeypatch.setattr(hook.os, "getppid", lambda: hook_parent)
+
+    def run(args, **kwargs):
+        if args[0] == "ps":
+            assert args[1:3] == ["-t", "/dev/pts/9"]
+            return SimpleNamespace(stdout=processes, returncode=0)
+        assert "#{pane_tty}" in args[-1]
+        return SimpleNamespace(stdout="/dev/pts/9|ccbot::@9:test\n", returncode=0)
+
+    monkeypatch.setattr(hook.subprocess, "run", run)
+
+
 def test_opencode_hook_retains_native_id_and_project(
     tmp_path, monkeypatch, opencode_native
 ):
     monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
     monkeypatch.setenv("TMUX_PANE", "%99")
-    monkeypatch.setattr(
-        hook.subprocess,
-        "run",
-        lambda *a, **kw: SimpleNamespace(stdout="ccbot::@9:test\n"),
-    )
+    mock_opencode_pane(monkeypatch, hook_parent=41)
     payload = {
         "session_id": "ses_ccbotAcceptance123",
         "cwd": str(tmp_path),
@@ -218,11 +234,7 @@ def test_opencode_hook_preserves_ownership(
     db.commit()
     monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
     monkeypatch.setenv("TMUX_PANE", "%99")
-    monkeypatch.setattr(
-        hook.subprocess,
-        "run",
-        lambda *a, **kw: SimpleNamespace(stdout="ccbot::@9:test\n"),
-    )
+    mock_opencode_pane(monkeypatch, hook_parent=41)
     mapping = tmp_path / "session_map.json"
     initial = {
         "ccbot:@8": {"session_id": "ses_alreadyBound123", "backend": "opencode"},
@@ -238,6 +250,30 @@ def test_opencode_hook_preserves_ownership(
     monkeypatch.setattr(hook.sys, "stdin", io.StringIO(json.dumps(payload)))
     hook._process_hook_event(backend="opencode")
     assert json.loads(mapping.read_text()) == initial
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_nested_headless_root_cannot_claim_interactive_pane(
+    tmp_path, monkeypatch, opencode_native, existing
+):
+    monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
+    monkeypatch.setenv("TMUX_PANE", "%99")
+    mock_opencode_pane(monkeypatch, hook_parent=43)
+    mapping = tmp_path / "session_map.json"
+    before = {"ccbot:@9": {"session_id": "ses_interactive", "backend": "opencode"}}
+    if existing:
+        mapping.write_text(json.dumps(before))
+    payload = {
+        "session_id": "ses_ccbotAcceptance123",
+        "cwd": str(tmp_path),
+        "hook_event_name": "UserPromptSubmit",
+        "opencode_origin": "chat.message",
+    }
+    monkeypatch.setattr(hook.sys, "stdin", io.StringIO(json.dumps(payload)))
+    hook._process_hook_event(backend="opencode")
+    assert (json.loads(mapping.read_text()) if mapping.exists() else None) == (
+        before if existing else None
+    )
 
 
 def test_plugin_install_is_idempotent_and_preserves_global_config(tmp_path):

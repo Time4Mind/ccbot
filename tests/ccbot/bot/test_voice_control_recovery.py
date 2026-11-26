@@ -637,3 +637,33 @@ async def test_switch_keeps_one_card_when_newer_frozen_answer_exists(
     surface.assert_not_awaited()
     bot.send_message.assert_not_awaited()
     bot.delete_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_switch_acknowledged_while_final_still_owns_carrier(setup, monkeypatch):
+    sess, state, manager, active = setup
+    acknowledged = asyncio.Event()
+    entered = asyncio.Event()
+
+    async def hold_final(*args):
+        entered.set()
+        await asyncio.Event().wait()
+
+    async def acknowledge(*args):
+        acknowledged.set()
+
+    query = SimpleNamespace(
+        data=CB_SW_USE + sess.id,
+        message=SimpleNamespace(message_id=100),
+        answer=acknowledge,
+    )
+    monkeypatch.setattr(switcher, "activate_card_on_carrier", hold_final)
+    task = asyncio.create_task(
+        switcher.handle(query, SimpleNamespace(bot=AsyncMock()), SimpleNamespace(id=42))
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        await asyncio.wait_for(acknowledged.wait(), 0.1)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

@@ -43,6 +43,13 @@ from ...user_activity import record as record_user_activity
 logger = logging.getLogger(__name__)
 
 
+async def _acknowledge_switch(query: CallbackQuery, session: Session) -> None:
+    try:
+        await query.answer(f"→ {session.name or session.id}")
+    except (TelegramError, TimeoutError) as exc:
+        logger.debug("switch acknowledgement failed: %s", type(exc).__name__)
+
+
 async def _strip_orphan_switcher_if_current(
     bot: Any, user_id: int, orphan_msg_id: int | None
 ) -> bool:
@@ -121,6 +128,7 @@ async def handle(
         if route_selected:
             current = session_manager.get_active_session(user.id)
             if current is None or current.id != target_id:
+                await _acknowledge_switch(query, sess)
                 return True
         cancel_for_active_card(user.id, getattr(context, "user_data", None))
         # A completed result stays unread through its first presentation and
@@ -170,6 +178,7 @@ async def handle(
         old_active_id = old_active.id if old_active is not None else None
         orphan_msg_id: int | None = None
         protected_carrier_id: int | None = None
+        acknowledgement = asyncio.create_task(_acknowledge_switch(query, sess))
         try:
             if query.message is not None:
                 protected_carrier_id = query.message.message_id
@@ -185,12 +194,6 @@ async def handle(
             current = session_manager.get_active_session(user.id)
             if current is None or current.id != target_id:
                 return True
-            # Dismiss Telegram's tap spinner before any screenshot render/upload.
-            # The carrier is already atomically owned by the target session here.
-            try:
-                await query.answer(f"→ {sess.name or sess.id}")
-            except (TelegramError, TimeoutError) as exc:
-                logger.debug("switch acknowledgement failed: %s", type(exc).__name__)
             # The TO session already had a live card on a DIFFERENT message
             # (typical after a voice message pinned to it finished landing
             # while the user was elsewhere). It just lost ownership to the
@@ -392,6 +395,7 @@ async def handle(
         finally:
             if protected_carrier_id is not None:
                 release_switcher_carrier(user.id, protected_carrier_id)
+            await acknowledgement
 
         return True
 

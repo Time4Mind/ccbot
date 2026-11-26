@@ -634,7 +634,9 @@ async def finalize_task(
                     logger.debug("finalize_task prewarm failed: %s", exc)
 
             if final_events and item is not None:
-                prepared = final_payload(state, final_events[0], old_card_msg_id)
+                prepared = final_payload(
+                    state, final_events[0], old_card_msg_id, user_id
+                )
                 if event_key:
                     prepared["event_key"] = event_key
                 if item.history_only:

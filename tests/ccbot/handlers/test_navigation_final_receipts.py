@@ -800,3 +800,82 @@ async def test_final_ownership_changes_only_after_successful_repaint(
         chat_id=42, message_id=100, reply_markup=None
     )
     assert pointer[0] == 17
+
+
+@pytest.mark.asyncio
+async def test_session_switch_while_final_retires_previous_card(
+    navigation, monkeypatch
+):
+    h = navigation
+    h.active[0] = h.sess
+    h.state.in_menu_view = False
+    old = h.state.msg_id
+    other = Session(id="other", name="Other", window_id="")
+
+    async def switch_while_retiring(bot, uid, message_id):
+        assert message_id == old
+        h.active[0] = other
+        h.state.in_menu_view = True
+        return True
+
+    from ccbot.handlers import card_final_delivery
+
+    monkeypatch.setattr(
+        card_final_delivery, "retire_card_keyboard", switch_while_retiring
+    )
+    await card_updates.finalize_task(h.bot, 42, h.sess, "previous session final")
+    assert h.state.msg_id == old
+    assert h.state.in_menu_view
+
+
+@pytest.mark.asyncio
+async def test_new_message_cannot_take_keyboard_after_route_changed_during_send(
+    navigation, monkeypatch
+):
+    h = navigation
+    h.active[0] = h.sess
+    h.state.in_menu_view = False
+    original = h.bot._post
+    old = h.state.msg_id
+    pointer = [17]
+    monkeypatch.setattr(
+        session_manager,
+        "set_last_switcher_msg",
+        lambda _, mid: pointer.__setitem__(0, mid),
+    )
+
+    async def switch_during_send(endpoint, data):
+        h.active[0] = Session(id="other", name="other", window_id="")
+        return await original(endpoint, data)
+
+    h.bot._post = switch_during_send
+    await card_transport._send_card(h.bot, 42, h.sess, h.state, text="turn progress")
+    assert pointer == [17]
+    assert h.state.msg_id == old
+    h.bot.edit_message_reply_markup.assert_awaited_with(
+        chat_id=42, message_id=100, reply_markup=None
+    )
+
+
+@pytest.mark.asyncio
+async def test_previous_paint_does_not_publish_keyboard_after_new_selection(
+    navigation, monkeypatch
+):
+    h = navigation
+    h.active[0] = h.sess
+    pointer = [9]
+
+    async def select_other_while_cleaning(*args):
+        h.active[0] = Session(id="other", name="other", window_id="")
+        pointer[0] = 75
+
+    monkeypatch.setattr(
+        card_carrier, "_strip_stale_switchers", select_other_while_cleaning
+    )
+    monkeypatch.setattr(
+        session_manager,
+        "set_last_switcher_msg",
+        lambda _, mid: pointer.__setitem__(0, mid),
+    )
+    await card_carrier.paint_card_on_carrier(h.bot, 42, h.sess, 11)
+    assert pointer == [75]

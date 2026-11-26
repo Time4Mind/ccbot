@@ -133,6 +133,7 @@ async def _send_card_locked(
         reply_markup = _legacy("build_footer_keyboard")(
             user_id, screen="main", is_busy=True
         )
+    selected = session_manager.get_active_session(user_id)
     keyboard = reply_markup
     sent_kind = CarrierKind.TEXT
     sent_file_id = ""
@@ -189,17 +190,17 @@ async def _send_card_locked(
             return False
     # Exactly one message in the chat may carry a live switcher, and it is
     # this one — strip every other card's keyboard, not just the pointer's.
-    bind_carrier(
-        state,
-        sent.message_id,
-        sent_kind,
-        rich_media_file_id=sent_file_id,
-        pane_hash=sent_pane_hash,
-        photo_edit_ts=sent_photo_ts,
-    )
     if state.delivery_id:
         from ..final_delivery import final_delivery_queue
 
+        bind_carrier(
+            state,
+            sent.message_id,
+            sent_kind,
+            rich_media_file_id=sent_file_id,
+            pane_hash=sent_pane_hash,
+            photo_edit_ts=sent_photo_ts,
+        )
         final_delivery_queue.bind_ack(state.delivery_id, sent.message_id)
         from .card_registry import _cards
 
@@ -227,9 +228,34 @@ async def _send_card_locked(
                 state.delivery_id,
             )
             return True
+
+    def route_changed() -> bool:
+        current = session_manager.get_active_session(user_id)
+        return (
+            selected is not None
+            and selected.id == sess.id
+            and (current is None or current.id != sess.id)
+        )
+
+    if not route_changed():
+        await _strip_stale_switchers(bot, user_id, sent.message_id, sess.id)
+    if route_changed():
+        from .card_registry import retire_card_keyboard
+
+        await retire_card_keyboard(bot, user_id, sent.message_id)
+        _register_msg(user_id, sent.message_id, sess.id)
+        return bool(state.delivery_id)
+    if not state.delivery_id:
+        bind_carrier(
+            state,
+            sent.message_id,
+            sent_kind,
+            rich_media_file_id=sent_file_id,
+            pane_hash=sent_pane_hash,
+            photo_edit_ts=sent_photo_ts,
+        )
     remember_rich_photo(state, sent_pane_hash, sent_file_id)
     persist_session_screenshot(sess, user_id, sent_pane_hash, sent_file_id)
-    await _strip_stale_switchers(bot, user_id, sent.message_id, sess.id)
     if keyboard is not None:
         session_manager.set_last_switcher_msg(user_id, sent.message_id)
     state.last_rendered = text

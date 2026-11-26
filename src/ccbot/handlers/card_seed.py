@@ -210,11 +210,15 @@ async def _seed_events_from_jsonl(
     elif sess.backend == "codex":
         from ..codex_session_io import build_session_file_path
 
-        fp = build_session_file_path(state.session_id, state.cwd)
+        fp = await asyncio.to_thread(
+            build_session_file_path, state.session_id, state.cwd
+        )
     else:
         from ..session_claude_io import build_session_file_path
 
-        fp = build_session_file_path(state.session_id, state.cwd)
+        fp = await asyncio.to_thread(
+            build_session_file_path, state.session_id, state.cwd
+        )
     if fp is None or not fp.exists():
         return []
     try:
@@ -456,7 +460,7 @@ async def _ensure_seeded(user_id: int, sess: Session, state: CardState) -> None:
         )
         state.remote_seed_version = version
     else:
-        mtime = _transcript_mtime(sess)
+        mtime = await asyncio.to_thread(_transcript_mtime, sess)
         if mtime >= 0.0 and mtime == state.seed_mtime:
             # Nothing new on disk since the last empty attempt — skip the
             # re-parse and wait for the transcript to grow.

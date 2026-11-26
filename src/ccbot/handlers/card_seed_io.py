@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ..reverse_lines import reverse_lines
 from ..transcript_codex import normalize_codex_entry
 from ..transcript_parser import TranscriptParser
 from ..transcript_types import ParsedEntry
@@ -45,35 +46,19 @@ def _recent_raw_entries_with_older(
     boundaries = 0
 
     with file_path.open("rb") as transcript:
-        transcript.seek(0, 2)
-        position = transcript.tell()
-        remainder = b""
-
-        while position > 0 and boundaries < wanted_boundaries:
-            start = max(0, position - _REVERSE_READ_CHUNK)
-            transcript.seek(start)
-            block = transcript.read(position - start) + remainder
-            position = start
-            lines = block.split(b"\n")
-            if start > 0:
-                remainder = lines[0]
-                lines = lines[1:]
-            else:
-                remainder = b""
-
-            for raw_line in reversed(lines):
-                if not raw_line.strip():
-                    continue
-                data = TranscriptParser.parse_line(
-                    raw_line.decode("utf-8", errors="replace")
-                )
-                if data is None:
-                    continue
-                reversed_entries.append(data)
-                if _is_turn_boundary(data):
-                    boundaries += 1
-                    if boundaries >= wanted_boundaries:
-                        break
+        for raw_line in reverse_lines(transcript, _REVERSE_READ_CHUNK):
+            if not raw_line.strip():
+                continue
+            data = TranscriptParser.parse_line(
+                raw_line.decode("utf-8", errors="replace")
+            )
+            if data is None:
+                continue
+            reversed_entries.append(data)
+            if _is_turn_boundary(data):
+                boundaries += 1
+                if boundaries >= wanted_boundaries:
+                    break
 
     reversed_entries.reverse()
     return reversed_entries, boundaries >= wanted_boundaries

@@ -204,4 +204,6 @@ def test_polling_transport_is_instrumented_with_and_without_proxy(
     assert polling_request.delegate is not application.bot.request
     assert polling_request.delegate._client.timeout.connect == 10.0
     assert polling_request.delegate._client.timeout.pool == 10.0
-    assert polling_request.delegate._client._transport._pool._max_connections == 4
+    transport = polling_request.delegate._client._transport
+    routes = [transport.proxy, transport.direct] if proxy else [transport]
+    assert all(route._pool._max_connections == 4 for route in routes)

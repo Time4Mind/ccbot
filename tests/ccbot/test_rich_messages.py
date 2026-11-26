@@ -909,3 +909,18 @@ class TestCardEditRichPath:
             bot.edit_message_text.call_args.kwargs["parse_mode"]  # type: ignore[attr-defined]
             == "MarkdownV2"
         )
+
+
+@pytest.mark.asyncio
+async def test_rich_reply_recovers_from_proven_unsent_connect_error(monkeypatch):
+    import httpx
+    from unittest.mock import AsyncMock, MagicMock
+
+    error = NetworkError("connect failed")
+    error.__cause__ = httpx.ConnectError("TLS setup failed")
+    sent = MagicMock(message_id=77)
+    send = AsyncMock(side_effect=[error, sent])
+    monkeypatch.setattr(config, "rich_messages", True)
+    monkeypatch.setattr(rich, "send_rich_message", send)
+    assert await message_sender.safe_reply(MagicMock(chat_id=123), "Menu") is sent
+    assert send.await_count == 2

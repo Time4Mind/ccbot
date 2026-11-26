@@ -232,3 +232,23 @@ def test_input_before_monitor_poll_uses_root_receipt(opencode_native):
     checkpoint = native_checkpoint("@1")
     assert checkpoint and checkpoint["session_id"] == SID
     assert json.loads(mapping.read_text())[key]["session_id"] == SID
+
+
+@pytest.mark.asyncio
+async def test_status_on_restart_reads_latest_visible_turn_without_rebuilding_history(
+    opencode_native,
+):
+    from ccbot.handlers.bg_status import infer_status_from_jsonl
+    from ccbot.session import Session
+    from ccbot.opencode_session_io import journal_path
+
+    db, _, cwd = opencode_native
+    add_message(db, "first", "assistant", "complete")
+    add_message(db, "invisible", "user", "internal", hidden=True)
+    session = Session(
+        id="s", name="s", backend="opencode", claude_session_id=SID, workdir=cwd
+    )
+    assert await infer_status_from_jsonl(session) == "finished"
+    add_message(db, "next", "user", "new work")
+    assert await infer_status_from_jsonl(session) == "working"
+    assert not journal_path(SID).exists()

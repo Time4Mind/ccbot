@@ -20,6 +20,7 @@ from ..startup_queue import capture_startup_message
 from ..request_commands import REQUEST_ACTION
 from ..telegram_rate_limit import PersistentEndpointRateLimiter
 from ..telegram_polling_health import PollingHeartbeatRequest, OutboundHealthRequest
+from ..telegram_failover import ProxyFirstTransport, ProxyHealth
 from ..telegram_proxy_transport import telegram_transport
 
 from ..config import config
@@ -79,13 +80,22 @@ def _socket_options() -> list[tuple[int, int, int]]:
 def _request_pair() -> tuple[Any, PollingHeartbeatRequest]:
     from telegram.request import HTTPXRequest
 
-    def request(*, pool_size: int, read_timeout: float) -> Any:
-        transport = telegram_transport(
+    def transport_for(pool_size: int, proxy_url: str):
+        return telegram_transport(
             pool_size=pool_size,
-            proxy_url=config.tg_proxy_url,
+            proxy_url=proxy_url,
             socket_options=_socket_options(),
             disable_ipv6=config.tg_disable_ipv6,
         )
+
+    proxy_health = ProxyHealth(lambda: transport_for(1, config.tg_proxy_url))
+
+    def request(*, pool_size: int, read_timeout: float) -> Any:
+        transport = transport_for(pool_size, config.tg_proxy_url)
+        if config.tg_proxy_url and config.tg_proxy_direct_fallback:
+            transport = ProxyFirstTransport(
+                transport, transport_for(pool_size, ""), proxy_health
+            )
         return HTTPXRequest(
             read_timeout=read_timeout,
             connect_timeout=10.0,

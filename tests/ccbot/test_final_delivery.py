@@ -252,3 +252,45 @@ async def test_navigation_wakes_an_old_retry_without_blocking_new_final(tmp_path
         assert queue.pending(42, include_history=True) == [old]
     finally:
         await queue.shutdown()
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+def test_final_checkpoint_cost_is_independent_of_prior_tool_output(tmp_path, legacy):
+    from dataclasses import asdict
+    import json
+
+    from ccbot.handlers.card_final_delivery import final_payload, restore_snapshot
+    from ccbot.handlers.card_types import CardState, Event
+
+    path = tmp_path / "deliveries.json"
+    old = Event("tool_use", "read log", 1, tool_content="x" * 1_000_000)
+    request = Event("user_msg", "which month?", 2)
+    pieces = [Event("final_text", s, 3) for s in ("part one", "part two")]
+    state = CardState(events=[old, request, *pieces])
+    payload = final_payload(state, pieces[0], 42)
+    q = delivery.FinalDeliveryQueue(path)
+    if legacy:
+        payload["state"]["events"] = [asdict(e) for e in state.events]
+        payload["final_index"] = 2
+        path.write_text(
+            json.dumps(
+                {
+                    "deliveries": [
+                        asdict(delivery.FinalDelivery("old", 42, "s", payload))
+                    ]
+                }
+            )
+        )
+    else:
+        q.enqueue(42, "s", payload)
+    q.defer_to_history(42, "s")
+    restored = delivery.FinalDeliveryQueue(path).pending(42, include_history=True)[0]
+    events = restore_snapshot(restored).events
+    assert events[restored.payload["final_index"]].text == "part one"
+    assert [e.text for e in events if e.type == "final_text"] == [
+        "part one",
+        "part two",
+    ]
+    assert request in events
+    assert restored.history_only
+    assert path.stat().st_size < 10_000

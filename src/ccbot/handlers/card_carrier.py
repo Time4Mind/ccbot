@@ -620,9 +620,18 @@ async def _paint_card_on_carrier_locked(
         state.last_edit_ts = time.monotonic()
         # Migrate the switcher pointer onto the new carrier so previous
         # switcher rows in chat stop being the canonical surface.
-        await _strip_stale_switchers(bot, user_id, carrier_msg_id, sess.id)
-        session_manager.set_last_switcher_msg(user_id, carrier_msg_id)
-        return True
+        async with _carrier_edit_lock(user_id):
+            if state.msg_id != carrier_msg_id or not _legacy("is_active_for_user")(
+                user_id, sess
+            ):
+                return False
+            await _strip_stale_switchers(bot, user_id, carrier_msg_id, sess.id)
+            if state.msg_id != carrier_msg_id or not _legacy("is_active_for_user")(
+                user_id, sess
+            ):
+                return False
+            session_manager.set_last_switcher_msg(user_id, carrier_msg_id)
+            return True
     return False
 
 

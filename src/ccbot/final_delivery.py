@@ -86,7 +86,11 @@ class FinalDeliveryQueue:
         # Fail closed on damaged state: silently overwriting it loses answers.
         records = [FinalDelivery(**row) for row in raw["deliveries"]]
         recovered = False
+        from .handlers.final_snapshot import compact_legacy_snapshot
+
         for item in records:
+            if compact_legacy_snapshot(item.payload, item.user_id):
+                recovered = True
             if item.status == "preparing":
                 recovered = True
                 item.status = "pending"

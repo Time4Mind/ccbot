@@ -6,10 +6,8 @@ session switch cannot change the answer waiting to be delivered.
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from datetime import timedelta
 import logging
-from typing import Any
 
 from telegram import Bot
 from telegram.error import RetryAfter
@@ -19,6 +17,7 @@ from ..session import Session, session_manager
 from ..telegram_rate_limit import background_telegram_request
 from .card_binding import restore_carrier, snapshot_carrier
 from .card_types import CardState, Event, TurnPhase
+from .final_snapshot import final_payload as final_payload
 from .card_session_link import session_link_keyboard
 from .card_registry import (
     _card_lock,
@@ -29,37 +28,6 @@ from .card_registry import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def final_payload(
-    state: CardState, final_event: Event, old_message_id: int | None
-) -> dict[str, Any]:
-    events = []
-    for event in state.events:
-        # Tool-result images are not part of final text rendering and need not
-        # duplicate binary transcript payloads in the delivery journal.
-        row = asdict(event)
-        row["image_data"] = None
-        events.append(row)
-    final_index = next(
-        index for index, event in enumerate(state.events) if event is final_event
-    )
-    return {
-        "final_index": final_index,
-        "text": None,
-        "old_message_id": old_message_id,
-        "state": {
-            "events": events,
-            "current_page_idx": state.current_page_idx,
-            "next_request_sequence": state.next_request_sequence,
-            "last_event_ts": state.last_event_ts,
-            "agent_model": state.agent_model,
-            "reasoning_effort": state.reasoning_effort,
-            "context_pct": state.context_pct,
-            "completion_marker_pending": True,
-            "media_anchor_offset": state.media_anchor_offset,
-        },
-    }
 
 
 def restore_snapshot(item: FinalDelivery) -> CardState:
@@ -229,34 +197,37 @@ async def deliver_final(
                 live.msg_id,
             )
             return True
-        delivered = sent is not False and target.msg_id is not None
-    if not delivered:
-        return False
-    if target.msg_id is not None:
+        if sent is False or target.msg_id is None:
+            return False
         final_delivery_queue.bind_ack(item.id, target.msg_id)
-    if (
-        _should_buffer(item.user_id, item.session_id, live)
-        or live.next_request_sequence != target.next_request_sequence
-    ):
+        if (
+            _should_buffer(item.user_id, item.session_id, live)
+            or live.next_request_sequence != target.next_request_sequence
+        ):
+            return True
+        old_id = item.payload.get("old_message_id")
+        if old_id and old_id != target.msg_id:
+            try:
+                await retire_card_keyboard(bot, item.user_id, old_id)
+            except Exception as exc:
+                logger.debug(
+                    "final card keyboard retirement failed error_type=%s",
+                    type(exc).__name__,
+                )
+        if (
+            _should_buffer(item.user_id, item.session_id, live)
+            or live.next_request_sequence != target.next_request_sequence
+        ):
+            return True
+        restore_carrier(live, snapshot_carrier(target))
+        live.last_rendered = text
+        # Only the last queued final may acknowledge the session's latest result.
+        if (
+            not passive
+            and len(final_delivery_queue.pending(item.user_id, item.session_id)) == 1
+        ):
+            bg_status.record_finished_delivery(item.user_id, item.session_id)
         return True
-    old_id = item.payload.get("old_message_id")
-    if old_id and old_id != target.msg_id:
-        try:
-            await retire_card_keyboard(bot, item.user_id, old_id)
-        except Exception as exc:
-            logger.debug(
-                "final card keyboard retirement failed error_type=%s",
-                type(exc).__name__,
-            )
-    restore_carrier(live, snapshot_carrier(target))
-    live.last_rendered = text
-    # Only the last queued final may acknowledge the session's latest result.
-    if (
-        not passive
-        and len(final_delivery_queue.pending(item.user_id, item.session_id)) == 1
-    ):
-        bg_status.record_finished_delivery(item.user_id, item.session_id)
-    return True
 
 
 async def retry_delivery(bot: Bot, item: FinalDelivery) -> bool | None:

@@ -91,6 +91,8 @@ class FakeBackend(httpcore.AsyncNetworkBackend):
 
 
 def application_with_backend(monkeypatch, mode):
+    # These regressions isolate a proxy-only pool (including user cancellation).
+    monkeypatch.setattr(config, "tg_proxy_direct_fallback", False)
     monkeypatch.setattr(config, "tg_proxy_url", "http://proxy.invalid:1081")
     application = create_bot()
     request = application.bot.request
@@ -136,6 +138,7 @@ async def test_direct_ipv4_override_avoids_ipv6_tls_stall(monkeypatch, request_i
 async def test_ipv4_override_preserves_auto_and_proxy_routes(
     monkeypatch, proxy, disable_ipv6
 ):
+    monkeypatch.setattr(config, "tg_proxy_direct_fallback", False)
     monkeypatch.setattr(config, "tg_proxy_url", proxy)
     monkeypatch.setattr(config, "tg_disable_ipv6", disable_ipv6)
     application = create_bot()
@@ -329,3 +332,125 @@ async def test_one_failed_send_does_not_restart_an_idle_bot(monkeypatch, tmp_pat
     finally:
         await application.bot.request.shutdown()
         await application.bot._request[0].shutdown()
+
+
+@pytest.mark.asyncio
+async def test_unavailable_proxy_falls_back_before_sending(monkeypatch):
+    from httpcore._backends.auto import AutoBackend
+
+    connected = []
+    direct = FakeBackend("healthy")
+
+    async def connect(_self, host, port, **kwargs):
+        connected.append(host)
+        if host == "proxy.invalid":
+            raise httpcore.ConnectError("proxy offline")
+        assert host == "api.telegram.org"
+        return await direct.connect_tcp(host, port, **kwargs)
+
+    monkeypatch.setattr(AutoBackend, "connect_tcp", connect)
+    monkeypatch.setattr(config, "tg_proxy_url", "http://proxy.invalid:1081")
+    bot = create_bot().bot
+    try:
+        assert (await bot.send_message(1, "one")).text == "reply"
+        assert (await bot.send_message(1, "two")).text == "reply"
+        assert connected == ["proxy.invalid", "api.telegram.org"]
+        # The separately pooled long poll shares the failed route state.
+        await bot._request[0].post("https://api.telegram.org/botplaceholder/getUpdates")
+        assert connected == ["proxy.invalid", "api.telegram.org", "api.telegram.org"]
+    finally:
+        await asyncio.gather(*(r.shutdown() for r in bot._request))
+
+
+@pytest.mark.asyncio
+async def test_stalled_handshake_bypassed_until_background_probe_succeeds(monkeypatch):
+    from httpcore._backends.auto import AutoBackend
+    from ccbot import telegram_failover
+
+    # Speed up the clock for this scenario. Separate real-route smoke uses 5s.
+    monkeypatch.setattr(telegram_failover, "CONNECT_BUDGET", 0.04)
+    monkeypatch.setattr(telegram_failover, "PROBE_INTERVAL", 0.01)
+    monkeypatch.setattr(config, "tg_proxy_url", "http://proxy.invalid:1081")
+    routes = []
+    recovered = asyncio.Event()
+    proxy = FakeBackend("tls_cancel")
+    direct = FakeBackend("healthy")
+
+    class Recorded(FakeStream):
+        is_probe = False
+
+        async def write(self, buffer, timeout=None):
+            if buffer.startswith(b"POST "):
+                routes.append("proxy" if self.backend is proxy else "direct")
+            if buffer.startswith(b"HEAD "):
+                assert buffer.split(b"\r\n")[0] == b"HEAD / HTTP/1.1"
+                self.is_probe = True
+                recovered.set()
+
+        async def read(self, max_bytes, timeout=None):
+            if self.is_probe:
+                return b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+            return await super().read(max_bytes, timeout)
+
+    async def connect(_self, host, port, **kwargs):
+        backend = proxy if host == "proxy.invalid" else direct
+        return Recorded(backend, backend.mode)
+
+    monkeypatch.setattr(AutoBackend, "connect_tcp", connect)
+    bot = create_bot().bot
+    try:
+        async with asyncio.timeout(1):
+            await bot.send_message(1, "fall back")
+            await bot.send_message(1, "still direct")
+            proxy.mode = "healthy"
+            await recovered.wait()
+            await asyncio.sleep(0.01)
+            await bot.send_message(1, "proxy restored")
+        assert routes == ["direct", "direct", "proxy"]
+    finally:
+        await asyncio.gather(*(r.shutdown() for r in bot._request))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lose_receipt", [False, True])
+async def test_delayed_or_lost_telegram_receipt_never_resends(
+    monkeypatch, lose_receipt
+):
+    from telegram.error import NetworkError
+    from httpcore._backends.auto import AutoBackend
+    from ccbot import telegram_failover
+
+    monkeypatch.setattr(telegram_failover, "CONNECT_BUDGET", 0.01)
+    monkeypatch.setattr(config, "tg_proxy_url", "http://proxy.invalid:1081")
+    sent = []
+    backend = FakeBackend("healthy")
+
+    class SlowReply(FakeStream):
+        async def write(self, buffer, timeout=None):
+            if buffer.startswith(b"POST "):
+                sent.append(buffer.split(b" ")[1])
+
+        async def read(self, max_bytes, timeout=None):
+            if self.tls_complete:
+                await asyncio.sleep(0.03)
+                if lose_receipt:
+                    raise httpcore.ReadError("disconnected after request")
+            return await super().read(max_bytes, timeout)
+
+    async def connect(_self, host, port, **kwargs):
+        assert host == "proxy.invalid", "cannot repeat an ambiguous request directly"
+        return SlowReply(backend, "healthy")
+
+    monkeypatch.setattr(AutoBackend, "connect_tcp", connect)
+    bot = create_bot().bot
+    try:
+        if lose_receipt:
+            with pytest.raises(NetworkError):
+                await bot.send_message(1, "send only once")
+        else:
+            await bot._request[0].post(
+                "https://api.telegram.org/botplaceholder/getUpdates"
+            )
+        assert len(sent) == 1
+    finally:
+        await asyncio.gather(*(r.shutdown() for r in bot._request))

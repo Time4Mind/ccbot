@@ -87,6 +87,18 @@ TG_PROXY_URL=socks5://127.0.0.1:1080    # local SOCKS proxy
 TG_PROXY_URL=http://user:pass@host:port # remote authenticated HTTP proxy
 ```
 
+An empty or unset `TG_PROXY_URL` selects the direct connection. A configured
+proxy is tried first. If establishing TCP, the tunnel and TLS fails or takes
+more than five seconds in total, pending unsent requests use the direct route.
+New requests stay on that route while a background check tries a fresh proxy
+connection every 15 seconds. A successful check restores the proxy for both
+polling and outgoing requests. Once a Telegram request starts writing, it
+keeps its ordinary response timeout and the transport never replays it.
+
+Set `TG_PROXY_DIRECT_FALLBACK=false` on hosts which require proxy-only access.
+Remove an empty `TG_PROXY_URL` override from your service environment when
+the URL should come from the local `.env`.
+
 Common patterns:
 
 - **Run a SOCKS5 proxy on a VPS in an unblocked region** (sing-box,

@@ -22,6 +22,7 @@ import logging
 import time
 from typing import Any
 
+import httpx
 from telegram import Bot, InputMediaPhoto, LinkPreviewOptions, Message
 from telegram.error import BadRequest, NetworkError, RetryAfter
 
@@ -72,13 +73,32 @@ async def _try_rich_send(
     if not config.rich_messages:
         return None
     started = time.monotonic()
-    try:
+
+    async def send(markdown: str) -> Message:
         return await rich.send_rich_message(
             bot,  # type: ignore[arg-type]
             chat_id,
-            rich.to_rich_markdown(text, file_base_dir=file_base_dir),
+            markdown,
             reply_markup=kwargs.get("reply_markup"),
         )
+
+    try:
+        markdown = rich.to_rich_markdown(text, file_base_dir=file_base_dir)
+        try:
+            return await send(markdown)
+        except NetworkError as first:
+            # PTB preserves the HTTPX transport cause. TLS/TCP setup failed
+            # before any Telegram payload was written; a read/write error
+            # can instead mean that Telegram already posted the message.
+            if (
+                not isinstance(
+                    first.__cause__, (httpx.ConnectError, httpx.ConnectTimeout)
+                )
+                or time.monotonic() - started >= 5
+            ):
+                raise
+            logger.info("Retrying unsent rich message after connection setup failed")
+            return await send(markdown)
     except RetryAfter:
         raise
     except Exception as e:

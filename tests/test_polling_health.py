@@ -147,3 +147,25 @@ def test_health_file_probe_transitions_from_healthy_to_stale(tmp_path) -> None:
     health.record_success()
     assert probe_health_file(health.state_path, now=10_179.0)
     assert not probe_health_file(health.state_path, now=10_181.0)
+
+
+@pytest.mark.asyncio
+async def test_first_poll_checks_telegram_immediately_then_resumes_long_poll(tmp_path):
+    from telegram import Bot
+
+    requests = []
+
+    class Capture(FakeRequest):
+        async def do_request(self, **kw):
+            requests.append(kw["request_data"].json_parameters)
+            return self.result
+
+    poll = PollingHeartbeatRequest(Capture(), _health(tmp_path, {"now": 1}, {"now": 1}))
+    bot = Bot("123:test", get_updates_request=poll)
+    for offset in (1, 2):
+        assert not await bot.get_updates(
+            timeout=10, offset=offset, allowed_updates=["message"]
+        )
+    assert [r["timeout"] for r in requests] == ["0", "10"]
+    assert [r["offset"] for r in requests] == ["1", "2"]
+    assert all(json.loads(r["allowed_updates"]) == ["message"] for r in requests)

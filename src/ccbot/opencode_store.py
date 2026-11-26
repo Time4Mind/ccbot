@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from contextlib import contextmanager
 import json
 import os
@@ -89,56 +90,97 @@ def read_snapshot(
             "ORDER BY time_created, rowid",
             (session_id, since, session_id, since),
         ).fetchall()
-        result, usage = [], []
-        watermark = since
-        for message in messages:
-            data = json.loads(message["data"])
-            if not isinstance(data, dict):
-                raise OpenCodeStoreError("Invalid OpenCode message")
-            data.update(id=message["id"], time_created=message["time_created"])
-            data["modelId"] = data.get("modelID", "")
-            data["parts"] = []
-            watermark = max(watermark, message["time_updated"])
-            for part in db.execute(
-                "SELECT * FROM part WHERE session_id=? AND message_id=? ORDER BY time_created, rowid",
-                (session_id, message["id"]),
-            ):
-                item = json.loads(part["data"])
-                if not isinstance(item, dict):
-                    raise OpenCodeStoreError("Invalid OpenCode part")
-                item["id"] = part["id"]
-                data["parts"].append(item)
-                watermark = max(watermark, part["time_updated"])
-            if data.get("role") == "assistant" and (data.get("time") or {}).get(
-                "completed"
-            ):
-                tokens = data.get("tokens") or {}
-                cache = tokens.get("cache") or {}
-                incoming = int(tokens.get("input") or 0)
-                outgoing = int(tokens.get("output") or 0)
-                cached = int(cache.get("read") or 0)
-                written = int(cache.get("write") or 0)
-                usage.append(
-                    {
-                        "id": message["id"],
-                        "assistant_message_id": message["id"],
-                        "started_at": message["time_created"],
-                        "status": "completed",
-                        "model_id": data["modelId"],
-                        "input_tokens": incoming,
-                        "output_tokens": outgoing,
-                        "cache_read_input_tokens": cached,
-                        "cache_creation_input_tokens": written,
-                        "computed_total_tokens": incoming + outgoing + cached + written,
-                    }
-                )
-            result.append(data)
-        return {
-            "session": dict(row),
-            "messages": result,
-            "usage": usage,
-            "watermark": watermark,
-        }
+        return _message_snapshot(db, row, messages, since)
+
+
+def _message_snapshot(
+    db: sqlite3.Connection,
+    row: sqlite3.Row,
+    messages: Iterable[sqlite3.Row],
+    since: int,
+) -> dict[str, Any]:
+    result, usage = [], []
+    watermark = since
+    for message in messages:
+        data = json.loads(message["data"])
+        if not isinstance(data, dict):
+            raise OpenCodeStoreError("Invalid OpenCode message")
+        data.update(id=message["id"], time_created=message["time_created"])
+        data["modelId"] = data.get("modelID", "")
+        data["parts"] = []
+        watermark = max(watermark, message["time_updated"])
+        for part in db.execute(
+            # The native DB indexes both columns separately. Query the globally
+            # unique message ID to avoid scanning every part in the session
+            # once per message, and still check ownership before decoding.
+            "SELECT * FROM part WHERE message_id=? ORDER BY time_created, rowid",
+            (message["id"],),
+        ):
+            if part["session_id"] != row["id"]:
+                continue
+            item = json.loads(part["data"])
+            if not isinstance(item, dict):
+                raise OpenCodeStoreError("Invalid OpenCode part")
+            item["id"] = part["id"]
+            data["parts"].append(item)
+            watermark = max(watermark, part["time_updated"])
+        if data.get("role") == "assistant" and (data.get("time") or {}).get(
+            "completed"
+        ):
+            tokens = data.get("tokens") or {}
+            cache = tokens.get("cache") or {}
+            incoming = int(tokens.get("input") or 0)
+            outgoing = int(tokens.get("output") or 0)
+            cached = int(cache.get("read") or 0)
+            written = int(cache.get("write") or 0)
+            usage.append(
+                {
+                    "id": message["id"],
+                    "assistant_message_id": message["id"],
+                    "started_at": message["time_created"],
+                    "status": "completed",
+                    "model_id": data["modelId"],
+                    "input_tokens": incoming,
+                    "output_tokens": outgoing,
+                    "cache_read_input_tokens": cached,
+                    "cache_creation_input_tokens": written,
+                    "computed_total_tokens": incoming + outgoing + cached + written,
+                }
+            )
+        result.append(data)
+    return {
+        "session": dict(row),
+        "messages": result,
+        "usage": usage,
+        "watermark": watermark,
+    }
+
+
+def latest_projected_message(
+    session_id: str, cwd: str, path: Path
+) -> dict[str, Any] | None:
+    """Find the latest visible lifecycle event without materializing the journal."""
+    from .transcript_opencode import project_snapshot
+
+    if not SESSION_ID.fullmatch(session_id):
+        raise OpenCodeStoreError("Invalid OpenCode session identity")
+    with open_store(path) as db:
+        session = db.execute(
+            "SELECT * FROM session WHERE id=?", (session_id,)
+        ).fetchone()
+        if session is None or (
+            cwd and Path(session["directory"]).resolve() != Path(cwd).resolve()
+        ):
+            return None
+        for message in db.execute(
+            "SELECT * FROM message WHERE session_id=? ORDER BY time_created DESC, rowid DESC",
+            (session_id,),
+        ):
+            rows = project_snapshot(_message_snapshot(db, session, [message], 0))
+            for row in reversed(rows):
+                if row["type"] in ("user", "assistant"):
+                    return row
+    return None
 
 
 def list_sessions(cwd: str, path: Path | None = None) -> list[dict[str, Any]]:

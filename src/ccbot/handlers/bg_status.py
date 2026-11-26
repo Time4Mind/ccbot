@@ -281,8 +281,37 @@ async def infer_status_from_jsonl(sess: "Session") -> Status | None:
 
     if not sess.claude_session_id or not sess.workdir:
         return None
-    file_path = session_claude_io.build_session_file_path(
-        sess.claude_session_id, sess.workdir
+    if sess.claude_session_id.startswith("ses_"):
+        from ..opencode_session_io import journal_path, projection_header
+        from ..opencode_store import (
+            database_path,
+            latest_projected_message,
+            OpenCodeStoreError,
+        )
+        from pathlib import Path
+
+        def opencode_status() -> Status | None:
+            path = journal_path(sess.claude_session_id)
+            header = projection_header(path)
+            source = Path(header.get("database_path") or database_path())
+            if source.is_file():
+                row = latest_projected_message(
+                    sess.claude_session_id, sess.workdir, source
+                )
+                return _row_status(row) if row else None
+            if header.get("sessionId") == sess.claude_session_id and header.get(
+                "cwd"
+            ) == str(Path(sess.workdir).resolve()):
+                return _infer_status_from_jsonl_tail(path)
+            return None
+
+        try:
+            return await asyncio.to_thread(opencode_status)
+        except (OpenCodeStoreError, OSError, ValueError):
+            return None
+
+    file_path = await asyncio.to_thread(
+        session_claude_io.build_session_file_path, sess.claude_session_id, sess.workdir
     )
     if file_path is None or not file_path.exists():
         return None
@@ -293,45 +322,38 @@ async def infer_status_from_jsonl(sess: "Session") -> Status | None:
         return None
 
 
-def _infer_status_from_jsonl_tail(file_path: Any) -> Status | None:
-    """Find the newest user/assistant record without scanning old history."""
+def _row_status(obj: dict[str, Any]) -> Status | None:
     from ..transcript_codex import normalize_codex_entry
 
-    def classify(raw: bytes) -> Status | None:
-        try:
-            obj = json.loads(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return None
-        if obj.get("type") in ("response_item", "event_msg"):
-            obj = normalize_codex_entry(obj) or {}
-        msg_type = obj.get("type")
-        if msg_type == "user":
-            return "working"
-        if msg_type != "assistant":
-            return None
-        if obj.get("isApiErrorMessage"):
-            return "error"
-        stop_reason = (obj.get("message") or {}).get("stop_reason", "") or ""
-        if stop_reason in ("end_turn", "stop_sequence", "max_tokens"):
-            return "finished"
+    if obj.get("type") in ("response_item", "event_msg"):
+        obj = normalize_codex_entry(obj) or {}
+    msg_type = obj.get("type")
+    if msg_type == "user":
         return "working"
+    if msg_type != "assistant":
+        return None
+    if obj.get("isApiErrorMessage"):
+        return "error"
+    if (obj.get("message") or {}).get("stop_reason") in (
+        "end_turn",
+        "stop_sequence",
+        "max_tokens",
+    ):
+        return "finished"
+    return "working"
 
-    chunk_size = 64 * 1024
+
+def _infer_status_from_jsonl_tail(file_path: Any) -> Status | None:
+    from ..reverse_lines import reverse_lines
+
     with open(file_path, "rb") as stream:
-        stream.seek(0, 2)
-        position = stream.tell()
-        partial = b""
-        while position > 0:
-            size = min(chunk_size, position)
-            position -= size
-            stream.seek(position)
-            parts = (stream.read(size) + partial).split(b"\n")
-            partial = parts[0]
-            for raw in reversed(parts[1:]):
-                if raw.strip() and (status := classify(raw)) is not None:
-                    return status
-        if partial.strip():
-            return classify(partial)
+        for raw in reverse_lines(stream, 64 * 1024):
+            try:
+                obj = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if isinstance(obj, dict) and (status := _row_status(obj)) is not None:
+                return status
     return None
 
 

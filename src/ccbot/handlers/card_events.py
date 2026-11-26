@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..transcript_format import EXPANDABLE_QUOTE_START, EXPANDABLE_QUOTE_END
 from ..session_monitor import NewMessage
 from .card_event_render import _build_tool_spoiler_body
 from .card_text import (
@@ -31,9 +32,21 @@ def _build_event(msg: NewMessage) -> Event:
     appending it.
     """
     raw_body = msg.text or ""
-    text = _strip_for_card(
-        strip_media_gap_prefix(raw_body) if msg.role == "user" else raw_body
-    )
+    # Cards render a short, configurable spoiler. Bound only the retained
+    # tool preview before applying regexes, splitting lines or parsing JSON.
+    # The full payload remains available in the source transcript.
+    limit = 64 * 1024
+    if msg.content_type in ("tool_use", "tool_result") and len(raw_body) > limit:
+        quote = raw_body.find(EXPANDABLE_QUOTE_START)
+        if quote >= 0:
+            head = raw_body[: min(quote, limit)]
+            start = quote + len(EXPANDABLE_QUOTE_START)
+            content = raw_body[start : start + limit]
+            if len(raw_body) - start > limit:
+                content += "…" + EXPANDABLE_QUOTE_END
+            raw_body = head + EXPANDABLE_QUOTE_START + content
+        else:
+            raw_body = raw_body[:limit] + "…"
     started = _parse_timestamp(msg.timestamp)
 
     if msg.content_type == "thinking":
@@ -92,6 +105,9 @@ def _build_event(msg: NewMessage) -> Event:
             image_data=msg.image_data,
             is_error=msg.is_error,
         )
+    text = _strip_for_card(
+        strip_media_gap_prefix(raw_body) if msg.role == "user" else raw_body
+    )
     if msg.role == "user":
         return Event(
             type="user_msg",

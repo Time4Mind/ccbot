@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from telegram.request import BaseRequest
+from telegram.request import BaseRequest, RequestData
 from telegram.error import NetworkError
 
 logger = logging.getLogger(__name__)
@@ -159,6 +159,16 @@ class PollingHealth:
                 pass
 
 
+def _immediate_poll(original: RequestData) -> RequestData:
+    """Serialize the same getUpdates offset and filters without the initial idle wait."""
+    from telegram.request._requestparameter import RequestParameter
+
+    params = {**original.parameters, "timeout": 0}
+    return RequestData(
+        [RequestParameter(name, value, None) for name, value in params.items()]
+    )
+
+
 class PollingHeartbeatRequest(BaseRequest):
     """Decorate PTB's dedicated getUpdates request with success heartbeats."""
 
@@ -192,6 +202,12 @@ class PollingHeartbeatRequest(BaseRequest):
         connect_timeout: Any = BaseRequest.DEFAULT_NONE,
         pool_timeout: Any = BaseRequest.DEFAULT_NONE,
     ) -> tuple[int, bytes]:
+        if (
+            not self.health.last_success_at
+            and isinstance(request_data, RequestData)
+            and url.endswith("/getUpdates")
+        ):
+            request_data = _immediate_poll(request_data)
         result = await self.delegate.do_request(
             url=url,
             method=method,

@@ -326,9 +326,16 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     from ..callbacks.more_menu import begin_menu_refresh, render_menu_text
 
+    logger.info("menu_requested message_id=%s", update.message.message_id)
     text = render_menu_text(user.id, refreshing=True)
     keyboard = build_footer_keyboard(user.id, screen="more")
     sent = await safe_reply(update.message, text, reply_markup=keyboard)
+    if sent:
+        logger.info(
+            "menu_sent request_message_id=%s menu_message_id=%s",
+            update.message.message_id,
+            sent.message_id,
+        )
     if sent and keyboard is not None:
         session_manager.set_last_switcher_msg(user.id, sent.message_id)
         begin_menu_refresh(sent, user.id)

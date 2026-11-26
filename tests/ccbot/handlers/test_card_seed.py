@@ -629,3 +629,61 @@ class TestEnsureSeededIdempotent:
         # mtime never advanced → parsed exactly once; never latched.
         assert calls["n"] == 1
         assert state.seed_attempted is False
+
+
+@pytest.mark.asyncio
+async def test_large_tool_result_keeps_card_preview_and_full_following_answer(tmp_path):
+    from ccbot.session import Session, session_manager
+
+    path = tmp_path / "large.jsonl"
+    payload = "output " * 100_000
+    answer = "полный ответ " * 12_000
+    _write_jsonl(
+        path,
+        [
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "t",
+                            "name": "Bash",
+                            "input": {"command": "test"},
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "t", "content": payload}
+                    ],
+                },
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "stop_reason": "end_turn",
+                    "content": [{"type": "text", "text": answer}],
+                },
+            },
+        ],
+    )
+    window = session_manager.get_window_state("@large-tool-result")
+    window.transcript_path = str(path)
+    window.cwd = str(tmp_path)
+    window.session_id = "large"
+    events = await _seed_events_from_jsonl(
+        Session(id="s", name="large", window_id="@large-tool-result")
+    )
+    tool = next(e for e in events if e.tool_use_id == "t")
+    assert tool.tool_content.startswith("output ") and len(tool.tool_content) < 100_000
+    assert (
+        next(e for e in events if e.type == "final_text").body.strip() == answer.strip()
+    )
+    assert payload in path.read_text()
